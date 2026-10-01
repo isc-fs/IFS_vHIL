@@ -64,6 +64,12 @@ def make_backend(fake_cls, monitor: RenodeMonitor, config: dict):
                 # Power-on: a cold boot, as on the bench (the reset macro
                 # reloads the image and sets VTOR).
                 self._on(machine, "machine Reset")
+                # Renode 1.17: Reset zeroes BASEPRI as read, but not the
+                # masking it applies. A cut inside a FreeRTOS critical section
+                # (BASEPRI raised) left the next boot unable to take the
+                # TIM23 HAL tick, hanging forever in HAL_Delay. A real power
+                # cut always clears it.
+                self._on(machine, 'cpu SetRegister "BasePri" 0x0')
                 self._on(machine, "machine Start")
             else:
                 self._on(machine, "machine Pause")
