@@ -1,0 +1,21 @@
+name: Unit (host)
+
+# Catalogue, systems and generator checks: no Renode, no firmware build.
+
+on:
+  pull_request:
+  push:
+    branches: [dev]
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -q pyyaml "jsonschema>=4" pytest
+      - run: python -m pytest tests/unit -q
+      - name: Every system validates
+        run: for s in systems/*.yaml; do python -m vhil.system validate "$s"; done
