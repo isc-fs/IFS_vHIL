@@ -50,14 +50,15 @@ class VirtualBench:
         m.execute(f"include @{REPO / 'scripts' / 'ecu.resc'}")
         if self.socketcan:
             m.execute(f"include @{REPO / 'scripts' / 'ecu-socketcan.resc'}")
-        # Carriers start unpowered: the suite's relay fixture powers them. The
-        # global clock must run (`machine Start` alone does not start it), so
-        # start the emulation and pause every carrier straight away.
+        # Carriers start unpowered: off their CAN buses, while the emulation
+        # runs so virtual time stays paced to host time (see broker.py). The
+        # suite's relay fixture powers them, which resets them.
         config = yaml.safe_load(Path(self.config).read_text())
         m.execute("start")
         for carrier in config.get("carriers", []):
             m.execute(f'mach set "{carrier["machine"]}"')
-            m.execute("machine Pause")
+            for controller, hub in carrier.get("can", {}).items():
+                m.execute(f"connector Disconnect {controller} {hub}")
 
         sys.path.insert(0, str(self.ifs_hil))
         from broker.fake_bus import FakeHardwareManager
