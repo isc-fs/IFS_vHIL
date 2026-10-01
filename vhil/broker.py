@@ -5,8 +5,9 @@ JSON-RPC on a Unix socket). This serves the same protocol with IFS_HIL's own
 server and its in-memory FakeHardwareManager, and overrides only the calls
 that reach a carrier:
 
-  tca.write_pin on a carrier relay   -> power: open = machine Pause,
-                                        close = machine Reset + Start
+  tca.write_pin on a carrier relay   -> power: open = its CAN controllers
+                                        leave their buses, close = machine
+                                        Reset and back on the buses
   ina.current on a carrier's monitor -> its nominal draw while powered, else 0
   dac.set_voltage on a routed channel -> `<adc> SetVoltage <uV> <ch>`
 
@@ -41,6 +42,14 @@ def make_backend(fake_cls, monitor: RenodeMonitor, config: dict):
     routes = {(r["dac"], r["channel"]): r for r in config.get("dac_routes", [])}
     # The broker server is threaded; `mach set` + the command must not interleave.
     lock = threading.Lock()
+    can_of = {c["machine"]: c.get("can", {}) for c in config.get("carriers", [])}
+
+    def set_buses(machine: str, connect: bool) -> None:
+        verb = "Connect" if connect else "Disconnect"
+        with lock:
+            monitor.execute(f'mach set "{machine}"')
+            for controller, hub in can_of[machine].items():
+                monitor.execute(f"connector {verb} {controller} {hub}")
 
     class VirtualHardwareManager(fake_cls):
         def __init__(self) -> None:
@@ -60,19 +69,23 @@ def make_backend(fake_cls, monitor: RenodeMonitor, config: dict):
             machine, value = carrier["machine"], bool(value)
             if value == self._powered[machine]:
                 return
+            # Power is the carrier's CAN controllers on/off its buses, not
+            # machine Pause: Renode paces virtual time to host time only while
+            # a CPU executes, and repays a paused interval by running fast
+            # afterwards (3x seen in CI), which breaks IFS_HIL's wall-clock
+            # checks. Unpowered, the firmware keeps running unheard; power-on
+            # is a full reset, so it boots cold.
             if value:
-                # Power-on: a cold boot, as on the bench (the reset macro
-                # reloads the image and sets VTOR).
+                # The reset macro reloads the image and sets VTOR.
                 self._on(machine, "machine Reset")
                 # Renode 1.17: Reset zeroes BASEPRI as read, but not the
-                # masking it applies. A cut inside a FreeRTOS critical section
-                # (BASEPRI raised) left the next boot unable to take the
-                # TIM23 HAL tick, hanging forever in HAL_Delay. A real power
-                # cut always clears it.
+                # masking it applies (renode/renode#1021). A cut inside a
+                # FreeRTOS critical section left the next boot unable to take
+                # the TIM23 HAL tick, hanging forever in HAL_Delay.
                 self._on(machine, 'cpu SetRegister "BasePri" 0x0')
-                self._on(machine, "machine Start")
+                set_buses(machine, connect=True)
             else:
-                self._on(machine, "machine Pause")
+                set_buses(machine, connect=False)
                 # Where the CPU was when power went: the first clue when a
                 # boot never reaches the bus.
                 pc = self._on(machine, "cpu PC").strip()

@@ -11,6 +11,12 @@ carriers:
     relay: {addr: 0x20, port: 0, pin: 3}
     ina_addr: 0x45
     current_A: 0.13          # ~130 mA alive (vcu_profile: mlc_boot_current_mA 100)
+    # CAN controllers and the hubs scripts/ecu.resc connects them to. Power
+    # off = off these buses (see vhil/broker.py).
+    can:
+      sysbus.fdcan1: can_inv
+      sysbus.fdcan2: can_acu
+      sysbus.fdcan3: can_dash
 
 # DAC (broker idx, channel) -> machine ADC channel.
 # vcu_profile: pedal_dac_idx 0; brake ch0 -> ADC3_INP3, APPS1 ch1 -> INP7,
