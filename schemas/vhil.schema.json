@@ -2,151 +2,317 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/isc-fs/IFS_vHIL/schemas/vhil.schema.json",
   "title": "IFS_vHIL catalogue and system documents",
-  "description": "Platforms, boards and firmware sources form the catalogue (catalog/); a system (systems/) places boards, gives each its firmware, and wires them together. Nothing above `platform` names an architecture or a backend.",
+  "description": "Platforms, boards, firmware sources and device models form the catalogue (catalog/); a system (systems/) places boards, gives each its firmware, attaches devices, and wires them together. Nothing above `platform` and `model` names an architecture or a backend.",
   "$defs": {
-    "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$"},
-    "name": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"},
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*$"
+    },
+    "name": {
+      "type": "string",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+    },
     "peripheral": {
       "type": "string",
       "description": "A backend path to a peripheral, e.g. Renode's sysbus.fdcan1.",
       "minLength": 1
     },
-    "address": {"type": "integer", "minimum": 0},
-
+    "address": {
+      "type": "integer",
+      "minimum": 0
+    },
     "platform": {
       "type": "object",
-      "required": ["kind", "id", "backend"],
+      "required": [
+        "kind",
+        "id",
+        "backend"
+      ],
       "additionalProperties": false,
       "properties": {
-        "kind": {"const": "platform"},
-        "id": {"$ref": "#/$defs/id"},
-        "description": {"type": "string"},
-        "backend": {"enum": ["renode"]},
+        "kind": {
+          "const": "platform"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "description": {
+          "type": "string"
+        },
+        "backend": {
+          "enum": [
+            "renode"
+          ]
+        },
         "renode": {
           "type": "object",
-          "required": ["repl"],
+          "required": [
+            "repl"
+          ],
           "additionalProperties": false,
           "properties": {
-            "repl": {"type": "string", "description": "Platform description, relative to the repo root."},
-            "cpu": {"type": "string", "default": "cpu"},
+            "repl": {
+              "type": "string",
+              "description": "Platform description, relative to the repo root."
+            },
+            "cpu": {
+              "type": "string",
+              "default": "cpu"
+            },
             "setup": {
-              "type": "array", "items": {"type": "string"},
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
               "description": "Monitor commands run on each machine after the platform loads."
             }
           }
         }
       }
     },
-
     "board": {
       "type": "object",
-      "required": ["kind", "id", "platform"],
+      "required": [
+        "kind",
+        "id",
+        "platform"
+      ],
       "additionalProperties": false,
       "properties": {
-        "kind": {"const": "board"},
-        "id": {"$ref": "#/$defs/id"},
-        "description": {"type": "string"},
-        "platform": {"$ref": "#/$defs/id"},
+        "kind": {
+          "const": "board"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "description": {
+          "type": "string"
+        },
+        "platform": {
+          "$ref": "#/$defs/id"
+        },
         "can": {
           "type": "object",
           "description": "Connector name -> CAN controller.",
-          "additionalProperties": {"$ref": "#/$defs/peripheral"}
+          "additionalProperties": {
+            "$ref": "#/$defs/peripheral"
+          }
         },
         "analog_in": {
           "type": "object",
           "description": "Pin name -> ADC and channel.",
           "additionalProperties": {
             "type": "object",
-            "required": ["adc", "channel"],
+            "required": [
+              "adc",
+              "channel"
+            ],
             "additionalProperties": false,
             "properties": {
-              "adc": {"$ref": "#/$defs/peripheral"},
-              "channel": {"type": "integer", "minimum": 0}
+              "adc": {
+                "$ref": "#/$defs/peripheral"
+              },
+              "channel": {
+                "type": "integer",
+                "minimum": 0
+              }
             }
+          }
+        },
+        "spi": {
+          "type": "object",
+          "description": "Connector name -> SPI controller.",
+          "additionalProperties": {
+            "$ref": "#/$defs/peripheral"
+          }
+        },
+        "gpio": {
+          "type": "object",
+          "description": "Pin name -> GPIO port and pin number.",
+          "additionalProperties": {
+            "type": "object",
+            "required": [
+              "port",
+              "pin"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "port": {
+                "$ref": "#/$defs/peripheral"
+              },
+              "pin": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          }
+        },
+        "sdmmc": {
+          "type": "object",
+          "description": "Connector name -> SD/MMC controller.",
+          "additionalProperties": {
+            "$ref": "#/$defs/peripheral"
           }
         }
       }
     },
-
     "firmware": {
       "type": "object",
-      "required": ["kind", "id", "repo", "ref", "build", "load"],
+      "required": [
+        "kind",
+        "id",
+        "repo",
+        "ref",
+        "build",
+        "load"
+      ],
       "additionalProperties": false,
       "properties": {
-        "kind": {"const": "firmware"},
-        "id": {"$ref": "#/$defs/id"},
-        "description": {"type": "string"},
-        "repo": {"type": "string", "pattern": "^[^/\\s]+/[^/\\s]+$"},
-        "ref": {"type": "string", "minLength": 1},
-        "submodules": {"type": "boolean", "default": false},
+        "kind": {
+          "const": "firmware"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "description": {
+          "type": "string"
+        },
+        "repo": {
+          "type": "string",
+          "pattern": "^[^/\\s]+/[^/\\s]+$"
+        },
+        "ref": {
+          "type": "string",
+          "minLength": 1
+        },
+        "submodules": {
+          "type": "boolean",
+          "default": false
+        },
         "build": {
           "type": "object",
-          "required": ["configure", "build", "elf"],
+          "required": [
+            "configure",
+            "build",
+            "elf"
+          ],
           "additionalProperties": false,
           "properties": {
-            "toolchain": {"type": "string"},
-            "configure": {"type": "string"},
-            "build": {"type": "string"},
-            "elf": {"type": "string"},
-            "recipe_source": {"type": "string", "description": "Where this recipe is reviewed, e.g. IFS_HIL configs/firmware/ecu.yaml."}
+            "toolchain": {
+              "type": "string"
+            },
+            "configure": {
+              "type": "string"
+            },
+            "build": {
+              "type": "string"
+            },
+            "elf": {
+              "type": "string"
+            },
+            "recipe_source": {
+              "type": "string",
+              "description": "Where this recipe is reviewed, e.g. IFS_HIL configs/firmware/ecu.yaml."
+            }
           }
         },
         "load": {
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "vector_table": {"$ref": "#/$defs/address", "description": "VTOR to set at reset, as a bootloader would."}
+            "vector_table": {
+              "$ref": "#/$defs/address",
+              "description": "VTOR to set at reset, as a bootloader would."
+            }
           }
         }
       }
     },
-
     "endpoint": {
       "type": "string",
       "description": "<board instance>.<connector or pin>",
       "pattern": "^[A-Za-z_][A-Za-z0-9_]*\\.[A-Za-z0-9_]+$"
     },
-
     "system": {
       "type": "object",
-      "required": ["kind", "id", "boards"],
+      "required": [
+        "kind",
+        "id",
+        "boards"
+      ],
       "additionalProperties": false,
       "properties": {
-        "kind": {"const": "system"},
-        "id": {"$ref": "#/$defs/id"},
-        "description": {"type": "string"},
+        "kind": {
+          "const": "system"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "description": {
+          "type": "string"
+        },
         "time": {
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "quantum_s": {"type": "number", "exclusiveMinimum": 0}
+            "quantum_s": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            }
           }
         },
         "boards": {
           "type": "object",
           "minProperties": 1,
-          "propertyNames": {"$ref": "#/$defs/name"},
+          "propertyNames": {
+            "$ref": "#/$defs/name"
+          },
           "additionalProperties": {
             "type": "object",
-            "required": ["board", "firmware"],
+            "required": [
+              "board",
+              "firmware"
+            ],
             "additionalProperties": false,
             "properties": {
-              "board": {"$ref": "#/$defs/id"},
-              "firmware": {"$ref": "#/$defs/id"}
+              "board": {
+                "$ref": "#/$defs/id"
+              },
+              "firmware": {
+                "$ref": "#/$defs/id"
+              }
             }
           }
         },
         "buses": {
           "type": "object",
-          "propertyNames": {"$ref": "#/$defs/name"},
+          "propertyNames": {
+            "$ref": "#/$defs/name"
+          },
           "additionalProperties": {
             "type": "object",
-            "required": ["kind", "nodes"],
+            "required": [
+              "kind",
+              "nodes"
+            ],
             "additionalProperties": false,
             "properties": {
-              "kind": {"enum": ["can"]},
-              "nodes": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/endpoint"}},
-              "host_netdev": {"type": "string", "description": "SocketCAN interface this bus is bridged to, when bridging is on."}
+              "kind": {
+                "enum": [
+                  "can"
+                ]
+              },
+              "nodes": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "$ref": "#/$defs/endpoint"
+                }
+              },
+              "host_netdev": {
+                "type": "string",
+                "description": "SocketCAN interface this bus is bridged to, when bridging is on."
+              }
             }
           }
         },
@@ -159,21 +325,48 @@
               "type": "array",
               "items": {
                 "type": "object",
-                "required": ["board", "relay", "ina_addr", "current_A"],
+                "required": [
+                  "board",
+                  "relay",
+                  "ina_addr",
+                  "current_A"
+                ],
                 "additionalProperties": false,
                 "properties": {
-                  "board": {"$ref": "#/$defs/name"},
-                  "slot": {"type": "integer", "minimum": 1},
+                  "board": {
+                    "$ref": "#/$defs/name"
+                  },
+                  "slot": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
                   "relay": {
                     "type": "object",
-                    "required": ["addr", "port", "pin"],
+                    "required": [
+                      "addr",
+                      "port",
+                      "pin"
+                    ],
                     "additionalProperties": false,
                     "properties": {
-                      "addr": {"type": "integer"}, "port": {"type": "integer"}, "pin": {"type": "integer"}
+                      "addr": {
+                        "type": "integer"
+                      },
+                      "port": {
+                        "type": "integer"
+                      },
+                      "pin": {
+                        "type": "integer"
+                      }
                     }
                   },
-                  "ina_addr": {"type": "integer"},
-                  "current_A": {"type": "number", "minimum": 0}
+                  "ina_addr": {
+                    "type": "integer"
+                  },
+                  "current_A": {
+                    "type": "number",
+                    "minimum": 0
+                  }
                 }
               }
             },
@@ -181,13 +374,159 @@
               "type": "array",
               "items": {
                 "type": "object",
-                "required": ["dac", "channel", "to"],
+                "required": [
+                  "dac",
+                  "channel",
+                  "to"
+                ],
                 "additionalProperties": false,
                 "properties": {
-                  "dac": {"type": "integer", "minimum": 0},
-                  "channel": {"type": "integer", "minimum": 0},
-                  "to": {"$ref": "#/$defs/endpoint"}
+                  "dac": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "channel": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "to": {
+                    "$ref": "#/$defs/endpoint"
+                  }
                 }
+              }
+            }
+          }
+        },
+        "devices": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/name"
+          },
+          "additionalProperties": {
+            "type": "object",
+            "required": [
+              "model"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "model": {
+                "$ref": "#/$defs/id"
+              },
+              "spi": {
+                "$ref": "#/$defs/endpoint"
+              },
+              "cs": {
+                "$ref": "#/$defs/endpoint"
+              },
+              "params": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": [
+                    "integer",
+                    "number",
+                    "string",
+                    "boolean"
+                  ]
+                }
+              },
+              "sdmmc": {
+                "$ref": "#/$defs/endpoint"
+              },
+              "attach": {
+                "$ref": "#/$defs/name",
+                "description": "Device whose port this one attaches to."
+              },
+              "count": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "Instances at positions 0..count-1 on the attach port, named <device><i>."
+              }
+            }
+          }
+        }
+      }
+    },
+    "model": {
+      "type": "object",
+      "required": [
+        "kind",
+        "id",
+        "interface",
+        "backend"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "model"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "description": {
+          "type": "string"
+        },
+        "interface": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "What a device of this model attaches to, and what it provides.",
+          "properties": {
+            "spi": {
+              "type": "boolean"
+            },
+            "cs": {
+              "type": "boolean",
+              "description": "Chip-select input, active low."
+            },
+            "sdmmc": {
+              "type": "boolean"
+            },
+            "attach": {
+              "type": "string",
+              "description": "Kind of port on another device this model attaches to, e.g. isospi."
+            },
+            "provides": {
+              "type": "string",
+              "description": "Kind of port this model offers other devices, e.g. isospi."
+            }
+          }
+        },
+        "params": {
+          "type": "object",
+          "description": "Parameter name -> default value; a device may override.",
+          "additionalProperties": {
+            "type": [
+              "integer",
+              "number",
+              "string",
+              "boolean"
+            ]
+          }
+        },
+        "backend": {
+          "enum": [
+            "renode"
+          ]
+        },
+        "renode": {
+          "type": "object",
+          "required": [
+            "type"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "source": {
+              "type": "string",
+              "description": "C# source, relative to the repo root, compiled at load time. Omit for a model built into Renode."
+            },
+            "type": {
+              "type": "string",
+              "description": "Type as used in a platform description, e.g. SPI.Ltc6811Chain."
+            },
+            "params": {
+              "type": "object",
+              "description": "Model parameter -> constructor argument name.",
+              "additionalProperties": {
+                "type": "string"
               }
             }
           }
@@ -196,9 +535,20 @@
     }
   },
   "oneOf": [
-    {"$ref": "#/$defs/platform"},
-    {"$ref": "#/$defs/board"},
-    {"$ref": "#/$defs/firmware"},
-    {"$ref": "#/$defs/system"}
+    {
+      "$ref": "#/$defs/platform"
+    },
+    {
+      "$ref": "#/$defs/board"
+    },
+    {
+      "$ref": "#/$defs/firmware"
+    },
+    {
+      "$ref": "#/$defs/model"
+    },
+    {
+      "$ref": "#/$defs/system"
+    }
   ]
 }

@@ -48,7 +48,8 @@ def _load(path: Path, kind: str) -> dict:
 
 
 def _entry(kind: str, ident: str, catalog: Path) -> dict:
-    folder = {"platform": "platforms", "board": "boards", "firmware": "firmware"}[kind]
+    folder = {"platform": "platforms", "board": "boards", "firmware": "firmware",
+              "model": "models"}[kind]
     path = catalog / folder / f"{ident}.yaml"
     if not path.is_file():
         raise SystemError(f"no {kind} '{ident}' in the catalogue ({path})")
@@ -66,11 +67,12 @@ class Board:
     firmware: dict      # catalogue firmware source
 
     def endpoint(self, connector: str) -> tuple[str, object]:
-        """('can', peripheral) or ('analog', {adc, channel}) for a connector or pin."""
-        if connector in self.board.get("can", {}):
-            return "can", self.board["can"][connector]
-        if connector in self.board.get("analog_in", {}):
-            return "analog", self.board["analog_in"][connector]
+        """(kind, target) for a connector or pin: ('can'|'spi'|'sdmmc', peripheral),
+        ('analog', {adc, channel}) or ('gpio', {port, pin})."""
+        for kind, section in (("can", "can"), ("spi", "spi"), ("sdmmc", "sdmmc"),
+                              ("analog", "analog_in"), ("gpio", "gpio")):
+            if connector in self.board.get(section, {}):
+                return kind, self.board[section][connector]
         raise SystemError(f"board '{self.name}' ({self.board['id']}) has no "
                           f"connector or pin '{connector}'")
 
@@ -87,6 +89,8 @@ class System:
                                       _entry("firmware", spec["firmware"], catalog))
         self.buses = self.doc.get("buses", {})
         self.bench = self.doc.get("bench", {})
+        self.devices = {name: dict(spec, model_doc=_entry("model", spec["model"], catalog))
+                        for name, spec in self.doc.get("devices", {}).items()}
         self._check()
 
     def resolve(self, endpoint: str) -> tuple[Board, str, object]:
@@ -106,6 +110,36 @@ class System:
                 if node in seen:
                     raise SystemError(f"'{node}' is on both '{seen[node]}' and '{bus}'")
                 seen[node] = bus
+        for name, dev in self.devices.items():
+            interface = dev["model_doc"].get("interface", {})
+            boards = set()
+            for port, want in (("spi", "spi"), ("cs", "gpio"), ("sdmmc", "sdmmc")):
+                if interface.get(port) and port not in dev:
+                    raise SystemError(f"device '{name}' ({dev['model']}) needs '{port}'")
+                if port in dev:
+                    if not interface.get(port):
+                        raise SystemError(f"device '{name}' ({dev['model']}) takes no '{port}'")
+                    board, kind, _ = self.resolve(dev[port])
+                    if kind != want:
+                        raise SystemError(f"device '{name}': {port} '{dev[port]}' is {kind}, not {want}")
+                    boards.add(board.name)
+            if interface.get("attach"):
+                parent = self.devices.get(dev.get("attach"))
+                if parent is None:
+                    raise SystemError(f"device '{name}' ({dev['model']}) must attach to a device "
+                                      f"providing {interface['attach']}")
+                if parent["model_doc"].get("interface", {}).get("provides") != interface["attach"]:
+                    raise SystemError(f"device '{name}': '{dev['attach']}' provides no "
+                                      f"{interface['attach']} port")
+            elif "attach" in dev or "count" in dev:
+                raise SystemError(f"device '{name}' ({dev['model']}) does not attach to a device")
+            if len(boards) > 1:
+                raise SystemError(f"device '{name}' spans boards {sorted(boards)}")
+            unknown = set(dev.get("params", {})) - set(dev["model_doc"].get("params", {}))
+            if unknown:
+                raise SystemError(f"device '{name}': unknown params {sorted(unknown)}")
+        for name in self.devices:
+            self.board_of_device(name)   # every device reaches a board, no cycles
         for c in self.bench.get("carriers", []):
             if c["board"] not in self.boards:
                 raise SystemError(f"bench carrier '{c['board']}' is not a board in this system")
@@ -124,6 +158,48 @@ class System:
                     out[controller] = bus
         return out
 
+    def board_of_device(self, name: str, _seen: tuple = ()) -> str:
+        if name in _seen:
+            raise SystemError(f"devices attach in a cycle: {' -> '.join(_seen + (name,))}")
+        dev = self.devices[name]
+        for port in ("spi", "cs", "sdmmc"):
+            if port in dev:
+                return self.resolve(dev[port])[0].name
+        return self.board_of_device(dev["attach"], _seen + (name,))
+
+    def devices_on(self, board: str) -> list[str]:
+        """Device names on one board, parents before the devices attached to them."""
+        mine = [n for n in self.devices if self.board_of_device(n) == board]
+        ordered: list[str] = []
+        def visit(n):
+            if n not in ordered:
+                if "attach" in self.devices[n]:
+                    visit(self.devices[n]["attach"])
+                ordered.append(n)
+        for n in mine:
+            visit(n)
+        return ordered
+
+    def _renode_device(self, name: str, dev: dict) -> str:
+        """Platform-description text attaching one device (or a counted chain)."""
+        rn = dev["model_doc"]["renode"]
+        local = lambda path: path.split(".", 1)[1] if path.startswith("sysbus.") else path
+        params = dict(dev["model_doc"].get("params", {}), **dev.get("params", {}))
+        body = [f"    {rn.get('params', {}).get(k, k)}: "
+                f"{str(v).lower() if isinstance(v, bool) else v}" for k, v in params.items()]
+        lines = []
+        if "attach" in dev:
+            for i in range(dev.get("count", 1)):
+                lines += [f"{name}{i}: {rn['type']} @ {dev['attach']} {i}"] + body
+        else:
+            port = dev.get("spi") or dev.get("sdmmc")
+            parent = local(self.resolve(port)[2]) if port else "sysbus"
+            lines += [f"{name}: {rn['type']} @ {parent}"] + body
+        if "cs" in dev:
+            gpio = self.resolve(dev["cs"])[2]
+            lines += ["", f"{local(gpio['port'])}:", f"    {gpio['pin']} -> {name}@0"]
+        return "\n".join(lines)
+
     # -- outputs ------------------------------------------------------------
 
     def render_renode(self, firmware: dict[str, Path] | None = None,
@@ -140,6 +216,10 @@ class System:
         for bus in self.buses:
             out.append(f'emulation CreateCANHub "{bus}"')
         out.append("")
+        sources = sorted({(REPO / d["model_doc"]["renode"]["source"]).as_posix()
+                          for d in self.devices.values() if "source" in d["model_doc"]["renode"]})
+        if sources:
+            out += [f"include @{src}" for src in sources] + [""]
         for b in self.boards.values():
             if b.platform["backend"] != "renode":
                 raise SystemError(f"board '{b.name}': backend {b.platform['backend']} is not supported")
@@ -153,6 +233,12 @@ class System:
             out += [f'mach create "{b.name}"',
                     f"machine LoadPlatformDescription @{(REPO / rn['repl']).as_posix()}"]
             out += rn.get("setup", [])
+            for name in self.devices_on(b.name):
+                dev = self.devices[name]
+                out += [f"# device {name}: {dev['model']}"
+                        + (f" x{dev['count']} on {dev['attach']}" if "count" in dev else ""),
+                        'machine LoadPlatformDescriptionFromString """',
+                        self._renode_device(name, dev), '"""']
             for controller, bus in self.can_of(b.name).items():
                 out.append(f"connector Connect {controller} {bus}")
             out += ["macro reset", '"""', f"    sysbus LoadELF ${var}"]

@@ -1,0 +1,22 @@
+kind: model
+id: ltc6811
+description: >-
+  LTC6811-1 battery monitor on an isoSPI daisy chain. Register-level:
+  configuration, cell and GPIO1 results, COMM and an ADG731 temperature mux
+  latched by STCOMM. Commands and writes with a bad PEC are ignored, and
+  conversions are instant. Answers its own segment, then relays downstream.
+  Defaults: 3700 mV cells, 25 C on every mux channel. Test API per chip
+  (monitor): SetCell, SetAllCells, SetTemperature, SetAllTemperatures,
+  SetAuxRaw, Respond, BreakDownstream, CommandCount.
+interface: {attach: isospi}
+params:
+  # false: write segment i goes to the chip i hops from the bridge, as the
+  # AMS firmware intends. true: segment 0 goes to the farthest chip, as
+  # LTC6811-1 silicon shifts it.
+  write_farthest_first: false
+backend: renode
+renode:
+  source: models/renode/IsoSpi.cs
+  type: SPI.Ltc6811
+  params:
+    write_farthest_first: writeFarthestFirst
