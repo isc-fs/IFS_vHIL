@@ -97,13 +97,13 @@ testable on their own, and shared.
 
 | Milestone | Deliverable | Done when |
 |---|---|---|
-| **M1: system description** | Schema for boards, firmware sources and nets; generator to Renode scripts | Today's ECU setup is *generated*, and IFS_HIL ECU smoke still gives 14 passed |
+| **M1: system description** ([#10](https://github.com/isc-fs/IFS_vHIL/issues/10)) | Schema for boards, firmware sources and nets; generator to Renode scripts | Today's ECU setup is *generated*, and IFS_HIL ECU smoke still gives 14 passed |
 | **M2: AMS chip model** ([#2](https://github.com/isc-fs/IFS_vHIL/issues/2)) | LTC6820/LTC6811 chain as the first catalogue chip model | AMS boots out of Error with seeded cells; AMS smoke passes |
-| **M3: multi-node systems** | ECU + AMS in one system on a shared ACU bus, no simulators | IFS_HIL's F-real-AMS tests leave `gaps.yaml` |
-| **M4: runtime API, virtual-time tests** | Start, step, inject, observe over an API; a test library in virtual time | A scenario runs deterministically at any emulation speed |
-| **M5: shared web app** | Workers, GitHub App, system editor, live views | An engineer composes, runs and inspects a system from the browser |
-| **M6: co-simulation port** | Time-synchronised signal port for plants; scripted plants first | A scripted plant drives the ECU's pedals and inverter in closed loop; MingoCIL can attach |
-| **M7: beyond STM32** | Platform abstraction exercised by a second MCU family, then a Linux SoC spike | A non-STM32 board runs in a system next to the H733 boards |
+| **M3: multi-node systems** ([#11](https://github.com/isc-fs/IFS_vHIL/issues/11)) | ECU + AMS in one system on a shared ACU bus, no simulators | IFS_HIL's F-real-AMS tests leave `gaps.yaml` |
+| **M4: runtime API, virtual-time tests** ([#12](https://github.com/isc-fs/IFS_vHIL/issues/12)) | Start, step, inject, observe over an API; a test library in virtual time | A scenario runs deterministically at any emulation speed |
+| **M5: shared web app** ([#13](https://github.com/isc-fs/IFS_vHIL/issues/13)) | Workers, GitHub App, system editor, live views | An engineer composes, runs and inspects a system from the browser |
+| **M6: co-simulation port** ([#14](https://github.com/isc-fs/IFS_vHIL/issues/14)) | Time-synchronised signal port for plants; scripted plants first | A scripted plant drives the ECU's pedals and inverter in closed loop; MingoCIL can attach |
+| **M7: beyond STM32** ([#15](https://github.com/isc-fs/IFS_vHIL/issues/15)) | Platform abstraction exercised by a second MCU family, then a Linux SoC spike | A non-STM32 board runs in a system next to the H733 boards |
 | IFS_HIL routing ([#3](https://github.com/isc-fs/IFS_vHIL/issues/3)) | Virtual bench descriptor in IFS_HIL | A firmware PR gets a virtual verdict without bench-01 (after M1) |
 | Depth ([#4](https://github.com/isc-fs/IFS_vHIL/issues/4)) | Bootloader emulation, fault injection, coverage | A-003 and Block D run virtually |
 
