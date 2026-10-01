@@ -12,9 +12,11 @@
 #
 # The kernel has CONFIG_MODVERSIONS=y: a module's imported symbols carry CRCs
 # that must match the kernel's. They are reproduced by building vmlinux from
-# the same source and config, so the first build compiles the kernel once.
-# BTF is disabled for that build only. The kernel allows BTF mismatch, and
-# BTF does not affect the CRCs, so this avoids needing pahole.
+# the same source and the exact running config, so the first build compiles
+# the kernel once. The config must stay exact: even BTF changes struct module,
+# and with it module_layout, which the kernel checks on every load. That is
+# why pahole (dwarves) is required. The script checks module_layout against a
+# module that ships with the kernel before it reports success.
 #
 # Rebuild after `wsl --update` changes the kernel version (uname -r).
 set -euo pipefail
@@ -44,23 +46,27 @@ if [ ! -f "$ko" ]; then
     fi
 
     missing=()
-    for t in gcc make flex bison bc perl; do command -v "$t" >/dev/null || missing+=("$t"); done
+    for t in gcc make flex bison bc perl pahole; do command -v "$t" >/dev/null || missing+=("$t"); done
     [ -f /usr/include/gelf.h ] || missing+=("libelf-dev")
     [ -f /usr/include/openssl/ssl.h ] || missing+=("libssl-dev")
     if [ ${#missing[@]} -gt 0 ]; then
         echo "Missing build dependencies: ${missing[*]}"
         echo "Install them with:"
-        echo "  sudo apt-get install -y build-essential flex bison bc libelf-dev libssl-dev"
+        echo "  sudo apt-get install -y build-essential flex bison bc libelf-dev libssl-dev dwarves"
         exit 1
     fi
 
     cd "$src"
     zcat /proc/config.gz > .config
-    scripts/config --module CAN_VCAN --disable DEBUG_INFO_BTF
+    scripts/config --module CAN_VCAN
     make olddefconfig >/dev/null
     echo "Building vmlinux once for the symbol CRCs ($jobs jobs)..."
     make -j"$jobs" LOCALVERSION= vmlinux >"$work/build.log" 2>&1 \
         || { tail -30 "$work/build.log"; exit 1; }
+    # An external-module build reads the kernel's CRCs from Module.symvers;
+    # building only vmlinux writes them to vmlinux.symvers.
+    cp vmlinux.symvers Module.symvers
+    make LOCALVERSION= M=drivers/net/can clean >/dev/null
     make -j"$jobs" LOCALVERSION= M=drivers/net/can modules >>"$work/build.log" 2>&1 \
         || { tail -30 "$work/build.log"; exit 1; }
     cp drivers/net/can/vcan.ko "$ko"
@@ -68,9 +74,19 @@ fi
 
 vm=$(modinfo -F vermagic "$ko")
 case "$vm" in
-    "$kver "*) echo "Built $ko (vermagic: $vm)" ;;
-    *) echo "vermagic mismatch: module '$vm' vs kernel '$kver'"; exit 1 ;;
+    "$kver "*) ;;
+    *) echo "vermagic mismatch: module '$vm' vs kernel '$kver'"; rm -f "$ko"; exit 1 ;;
 esac
+# module_layout must match a module the kernel already accepts.
+layout() { /sbin/modprobe --dump-modversions "$1" | awk '$2=="module_layout"{print $1}'; }
+ref=$(layout "$(modinfo -n can-dev)")
+ours=$(layout "$ko")
+if [ "$ours" != "$ref" ]; then
+    echo "module_layout mismatch: built $ours, kernel expects $ref."
+    echo "The build config differs from the running kernel's; not loading it."
+    rm -f "$ko"; exit 1
+fi
+echo "Built $ko (vermagic and module_layout match the running kernel)"
 
 if [ "${1:-}" = "--load" ]; then
     sudo modprobe can_dev
