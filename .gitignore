@@ -5,3 +5,4 @@ report.html
 results/
 snapshots/
 logs/
+__pycache__/
