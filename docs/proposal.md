@@ -1,5 +1,8 @@
 # IFS_vHIL — proposal
 
+> **Direction and roadmap now live in [`vision.md`](vision.md).** This
+> document keeps the Phase 0/1 design, spike results and findings.
+
 **Status:** Phase 0 (feasibility spike) done — see [§3](#3-what-the-spike-proved).
 **Date:** 2026-10-01
 

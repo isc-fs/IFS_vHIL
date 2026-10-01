@@ -6,11 +6,17 @@ flashes to real carriers, on emulated STM32H733 boards in
 every push, in parallel, with no hardware attached. Physical-only work stays
 on the physical bench: analog accuracy, real power, flash wear and bus physics.
 
-**Status: Phase 0 — feasibility spike done.** The unmodified ECU firmware
-boots in Renode. Its three CAN buses run at the firmware's configured rates.
-Read [`docs/proposal.md`](docs/proposal.md) for the design, what the spike
-proved, coverage against IFS_HIL's suites, and the plan. Work is tracked
-in issues, one per phase: [#1](https://github.com/isc-fs/IFS_vHIL/issues/1)–[#4](https://github.com/isc-fs/IFS_vHIL/issues/4).
+**Where it's going:** a shared web app where engineers compose whole systems,
+defining their own boards, connecting ECUs over buses and wires, and pointing
+each one at its firmware repository. Hardware combinations are bounded by what
+is modelled, not by a PCB. See [`docs/vision.md`](docs/vision.md).
+
+**Status: Phase 1 done.** IFS_HIL's own ECU smoke suite runs unmodified
+against the virtual ECU, in CI and locally: 14 passed, 7 skipped, each skip
+with a stated reason ([#1](https://github.com/isc-fs/IFS_vHIL/issues/1)).
+Next is M1, the system description. The roadmap and its issues are in
+[`docs/vision.md`](docs/vision.md#5-roadmap). The Phase 0/1 design and
+findings are in [`docs/proposal.md`](docs/proposal.md).
 
 **Contributing:** `dev` is the trunk and `main` is release-only. Branch
 `feat/` `fix/` `docs/` `chore/` `test/` off `dev` and open a PR back into it.
