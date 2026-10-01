@@ -1,0 +1,32 @@
+# Unmodelled hardware the firmware is allowed to touch, and why that is safe.
+#
+# Renode drops writes to, and returns 0 for reads from, registers it does not
+# model. vhil/peripheral_guard.py fails a run when firmware touches anything
+# not listed here. Add an entry only with a reason the access cannot change
+# what a test observes. Otherwise, model the hardware.
+#
+#   peripheral: <name or glob>   offsets: [<register offsets>]  (omit = any)
+#   tag: <tagged sysbus region>
+#   address: <unmapped address>
+
+- peripheral: usb1
+  why: "USB OTG HS: CubeMX initialises it (MX_USB_OTG_HS_PCD_Init), but neither app ever uses USB"
+
+- tag: CAN_CCU
+  why: "FDCAN clock-calibration unit. HAL_FDCAN_IRQHandler polls its IR/IE on FDCAN1; calibration is off (classic CAN, HSE kernel clock), so reading 0 is the hardware's answer too"
+
+- peripheral: fdcan1
+  offsets: [0x108]
+  why: "TT-CAN TTOCF. HAL_FDCAN_Init clears its OM bits on FDCAN1 (stm32h7xx_hal_fdcan.c:583) and HAL reads it to test for TT mode; reading 0 means event-driven, which is the firmware's real configuration"
+
+- peripheral: fdcan*
+  offsets: [0x1C]
+  why: "NBTP nominal bit timing. Renode does not model bit timing (proposal non-goal); bitrate and sample point stay physical-bench checks"
+
+- peripheral: rcc
+  offsets: [0x2C, 0x54, 0xEC, 0xF0]
+  why: "PLLCFGR fractional/range bits (0x2C), D2CCIP2R USBSEL (0x54), and the H72x/H73x-only enable bits the H743 RCC model treats as reserved: APB1HENR.TIM23EN bit 24 (0xEC) and APB2ENR.USART10EN bit 7 (0xF0), per stm32h733xx.h. Renode does not gate clocks, so those peripherals run regardless; frequencies come from the PLL dividers, which are modelled"
+
+- peripheral: usart10
+  offsets: [0x08, 0x2C]
+  why: "CR3.EIE (error interrupt) and PRESC, which the F7-family USART model lacks. Baud rate is not modelled, so the prescaler cannot change what a test sees"

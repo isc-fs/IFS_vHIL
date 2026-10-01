@@ -89,7 +89,13 @@ IFS_HIL recipe ─▶ ECU08.elf / AMS.elf  (same image the physical bench flashe
    Renode 1.17's reset zeroes the register as read but not its masking, so a
    cut inside a FreeRTOS critical section hangs the next boot in `HAL_Delay`
    (`vhil/broker.py`). Don't remove it until upstream Renode fixes this.
-7. **A virtual pass is not a physical pass.** When the two benches
+7. **Unmodelled hardware fails the run unless it is explained.** Renode drops
+   writes to unmodelled registers and returns 0 for reads. The plugin's
+   peripheral guard (`vhil/peripheral_guard.py`) fails a session on any such
+   access not in [`configs/peripherals.yaml`](configs/peripherals.yaml). Add an
+   entry only with a reason it can't change what a test sees; otherwise model
+   the hardware.
+8. **A virtual pass is not a physical pass.** When the two benches
    disagree, it's a model gap until proven otherwise. File an issue;
    don't tune the test to agree.
 

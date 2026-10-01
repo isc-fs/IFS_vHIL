@@ -171,8 +171,9 @@ is incremental.
   assert on sub-millisecond timing need loose tolerances or stay physical.
 - **Silent no-ops.** Renode *tags* unmodelled peripherals: writes are dropped
   and reads return 0. A firmware path that depends on one can pass for the
-  wrong reason. Mitigation: fail CI on new "non existing peripheral" warnings
-  outside an allow-list.
+  wrong reason. Mitigation (in place): the peripheral guard fails any run
+  whose firmware touches unmodelled hardware not explained in
+  `configs/peripherals.yaml`.
 - **Linux-only CAN bridge.** `SocketCANBridge` needs Linux (or WSL2 with
   `vcan`). CI is Linux, so this only affects local runs on Windows/macOS.
 - **Upstream drift.** Pin the Renode version; bump deliberately.
