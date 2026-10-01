@@ -9,7 +9,13 @@ on the physical bench: analog accuracy, real power, flash wear and bus physics.
 **Status: Phase 0 — feasibility spike done.** The unmodified ECU firmware
 boots in Renode. Its three CAN buses run at the firmware's configured rates.
 Read [`docs/proposal.md`](docs/proposal.md) for the design, what the spike
-proved, coverage against IFS_HIL's suites, and the plan.
+proved, coverage against IFS_HIL's suites, and the plan. Work is tracked
+in issues, one per phase: [#1](https://github.com/isc-fs/IFS_vHIL/issues/1)–[#4](https://github.com/isc-fs/IFS_vHIL/issues/4).
+
+**Contributing:** `dev` is the trunk and `main` is release-only. Branch
+`feat/` `fix/` `docs/` `chore/` `test/` off `dev` and open a PR back into it.
+See [`docs/development/setup.md`](docs/development/setup.md), and
+[`CLAUDE.md`](CLAUDE.md) for the operating model.
 
 ## Layout
 
@@ -19,7 +25,9 @@ scripts/ecu.resc                Boot the ECU app image as the CAN bootloader lea
 scripts/build_fw.sh             Build a DUT image with IFS_HIL's recipe
 scripts/explore.sh, probe.sh    Headless boot + log / monitor-command helpers
 tests/ecu_smoke.robot           CAN-side smoke checks (heartbeat, buses, 0x704 health)
+CLAUDE.md                       Operating model: branch/commit/PR policy, invariants
 docs/proposal.md                Design, spike results, coverage, phases, risks
+docs/development/setup.md       Toolchain, branching, issues, PRs, releases
 .github/workflows/ecu-smoke.yml  CI: build the ECU from IFS_HIL's recipe, run the smoke suite
 ```
 

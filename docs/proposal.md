@@ -155,10 +155,10 @@ the Pico emulator's own fidelity.
 | Phase | Deliverable | Exit criterion |
 |---|---|---|
 | **0 — spike** ✅ | H733 platform, ECU boot script, Robot smoke test | ECU boots, all three buses at the right rates |
-| **1 — CAN I/O + CI** | SocketCAN bridge to `vcan`, a pytest fixture that starts Renode and yields the buses, CI workflow building the ECU from IFS_HIL's recipe | IFS_HIL's ECU `smoke` suite (A, B, F, I) passes unmodified against the virtual ECU in GitHub Actions |
-| **2 — AMS** | LTC6820/LTC6811 chain model (C#), AMS boot script, GPIO/ADC stimulus adapter | AMS boots out of Error with seeded cells; AMS `smoke` passes |
-| **3 — fleet integration** | A `kind: virtual` bench descriptor in IFS_HIL, routed to GitHub-hosted runners; `/hil-test` picks virtual when no physical capability is needed | A firmware PR gets a virtual verdict without bench-01 |
-| **4 — depth** | CAN bootloader emulation (A-003, Block D), fault injection, coverage reports, multi-node (ECU ↔ AMS on one virtual bus) | ECU and AMS talking to each other, no simulators |
+| **1 — CAN I/O + CI** ([#1](https://github.com/isc-fs/IFS_vHIL/issues/1)) | SocketCAN bridge to `vcan`, a pytest fixture that starts Renode and yields the buses, CI workflow building the ECU from IFS_HIL's recipe | IFS_HIL's ECU `smoke` suite (A, B, F, I) passes unmodified against the virtual ECU in GitHub Actions |
+| **2 — AMS** ([#2](https://github.com/isc-fs/IFS_vHIL/issues/2)) | LTC6820/LTC6811 chain model (C#), AMS boot script, GPIO/ADC stimulus adapter | AMS boots out of Error with seeded cells; AMS `smoke` passes |
+| **3 — fleet integration** ([#3](https://github.com/isc-fs/IFS_vHIL/issues/3)) | A `kind: virtual` bench descriptor in IFS_HIL, routed to GitHub-hosted runners; `/hil-test` picks virtual when no physical capability is needed | A firmware PR gets a virtual verdict without bench-01 |
+| **4 — depth** ([#4](https://github.com/isc-fs/IFS_vHIL/issues/4)) | CAN bootloader emulation (A-003, Block D), fault injection, coverage reports, multi-node (ECU ↔ AMS on one virtual bus) | ECU and AMS talking to each other, no simulators |
 
 Phase 1 is the decisive one: if the existing suites run unmodified, the rest
 is incremental.
