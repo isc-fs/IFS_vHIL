@@ -6,3 +6,4 @@ results/
 snapshots/
 logs/
 __pycache__/
+build/

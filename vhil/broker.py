@@ -15,7 +15,7 @@ Everything else (PSU, health, unrouted DACs, other TCA pins) keeps the fake's
 behaviour, which is what an off-bench run already relies on.
 
   python -m vhil.broker --ifs-hil ../IFS_HIL --renode-port 1234 \
-      --socket /tmp/hil-broker.sock [--config configs/vbench.yaml]
+      --socket /tmp/hil-broker.sock [--system systems/ecu.yaml]
 """
 from __future__ import annotations
 
@@ -25,7 +25,6 @@ import sys
 import threading
 from pathlib import Path
 
-import yaml
 
 from vhil.renode import RenodeMonitor
 
@@ -124,7 +123,8 @@ def main(argv=None) -> int:
                    help="IFS_HIL checkout (provides broker.server + fake_bus)")
     p.add_argument("--renode-port", type=int, default=1234)
     p.add_argument("--socket", default="/tmp/hil-broker.sock")
-    p.add_argument("--config", type=Path, default=REPO / "configs" / "vbench.yaml")
+    p.add_argument("--system", type=Path, default=REPO / "systems" / "ecu.yaml",
+                   help="system file whose bench wiring to serve")
     p.add_argument("--log-level", default="INFO")
     args = p.parse_args(argv)
     logging.basicConfig(level=args.log_level,
@@ -134,7 +134,8 @@ def main(argv=None) -> int:
     from broker.fake_bus import FakeHardwareManager
     from broker.server import serve
 
-    config = yaml.safe_load(args.config.read_text())
+    from vhil.system import System
+    config = System(args.system).bench_config()
     monitor = RenodeMonitor(args.renode_port)
     backend = make_backend(FakeHardwareManager, monitor, config)
     log.info("virtual broker on %s (Renode monitor :%d)", args.socket, args.renode_port)

@@ -1,7 +1,7 @@
 name: ECU smoke (virtual)
 
-# Builds the ECU exactly as IFS_HIL's configs/firmware/ecu.yaml does, boots it
-# on the virtual STM32H733 and runs tests/ecu_smoke.robot. No hardware.
+# Builds the ECU from the source systems/ecu.yaml declares (IFS_HIL's recipe),
+# renders the system to a Renode script, and runs tests/ecu_smoke.robot on it.
 
 on:
   pull_request:
@@ -10,9 +10,8 @@ on:
   workflow_dispatch:
     inputs:
       ecu_ref:
-        description: "IFS08-CE-ECU ref to test"
+        description: "ECU firmware ref (default: the ref in catalog/firmware/ecu.yaml)"
         required: false
-        default: dev
 
 env:
   RENODE_VERSION: 1.17.0
@@ -24,20 +23,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Check out the ECU firmware
-        uses: actions/checkout@v4
-        with:
-          repository: isc-fs/IFS08-CE-ECU
-          ref: ${{ inputs.ecu_ref || 'dev' }}
-          path: fw/ecu
-
       - name: Arm GNU toolchain (pinned like IFS_HIL's recipe)
         uses: carlosperate/arm-none-eabi-gcc-action@v1
         with:
           release: '14.2.Rel1'
 
-      - name: Build ECU08.elf
-        run: scripts/build_fw.sh fw/ecu
+      - name: Build the ECU firmware from systems/ecu.yaml
+        id: fw
+        env:
+          ECU_REF: ${{ inputs.ecu_ref }}
+        run: |
+          pip install -q pyyaml "jsonschema>=4"
+          python -m vhil.system build systems/ecu.yaml --workdir "$RUNNER_TEMP/fw" \
+            ${ECU_REF:+--ref "ecu=$ECU_REF"} | tee built.txt
+          echo "elf=$(sed -n 's/^ecu=//p' built.txt)" >> "$GITHUB_OUTPUT"
 
       - name: Install Renode ${{ env.RENODE_VERSION }}
         run: |
@@ -50,8 +49,10 @@ jobs:
 
       - name: Run tests/ecu_smoke.robot
         run: |
+          python -m vhil.system render systems/ecu.yaml -o "$RUNNER_TEMP/ecu.resc"
           "$RUNNER_TEMP/renode/renode-test" tests/ecu_smoke.robot \
-            --variable ELF:"$GITHUB_WORKSPACE/fw/ecu/build/ECU08.elf" -r results
+            --variable ELF:"${{ steps.fw.outputs.elf }}" \
+            --variable RESC:"$RUNNER_TEMP/ecu.resc" -r results
 
       - name: Upload results
         if: always()

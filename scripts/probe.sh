@@ -1,13 +1,17 @@
 #!/usr/bin/env bash
-# Boot a .resc for N virtual seconds, then run extra monitor commands.
-#   scripts/probe.sh <script.resc> <elf> <seconds> "<cmd1>" "<cmd2>" ...
+# Boot a one-board system for N virtual seconds, then run extra monitor commands.
+#   scripts/probe.sh <systems/x.yaml> <elf> <seconds> "<cmd1>" "<cmd2>" ...
 set -euo pipefail
+here=$(cd "$(dirname "$0")/.." && pwd)
 renode=${RENODE:-$HOME/vhil-tools/renode_1.17.0-portable/renode}
-resc=$(realpath "$1"); elf=$2; secs=$3; shift 3
+export PYTHONPATH="$here${PYTHONPATH:+:$PYTHONPATH}"
+system=$1; elf=$(realpath "$2"); secs=$3; shift 3
+board=$(python3 -c "from vhil.system import System; print(*System('$system').boards)")
+script=$(mktemp --suffix=.resc)
+python3 -m vhil.system render "$system" --firmware "$board=$elf" -o "$script"
 cmds=$(printf '%s\n' "$@")
 "$renode" --disable-gui --plain --console -e "
-\$elf=@$elf
-include @$resc
+include @$script
 emulation RunFor \"$secs\"
 $cmds
 quit
