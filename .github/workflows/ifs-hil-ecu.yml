@@ -79,6 +79,11 @@ jobs:
           done
           ip -br link show type vcan
 
+      - name: Capture all CAN traffic
+        run: |
+          sudo apt-get install -y -qq can-utils >/dev/null
+          nohup candump -L -t a can0 can1 can2 > candump.log 2>&1 &
+
       - name: Run IFS_HIL's ECU suite against the virtual ECU
         working-directory: ifs_hil
         env:
@@ -93,7 +98,7 @@ jobs:
             --vhil-elf "$GITHUB_WORKSPACE/fw/ecu/build/ECU08.elf" \
             --vhil-renode "$RUNNER_TEMP/renode/renode" \
             --vhil-socketcan --vhil-log "$GITHUB_WORKSPACE/vhil-renode.log" \
-            -p no:cacheprovider -rA --junitxml="$GITHUB_WORKSPACE/junit.xml" \
+            -p no:cacheprovider -rA --log-level=INFO --junitxml="$GITHUB_WORKSPACE/junit.xml" \
             $targets | tee "$GITHUB_WORKSPACE/pytest.txt"
           rc=${PIPESTATUS[0]}
           # A missing bus must never pass as a skip.
@@ -111,4 +116,5 @@ jobs:
             junit.xml
             pytest.txt
             vhil-renode.log
+            candump.log
           if-no-files-found: ignore

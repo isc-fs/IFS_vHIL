@@ -67,6 +67,11 @@ def make_backend(fake_cls, monitor: RenodeMonitor, config: dict):
                 self._on(machine, "machine Start")
             else:
                 self._on(machine, "machine Pause")
+                # Where the CPU was when power went: the first clue when a
+                # boot never reaches the bus.
+                pc = self._on(machine, "cpu PC").strip()
+                log.info("%s power cut at %s %s", machine, pc,
+                         self._on(machine, f"sysbus FindSymbolAt {pc}").strip())
             self._powered[machine] = value
             log.info("%s %s", machine, "powered" if value else "unpowered")
 
