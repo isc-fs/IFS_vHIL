@@ -1,0 +1,57 @@
+name: Native tests (virtual time)
+
+# Builds the firmware each system declares, then runs tests/sim on Renode
+# through vhil.sim: assertions on virtual timestamps, not wall clock.
+
+on:
+  pull_request:
+  push:
+    branches: [dev]
+  workflow_dispatch:
+
+env:
+  RENODE_VERSION: 1.17.0
+
+jobs:
+  sim:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Arm GNU toolchain (pinned like IFS_HIL's recipe)
+        uses: carlosperate/arm-none-eabi-gcc-action@v1
+        with:
+          release: '14.2.Rel1'
+
+      - name: Build the ECU firmware from systems/ecu.yaml
+        id: fw
+        run: |
+          pip install -q pyyaml "jsonschema>=4" pytest
+          python -m vhil.system build systems/ecu.yaml --workdir "$RUNNER_TEMP/fw" | tee built.txt
+          echo "ecu=$(sed -n 's/^ecu=//p' built.txt)" >> "$GITHUB_OUTPUT"
+
+      - name: Install Renode ${{ env.RENODE_VERSION }}
+        run: |
+          curl -sSL -o renode.tar.gz \
+            "https://github.com/renode/renode/releases/download/v${RENODE_VERSION}/renode-${RENODE_VERSION}.linux-portable.tar.gz"
+          mkdir -p "$RUNNER_TEMP/renode"
+          tar xzf renode.tar.gz -C "$RUNNER_TEMP/renode" --strip-components=1
+
+      - name: Run tests/sim
+        env:
+          RENODE: ${{ runner.temp }}/renode/renode
+          VHIL_ECU_ELF: ${{ steps.fw.outputs.ecu }}
+        run: python -m pytest tests/sim -v --sim-log-dir sim-logs
+
+      - name: Upload Renode logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sim-logs
+          path: sim-logs/
+          if-no-files-found: ignore
