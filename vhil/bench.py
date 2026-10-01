@@ -64,6 +64,9 @@ class VirtualBench:
         from broker.server import serve
 
         backend = make_backend(FakeHardwareManager, m, config)
+        # A socket left by an earlier run would satisfy _wait_for_socket before
+        # this broker has bound it.
+        Path(self.socket_path).unlink(missing_ok=True)
         threading.Thread(target=serve, args=(backend, self.socket_path),
                          daemon=True, name="vhil-broker").start()
         os.environ["HIL_BROKER_SOCKET"] = self.socket_path
@@ -71,12 +74,19 @@ class VirtualBench:
         return self
 
     def _wait_for_socket(self, timeout_s: float = 10.0) -> None:
+        """Ready means a client can connect: the file exists from bind(),
+        a moment before listen()."""
         import time
         deadline = time.monotonic() + timeout_s
-        while not Path(self.socket_path).exists():
-            if time.monotonic() > deadline:
-                raise TimeoutError(f"virtual broker never bound {self.socket_path}")
-            time.sleep(0.05)
+        while True:
+            try:
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+                    s.connect(self.socket_path)
+                return
+            except OSError:
+                if time.monotonic() > deadline:
+                    raise TimeoutError(f"virtual broker never listened on {self.socket_path}")
+                time.sleep(0.05)
 
     def stop(self) -> None:
         if self._monitor is not None:
