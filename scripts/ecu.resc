@@ -1,0 +1,27 @@
+:name: IFS ECU (STM32H733) on a virtual MLC carrier
+:description: Boots the ECU application image as the CAN bootloader would leave it, with each FDCAN on its own CAN hub.
+
+using sysbus
+
+$elf?=@/tmp/ECU08.elf
+
+mach create "ecu"
+machine LoadPlatformDescription $ORIGIN/../platforms/cpus/stm32h733.repl
+
+# One hub per physical bus, so a test can attach to exactly the bus it means.
+emulation CreateCANHub "can_inv"
+emulation CreateCANHub "can_acu"
+emulation CreateCANHub "can_dash"
+connector Connect sysbus.fdcan1 can_inv
+connector Connect sysbus.fdcan2 can_acu
+connector Connect sysbus.fdcan3 can_dash
+
+macro reset
+"""
+    sysbus LoadELF $elf
+    # The app is linked at 0x08020000 and never sets VTOR itself: the CAN
+    # bootloader at 0x08000000 does that before jumping. Do the same here.
+    cpu VectorTableOffset 0x08020000
+"""
+
+runMacro $reset

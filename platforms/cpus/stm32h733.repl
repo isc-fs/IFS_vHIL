@@ -1,0 +1,54 @@
+// STM32H733ZG — the MCU on every MLC carrier (ECU and AMS).
+//
+// Renode ships only the H743/H753/H747 parts. The H72x/H73x line shares their
+// peripheral IP, so this file reuses Renode's common stm32h7.repl and corrects
+// what differs. Every address and IRQ below is from ST's stm32h733xx.h
+// (Drivers/CMSIS/Device/ST/STM32H7xx/Include in the firmware repos).
+
+using "platforms/cpus/stm32h7.repl"
+
+// --- Memory map (RM0468): 1 MB single-bank flash, 320 KB AXI SRAM, 32 KB SRAM1+2
+
+flashBank1:
+    size: 0x100000
+
+axiSram:
+    size: 0x50000
+
+sram1:
+    size: 0x4000
+
+sram2:
+    size: 0x4000
+
+// --- Clock tree: the MLC carriers have a 24 MHz HSE (Renode defaults to the
+// Nucleo's 8 MHz). The firmwares run HSE/2*44 = 528 MHz SYSCLK; with the wrong
+// HSE the RCC model derives 176 MHz and every FreeRTOS period runs 3x slow.
+
+rcc:
+    hseFrequency: 24000000
+
+// --- Peripherals the H733 has and the H743 platform lacks
+
+// Third FDCAN (the ECU's dash bus). Shares the 10 KB message RAM with FDCAN1/2.
+fdcan3: CAN.MCAN @ sysbus 0x4000D400
+    Line0 -> nvic@159
+    Line1 -> nvic@160
+    Calibration -> nvic@63
+    messageRAM: canMessageRAM
+
+// TIM23 — CubeMX's HAL timebase on both firmwares. Without it HAL_GetTick never
+// advances and every HAL timeout loop spins forever. 32-bit; the timer kernel
+// clock is 2 x PCLK1 = 264 MHz with the carriers' clock tree.
+timer23: Timers.STM32_Timer @ sysbus 0x4000E000
+    initialLimit: 0xffffffff
+    frequency: 264000000
+    -> nvic@161
+
+// USART10 — ECU GPS (NMEA @ 9600). Kernel clock = PCLK2 = 132 MHz.
+usart10: UART.STM32F7_USART @ sysbus 0x40011C00
+    frequency: 132000000
+    IRQ -> nvic@156
+
+// SPI1 — the AMS's LTC6820 isoSPI master. The base platform only tags it.
+spi1: SPI.STM32H7_SPI @ sysbus 0x40013000

@@ -1,0 +1,7 @@
+# renode-test output
+robot_output.xml
+log.html
+report.html
+results/
+snapshots/
+logs/
