@@ -9,4 +9,9 @@ tc=${2:-${ARM_TOOLCHAIN_BIN:-}}
 cd "$src"
 cmake -B build -DCMAKE_TOOLCHAIN_FILE=cmake/gcc-arm-none-eabi.cmake
 cmake --build build -j"$(nproc)"
-ls -la build/*.elf
+# The flat image IFS_HIL's hil-fw-build.yml ships; some tests read it directly
+# (e.g. A-005 parses fw-info out of the .bin).
+for elf in build/*.elf; do
+    arm-none-eabi-objcopy -O binary "$elf" "${elf%.elf}.bin"
+done
+ls -la build/*.elf build/*.bin
