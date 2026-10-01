@@ -27,6 +27,7 @@ scripts/explore.sh, probe.sh    Headless boot + log / monitor-command helpers
 scripts/run-ifs-hil.sh          Run an IFS_HIL suite against the virtual bench (CI and local)
 vhil/                           Virtual broker, Renode monitor client, pytest plugin
 configs/vbench.yaml, gaps.yaml  Virtual bench wiring; known model gaps
+configs/peripherals.yaml        Unmodelled hardware the firmware may touch, and why (peripheral guard)
 tests/ecu_smoke.robot           CAN-side smoke checks (heartbeat, buses, 0x704 health)
 CLAUDE.md                       Operating model: branch/commit/PR policy, invariants
 docs/proposal.md                Design, spike results, coverage, phases, risks
@@ -56,7 +57,10 @@ RENODE=~/renode_1.17.0-portable/renode scripts/run-ifs-hil.sh ~/IFS_HIL ~/vhil/E
 
 Tests the virtual bench can't pass yet are listed in
 [`configs/gaps.yaml`](configs/gaps.yaml) with the reason and issue; they are
-reported as skips, never silently dropped.
+reported as skips, never silently dropped. If the firmware touches hardware
+the bench doesn't model and that isn't explained in
+[`configs/peripherals.yaml`](configs/peripherals.yaml), the run fails even
+when every test passed.
 
 `renode-test` needs Renode's Python test requirements (`robotframework==6.1`,
 `psutil`, `pyyaml`, `telnetlib3`, `robotframework-retryfailed`).
