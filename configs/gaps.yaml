@@ -1,0 +1,9 @@
+# IFS_HIL tests the virtual bench cannot pass yet, and why. The vhil plugin
+# skips them with this reason, so they show in every report. A test leaves
+# this list when the virtual bench can run it, never to make a run green.
+#
+# path: IFS_HIL test file or node id (prefix match)
+# why:  model gap or physical-only, with the issue that tracks it
+
+- path: tests/hil/vcu/test_block_f_real_ams.py
+  why: "needs a live AMS on the ACU bus (bench-01 powers the real MLC2); virtual AMS is Phase 2 (#2), ECU<->AMS on one bus is Phase 4 (#4)"

@@ -16,7 +16,9 @@ from pathlib import Path
 
 import pytest
 
-from vhil.bench import DEFAULT_RENODE, VirtualBench
+import yaml
+
+from vhil.bench import DEFAULT_RENODE, REPO, VirtualBench
 
 _bench = None
 
@@ -29,6 +31,8 @@ def pytest_addoption(parser):
                 help="bridge the CAN hubs to SocketCAN (needs vcan can0..can2)")
     g.addoption("--vhil-socket", default="/tmp/vhil-broker.sock")
     g.addoption("--vhil-log", default="vhil-renode.log", help="Renode log file")
+    g.addoption("--vhil-gaps", default=str(REPO / "configs" / "gaps.yaml"),
+                help="known model gaps to skip with their reason")
 
 
 def pytest_configure(config):
@@ -66,6 +70,17 @@ def pytest_fixture_setup(fixturedef, request):
         if flags.exists() and not int(flags.read_text(), 16) & 0x1:
             subprocess.run(["sudo", "-n", "ip", "link", "set", link, "up"],
                            check=False, timeout=5)
+
+
+def pytest_collection_modifyitems(config, items):
+    if _bench is None:
+        return
+    gaps = yaml.safe_load(Path(config.getoption("--vhil-gaps")).read_text()) or []
+    for item in items:
+        for gap in gaps:
+            if item.nodeid.startswith(gap["path"]):
+                item.add_marker(pytest.mark.skip(reason=f"vhil gap: {gap['why']}"))
+                break
 
 
 def pytest_unconfigure(config):
