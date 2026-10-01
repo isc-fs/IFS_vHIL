@@ -85,7 +85,11 @@ IFS_HIL recipe ─▶ ECU08.elf / AMS.elf  (same image the physical bench flashe
    `stm32h733xx.h`.** Cite it; don't guess.
 5. **The app images never set VTOR themselves** (the ECU doesn't): the
    boot script sets VTOR = `0x08020000`, as the CAN bootloader would.
-6. **A virtual pass is not a physical pass.** When the two benches
+6. **A virtual power-on writes `BASEPRI` = 0 after `machine Reset`.**
+   Renode 1.17's reset zeroes the register as read but not its masking, so a
+   cut inside a FreeRTOS critical section hangs the next boot in `HAL_Delay`
+   (`vhil/broker.py`). Don't remove it until upstream Renode fixes this.
+7. **A virtual pass is not a physical pass.** When the two benches
    disagree, it's a model gap until proven otherwise. File an issue;
    don't tune the test to agree.
 

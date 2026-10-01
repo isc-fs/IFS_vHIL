@@ -24,6 +24,9 @@ platforms/cpus/stm32h733.repl   STM32H733 platform (Renode ships only H743/H753/
 scripts/ecu.resc                Boot the ECU app image as the CAN bootloader leaves it
 scripts/build_fw.sh             Build a DUT image with IFS_HIL's recipe
 scripts/explore.sh, probe.sh    Headless boot + log / monitor-command helpers
+scripts/run-ifs-hil.sh          Run an IFS_HIL suite against the virtual bench (CI and local)
+vhil/                           Virtual broker, Renode monitor client, pytest plugin
+configs/vbench.yaml, gaps.yaml  Virtual bench wiring; known model gaps
 tests/ecu_smoke.robot           CAN-side smoke checks (heartbeat, buses, 0x704 health)
 CLAUDE.md                       Operating model: branch/commit/PR policy, invariants
 docs/proposal.md                Design, spike results, coverage, phases, risks
@@ -45,7 +48,15 @@ RENODE=~/renode_1.17.0-portable/renode scripts/explore.sh scripts/ecu.resc ~/vhi
 
 # automated smoke checks
 ~/renode_1.17.0-portable/renode-test tests/ecu_smoke.robot --variable ELF:$HOME/vhil/ECU/build/ECU08.elf
+
+# IFS_HIL's own ECU suite, unmodified, against the virtual ECU (needs vcan
+# can0..can2; on WSL2 run scripts/wsl-vcan.sh --load first)
+RENODE=~/renode_1.17.0-portable/renode scripts/run-ifs-hil.sh ~/IFS_HIL ~/vhil/ECU/build/ECU08.elf smoke
 ```
+
+Tests the virtual bench can't pass yet are listed in
+[`configs/gaps.yaml`](configs/gaps.yaml) with the reason and issue; they are
+reported as skips, never silently dropped.
 
 `renode-test` needs Renode's Python test requirements (`robotframework==6.1`,
 `psutil`, `pyyaml`, `telnetlib3`, `robotframework-retryfailed`).

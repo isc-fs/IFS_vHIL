@@ -5,6 +5,11 @@ using sysbus
 
 $elf?=@/tmp/ECU08.elf
 
+# A 500 us sync quantum (Renode default: 100 us) lets the ECU keep real-time
+# pace on a desktop host: IFS_HIL's tests time the firmware with the wall
+# clock. Still 20x finer than the firmware's fastest period (10 ms).
+emulation SetGlobalQuantum "0.0005"
+
 mach create "ecu"
 machine LoadPlatformDescription $ORIGIN/../platforms/cpus/stm32h733.repl
 
@@ -25,3 +30,7 @@ macro reset
 """
 
 runMacro $reset
+
+# The firmware polls ADC3 without setting PCSEL; Renode warns on every
+# conversion (~300 lines/s), which is pure log overhead.
+logLevel 3 sysbus.adc3

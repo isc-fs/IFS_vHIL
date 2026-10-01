@@ -1,0 +1,21 @@
+# Virtual bench wiring: what the physical bench's relays, current monitors and
+# DACs are connected to, expressed as Renode machines and peripherals. The
+# virtual broker (vhil/broker.py) answers IFS_HIL's broker RPCs from this.
+#
+# Values mirror IFS_HIL tests/hil/vcu/vcu_profile.yaml and bench-01's routing.
+
+carriers:
+  # MLC4: relay K4 = TCA 0x20 port 0 pin 3, current monitor INA 0x45
+  - machine: ecu
+    slot: 4
+    relay: {addr: 0x20, port: 0, pin: 3}
+    ina_addr: 0x45
+    current_A: 0.13          # ~130 mA alive (vcu_profile: mlc_boot_current_mA 100)
+
+# DAC (broker idx, channel) -> machine ADC channel.
+# vcu_profile: pedal_dac_idx 0; brake ch0 -> ADC3_INP3, APPS1 ch1 -> INP7,
+# APPS2 ch2 -> INP2.
+dac_routes:
+  - {dac: 0, channel: 0, machine: ecu, adc: sysbus.adc3, adc_channel: 3}
+  - {dac: 0, channel: 1, machine: ecu, adc: sysbus.adc3, adc_channel: 7}
+  - {dac: 0, channel: 2, machine: ecu, adc: sysbus.adc3, adc_channel: 2}

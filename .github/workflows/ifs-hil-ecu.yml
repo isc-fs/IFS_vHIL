@@ -1,0 +1,111 @@
+name: IFS_HIL ECU suite (virtual)
+
+# Runs IFS_HIL's own ECU suite, unmodified, against the virtual ECU: the ECU
+# built with IFS_HIL's recipe, Renode bridged to vcan can0/can1/can2 and the
+# virtual broker answering IFS_HIL's broker protocol (issue #1).
+
+on:
+  pull_request:
+  push:
+    branches: [dev]
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: "IFS_HIL ECU suite name (configs/suites.yaml) or test path"
+        required: false
+        default: smoke
+      ecu_ref:
+        description: "IFS08-CE-ECU ref"
+        required: false
+        default: dev
+      ifs_hil_ref:
+        description: "IFS_HIL ref"
+        required: false
+        default: dev
+
+env:
+  RENODE_VERSION: 1.17.0
+
+jobs:
+  ecu:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check out IFS_HIL
+        uses: actions/checkout@v4
+        with:
+          repository: isc-fs/IFS_HIL
+          ref: ${{ inputs.ifs_hil_ref || 'dev' }}
+          path: ifs_hil
+
+      - name: Check out the ECU firmware
+        uses: actions/checkout@v4
+        with:
+          repository: isc-fs/IFS08-CE-ECU
+          ref: ${{ inputs.ecu_ref || 'dev' }}
+          path: fw/ecu
+
+      - name: Arm GNU toolchain (pinned like IFS_HIL's recipe)
+        uses: carlosperate/arm-none-eabi-gcc-action@v1
+        with:
+          release: '14.2.Rel1'
+
+      - name: Build ECU08.elf
+        run: scripts/build_fw.sh fw/ecu
+
+      - name: Install Renode ${{ env.RENODE_VERSION }}
+        run: |
+          curl -sSL -o renode.tar.gz \
+            "https://github.com/renode/renode/releases/download/v${RENODE_VERSION}/renode-${RENODE_VERSION}.linux-portable.tar.gz"
+          mkdir -p "$RUNNER_TEMP/renode"
+          tar xzf renode.tar.gz -C "$RUNNER_TEMP/renode" --strip-components=1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install IFS_HIL (core deps only, as off-bench)
+        run: pip install -q -e ifs_hil
+
+      - name: Create vcan can0 / can1 / can2
+        run: |
+          sudo apt-get install -y -qq "linux-modules-extra-$(uname -r)" >/dev/null
+          sudo modprobe vcan
+          for i in 0 1 2; do
+            sudo ip link add "can$i" type vcan
+            sudo ip link set "can$i" txqueuelen 1000 up
+          done
+          ip -br link show type vcan
+
+      - name: Capture all CAN traffic
+        run: |
+          sudo apt-get install -y -qq can-utils >/dev/null
+          nohup candump -L -t a can0 can1 can2 > candump.log 2>&1 &
+
+      - name: Run IFS_HIL's ECU suite against the virtual ECU
+        env:
+          SUITE: ${{ inputs.suite || 'smoke' }}
+          RENODE: ${{ runner.temp }}/renode/renode
+        run: |
+          set +e
+          scripts/run-ifs-hil.sh ifs_hil fw/ecu/build/ECU08.elf "$SUITE"             --vhil-log "$GITHUB_WORKSPACE/vhil-renode.log"             --junitxml="$GITHUB_WORKSPACE/junit.xml" | tee pytest.txt
+          rc=${PIPESTATUS[0]}
+          # A missing bus must never pass as a skip.
+          if grep -q "SocketCAN interface .* not present" pytest.txt; then
+            echo "::error::tests skipped for a missing SocketCAN interface"; exit 1
+          fi
+          exit $rc
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ifs-hil-ecu-virtual
+          path: |
+            junit.xml
+            pytest.txt
+            vhil-renode.log
+            candump.log
+          if-no-files-found: ignore
