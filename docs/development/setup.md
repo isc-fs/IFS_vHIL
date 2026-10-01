@@ -19,7 +19,7 @@ Microsoft's WSL2 kernel has the CAN core but not `vcan.ko`.
 source for exactly the running kernel (the first run takes ~10–15 min). With
 `--load`, it also loads the module and creates `can0`–`can2`, asking for your
 sudo password. Build dependencies: `sudo apt-get install -y build-essential
-flex bison bc libelf-dev libssl-dev`. Re-run it after `wsl --update` changes
+flex bison bc libelf-dev libssl-dev dwarves`. Re-run it after `wsl --update` changes
 `uname -r`, and after every WSL restart with `--load`.
 
 CI ([`.github/workflows/ecu-smoke.yml`](../../.github/workflows/ecu-smoke.yml))
