@@ -83,6 +83,8 @@ jobs:
         working-directory: ifs_hil
         env:
           SUITE: ${{ inputs.suite || 'smoke' }}
+          # The image under test, as hil-test.yml exports after flashing.
+          ECU_FIRMWARE_BIN: ${{ github.workspace }}/fw/ecu/build/ECU08.bin
         run: |
           targets=$(python -m tools.bench suite --dut ecu --suite "$SUITE")
           echo "targets: $targets"

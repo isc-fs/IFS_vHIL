@@ -11,7 +11,10 @@ tests and conftests run unmodified.
 """
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
+
+import pytest
 
 from vhil.bench import DEFAULT_RENODE, VirtualBench
 
@@ -40,6 +43,29 @@ def pytest_configure(config):
         socket_path=config.getoption("--vhil-socket"),
         log_path=Path(config.getoption("--vhil-log")),
     ).start()
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_fixture_setup(fixturedef, request):
+    """Bring the bridged links back up after IFS_HIL's per-bus bitrate fixture.
+
+    `vcu_can_sp` takes each bus down, set a bitrate
+    and sample point, and bring it up again. A vcan link has no bitrate, so
+    that call fails and the fixture's error path leaves the link down, which
+    makes the Renode bridge report "Network is down". On bench-01 the call
+    succeeds.
+    """
+    yield
+    if _bench is None or not _bench.socketcan:
+        return
+    if fixturedef.argname != "vcu_can_sp":
+        return
+    for link in ("can0", "can1", "can2"):
+        # vcan reports operstate "unknown" even when up; test IFF_UP instead.
+        flags = Path(f"/sys/class/net/{link}/flags")
+        if flags.exists() and not int(flags.read_text(), 16) & 0x1:
+            subprocess.run(["sudo", "-n", "ip", "link", "set", link, "up"],
+                           check=False, timeout=5)
 
 
 def pytest_unconfigure(config):
