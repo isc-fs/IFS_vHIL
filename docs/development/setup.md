@@ -12,6 +12,16 @@ Linux-only.
 | Python | ≥ 3.10 | venv with `robotframework==6.1 robotframework-retryfailed==0.2.0 psutil==5.9.4 "pyyaml==6.0.*" "telnetlib3==2.0.*"` (Renode 1.17's own `tests/requirements.txt`) |
 | CMake | ≥ 3.22 | distro package |
 
+### vcan on WSL2
+
+Microsoft's WSL2 kernel has the CAN core but not `vcan.ko`.
+[`scripts/wsl-vcan.sh`](../../scripts/wsl-vcan.sh) builds it from Microsoft's
+source for exactly the running kernel (the first run takes ~10–15 min). With
+`--load`, it also loads the module and creates `can0`–`can2`, asking for your
+sudo password. Build dependencies: `sudo apt-get install -y build-essential
+flex bison bc libelf-dev libssl-dev dwarves`. Re-run it after `wsl --update` changes
+`uname -r`, and after every WSL restart with `--load`.
+
 CI ([`.github/workflows/ecu-smoke.yml`](../../.github/workflows/ecu-smoke.yml))
 installs exactly these on `ubuntu-latest`. It is the reference setup.
 
