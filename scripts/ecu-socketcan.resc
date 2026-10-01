@@ -1,0 +1,12 @@
+:name: Bridge the ECU's CAN hubs to host SocketCAN
+:description: Include after ecu.resc. Needs vcan interfaces can0, can1, can2 (Linux only).
+
+# Netdev names follow IFS_HIL's vcu_profile.yaml, so its tests open the same
+# interfaces they use on bench-01: INV = can0, ACU = can2. The dash bus has no
+# bench netdev, so it takes the remaining can1.
+machine CreateSocketCANBridge "br_inv" "can0"
+machine CreateSocketCANBridge "br_dash" "can1"
+machine CreateSocketCANBridge "br_acu" "can2"
+connector Connect br_inv can_inv
+connector Connect br_dash can_dash
+connector Connect br_acu can_acu
