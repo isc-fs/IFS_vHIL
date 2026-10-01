@@ -1,0 +1,16 @@
+kind: firmware
+id: ecu
+description: Vehicle control unit application, run behind the CAN bootloader.
+repo: isc-fs/IFS08-CE-ECU
+ref: dev
+submodules: false
+build:
+  toolchain: Arm GNU 14.2.Rel1
+  configure: cmake -B build -DCMAKE_TOOLCHAIN_FILE=cmake/gcc-arm-none-eabi.cmake
+  build: cmake --build build -j
+  elf: build/ECU08.elf
+  recipe_source: IFS_HIL configs/firmware/ecu.yaml
+load:
+  # Linked at 0x08020000 behind the bootloader, and never sets VTOR itself:
+  # the bootloader does that before jumping, so the loader must too.
+  vector_table: 0x08020000

@@ -26,19 +26,24 @@ See [`docs/development/setup.md`](docs/development/setup.md), and
 ## Layout
 
 ```
-platforms/cpus/stm32h733.repl   STM32H733 platform (Renode ships only H743/H753/H747)
-scripts/ecu.resc                Boot the ECU app image as the CAN bootloader leaves it
-scripts/build_fw.sh             Build a DUT image with IFS_HIL's recipe
+systems/                        Systems as data: boards, their firmware, the buses between them
+catalog/platforms/              Emulatable MCUs (stm32h733)
+catalog/boards/                 Boards: a platform plus named connectors and pins (mlc-carrier)
+catalog/firmware/               Firmware sources: repo, ref, build recipe, load address (ecu, ams)
+schemas/vhil.schema.json        Schema every catalogue entry and system is validated against
+platforms/cpus/stm32h733.repl   STM32H733 Renode platform (Renode ships only H743/H753/H747)
+vhil/system.py                  Generator: validate / render / bench / build a system
 scripts/explore.sh, probe.sh    Headless boot + log / monitor-command helpers
 scripts/run-ifs-hil.sh          Run an IFS_HIL suite against the virtual bench (CI and local)
 vhil/                           Virtual broker, Renode monitor client, pytest plugin
-configs/vbench.yaml, gaps.yaml  Virtual bench wiring; known model gaps
+configs/gaps.yaml               IFS_HIL tests the virtual bench can't pass yet, and why
 configs/peripherals.yaml        Unmodelled hardware the firmware may touch, and why (peripheral guard)
 tests/ecu_smoke.robot           CAN-side smoke checks (heartbeat, buses, 0x704 health)
+tests/unit/                     Host-only checks of the catalogue, systems and generator
 CLAUDE.md                       Operating model: branch/commit/PR policy, invariants
 docs/proposal.md                Design, spike results, coverage, phases, risks
 docs/development/setup.md       Toolchain, branching, issues, PRs, releases
-.github/workflows/ecu-smoke.yml  CI: build the ECU from IFS_HIL's recipe, run the smoke suite
+.github/workflows/              CI: unit, ECU smoke (Robot), IFS_HIL ECU suite
 ```
 
 ## Try it (Linux or WSL2)
@@ -47,19 +52,26 @@ Requirements: Renode 1.17.0 (portable Linux build) and Arm GNU Toolchain
 14.2.Rel1, the toolchain pinned by IFS_HIL's recipes.
 
 ```sh
-git clone -b dev https://github.com/isc-fs/IFS08-CE-ECU ~/vhil/ECU
-scripts/build_fw.sh ~/vhil/ECU ~/arm-gnu-toolchain-14.2.rel1-x86_64-arm-none-eabi/bin
+export RENODE=~/renode_1.17.0-portable/renode     # and the Arm toolchain on PATH
+
+# build every board's firmware from the source its system declares
+python -m vhil.system build systems/ecu.yaml --workdir build/fw   # prints ecu=<elf>
 
 # 5 virtual seconds, logging every CAN frame the ECU queues
-RENODE=~/renode_1.17.0-portable/renode scripts/explore.sh scripts/ecu.resc ~/vhil/ECU/build/ECU08.elf 5
+scripts/explore.sh systems/ecu.yaml build/fw/ecu@dev/build/ECU08.elf 5
 
-# automated smoke checks
-~/renode_1.17.0-portable/renode-test tests/ecu_smoke.robot --variable ELF:$HOME/vhil/ECU/build/ECU08.elf
+# automated smoke checks (the Renode script is generated from the system)
+python -m vhil.system render systems/ecu.yaml -o build/ecu.resc
+$RENODE-test tests/ecu_smoke.robot --variable ELF:$PWD/build/fw/ecu@dev/build/ECU08.elf --variable RESC:$PWD/build/ecu.resc
 
 # IFS_HIL's own ECU suite, unmodified, against the virtual ECU (needs vcan
 # can0..can2; on WSL2 run scripts/wsl-vcan.sh --load first)
-RENODE=~/renode_1.17.0-portable/renode scripts/run-ifs-hil.sh ~/IFS_HIL ~/vhil/ECU/build/ECU08.elf smoke
+scripts/run-ifs-hil.sh ~/IFS_HIL build/fw/ecu@dev/build/ECU08.elf smoke
 ```
+
+A system file is the source of truth: edit `systems/*.yaml`, never a
+generated script. `python -m vhil.system validate <system>` checks one against
+the schema and the catalogue.
 
 Tests the virtual bench can't pass yet are listed in
 [`configs/gaps.yaml`](configs/gaps.yaml) with the reason and issue; they are

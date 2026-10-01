@@ -6,7 +6,8 @@
 # suite defaults to `smoke` and is expanded by IFS_HIL's own `tools.bench
 # suite`, exactly as /hil-test does. SocketCAN is used when can0..can2 exist
 # (CI, or WSL2 after scripts/wsl-vcan.sh --load). RENODE overrides the
-# launcher path. ECU_FIRMWARE_BIN defaults to the .bin next to the .elf.
+# launcher path, VHIL_SYSTEM the system file (default systems/ecu.yaml).
+# ECU_FIRMWARE_BIN defaults to the .bin next to the .elf.
 set -euo pipefail
 here=$(cd "$(dirname "$0")/.." && pwd)
 ifs_hil=$(realpath "$1"); elf=$(realpath "$2"); suite=${3:-smoke}
@@ -31,5 +32,6 @@ targets=$(python3 -m tools.bench suite --dut ecu --suite "$suite")
 renode_opt=()
 [ -n "${RENODE:-}" ] && renode_opt=(--vhil-renode "$RENODE")
 PYTHONPATH="$here${PYTHONPATH:+:$PYTHONPATH}" exec python3 -m pytest -p vhil.pytest_plugin \
+    --vhil-system "${VHIL_SYSTEM:-$here/systems/ecu.yaml}" \
     --vhil-elf "$elf" "${socketcan[@]}" "${renode_opt[@]}" \
     -p no:cacheprovider -rA --log-level=INFO $targets "$@"

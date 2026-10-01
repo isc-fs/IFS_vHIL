@@ -8,6 +8,10 @@ From an IFS_HIL checkout, with this repo on PYTHONPATH:
 The plugin starts Renode and the virtual broker before IFS_HIL's session
 fixtures look for a bench, and points HIL_BROKER_SOCKET at it. IFS_HIL's
 tests and conftests run unmodified.
+
+--vhil-system picks the system (default systems/ecu.yaml). --vhil-elf is
+shorthand for a one-board system; --vhil-firmware BOARD=ELF names each board's
+image.
 """
 from __future__ import annotations
 
@@ -19,16 +23,21 @@ import pytest
 import yaml
 
 from vhil.bench import DEFAULT_RENODE, REPO, VirtualBench
+from vhil.system import System
 
 _bench = None
 
 
 def pytest_addoption(parser):
     g = parser.getgroup("vhil", "virtual HIL bench (IFS_vHIL)")
-    g.addoption("--vhil-elf", help="DUT image to boot (enables the virtual bench)")
+    g.addoption("--vhil-system", default=str(REPO / "systems" / "ecu.yaml"),
+                help="system file to run (systems/*.yaml)")
+    g.addoption("--vhil-firmware", action="append", metavar="BOARD=ELF",
+                help="image for one board of the system (repeat per board)")
+    g.addoption("--vhil-elf", help="image for a one-board system (shorthand)")
     g.addoption("--vhil-renode", default=DEFAULT_RENODE, help="renode launcher")
     g.addoption("--vhil-socketcan", action="store_true",
-                help="bridge the CAN hubs to SocketCAN (needs vcan can0..can2)")
+                help="bridge the CAN buses to their host_netdev (needs those vcan links)")
     g.addoption("--vhil-socket", default="/tmp/vhil-broker.sock")
     g.addoption("--vhil-log", default="vhil-renode.log", help="Renode log file")
     g.addoption("--vhil-peripherals", default=str(REPO / "configs" / "peripherals.yaml"),
@@ -37,13 +46,31 @@ def pytest_addoption(parser):
                 help="known model gaps to skip with their reason")
 
 
+def _firmware(config) -> dict[str, Path]:
+    pairs = {}
+    for item in config.getoption("--vhil-firmware") or []:
+        board, sep, path = item.partition("=")
+        if not sep:
+            raise pytest.UsageError(f"--vhil-firmware expects BOARD=ELF, got '{item}'")
+        pairs[board] = Path(path)
+    elf = config.getoption("--vhil-elf")
+    if elf:
+        boards = list(System(Path(config.getoption("--vhil-system"))).boards)
+        if len(boards) != 1:
+            raise pytest.UsageError(f"--vhil-elf needs a one-board system; this one has "
+                                    f"{boards}. Use --vhil-firmware BOARD=ELF.")
+        pairs.setdefault(boards[0], Path(elf))
+    return pairs
+
+
 def pytest_configure(config):
     global _bench
-    elf = config.getoption("--vhil-elf")
-    if not elf:
+    firmware = _firmware(config)
+    if not firmware:
         return
     _bench = VirtualBench(
-        ifs_hil=Path(config.rootpath), elf=Path(elf),
+        ifs_hil=Path(config.rootpath), firmware=firmware,
+        system=Path(config.getoption("--vhil-system")),
         renode=config.getoption("--vhil-renode"),
         socketcan=config.getoption("--vhil-socketcan"),
         socket_path=config.getoption("--vhil-socket"),
@@ -66,7 +93,8 @@ def pytest_fixture_setup(fixturedef, request):
         return
     if fixturedef.argname != "vcu_can_sp":
         return
-    for link in ("can0", "can1", "can2"):
+    links = [b["host_netdev"] for b in _bench.system.buses.values() if b.get("host_netdev")]
+    for link in links:
         # vcan reports operstate "unknown" even when up; test IFF_UP instead.
         flags = Path(f"/sys/class/net/{link}/flags")
         if flags.exists() and not int(flags.read_text(), 16) & 0x1:
@@ -115,6 +143,7 @@ def pytest_unconfigure(config):
 
 
 def pytest_report_header(config):
-    if config.getoption("--vhil-elf"):
-        return (f"vhil: virtual bench, image {config.getoption('--vhil-elf')}, "
-                f"socketcan={'on' if config.getoption('--vhil-socketcan') else 'off'}")
+    if _bench is not None:
+        images = ", ".join(f"{b}={p.name}" for b, p in _bench.firmware.items())
+        return (f"vhil: system {_bench.system.id} ({images}), "
+                f"socketcan={'on' if _bench.socketcan else 'off'}")

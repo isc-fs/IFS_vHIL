@@ -1,0 +1,26 @@
+kind: system
+id: ecu
+description: >-
+  One ECU on an MLC carrier with its three CAN buses: what IFS_HIL's ECU
+  suites expect from bench-01 slot 4.
+time:
+  # 500 us sync quantum (Renode default 100 us) keeps one H7 at about real
+  # time on a desktop; still 20x finer than the firmware's 10 ms period.
+  quantum_s: 0.0005
+boards:
+  ecu: {board: mlc-carrier, firmware: ecu}
+buses:
+  # Bus names are what tests attach to. host_netdev follows bench-01's
+  # netdev names, so IFS_HIL's suites open the same interfaces.
+  can_inv:  {kind: can, nodes: [ecu.FDCAN1], host_netdev: can0}
+  can_dash: {kind: can, nodes: [ecu.FDCAN3], host_netdev: can1}
+  can_acu:  {kind: can, nodes: [ecu.FDCAN2], host_netdev: can2}
+bench:
+  carriers:
+    # MLC4: relay K4 = TCA 0x20 port 0 pin 3, current monitor INA 0x45.
+    - {board: ecu, slot: 4, relay: {addr: 0x20, port: 0, pin: 3}, ina_addr: 0x45, current_A: 0.13}
+  dac_routes:
+    # bench DAC1 -> pedal inputs (vcu_profile: brake, APPS1, APPS2)
+    - {dac: 0, channel: 0, to: ecu.PF7}
+    - {dac: 0, channel: 1, to: ecu.PF8}
+    - {dac: 0, channel: 2, to: ecu.PF9}

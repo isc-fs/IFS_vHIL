@@ -1,0 +1,20 @@
+kind: system
+id: ams
+description: >-
+  One AMS on an MLC carrier on the ACU bus: what IFS_HIL's AMS suites expect
+  from bench-01 slot 2. Until its LTC6820/LTC6811 chain is modelled (M2, #2)
+  the AMS finds no cells at boot, latches Error and opens its relays; it
+  still boots and talks CAN.
+time:
+  quantum_s: 0.0005
+boards:
+  ams: {board: mlc-carrier, firmware: ams}
+buses:
+  can_acu: {kind: can, nodes: [ams.FDCAN1], host_netdev: can2}
+bench:
+  carriers:
+    # MLC2: relay K2 = TCA 0x20 port 0 pin 1, current monitor INA 0x41
+    # (bench-01: 118-128 mA alive).
+    - {board: ams, slot: 2, relay: {addr: 0x20, port: 0, pin: 1}, ina_addr: 0x41, current_A: 0.12}
+  # Pack-current (DAC4 differential pair -> PF7/PF8) and the TSMS / DASH_CHG
+  # GPIO inputs arrive with M2, with the models that read them.

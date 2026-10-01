@@ -1,0 +1,16 @@
+kind: board
+id: mlc-carrier
+description: >-
+  MLC carrier: the STM32H733ZG daughter-board in every BACKPLANE_HIL slot.
+  Connector and pin names follow the MCU (FDCANn, port pins); what a
+  firmware uses them for belongs to the system, not the board.
+platform: stm32h733
+can:
+  FDCAN1: sysbus.fdcan1
+  FDCAN2: sysbus.fdcan2
+  FDCAN3: sysbus.fdcan3
+analog_in:
+  # ADC3 inputs routed to the carrier connector (IFS_HIL vcu_profile.yaml).
+  PF7: {adc: sysbus.adc3, channel: 3}
+  PF8: {adc: sysbus.adc3, channel: 7}
+  PF9: {adc: sysbus.adc3, channel: 2}

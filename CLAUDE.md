@@ -63,6 +63,15 @@ Same model as IFS_HIL.
 
 ---
 
+## Systems are data
+
+A system (`systems/*.yaml`) places boards from the catalogue (`catalog/`),
+gives each its firmware source, and wires them together. Renode scripts and
+the virtual broker's wiring are **generated** from it by `vhil/system.py`.
+Never hand-edit a generated script, and never put a car-specific name in the
+catalogue (`ecu`, not `ifs08-ecu`). Validate with
+`python -m vhil.system validate`.
+
 ## The bench in 30 seconds
 
 ```
@@ -103,10 +112,13 @@ IFS_HIL recipe ─▶ ECU08.elf / AMS.elf  (same image the physical bench flashe
 ## Run things (Linux / WSL2)
 
 ```sh
-scripts/build_fw.sh <fw-checkout> [arm-toolchain-bin]           # IFS_HIL recipe
-RENODE=<renode> scripts/explore.sh scripts/ecu.resc <elf> 5      # boot + CAN log
-RENODE=<renode> scripts/probe.sh scripts/ecu.resc <elf> 1 "nvic Frequency"
-<renode-dir>/renode-test tests/ecu_smoke.robot --variable ELF:<elf>
+python -m vhil.system validate systems/ecu.yaml                 # schema + catalogue
+python -m vhil.system build systems/ecu.yaml --workdir build/fw  # firmware from its declared source
+python -m vhil.system render systems/ecu.yaml -o build/ecu.resc  # generated Renode script
+RENODE=<renode> scripts/explore.sh systems/ecu.yaml <elf> 5       # boot + CAN log
+RENODE=<renode> scripts/probe.sh systems/ecu.yaml <elf> 1 "nvic Frequency"
+<renode-dir>/renode-test tests/ecu_smoke.robot --variable ELF:<elf> --variable RESC:build/ecu.resc
+python -m pytest tests/unit                                       # host-only, no Renode
 ```
 
 Pinned versions: Renode **1.17.0**, Arm GNU **14.2.Rel1**. Bump deliberately,

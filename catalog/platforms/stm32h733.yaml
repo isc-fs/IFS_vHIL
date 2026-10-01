@@ -1,0 +1,15 @@
+kind: platform
+id: stm32h733
+description: >-
+  STM32H733ZG (Cortex-M7, 1 MB flash). Renode ships only H743/H753/H747, so
+  this reuses its stm32h7.repl and adds FDCAN3, TIM23, USART10 and SPI1, plus
+  the 24 MHz HSE of the MLC carriers. Addresses and IRQs from ST's
+  stm32h733xx.h.
+backend: renode
+renode:
+  repl: platforms/cpus/stm32h733.repl
+  cpu: cpu
+  setup:
+    # Firmware polling ADC3 without PCSEL makes Renode warn on every
+    # conversion (~300 lines/s): pure log overhead.
+    - logLevel 3 sysbus.adc3

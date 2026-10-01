@@ -3,13 +3,14 @@ ECU smoke suite on a virtual STM32H733 carrier.
 
 Boots the unmodified ECU application image (the same ELF IFS_HIL flashes to a
 real carrier) and checks it from the CAN side only, as the physical bench's
-Block A / Block I do. Run with:
-    renode-test tests/ecu_smoke.robot --variable ELF:/path/to/ECU08.elf
+Block A / Block I do. The Renode script is generated from systems/ecu.yaml:
+    python -m vhil.system render systems/ecu.yaml -o /tmp/ecu.resc
+    renode-test tests/ecu_smoke.robot --variable ELF:/path/to/ECU08.elf --variable RESC:/tmp/ecu.resc
 
 
 *** Variables ***
 ${ELF}                  ${EMPTY}
-${RESC}                 ${CURDIR}/../scripts/ecu.resc
+${RESC}                 ${EMPTY}
 
 # can_map.py IDs (IFS_HIL tools/firmware_test/vcu/can_map.py)
 ${ID_HEARTBEAT}         0x100
@@ -29,7 +30,8 @@ ${TASK_DIAG}            0x10
 Boot ECU
     [Arguments]    ${hub}
     Should Not Be Empty    ${ELF}    Pass the image with --variable ELF:/path/to/ECU08.elf
-    Execute Command    $elf=@${ELF}
+    Should Not Be Empty    ${RESC}    Pass the script rendered from systems/ecu.yaml with --variable RESC:<path>
+    Execute Command    $elf_ecu=@${ELF}
     Execute Command    include @${RESC}
     Create CAN Tester    ${hub}    defaultTimeout=3
 
