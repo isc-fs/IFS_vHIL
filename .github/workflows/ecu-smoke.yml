@@ -4,8 +4,9 @@ name: ECU smoke (virtual)
 # on the virtual STM32H733 and runs tests/ecu_smoke.robot. No hardware.
 
 on:
-  push:
   pull_request:
+  push:
+    branches: [dev]
   workflow_dispatch:
     inputs:
       ecu_ref:
