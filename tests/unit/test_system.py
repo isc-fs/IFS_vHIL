@@ -81,3 +81,39 @@ def test_unknown_catalogue_entries_are_rejected(tmp_path):
     p.write_text("kind: system\nid: t\nboards:\n  x: {board: no-such-board, firmware: ecu}\n")
     with pytest.raises(SystemError, match="no board 'no-such-board'"):
         System(p)
+
+
+# -- devices ------------------------------------------------------------------
+
+def test_ams_renders_the_isospi_chain_in_order():
+    s = System(REPO / "systems" / "ams.yaml").render_renode()
+    assert s.count("include @") == 1 and "models/renode/IsoSpi.cs" in s
+    bridge = s.index("isospi: SPI.Ltc6820 @ spi1")
+    assert "9 -> isospi@0" in s
+    positions = [s.index(f"cells{i}: SPI.Ltc6811 @ isospi {i}") for i in range(10)]
+    assert bridge < positions[0] and positions == sorted(positions)
+    assert "sd: SD.SDCard @ sdmmc" in s
+
+
+def _ams(tmp_path, devices):
+    p = tmp_path / "s.yaml"
+    p.write_text("kind: system\nid: t\nboards:\n  ams: {board: mlc-carrier, firmware: ams}\n"
+                 "devices:\n" + devices)
+    return p
+
+
+@pytest.mark.parametrize("devices, message", [
+    ("  b: {model: ltc6820, spi: ams.SPI1}\n", "needs 'cs'"),
+    ("  b: {model: ltc6820, spi: ams.PB9, cs: ams.PB9}\n", "is gpio, not spi"),
+    ("  c: {model: ltc6811}\n", "must attach to a device"),
+    ("  sd: {model: sd-card, sdmmc: ams.SDMMC1}\n  c: {model: ltc6811, attach: sd}\n",
+     "provides no isospi port"),
+    ("  sd: {model: sd-card, sdmmc: ams.SDMMC1, count: 2}\n", "does not attach"),
+    ("  sd: {model: sd-card, sdmmc: ams.SDMMC1, spi: ams.SPI1}\n", "takes no 'spi'"),
+    ("  c: {model: ltc6811, attach: nope}\n", "must attach to a device"),
+    ("  b: {model: ltc6820, spi: ams.SPI1, cs: ams.PB9}\n"
+     "  c: {model: ltc6811, attach: b, params: {bogus: 1}}\n", "unknown params"),
+])
+def test_bad_devices_are_rejected_with_a_reason(tmp_path, devices, message):
+    with pytest.raises(SystemError, match=message):
+        System(_ams(tmp_path, devices))
