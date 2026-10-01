@@ -31,6 +31,8 @@ def pytest_addoption(parser):
                 help="bridge the CAN hubs to SocketCAN (needs vcan can0..can2)")
     g.addoption("--vhil-socket", default="/tmp/vhil-broker.sock")
     g.addoption("--vhil-log", default="vhil-renode.log", help="Renode log file")
+    g.addoption("--vhil-peripherals", default=str(REPO / "configs" / "peripherals.yaml"),
+                help="unmodelled hardware the firmware may touch (peripheral guard)")
     g.addoption("--vhil-gaps", default=str(REPO / "configs" / "gaps.yaml"),
                 help="known model gaps to skip with their reason")
 
@@ -81,6 +83,30 @@ def pytest_collection_modifyitems(config, items):
             if item.nodeid.startswith(gap["path"]):
                 item.add_marker(pytest.mark.skip(reason=f"vhil gap: {gap['why']}"))
                 break
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """Stop Renode (so its log is complete), then fail the session if the
+    firmware touched hardware the bench does not model and nobody explained
+    it in configs/peripherals.yaml."""
+    global _bench
+    if _bench is None:
+        return
+    _bench.stop()
+    log_path, _bench = _bench.log_path, None
+    if log_path is None or not Path(log_path).exists():
+        return
+    from vhil import peripheral_guard as guard
+    findings = guard.unexplained(Path(log_path).read_text(errors="replace"),
+                                 guard.load_rules(session.config.getoption("--vhil-peripherals")))
+    tr = session.config.pluginmanager.get_plugin("terminalreporter")
+    if findings:
+        if tr:
+            tr.write_sep("=", "vhil peripheral guard", red=True)
+            tr.write_line(guard.report(findings))
+        session.exitstatus = pytest.ExitCode.TESTS_FAILED
+    elif tr:
+        tr.write_line("vhil peripheral guard: every unmodelled access is explained")
 
 
 def pytest_unconfigure(config):
