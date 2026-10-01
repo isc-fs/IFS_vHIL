@@ -34,12 +34,13 @@ scripts/run-ifs-hil.sh          Run an IFS_HIL suite against the virtual bench (
 vhil/                           Virtual broker, Renode monitor client, pytest plugin
 configs/gaps.yaml               IFS_HIL tests the virtual bench can't pass yet, and why
 configs/peripherals.yaml        Unmodelled hardware the firmware may touch, and why (peripheral guard)
-tests/ecu_smoke.robot           CAN-side smoke checks (heartbeat, buses, 0x704 health)
+tests/ecu_smoke.robot           ECU smoke: heartbeat, buses, 0x704 health
+tests/ams_smoke.robot           AMS smoke: what the AMS reports about its modelled battery, faults included
 tests/unit/                     Host-only checks of the catalogue, systems and generator
 CLAUDE.md                       Operating model: branch/commit/PR policy, invariants
 docs/proposal.md                Design, spike results, coverage, phases, risks
 docs/development/setup.md       Toolchain, branching, issues, PRs, releases
-.github/workflows/              CI: unit, ECU smoke (Robot), IFS_HIL ECU suite
+.github/workflows/              CI: unit, smoke per system (Robot), IFS_HIL ECU suite
 ```
 
 ## Try it (Linux or WSL2)

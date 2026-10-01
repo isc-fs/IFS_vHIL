@@ -22,7 +22,7 @@ sudo password. Build dependencies: `sudo apt-get install -y build-essential
 flex bison bc libelf-dev libssl-dev dwarves`. Re-run it after `wsl --update` changes
 `uname -r`, and after every WSL restart with `--load`.
 
-CI ([`.github/workflows/ecu-smoke.yml`](../../.github/workflows/ecu-smoke.yml))
+CI ([`.github/workflows/smoke.yml`](../../.github/workflows/smoke.yml))
 installs exactly these on `ubuntu-latest`. It is the reference setup.
 
 ## Branching
