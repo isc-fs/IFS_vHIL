@@ -7,7 +7,7 @@ import pytest
 import yaml
 
 from vhil.editor import (BUS_NODE, ERROR, OK, EditorMethods, dump_system, from_dataflow,
-                         specification, to_dataflow, validate)
+                         specification, to_dataflow, validate, write_system)
 from vhil.system import REPO
 
 SYSTEMS = sorted((REPO / "systems").glob("*.yaml"))
@@ -127,4 +127,29 @@ def test_rpc_import_export_round_trip():
     assert imported["type"] == OK
     exported = rpc.dataflow_export(dataflow=imported["content"])
     assert exported["type"] == OK and exported["filename"] == "ecu.yaml"
-    assert yaml.safe_load(base64.b64decode(exported["content"])) == yaml.safe_load(text)
+    # Unchanged, the file comes back byte for byte, comments included.
+    assert base64.b64decode(exported["content"]).decode() == text
+
+
+@pytest.mark.parametrize("path", SYSTEMS, ids=lambda p: p.name)
+def test_an_unedited_system_writes_back_identical(spec, path):
+    text = path.read_text()
+    assert write_system(yaml.safe_load(text), text) == text
+
+
+def test_an_edit_keeps_the_files_comments():
+    """M3's shape again, through write_system: comments and untouched lines
+    stay; the new board and bus member appear in the file's style."""
+    text = (REPO / "systems" / "ams.yaml").read_text()
+    doc = yaml.safe_load(text)
+    doc["boards"]["ecu"] = {"board": "mlc-carrier", "firmware": "ecu"}
+    doc["buses"]["can_acu"]["nodes"].append("ecu.FDCAN2")
+    del doc["devices"]["sd"]
+    out = write_system(doc, text)
+    assert yaml.safe_load(out) == doc
+    assert "  ecu: {board: mlc-carrier, firmware: ecu}\n" in out
+    assert "nodes: [ams.FDCAN1, ecu.FDCAN2]" in out
+    assert "sd-card" not in out
+    for line in text.splitlines():
+        if line.lstrip().startswith("#"):
+            assert line in out

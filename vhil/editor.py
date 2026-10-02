@@ -25,9 +25,11 @@ from __future__ import annotations
 
 import argparse
 import base64 as b64
+import io
 import json
 import logging
 import os
+import re
 import sys
 import tempfile
 import textwrap
@@ -49,6 +51,10 @@ GRAPH_ID = "system"
 BUS_SIZE, BUS_PITCH = 120, 40
 
 # Board catalogue section -> interface type and side.
+# A bus interface's length in pixels: each connection lands on a stub along
+# it. Pipeline Manager places a new stub at size / 2, so a tiny bus stacks
+# every connection on the node header.
+BUS_SIZE, BUS_PITCH = 120, 40
 _BOARD_PORTS = (("can", "can", "right"), ("spi", "spi", "left"), ("sdmmc", "sdmmc", "left"),
                 ("gpio", "gpio", "left"), ("analog_in", "analog", "left"))
 # Model host-side ports: system device field -> interface type.
@@ -131,9 +137,10 @@ def specification(catalog: Path = CATALOG) -> dict:
 
 # -- system -> graph -------------------------------------------------------------
 
-def to_dataflow(doc: dict, spec: dict | None = None) -> dict:
+def to_dataflow(doc: dict, spec: dict | None = None, source: str | None = None) -> dict:
     """A system document as a Pipeline Manager dataflow. IDs derive from names,
-    so the same system always gives the same graph."""
+    so the same system always gives the same graph. `source`, the file's
+    text, rides along so an export can keep its comments (write_system)."""
     spec = spec or specification()
     types = {n["name"]: n for n in spec["nodes"]}
     nodes, connections = [], []
@@ -183,6 +190,8 @@ def to_dataflow(doc: dict, spec: dict | None = None) -> dict:
             connect(f"i:{dev['attach']}:{port}", f"i:{name}:{port}")
 
     extra = {k: doc[k] for k in ("id", "description", "time", "bench") if k in doc}
+    if source is not None:
+        extra["source"] = source
     return {"version": FORMAT_VERSION, "entryGraph": GRAPH_ID,
             "graphs": [{"id": GRAPH_ID, "name": doc["id"], "nodes": nodes,
                         "connections": connections, "additionalData": {"vhil": extra}}]}
@@ -215,6 +224,9 @@ def from_dataflow(dataflow: dict, spec: dict | None = None) -> dict:
     doc = {"kind": "system", "id": extra.pop("id", graph.get("name") or "system")}
     if "description" in extra:
         doc["description"] = extra.pop("description")
+            # A connection to a bus ends on one of its stubs.
+            for stub in (i.get("bus") or {}).get("stubs") or []:
+                by_iface[stub["id"]] = (n, name, i["name"])
     if "time" in extra:
         doc["time"] = extra.pop("time")
     boards, buses, devices = {}, {}, {}
@@ -291,6 +303,66 @@ def dump_system(doc: dict) -> str:
     return "\n".join(out) + "\n"
 
 
+def _merge(node, new, depth: int = 0):
+    """Apply `new` onto ruamel's round-trip `node` in place, touching only
+    what changed, so comments and flow style stay where they were."""
+    from ruamel.yaml.comments import CommentedMap, CommentedSeq
+
+    def fresh(v, d):
+        # New entries of boards/buses/devices are one flow-style line each.
+        if isinstance(v, dict):
+            m = CommentedMap((k, fresh(x, d + 1)) for k, x in v.items())
+            if d >= 2:
+                m.fa.set_flow_style()
+            return m
+        if isinstance(v, list):
+            q = CommentedSeq(fresh(x, d + 1) for x in v)
+            if d >= 2:
+                q.fa.set_flow_style()
+            return q
+        return v
+
+    for key in [k for k in node if k not in new]:
+        del node[key]
+    for key, value in new.items():
+        old = node.get(key)
+        if isinstance(old, dict) and isinstance(value, dict):
+            _merge(old, value, depth + 1)
+        elif isinstance(old, list) and isinstance(value, list):
+            if list(old) != value:
+                old[:] = [fresh(x, depth + 2) for x in value]
+        elif key not in node or old != value:
+            node[key] = fresh(value, depth + 1)
+
+
+def _source(dataflow: dict) -> str | None:
+    """The system file text a dataflow was made from, if it carries one."""
+    graphs = {g["id"]: g for g in dataflow["graphs"]}
+    graph = graphs[dataflow.get("entryGraph") or dataflow["graphs"][0]["id"]]
+    return (graph.get("additionalData") or {}).get("vhil", {}).get("source")
+
+
+def write_system(doc: dict, source: str | None = None) -> str:
+    """The system file for `doc`. Given the file it came from, edits are
+    applied onto that text, keeping its comments and layout; otherwise the
+    normalised dump_system form."""
+    if source is None:
+        return dump_system(doc)
+    from ruamel.yaml import YAML
+    y = YAML()
+    y.width, y.preserve_quotes = 1000, True
+    y.indent(mapping=2, sequence=4, offset=2)
+    root = y.load(source)
+    _merge(root, doc)
+    out = io.StringIO()
+    y.dump(root, out)
+    # ruamel drops alignment padding after a key (`can_inv:  {...}`): an
+    # unchanged line is the original line.
+    norm = lambda line: re.sub(r":\s+", ": ", line)
+    original = {norm(line): line for line in source.splitlines()}
+    return "\n".join(original.get(norm(line), line) for line in out.getvalue().splitlines()) + "\n"
+
+
 def validate(doc: dict) -> list[str]:
     """Schema and catalogue errors of a system document ([] if it is valid)."""
     with tempfile.TemporaryDirectory() as tmp:
@@ -343,8 +415,10 @@ class EditorMethods:
             doc = from_dataflow(dataflow, self.spec)
         except (SystemError, KeyError) as e:
             return {"type": ERROR, "content": str(e)}
+        source = _source(dataflow)
+        text = write_system(doc, source)
         # content is a JSON object or a base64 string; a YAML file is the latter.
-        return {"type": OK, "content": b64.b64encode(dump_system(doc).encode()).decode(),
+        return {"type": OK, "content": b64.b64encode(text.encode()).decode(),
                 "filename": f"{doc['id']}.yaml"}
 
     def dataflow_import(self, external_application_dataflow, mime="", base64=False, **_):
@@ -356,7 +430,7 @@ class EditorMethods:
             errors = validate(doc)
             if errors:
                 return {"type": ERROR, "content": "; ".join(errors)}
-            return {"type": OK, "content": to_dataflow(doc, self.spec)}
+            return {"type": OK, "content": to_dataflow(doc, self.spec, source=text)}
         except (yaml.YAMLError, SystemError, KeyError, TypeError) as e:
             return {"type": ERROR, "content": str(e)}
 
@@ -479,9 +553,12 @@ def main(argv=None) -> int:
     if args.cmd == "spec":
         text = json.dumps(specification(), indent=2)
     elif args.cmd == "to-graph":
-        text = json.dumps(to_dataflow(yaml.safe_load(Path(args.system).read_text())), indent=2)
+        source = Path(args.system).read_text()
+        text = json.dumps(to_dataflow(yaml.safe_load(source), source=source), indent=2)
     else:
-        text = dump_system(from_dataflow(json.loads(Path(args.dataflow).read_text())))
+        dataflow = json.loads(Path(args.dataflow).read_text())
+        source = _source(dataflow)
+        text = write_system(from_dataflow(dataflow), source)
     if args.output:
         Path(args.output).write_text(text + ("" if text.endswith("\n") else "\n"))
     else:
