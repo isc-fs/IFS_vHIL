@@ -111,9 +111,13 @@ IFS_HIL recipe ─▶ ECU08.elf / AMS.elf  (same image the physical bench flashe
    `sd-card`). With no card, Renode's STM32 SDMMC never sets CMDSENT and the
    HAL's no-response command wait spins for seconds, starving every other
    task: the AMS stopped polling its battery chain after boot.
-9. **A virtual pass is not a physical pass.** When the two benches
-   disagree, it's a model gap until proven otherwise. File an issue;
-   don't tune the test to agree.
+9. **Neither bench is ground truth; the car is.** Model what the car's
+   hardware does (schematics, datasheets) and what the firmware intends,
+   not what the physical bench happens to do: it has its own artifacts
+   (stand-in DACs, the Pico LTC emulator, missing peers, state left by the
+   last run). When the two benches disagree, find out which one departs
+   from the car, a model gap or a bench artifact, and file an issue either
+   way. Don't tune a test or a model to agree with the other bench.
 
 ## Run things (Linux / WSL2)
 
