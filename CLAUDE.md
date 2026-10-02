@@ -71,7 +71,9 @@ the virtual broker's wiring are **generated** from it by `vhil/system.py`.
 Never hand-edit a generated script, and never put a car-specific name in the
 catalogue (`ecu`, not `ifs08-ecu`). Devices (`catalog/models/`) attach to a
 board's connectors or to another device's port: the LTC6811s sit on the
-LTC6820's isoSPI chain, one per IC, in chain order. Validate with
+LTC6820's isoSPI chain, one per IC, in chain order. Analog sources (models
+with backend `analog`, e.g. the AMS's current sensors) drive a board's
+analog inputs through `outputs`; their pin voltages are set at load. Validate with
 `python -m vhil.system validate`.
 
 ## The bench in 30 seconds

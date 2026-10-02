@@ -58,11 +58,26 @@ def _currents(frame):
 
 @pytest.fixture(scope="module")
 def ams(make_sim):
-    sim = make_sim("ams")
-    sim.io("ams").set_voltage("PF7", COMMON_MODE_V)
-    sim.io("ams").set_voltage("PF8", COMMON_MODE_V)
-    sim.io("ams").set_voltage("PC1", DCDC_ZERO_MV / 1000)
-    return sim
+    # systems/ams.yaml fits the car's sensors at 0 A (ssa-2-250a on PF7/PF8,
+    # acs758lcb-050b on PC1); tests drive the pins from there.
+    return make_sim("ams")
+
+
+def test_sensors_keep_the_ams_out_of_error(ams):
+    """With its sensors fitted at 0 A, the AMS passes its boot grace without a
+    current fault (0 V legs read as a disconnected sensor), and reads ~0 A
+    up to the firmware's zero calibration (CurrentZeroCount 2054 vs the
+    ideal 2048: about -2 A)."""
+    can = ams.can("can_acu")
+    ams.run_for(ms=1000)                           # booted: listening for the arm
+    can.send(PIT_ARM, bytes.fromhex("DEADBEEF"))
+    t0 = ams.run_for(ms=3000)                      # past the 2 s boot grace
+    status = can.frames(PIT_FSM, since_us=t0 - 1_000_000)
+    assert status, "no 0x6C0 after arming the pit stream"
+    assert {f.data[0] for f in status} == {0}, "AMS left Start"
+    assert {f.data[6] for f in status} == {0}, f"fault reasons {sorted({f.data[6] for f in status})}"
+    accu, dcdc = _currents(can.last(CURRENTS))
+    assert abs(accu - _pack_dA(COMMON_MODE_V, COMMON_MODE_V)) <= 5 and abs(dcdc) <= 5
 
 
 @pytest.mark.parametrize("amps", [0, 100, -50])
