@@ -25,6 +25,27 @@ flex bison bc libelf-dev libssl-dev dwarves`. Re-run it after `wsl --update` cha
 CI ([`.github/workflows/smoke.yml`](../../.github/workflows/smoke.yml))
 installs exactly these on `ubuntu-latest`. It is the reference setup.
 
+### System editor (optional)
+
+The editor UI is Antmicro's [Pipeline Manager](https://github.com/antmicro/kenning-pipeline-manager)
+(Apache-2.0) in server mode, talking to `python -m vhil.editor serve`.
+
+1. Node.js ≥ 20.18 (the Node 22 LTS `linux-x64` tarball from nodejs.org,
+   unpacked to `~/vhil-tools/node`; no sudo needed).
+2. Pipeline Manager in its own venv (it pins old dependency versions):
+   `git clone https://github.com/antmicro/kenning-pipeline-manager ~/vhil-tools/kenning-pipeline-manager`,
+   `python3 -m venv ~/vhil-tools/pm-venv`, then in that venv
+   `pip install -e ~/vhil-tools/kenning-pipeline-manager` and
+   `pip install git+https://github.com/antmicro/kenning-pipeline-manager-backend-communication.git`,
+   and `PATH=~/vhil-tools/node/bin:$PATH ./build server-app` in the checkout.
+3. The same backend library in this repo's venv.
+4. `scripts/editor.sh`, then open http://localhost:5000. Load a system with
+   `python -m vhil.editor to-graph systems/ams.yaml -o ams.json` and drop the
+   file on the canvas. Run needs `VHIL_<FIRMWARE>_ELF` (e.g. `VHIL_AMS_ELF`).
+
+Pipeline Manager's `./validate <spec> <dataflow>` checks generated files
+against its own schema: `python -m vhil.editor spec -o spec.json`.
+
 ## Branching
 
 `main` is the release branch. Feature work lands on `dev` first, and `dev`
