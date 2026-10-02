@@ -26,6 +26,11 @@ DEFAULT_RENODE = os.environ.get(
 # fidelity for real time; native tests (vhil.sim) keep the platform's value.
 WALL_CLOCK_MIPS = 100
 
+PACER_SOURCE = REPO / "models" / "renode" / "VhilPacer.cs"
+# A deficit beyond this is forgiven rather than repaid; within it the bench
+# catches up, so wall-clock periods stay within this of nominal.
+PACER_MAX_LAG_S = 0.05
+
 
 def _free_port() -> int:
     with socket.socket() as s:
@@ -62,6 +67,11 @@ class VirtualBench:
         self._monitor = RenodeMonitor(port)
         m = self._monitor
         m.execute(f"include @{script}")
+        # Pace to the wall clock ourselves: Renode's pacing repays every slow
+        # stretch by running fast afterwards (see VhilPacer.cs).
+        m.execute(f"include @{PACER_SOURCE.as_posix()}")
+        m.execute("emulation SetGlobalAdvanceImmediately true")
+        m.execute(f"emulation EnableVhilPacer {PACER_MAX_LAG_S}")
         for board in self.system.boards:
             m.execute(f'mach set "{board}"')
             m.execute(f"cpu PerformanceInMips {WALL_CLOCK_MIPS}")
