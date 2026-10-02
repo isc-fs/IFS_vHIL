@@ -32,7 +32,8 @@ rcc:
 // waits (the ECU's bit-banged nRF24, cycle-counted delays) took 5x longer in
 // virtual time than on the 528 MHz part and delayed lower-priority tasks: the
 // ECU's 0x704 landed up to 25 ms late. One instruction per cycle is the M7's
-// nominal rate.
+// nominal rate. The wall-clock bench lowers it to keep up with real time
+// (vhil/bench.py, WALL_CLOCK_MIPS).
 cpu:
     PerformanceInMips: 528
 
