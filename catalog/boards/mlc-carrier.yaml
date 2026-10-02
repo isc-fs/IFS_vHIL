@@ -18,6 +18,8 @@ gpio:
   PB9: {port: sysbus.gpioPortB, pin: 9}
 analog_in:
   # ADC3 inputs routed to the carrier connector (IFS_HIL vcu_profile.yaml).
-  PF7: {adc: sysbus.adc3, channel: 3}
-  PF8: {adc: sysbus.adc3, channel: 7}
-  PF9: {adc: sysbus.adc3, channel: 2}
+  PF7: {adc: sysbus.adc3_h73x, channel: 3}
+  PF8: {adc: sysbus.adc3_h73x, channel: 7}
+  PF9: {adc: sysbus.adc3_h73x, channel: 2}
+  # AMS DCDC current sensor, single-ended (ams_config.hpp:710).
+  PC1: {adc: sysbus.adc3_h73x, channel: 11}

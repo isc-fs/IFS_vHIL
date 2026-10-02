@@ -216,8 +216,11 @@ class System:
         for bus in self.buses:
             out.append(f'emulation CreateCANHub "{bus}"')
         out.append("")
-        sources = sorted({(REPO / d["model_doc"]["renode"]["source"]).as_posix()
-                          for d in self.devices.values() if "source" in d["model_doc"]["renode"]})
+        sources = {(REPO / d["model_doc"]["renode"]["source"]).as_posix()
+                   for d in self.devices.values() if "source" in d["model_doc"]["renode"]}
+        sources |= {(REPO / src).as_posix()
+                    for b in self.boards.values() for src in b.platform["renode"].get("sources", [])}
+        sources = sorted(sources)
         if sources:
             out += [f"include @{src}" for src in sources] + [""]
         for b in self.boards.values():

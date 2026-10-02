@@ -65,6 +65,13 @@
                 "type": "string"
               },
               "description": "Monitor commands run on each machine after the platform loads."
+            },
+            "sources": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "C# model sources the platform description needs, relative to the repo root, compiled before any machine loads."
             }
           }
         }
