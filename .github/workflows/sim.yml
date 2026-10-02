@@ -45,6 +45,9 @@ jobs:
           mkdir -p "$RUNNER_TEMP/renode"
           tar xzf renode.tar.gz -C "$RUNNER_TEMP/renode" --strip-components=1
 
+      - name: FAT tools for SD card images
+        run: sudo apt-get install -y -qq dosfstools mtools >/dev/null
+
       - name: Run tests/sim
         env:
           RENODE: ${{ runner.temp }}/renode/renode
