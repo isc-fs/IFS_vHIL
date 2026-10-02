@@ -13,6 +13,7 @@
 #   scripts/vhil-docker.sh speed [mips ...]      scripts/speed.py on the ECU
 #   scripts/vhil-docker.sh ifs-hil [suite] [pytest args]
 #                                                IFS_HIL's ECU suite over vcan
+#                                                (VHIL_SYSTEM=systems/ecu-ams.yaml: with the AMS)
 #   scripts/vhil-docker.sh editor                system editor on http://localhost:5050
 #   scripts/vhil-docker.sh shell                 a shell in the container
 #   scripts/vhil-docker.sh run <cmd...>          any command in the container
@@ -73,6 +74,7 @@ in_container() {
     "${docker[@]}" run --rm ${tty[@]+"${tty[@]}"} "${run_args[@]}" \
         -v "$repo:/work" -v vhil-data:/vhil \
         -e IFS_HIL_REF="${IFS_HIL_REF:-dev}" -e FW_REFS="${FW_REFS:-}" \
+        -e VHIL_SYSTEM="${VHIL_SYSTEM:-}" \
         -e EDITOR_URL="http://localhost:${VHIL_EDITOR_PORT:-5050}" \
         "$image" bash -c "$1" vhil "${@:2}"
 }
@@ -120,6 +122,14 @@ speed)
 ifs-hil)
     in_container "$prelude"'
         need_elf ecu
+        # The other boards of $VHIL_SYSTEM run their last-built images.
+        export VHIL_SYSTEM=${VHIL_SYSTEM:-systems/ecu.yaml}
+        VHIL_FIRMWARE=
+        for b in $(python -c "import sys; from vhil.system import System; print(*System(sys.argv[1]).boards)" "$VHIL_SYSTEM"); do
+            [ "$b" = ecu ] && continue
+            need_elf "$b"; VHIL_FIRMWARE+="$b=$(elf "$b") "
+        done
+        export VHIL_FIRMWARE
         for i in 0 1 2; do
             ip link show "can$i" >/dev/null 2>&1 || ip link add "can$i" type vcan
             ip link set "can$i" txqueuelen 1000 up
