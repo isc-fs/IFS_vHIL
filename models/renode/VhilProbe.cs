@@ -108,9 +108,11 @@ namespace Antmicro.Renode.Testing
 
         // -- stimulate ------------------------------------------------------
 
+        // Goes out at the current virtual instant once time next advances.
+        // Not SendFrame directly: on a paused emulation that starts it.
         public void Send(uint id, string hex, bool extended = false)
         {
-            SendFrame(new CANMessageFrame(id, Bytes(hex), extended));
+            SendAt(0, id, hex, extended);
         }
 
         // Send once at an absolute virtual time (us); in the past = now.
