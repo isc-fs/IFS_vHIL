@@ -50,7 +50,7 @@ def test_each_relay_powers_only_its_own_board():
     monitor.commands.clear()
     backend.tca_write_pin(0x20, 0, 1, True)          # K2 = MLC2 = AMS
     assert {m for m, _ in monitor.commands} == {"ams"}
-    assert ("ams", "connector Connect sysbus.fdcan1 can_acu") in monitor.commands
+    assert ("ams", "connector Connect sysbus.fdcan1_h7 can_acu") in monitor.commands
     assert backend.ina_current(0x41) == 0.12 and backend.ina_current(0x45) == 0.0
 
 

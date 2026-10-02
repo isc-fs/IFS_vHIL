@@ -19,7 +19,7 @@
 - tag: CAN_CCU
   why: "FDCAN clock-calibration unit. HAL_FDCAN_IRQHandler polls its IR/IE on FDCAN1; calibration is off (classic CAN, HSE kernel clock), so reading 0 is the hardware's answer too"
 
-- peripheral: fdcan1
+- peripheral: fdcan1*
   offsets: [0x108]
   why: "TT-CAN TTOCF. HAL_FDCAN_Init clears its OM bits on FDCAN1 (stm32h7xx_hal_fdcan.c:583) and HAL reads it to test for TT mode; reading 0 means event-driven, which is the firmware's real configuration"
 

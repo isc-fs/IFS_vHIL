@@ -11,9 +11,9 @@ platform: stm32h733
 # schematic.
 vbat: false
 can:
-  FDCAN1: sysbus.fdcan1
-  FDCAN2: sysbus.fdcan2
-  FDCAN3: sysbus.fdcan3
+  FDCAN1: sysbus.fdcan1_h7
+  FDCAN2: sysbus.fdcan2_h7
+  FDCAN3: sysbus.fdcan3_h7
 spi:
   SPI1: sysbus.spi1
 sdmmc:
