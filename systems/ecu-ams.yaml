@@ -1,0 +1,40 @@
+kind: system
+id: ecu-ams
+description: >-
+  The ECU and the AMS on one ACU bus, each on its own MLC carrier: bench-01
+  with slot 4 and slot 2 seated, what IFS_HIL's real-AMS block (F-real)
+  expects. The AMS carries its battery chain and SD card as in ams.yaml.
+time:
+  quantum_s: 0.0005
+boards:
+  ecu: {board: mlc-carrier, firmware: ecu}
+  ams: {board: mlc-carrier, firmware: ams}
+buses:
+  # As in ecu.yaml; the ACU bus is the one the two boards share (bench-01
+  # wires MLC4 FDCAN2 and MLC2 FDCAN1 to can2).
+  can_inv:  {kind: can, nodes: [ecu.FDCAN1], host_netdev: can0}
+  can_dash: {kind: can, nodes: [ecu.FDCAN3], host_netdev: can1}
+  can_acu:  {kind: can, nodes: [ecu.FDCAN2, ams.FDCAN1], host_netdev: can2}
+devices:
+  # The AMS's, from ams.yaml: LTC6820 on SPI1 (chip select PB9), 10 LTC6811s
+  # on its isoSPI chain, and the SD card its firmware needs to keep running.
+  isospi: {model: ltc6820, spi: ams.SPI1, cs: ams.PB9}
+  cells: {model: ltc6811, attach: isospi, count: 10}
+  sd: {model: sd-card, sdmmc: ams.SDMMC1}
+bench:
+  carriers:
+    # MLC4 (ECU): relay K4 = TCA 0x20 port 0 pin 3, current monitor INA 0x45.
+    - {board: ecu, slot: 4, relay: {addr: 0x20, port: 0, pin: 3}, ina_addr: 0x45, current_A: 0.13}
+    # MLC2 (AMS): relay K2 = TCA 0x20 port 0 pin 1, current monitor INA 0x41.
+    - {board: ams, slot: 2, relay: {addr: 0x20, port: 0, pin: 1}, ina_addr: 0x41, current_A: 0.12}
+  dac_routes:
+    # bench DAC1 -> ECU pedal inputs (vcu_profile: brake, APPS1, APPS2)
+    - {dac: 0, channel: 0, to: ecu.PF7}
+    - {dac: 0, channel: 1, to: ecu.PF8}
+    - {dac: 0, channel: 2, to: ecu.PF9}
+    # bench DAC4 -> the AMS pack-current pair (bench-01.yaml routing.pack_current;
+    # zero current = both legs at 1.44 V). Nothing in the ECU suites sets it:
+    # undriven, the AMS reads its legs out of range and latches
+    # CurrentSensorFault at the end of its boot grace.
+    - {dac: 3, channel: 0, to: ams.PF7}
+    - {dac: 3, channel: 1, to: ams.PF8}

@@ -7,7 +7,9 @@
 # suite`, exactly as /hil-test does. SocketCAN is used when can0..can2 exist
 # (CI, or WSL2 after scripts/wsl-vcan.sh --load). RENODE overrides the
 # launcher path, VHIL_SYSTEM the system file (default systems/ecu.yaml).
-# ECU_FIRMWARE_BIN defaults to the .bin next to the .elf.
+# ECU_FIRMWARE_BIN defaults to the .bin next to the .elf. In a system with
+# more boards than the ECU, VHIL_FIRMWARE names the others' images:
+# VHIL_FIRMWARE="ams=build/AMS.elf" with VHIL_SYSTEM=systems/ecu-ams.yaml.
 set -euo pipefail
 here=$(cd "$(dirname "$0")/.." && pwd)
 ifs_hil=$(realpath "$1"); elf=$(realpath "$2"); suite=${3:-smoke}
@@ -18,6 +20,8 @@ if [ ! -f "$bin" ] && command -v arm-none-eabi-objcopy >/dev/null; then
     arm-none-eabi-objcopy -O binary "$elf" "$bin"
 fi
 export ECU_FIRMWARE_BIN=${ECU_FIRMWARE_BIN:-$bin}
+# Resolved before the cd below, like every other path argument.
+system=$(realpath "${VHIL_SYSTEM:-$here/systems/ecu.yaml}")
 
 socketcan=()
 if ip link show can0 >/dev/null 2>&1 && ip link show can1 >/dev/null 2>&1 \
@@ -29,9 +33,13 @@ fi
 
 cd "$ifs_hil"
 targets=$(python3 -m tools.bench suite --dut ecu --suite "$suite")
+firmware=(--vhil-firmware "ecu=$elf")
+for pair in ${VHIL_FIRMWARE:-}; do
+    firmware+=(--vhil-firmware "${pair%%=*}=$(realpath "${pair#*=}")")
+done
 renode_opt=()
 [ -n "${RENODE:-}" ] && renode_opt=(--vhil-renode "$RENODE")
 PYTHONPATH="$here${PYTHONPATH:+:$PYTHONPATH}" exec python3 -m pytest -p vhil.pytest_plugin \
-    --vhil-system "${VHIL_SYSTEM:-$here/systems/ecu.yaml}" \
-    --vhil-elf "$elf" "${socketcan[@]}" "${renode_opt[@]}" \
+    --vhil-system "$system" \
+    "${firmware[@]}" "${socketcan[@]}" "${renode_opt[@]}" \
     --rootdir "$ifs_hil" -p no:cacheprovider -rA --log-level=INFO $targets "$@"
