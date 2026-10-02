@@ -34,4 +34,4 @@ renode_opt=()
 PYTHONPATH="$here${PYTHONPATH:+:$PYTHONPATH}" exec python3 -m pytest -p vhil.pytest_plugin \
     --vhil-system "${VHIL_SYSTEM:-$here/systems/ecu.yaml}" \
     --vhil-elf "$elf" "${socketcan[@]}" "${renode_opt[@]}" \
-    -p no:cacheprovider -rA --log-level=INFO $targets "$@"
+    --rootdir "$ifs_hil" -p no:cacheprovider -rA --log-level=INFO $targets "$@"
