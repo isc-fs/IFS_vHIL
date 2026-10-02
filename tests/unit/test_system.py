@@ -118,6 +118,29 @@ def test_ams_renders_the_isospi_chain_in_order():
     assert "sd: SD.SDCard @ sdmmc" in s
 
 
+def test_ams_current_sensors_hold_their_zero_from_load():
+    """The car's sensors at 0 A: SSA-2 legs at the 1.44 V common mode, the
+    ACS758 at Vcc/2 (ams_config.hpp, current sensor calibration)."""
+    s = System(REPO / "systems" / "ams.yaml").render_renode()
+    for line in ("sysbus.adc3_h73x SetVoltage 1440000 3",    # PF7 = INP3
+                 "sysbus.adc3_h73x SetVoltage 1440000 7",    # PF8 = INN3's pin
+                 "sysbus.adc3_h73x SetVoltage 1650000 11"):  # PC1 = INP11
+        assert line in s
+    assert s.index(line) < s.index("macro reset")   # outside the board: not reset
+
+
+@pytest.mark.parametrize("amps, p_v, n_v", [
+    (100, 1.69, 1.19),        # +/-2.5 mV/A per leg
+    (-100, 1.19, 1.69),
+    (1000, 2.75, 0.13),       # clipped at +/-1.31 V per leg (2.62 V differential)
+])
+def test_ssa_2_legs_follow_the_current(tmp_path, amps, p_v, n_v):
+    s = System(_ams(tmp_path, "  i: {model: ssa-2-250a, outputs: {out_p: ams.PF7, out_n: ams.PF8},"
+                              f" params: {{current_A: {amps}}}}}\n"))
+    levels = s.analog_levels("i")
+    assert levels["ams.PF7"] == pytest.approx(p_v) and levels["ams.PF8"] == pytest.approx(n_v)
+
+
 def _ams(tmp_path, devices):
     p = tmp_path / "s.yaml"
     p.write_text("kind: system\nid: t\nboards:\n  ams: {board: mlc-carrier, firmware: ams}\n"
@@ -135,7 +158,8 @@ def _ams(tmp_path, devices):
     ("  sd: {model: sd-card, sdmmc: ams.SDMMC1, spi: ams.SPI1}\n", "takes no 'spi'"),
     ("  c: {model: ltc6811, attach: nope}\n", "must attach to a device"),
     ("  b: {model: ltc6820, spi: ams.SPI1, cs: ams.PB9}\n"
-     "  c: {model: ltc6811, attach: b, params: {bogus: 1}}\n", "unknown params"),
+     "  c: {model: ltc6811, attach: b, params: {bogus: 1}}\n", "unknown params"),    ("  i: {model: ssa-2-250a, outputs: {out_p: ams.PF7}}\n", "drives outputs"),
+    ("  i: {model: acs758lcb-050b, outputs: {out: ams.FDCAN1}}\n", "not an analog input"),
 ])
 def test_bad_devices_are_rejected_with_a_reason(tmp_path, devices, message):
     with pytest.raises(SystemError, match=message):

@@ -71,7 +71,9 @@ the virtual broker's wiring are **generated** from it by `vhil/system.py`.
 Never hand-edit a generated script, and never put a car-specific name in the
 catalogue (`ecu`, not `ifs08-ecu`). Devices (`catalog/models/`) attach to a
 board's connectors or to another device's port: the LTC6811s sit on the
-LTC6820's isoSPI chain, one per IC, in chain order. Validate with
+LTC6820's isoSPI chain, one per IC, in chain order. Analog sources (models
+with backend `analog`, e.g. the AMS's current sensors) drive a board's
+analog inputs through `outputs`; their pin voltages are set at load. Validate with
 `python -m vhil.system validate`.
 
 ## The bench in 30 seconds
@@ -111,9 +113,13 @@ IFS_HIL recipe ─▶ ECU08.elf / AMS.elf  (same image the physical bench flashe
    `sd-card`). With no card, Renode's STM32 SDMMC never sets CMDSENT and the
    HAL's no-response command wait spins for seconds, starving every other
    task: the AMS stopped polling its battery chain after boot.
-9. **A virtual pass is not a physical pass.** When the two benches
-   disagree, it's a model gap until proven otherwise. File an issue;
-   don't tune the test to agree.
+9. **Neither bench is ground truth; the car is.** Model what the car's
+   hardware does (schematics, datasheets) and what the firmware intends,
+   not what the physical bench happens to do: it has its own artifacts
+   (stand-in DACs, the Pico LTC emulator, missing peers, state left by the
+   last run). When the two benches disagree, find out which one departs
+   from the car, a model gap or a bench artifact, and file an issue either
+   way. Don't tune a test or a model to agree with the other bench.
 
 ## Run things (Linux / WSL2)
 

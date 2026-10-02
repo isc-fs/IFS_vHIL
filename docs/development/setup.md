@@ -104,9 +104,10 @@ exit criterion. Bugs and model gaps get their own issue, labelled
 - A PR says which issue it advances: `Part of #1`.
 - PRs merge into `dev`, so GitHub's `Closes #N` does not fire. Close the
   issue by hand once its exit criterion is met, linking the PRs.
-- A test that passes virtually but fails on the physical bench is a
-  **model gap**. Open an issue for it; don't skip the test to make it
-  green.
+- When the virtual and physical benches disagree, neither is assumed
+  right: check both against the car's hardware and the firmware's intent.
+  Open an issue for the side that departs from the car (a model gap or a
+  bench artifact); don't skip the test to make it green.
 
 ## Pull requests
 

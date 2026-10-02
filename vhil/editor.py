@@ -56,7 +56,7 @@ _BOARD_PORTS = (("can", "can", "right"), ("spi", "spi", "left"), ("sdmmc", "sdmm
 # Model host-side ports: system device field -> interface type.
 _MODEL_HOST_PORTS = (("spi", "spi"), ("cs", "gpio"), ("sdmmc", "sdmmc"))
 # Field order in a written system file.
-_DEVICE_FIELDS = ("model", "spi", "cs", "sdmmc", "attach", "count", "params")
+_DEVICE_FIELDS = ("model", "spi", "cs", "sdmmc", "outputs", "attach", "count", "params")
 _SYSTEM_FIELDS = ("kind", "id", "description", "time", "boards", "buses", "devices", "bench")
 
 
@@ -116,6 +116,9 @@ def specification(catalog: Path = CATALOG) -> dict:
         if iface.get("provides"):
             interfaces.append({"name": iface["provides"], "type": iface["provides"],
                                "direction": "output", "side": "right"})
+        # Analog outputs drive a board's analog inputs.
+        interfaces += [{"name": out, "type": "analog", "direction": "output", "side": "right",
+                        "maxConnectionsCount": 1} for out in iface.get("analog_out", [])]
         properties = [_property(k, v) for k, v in (model.get("params") or {}).items()]
         if iface.get("attach"):
             properties.insert(0, {"name": "count", "type": "integer", "default": 1, "min": 1,
@@ -179,6 +182,9 @@ def to_dataflow(doc: dict, spec: dict | None = None, source: str | None = None) 
             if field in dev:
                 board, pin = dev[field].split(".", 1)
                 connect(f"i:{board}:{pin}", f"i:{name}:{field}")
+        for out, endpoint in dev.get("outputs", {}).items():
+            board, pin = endpoint.split(".", 1)
+            connect(f"i:{name}:{out}", f"i:{board}:{pin}")
     models = _catalog("model")
     for name, dev in devices.items():
         if "attach" in dev:
@@ -253,7 +259,11 @@ def from_dataflow(dataflow: dict, spec: dict | None = None) -> dict:
         elif {ka, kb} == {"board", "model"}:
             (dev, field), (board, pin) = ((b_name, b_if), (a_name, a_if)) if kb == "model" \
                 else ((a_name, a_if), (b_name, b_if))
-            devices[dev][field] = f"{board}.{pin}"
+            model = models[devices[dev]["model"]]
+            if field in model.get("interface", {}).get("analog_out", []):
+                devices[dev].setdefault("outputs", {})[field] = f"{board}.{pin}"
+            else:
+                devices[dev][field] = f"{board}.{pin}"
         elif ka == kb == "model":
             provider, child = (a_name, b_name) if a_if == models[na["name"]]["interface"].get(
                 "provides") else (b_name, a_name)

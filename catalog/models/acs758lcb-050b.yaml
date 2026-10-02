@@ -1,0 +1,16 @@
+kind: model
+id: acs758lcb-050b
+description: >-
+  Allegro ACS758LCB-050B Hall current sensor on a 3.3 V supply. Ratiometric:
+  its 5 V ratings (offset Vcc/2, 40 mV/A) scale by 3.3/5, giving 1.65 V at
+  0 A and 26.4 mV/A, within the supply rails. Figures as used by
+  IFS08-CE-AMS ams_config.hpp (DCDC current); check against the Allegro
+  datasheet when to hand. A test or bench DAC may drive the pin afterwards.
+interface: {analog_out: [out]}
+params:
+  current_A: 0.0        # sign follows the IP+ -> IP- wiring
+backend: analog
+analog:
+  input: current_A
+  outputs:
+    out: {offset_V: 1.65, gain_V: 0.0264, min_V: 0.0, max_V: 3.3}

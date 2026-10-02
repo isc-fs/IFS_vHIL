@@ -147,5 +147,6 @@ drifts from upstream loses the models and fixes we rely on Antmicro for.
   time.
 - **Multi-backend creep.** Keep the backend boundary thin, and add a second
   backend only when a platform needs it.
-- **Two benches, two truths.** A virtual pass is not a physical pass. A
-  disagreement is a model gap until proven otherwise.
+- **Two benches, neither the truth.** A pass on either is not a pass on the
+  car. When they disagree, check both against the car's hardware and the
+  firmware's intent: the gap can be in the models or in the physical bench.

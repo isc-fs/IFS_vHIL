@@ -31,12 +31,19 @@ from vhil.renode import RenodeMonitor
 log = logging.getLogger("vhil.broker")
 REPO = Path(__file__).resolve().parent.parent
 
+# RTC backup registers: RTC_BASE 0x58004000 (stm32h733xx.h:2394), BKP0R at
+# offset 0x50 (stm32h733xx.h:1331). Renode's STM32F4_RTC holds the F4's 20,
+# BKP0R..BKP19R; the H733's BKP20R..BKP31R (to 0xCC) are unmodelled, so they
+# hold nothing to wipe.
+RTC_BKP = range(0x58004050, 0x58004050 + 20 * 4, 4)
+
 
 def make_backend(fake_cls, monitor: RenodeMonitor, config: dict):
     """Build the backend as a subclass of IFS_HIL's FakeHardwareManager."""
 
     carriers = {(c["relay"]["addr"], c["relay"]["port"], c["relay"]["pin"]): c
                 for c in config.get("carriers", [])}
+    vbat = {c["machine"]: c.get("vbat", True) for c in config.get("carriers", [])}
     by_ina = {c["ina_addr"]: c for c in config.get("carriers", [])}
     routes = {(r["dac"], r["channel"]): r for r in config.get("dac_routes", [])}
     # The broker server is threaded; `mach set` + the command must not interleave.
@@ -75,6 +82,15 @@ def make_backend(fake_cls, monitor: RenodeMonitor, config: dict):
             # checks. Unpowered, the firmware keeps running unheard; power-on
             # is a full reset, so it boots cold.
             if value:
+                # machine Reset keeps the backup domain, as a warm reset does.
+                # Without VBAT a power cut wipes it: the AMS's sticky
+                # ErrorLatch must not outlive the carrier's power. Before the
+                # reset, so the booting firmware never reads the old value.
+                if not vbat[machine]:
+                    with lock:
+                        monitor.execute(f'mach set "{machine}"')
+                        for addr in RTC_BKP:
+                            monitor.execute(f"sysbus WriteDoubleWord {addr:#x} 0x0")
                 # The reset macro reloads the image and sets VTOR.
                 self._on(machine, "machine Reset")
                 # Renode 1.17: Reset zeroes BASEPRI as read, but not the

@@ -123,6 +123,25 @@ class System:
                     if kind != want:
                         raise SystemError(f"device '{name}': {port} '{dev[port]}' is {kind}, not {want}")
                     boards.add(board.name)
+            doc = dev["model_doc"]
+            if doc["backend"] == "analog":
+                an = doc.get("analog")
+                if (an is None or set(an["outputs"]) != set(interface.get("analog_out", []))
+                        or an["input"] not in doc.get("params", {})):
+                    raise SystemError(f"model '{doc['id']}': its analog section must define "
+                                      f"every analog_out and follow one of its params")
+            elif "renode" not in doc:
+                raise SystemError(f"model '{doc['id']}': backend renode needs a renode section")
+            want_out = set(interface.get("analog_out", []))
+            if set(dev.get("outputs", {})) != want_out:
+                raise SystemError(f"device '{name}' ({dev['model']}) drives outputs "
+                                  f"{sorted(want_out)}, got {sorted(dev.get('outputs', {}))}")
+            for out, endpoint in dev.get("outputs", {}).items():
+                board, kind, _ = self.resolve(endpoint)
+                if kind != "analog":
+                    raise SystemError(f"device '{name}': output {out} to '{endpoint}', "
+                                      f"which is {kind}, not an analog input")
+                boards.add(board.name)
             if interface.get("attach"):
                 parent = self.devices.get(dev.get("attach"))
                 if parent is None:
@@ -165,6 +184,8 @@ class System:
         for port in ("spi", "cs", "sdmmc"):
             if port in dev:
                 return self.resolve(dev[port])[0].name
+        for endpoint in dev.get("outputs", {}).values():
+            return self.resolve(endpoint)[0].name
         return self.board_of_device(dev["attach"], _seen + (name,))
 
     def devices_on(self, board: str) -> list[str]:
@@ -180,11 +201,28 @@ class System:
             visit(n)
         return ordered
 
+    @staticmethod
+    def _params(dev: dict) -> dict:
+        return dict(dev["model_doc"].get("params", {}), **dev.get("params", {}))
+
+    def analog_levels(self, name: str) -> dict[str, float]:
+        """An analog device's output voltages at its params, by endpoint."""
+        dev = self.devices[name]
+        an = dev["model_doc"]["analog"]
+        params = self._params(dev)
+        x = float(params[an["input"]])
+        levels = {}
+        for out, endpoint in dev["outputs"].items():
+            o = an["outputs"][out]
+            v = o["offset_V"] + o["gain_V"] * x
+            levels[endpoint] = min(max(v, o.get("min_V", v)), o.get("max_V", v))
+        return levels
+
     def _renode_device(self, name: str, dev: dict) -> str:
         """Platform-description text attaching one device (or a counted chain)."""
         rn = dev["model_doc"]["renode"]
         local = lambda path: path.split(".", 1)[1] if path.startswith("sysbus.") else path
-        params = dict(dev["model_doc"].get("params", {}), **dev.get("params", {}))
+        params = self._params(dev)
         body = [f"    {rn.get('params', {}).get(k, k)}: "
                 f"{str(v).lower() if isinstance(v, bool) else v}" for k, v in params.items()]
         lines = []
@@ -217,7 +255,8 @@ class System:
             out.append(f'emulation CreateCANHub "{bus}"')
         out.append("")
         sources = {(REPO / d["model_doc"]["renode"]["source"]).as_posix()
-                   for d in self.devices.values() if "source" in d["model_doc"]["renode"]}
+                   for d in self.devices.values()
+                   if "source" in d["model_doc"].get("renode", {})}
         sources |= {(REPO / src).as_posix()
                     for b in self.boards.values() for src in b.platform["renode"].get("sources", [])}
         sources = sorted(sources)
@@ -240,6 +279,17 @@ class System:
             out += rn.get("setup", [])
             for name in self.devices_on(b.name):
                 dev = self.devices[name]
+                if dev["model_doc"]["backend"] == "analog":
+                    # Pin voltages live outside the MCU: they survive machine
+                    # Reset, so they are set once, not in the reset macro.
+                    out.append(f"# device {name}: {dev['model']} "
+                               f"({dev['model_doc']['analog']['input']} = "
+                               f"{self._params(dev)[dev['model_doc']['analog']['input']]})")
+                    for endpoint, volts in self.analog_levels(name).items():
+                        target = self.resolve(endpoint)[2]
+                        out.append(f"{target['adc']} SetVoltage {round(volts * 1e6)} "
+                                   f"{target['channel']}")
+                    continue
                 out += [f"# device {name}: {dev['model']}"
                         + (f" x{dev['count']} on {dev['attach']}" if "count" in dev else ""),
                         'machine LoadPlatformDescriptionFromString """',
@@ -264,7 +314,8 @@ class System:
         """The virtual broker's wiring (see vhil/broker.py)."""
         carriers = [{"machine": c["board"], "slot": c.get("slot"), "relay": c["relay"],
                      "ina_addr": c["ina_addr"], "current_A": c["current_A"],
-                     "can": self.can_of(c["board"])}
+                     "can": self.can_of(c["board"]),
+                     "vbat": self.boards[c["board"]].board.get("vbat", True)}
                     for c in self.bench.get("carriers", [])]
         routes = []
         for r in self.bench.get("dac_routes", []):

@@ -1,0 +1,20 @@
+kind: model
+id: ssa-2-250a
+description: >-
+  Bourns SSA-2-250A shunt current sensor: amplified differential output,
+  OUT_P/OUT_N about a common mode, +/-5 mV/A between them (+/-2.5 mV/A per
+  leg), 250 A nominal, clipping at +/-2.62 V differential. Figures as
+  transcribed from the datasheet in IFS08-CE-AMS ams_config.hpp (current
+  sensor calibration); check against the Bourns datasheet when to hand.
+  A test or bench DAC may drive the pins afterwards.
+interface: {analog_out: [out_p, out_n]}
+params:
+  current_A: 0.0        # positive = discharge
+backend: analog
+analog:
+  input: current_A
+  outputs:
+    # Each leg: 1.44 V common mode +/- 2.5 mV/A, clipped at +/-1.31 V (half
+    # the 2.62 V differential clip).
+    out_p: {offset_V: 1.44, gain_V: 0.0025, min_V: 0.13, max_V: 2.75}
+    out_n: {offset_V: 1.44, gain_V: -0.0025, min_V: 0.13, max_V: 2.75}

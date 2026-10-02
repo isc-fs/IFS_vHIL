@@ -98,6 +98,10 @@
         "platform": {
           "$ref": "#/$defs/id"
         },
+        "vbat": {
+          "type": "boolean",
+          "description": "Whether the board backs the MCU's backup domain (VBAT). Without it a power cut wipes the RTC backup registers; default true, Renode's behaviour."
+        },
         "can": {
           "type": "object",
           "description": "Connector name -> CAN controller.",
@@ -447,6 +451,16 @@
                 "type": "integer",
                 "minimum": 1,
                 "description": "Instances at positions 0..count-1 on the attach port, named <device><i>."
+              },
+              "outputs": {
+                "type": "object",
+                "propertyNames": {
+                  "$ref": "#/$defs/name"
+                },
+                "additionalProperties": {
+                  "$ref": "#/$defs/endpoint"
+                },
+                "description": "Model analog output -> the board's analog input it drives."
               }
             }
           }
@@ -494,6 +508,14 @@
             "provides": {
               "type": "string",
               "description": "Kind of port this model offers other devices, e.g. isospi."
+            },
+            "analog_out": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/name"
+              },
+              "minItems": 1,
+              "description": "Named analog outputs; a device maps each onto a board's analog input (outputs)."
             }
           }
         },
@@ -511,7 +533,8 @@
         },
         "backend": {
           "enum": [
-            "renode"
+            "renode",
+            "analog"
           ]
         },
         "renode": {
@@ -534,6 +557,46 @@
               "description": "Model parameter -> constructor argument name.",
               "additionalProperties": {
                 "type": "string"
+              }
+            }
+          }
+        },
+        "analog": {
+          "type": "object",
+          "required": [
+            "input",
+            "outputs"
+          ],
+          "additionalProperties": false,
+          "description": "An analog source: each output's voltage is offset_V + gain_V * the input param, clipped to [min_V, max_V]. Set at load; a test or bench DAC may drive the pin afterwards.",
+          "properties": {
+            "input": {
+              "type": "string",
+              "description": "The param the outputs follow, e.g. current_A."
+            },
+            "outputs": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "object",
+                "required": [
+                  "offset_V",
+                  "gain_V"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "offset_V": {
+                    "type": "number"
+                  },
+                  "gain_V": {
+                    "type": "number"
+                  },
+                  "min_V": {
+                    "type": "number"
+                  },
+                  "max_V": {
+                    "type": "number"
+                  }
+                }
               }
             }
           }
