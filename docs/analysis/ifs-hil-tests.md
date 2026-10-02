@@ -33,7 +33,7 @@ Blockers among the `virtual-needs` tests:
 | CAN bootloader emulation ([#4](https://github.com/isc-fs/IFS_vHIL/issues/4)) | 13 | Flash, jump, discover, jump reason |
 | SDMMC IDMA model | 7 | AMS SD logger. Modelled (#21, `models/renode/Stm32H7Sdmmc.cs`): the AMS mounts a FAT32 card image, logs, and seals; `tests/sim/test_ams_sd.py` reads the card back |
 | ECU + AMS in one system (M3, [#11](https://github.com/isc-fs/IFS_vHIL/issues/11)) | 3 | ECU side of the real-AMS tests |
-| FDCAN bus-off injection hook | 2 | AMS recovery logic; real error physics stays physical |
+| FDCAN bus-off injection hook | 2 | AMS recovery logic; real error physics stays physical. Modelled (#22, `models/renode/Stm32H7Fdcan.cs`): bus-off, TX FIFO full, failed bring-up; `tests/sim/test_fdcan_faults.py`. Found IFS08-CE-AMS#604 |
 | RTC backup domain across warm reset | 2 | Error-latch persistence, HIL_CLEAR build |
 | RCC reset-flag model | 1 | ECU reset cause |
 | FDCAN fault injection | 1 | ECU FDCAN1 failure must not silence FDCAN2 |
