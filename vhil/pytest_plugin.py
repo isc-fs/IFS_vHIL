@@ -116,6 +116,8 @@ def pytest_collection_modifyitems(config, items):
         except ValueError:
             continue
         for gap in gaps:
+            if "systems" in gap and _bench.system.id not in gap["systems"]:
+                continue
             if (path + "::" + item.name).startswith(gap["path"]):
                 item.add_marker(pytest.mark.skip(reason=f"vhil gap: {gap['why']}"))
                 break
