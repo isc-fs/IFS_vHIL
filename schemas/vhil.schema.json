@@ -558,6 +558,21 @@
               "additionalProperties": {
                 "type": "string"
               }
+            },
+            "set_also": {
+              "type": "object",
+              "description": "Param -> constructor arguments also passed when that param is set (a non-empty value). An empty string param is left out.",
+              "additionalProperties": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": [
+                    "integer",
+                    "number",
+                    "string",
+                    "boolean"
+                  ]
+                }
+              }
             }
           }
         },
