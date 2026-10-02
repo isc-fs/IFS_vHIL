@@ -264,7 +264,8 @@ class System:
         """The virtual broker's wiring (see vhil/broker.py)."""
         carriers = [{"machine": c["board"], "slot": c.get("slot"), "relay": c["relay"],
                      "ina_addr": c["ina_addr"], "current_A": c["current_A"],
-                     "can": self.can_of(c["board"])}
+                     "can": self.can_of(c["board"]),
+                     "vbat": self.boards[c["board"]].board.get("vbat", True)}
                     for c in self.bench.get("carriers", [])]
         routes = []
         for r in self.bench.get("dac_routes", []):

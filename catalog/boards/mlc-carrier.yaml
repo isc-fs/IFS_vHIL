@@ -5,6 +5,11 @@ description: >-
   Connector and pin names follow the MCU (FDCANn, port pins); what a
   firmware uses them for belongs to the system, not the board.
 platform: stm32h733
+# No coin cell or supercap on VBAT, so a power cut wipes the backup domain:
+# the RTC backup registers (the AMS's sticky ErrorLatch, BKP1R) start clear.
+# Source: IFS08-CE-AMS app_init_task.cpp:78-80; to confirm on the carrier
+# schematic.
+vbat: false
 can:
   FDCAN1: sysbus.fdcan1
   FDCAN2: sysbus.fdcan2

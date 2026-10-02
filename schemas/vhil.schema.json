@@ -98,6 +98,10 @@
         "platform": {
           "$ref": "#/$defs/id"
         },
+        "vbat": {
+          "type": "boolean",
+          "description": "Whether the board backs the MCU's backup domain (VBAT). Without it a power cut wipes the RTC backup registers; default true, Renode's behaviour."
+        },
         "can": {
           "type": "object",
           "description": "Connector name -> CAN controller.",
