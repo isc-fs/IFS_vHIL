@@ -51,10 +51,6 @@ GRAPH_ID = "system"
 BUS_SIZE, BUS_PITCH = 120, 40
 
 # Board catalogue section -> interface type and side.
-# A bus interface's length in pixels: each connection lands on a stub along
-# it. Pipeline Manager places a new stub at size / 2, so a tiny bus stacks
-# every connection on the node header.
-BUS_SIZE, BUS_PITCH = 120, 40
 _BOARD_PORTS = (("can", "can", "right"), ("spi", "spi", "left"), ("sdmmc", "sdmmc", "left"),
                 ("gpio", "gpio", "left"), ("analog_in", "analog", "left"))
 # Model host-side ports: system device field -> interface type.
@@ -224,9 +220,6 @@ def from_dataflow(dataflow: dict, spec: dict | None = None) -> dict:
     doc = {"kind": "system", "id": extra.pop("id", graph.get("name") or "system")}
     if "description" in extra:
         doc["description"] = extra.pop("description")
-            # A connection to a bus ends on one of its stubs.
-            for stub in (i.get("bus") or {}).get("stubs") or []:
-                by_iface[stub["id"]] = (n, name, i["name"])
     if "time" in extra:
         doc["time"] = extra.pop("time")
     boards, buses, devices = {}, {}, {}
