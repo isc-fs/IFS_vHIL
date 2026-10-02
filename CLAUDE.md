@@ -119,6 +119,7 @@ RENODE=<renode> scripts/explore.sh systems/ecu.yaml <elf> 5       # boot + CAN l
 RENODE=<renode> scripts/probe.sh systems/ecu.yaml <elf> 1 "nvic Frequency"
 <renode-dir>/renode-test tests/ecu_smoke.robot --variable ELF:<elf> --variable RESC:build/ecu.resc
 python -m pytest tests/unit                                       # host-only, no Renode
+python -m pytest tests/sim --ecu-elf <elf>                        # native tests in virtual time (vhil/sim.py)
 ```
 
 Pinned versions: Renode **1.17.0**, Arm GNU **14.2.Rel1**. Bump deliberately,
