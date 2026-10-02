@@ -57,8 +57,25 @@ def test_every_system_survives_the_round_trip(spec, path):
 def test_connections_reference_interfaces_that_exist(spec):
     graph = to_dataflow(yaml.safe_load((REPO / "systems" / "ams.yaml").read_text()), spec)["graphs"][0]
     ifaces = {i["id"] for n in graph["nodes"] for i in n["interfaces"]}
+    stubs = {s["id"] for n in graph["nodes"] for i in n["interfaces"]
+             for s in (i.get("bus") or {}).get("stubs", [])}
     for c in graph["connections"]:
-        assert c["from"] in ifaces and c["to"] in ifaces
+        assert c["from"] in ifaces and c["to"] in ifaces | stubs
+
+
+def test_bus_connections_land_on_spread_stubs(spec):
+    """Pipeline Manager draws a bus connection to its stub: one per
+    connection, along the bus, not at the bus node's header."""
+    doc = yaml.safe_load((REPO / "systems" / "ams.yaml").read_text())
+    doc["boards"]["ecu"] = {"board": "mlc-carrier", "firmware": "ecu"}
+    doc["buses"]["can_acu"]["nodes"].append("ecu.FDCAN2")
+    g = to_dataflow(doc, spec)["graphs"][0]
+    bus = next(n for n in g["nodes"] if n["instanceName"] == "can_acu")["interfaces"][0]["bus"]
+    offsets = [s["offset"] for s in bus["stubs"]]
+    assert len(offsets) == 2 == len(set(offsets))
+    assert all(0 < o < bus["size"] for o in offsets) and bus["size"] >= 100
+    to_bus = [c["to"] for c in g["connections"] if c["to"].startswith("s:can_acu:")]
+    assert sorted(to_bus) == sorted(s["id"] for s in bus["stubs"])
 
 
 def test_an_edit_in_the_graph_is_a_valid_system(spec):
@@ -74,7 +91,10 @@ def test_an_edit_in_the_graph_is_a_valid_system(spec):
     for i in ecu["interfaces"]:
         i["id"] = i["id"].replace(":ams:", ":ecu:")
     g["nodes"].append(ecu)
-    g["connections"].append({"id": "c:new", "from": "i:ecu:FDCAN2", "to": "i:can_acu:bus"})
+    # As the UI does it: a new stub on the bus, the connection to the stub.
+    bus = next(n for n in g["nodes"] if n["instanceName"] == "can_acu")["interfaces"][0]
+    bus["bus"]["stubs"].append({"id": "3f6c-stub", "offset": 90, "side": "left"})
+    g["connections"].append({"id": "c:new", "from": "i:ecu:FDCAN2", "to": "3f6c-stub"})
     doc = from_dataflow(graph, spec)
     assert doc["buses"]["can_acu"]["nodes"] == ["ams.FDCAN1", "ecu.FDCAN2"]
     assert doc["boards"]["ecu"] == {"board": "mlc-carrier", "firmware": "ecu"}

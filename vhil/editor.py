@@ -43,6 +43,10 @@ FORMAT_VERSION = "20250623.14"
 
 BUS_NODE = "CAN bus"
 GRAPH_ID = "system"
+# A bus interface's length in pixels: each connection lands on a stub along
+# it. Pipeline Manager places a new stub at size / 2, so a tiny bus stacks
+# every connection on the node header.
+BUS_SIZE, BUS_PITCH = 120, 40
 
 # Board catalogue section -> interface type and side.
 _BOARD_PORTS = (("can", "can", "right"), ("spi", "spi", "left"), ("sdmmc", "sdmmc", "left"),
@@ -93,7 +97,8 @@ def specification(catalog: Path = CATALOG) -> dict:
         "name": BUS_NODE, "category": "Buses", "layer": "bus",
         "description": "A CAN bus. Connect every node's CAN connector to it.",
         "interfaces": [{"name": "bus", "type": "can", "direction": "inout",
-                        "bus": {"type": "twoSided", "size": 2}}],
+                        "maxConnectionsCount": -1,
+                        "bus": {"type": "twoSided", "size": BUS_SIZE}}],
         "properties": [{"name": "host_netdev", "type": "text", "default": "",
                         "description": "SocketCAN interface to bridge to (optional)."}],
         "additionalData": {"vhil": {"kind": "bus"}},
@@ -151,10 +156,16 @@ def to_dataflow(doc: dict, spec: dict | None = None) -> dict:
     for row, (name, b) in enumerate(doc["boards"].items()):
         node(b["board"], name, {"firmware": b["firmware"]}, 0, 420 * row)
     for row, (name, bus) in enumerate(doc.get("buses", {}).items()):
-        node(BUS_NODE, name, {"host_netdev": bus.get("host_netdev", "")}, 520, 160 * row)
-        for endpoint in bus["nodes"]:
+        n = node(BUS_NODE, name, {"host_netdev": bus.get("host_netdev", "")}, 520, 160 * row)
+        # One stub per connection, spread along the bus, facing the boards
+        # (their CAN connectors are on the right; the bus is to their right).
+        size = max(BUS_SIZE, BUS_PITCH * (len(bus["nodes"]) + 1))
+        stubs = [{"id": f"s:{name}:{k}", "offset": size * (k + 1) // (len(bus["nodes"]) + 1),
+                  "side": "left"} for k in range(len(bus["nodes"]))]
+        n["interfaces"][0]["bus"] = {"type": "twoSided", "size": size, "stubs": stubs}
+        for endpoint, stub in zip(bus["nodes"], stubs):
             board, pin = endpoint.split(".", 1)
-            connect(f"i:{board}:{pin}", f"i:{name}:bus")
+            connect(f"i:{board}:{pin}", stub["id"])
     devices = doc.get("devices", {})
     for row, (name, dev) in enumerate(devices.items()):
         values = dict(dev.get("params", {}))
@@ -196,6 +207,9 @@ def from_dataflow(dataflow: dict, spec: dict | None = None) -> dict:
         names[n["id"]] = name
         for i in n["interfaces"]:
             by_iface[i["id"]] = (n, name, i["name"])
+            # A connection to a bus ends on one of its stubs.
+            for stub in (i.get("bus") or {}).get("stubs") or []:
+                by_iface[stub["id"]] = (n, name, i["name"])
 
     extra = dict((graph.get("additionalData") or {}).get("vhil", {}))
     doc = {"kind": "system", "id": extra.pop("id", graph.get("name") or "system")}
