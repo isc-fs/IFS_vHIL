@@ -1,5 +1,28 @@
 # Development setup and workflow
 
+## Docker (any host, nothing installed natively)
+
+[`docker/Dockerfile`](../../docker/Dockerfile) holds everything below at the
+pinned versions, for amd64 and arm64. [`scripts/vhil-docker.sh`](../../scripts/vhil-docker.sh)
+runs each CI job in it; firmware and the IFS_HIL checkout live in the
+`vhil-data` volume, results land in `results/`.
+
+```sh
+scripts/vhil-docker.sh vm          # macOS: Colima VM `vhil` with vcan (once; needs colima)
+scripts/vhil-docker.sh fw          # build ECU + AMS from their systems
+scripts/vhil-docker.sh unit
+scripts/vhil-docker.sh smoke ecu   # or ams
+scripts/vhil-docker.sh sim
+scripts/vhil-docker.sh ifs-hil     # IFS_HIL's ECU smoke suite over vcan can0..can2
+scripts/vhil-docker.sh shell
+```
+
+On macOS it uses a Colima VM rather than Docker Desktop: Docker Desktop's
+LinuxKit kernel has no vcan, so IFS_HIL's suites could not reach the buses.
+Colima's Ubuntu image lacks `linux-modules-extra` for its shipped kernel, so
+`vm` moves it to the current generic kernel once and restarts. On a Linux
+host, load vcan and set `VHIL_DOCKER_CONTEXT=default`.
+
 ## Environment
 
 Linux, or WSL2 on Windows. The Renode SocketCAN bridge used from Phase 1 is
