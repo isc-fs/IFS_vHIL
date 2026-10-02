@@ -9,6 +9,13 @@ can:
   FDCAN1: sysbus.fdcan1
   FDCAN2: sysbus.fdcan2
   FDCAN3: sysbus.fdcan3
+spi:
+  SPI1: sysbus.spi1
+sdmmc:
+  SDMMC1: sysbus.sdmmc
+gpio:
+  # Software chip-select of SPI1 on the AMS (main.h: LTC_CS, PB9).
+  PB9: {port: sysbus.gpioPortB, pin: 9}
 analog_in:
   # ADC3 inputs routed to the carrier connector (IFS_HIL vcu_profile.yaml).
   PF7: {adc: sysbus.adc3, channel: 3}

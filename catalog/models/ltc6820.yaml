@@ -1,0 +1,13 @@
+kind: model
+id: ltc6820
+description: >-
+  LTC6820 isoSPI bridge: an SPI slave on the host side and the isoSPI master
+  of a daisy chain. Frames transactions on its chip-select, and turns a CS
+  pulse with no clocks into an isoSPI wake. Knows nothing about what the
+  chain's devices do. Test API (monitor): SetAllCells, SetAllTemperatures,
+  StopReply, ResumeAll, Stats.
+interface: {spi: true, cs: true, provides: isospi}
+backend: renode
+renode:
+  source: models/renode/IsoSpi.cs
+  type: SPI.Ltc6820

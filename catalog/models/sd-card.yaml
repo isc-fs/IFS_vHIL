@@ -1,0 +1,13 @@
+kind: model
+id: sd-card
+description: >-
+  SD card on an SD/MMC controller, in memory (Renode's built-in SD.SDCard).
+  Fitting one matters even when nothing is read: with no card, Renode's
+  STM32 SDMMC never sets CMDSENT, and the HAL's no-response command wait
+  then spins for seconds.
+interface: {sdmmc: true}
+params:
+  capacity: 0x8000000      # 128 MiB
+backend: renode
+renode:
+  type: SD.SDCard

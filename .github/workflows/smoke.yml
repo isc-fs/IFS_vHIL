@@ -1,17 +1,14 @@
-name: ECU smoke (virtual)
+name: Smoke (virtual)
 
-# Builds the ECU from the source systems/ecu.yaml declares (IFS_HIL's recipe),
-# renders the system to a Renode script, and runs tests/ecu_smoke.robot on it.
+# For each system: build every board's firmware from the source the system
+# declares, render the system to a Renode script, and run its smoke suite
+# (tests/<system>_smoke.robot). No hardware.
 
 on:
   pull_request:
   push:
     branches: [dev]
   workflow_dispatch:
-    inputs:
-      ecu_ref:
-        description: "ECU firmware ref (default: the ref in catalog/firmware/ecu.yaml)"
-        required: false
 
 env:
   RENODE_VERSION: 1.17.0
@@ -20,23 +17,25 @@ jobs:
   smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        system: [ecu, ams]
     steps:
       - uses: actions/checkout@v4
 
-      - name: Arm GNU toolchain (pinned like IFS_HIL's recipe)
+      - name: Arm GNU toolchain (pinned like IFS_HIL's recipes)
         uses: carlosperate/arm-none-eabi-gcc-action@v1
         with:
           release: '14.2.Rel1'
 
-      - name: Build the ECU firmware from systems/ecu.yaml
+      - name: Build firmware from systems/${{ matrix.system }}.yaml
         id: fw
-        env:
-          ECU_REF: ${{ inputs.ecu_ref }}
         run: |
           pip install -q pyyaml "jsonschema>=4"
-          python -m vhil.system build systems/ecu.yaml --workdir "$RUNNER_TEMP/fw" \
-            ${ECU_REF:+--ref "ecu=$ECU_REF"} | tee built.txt
-          echo "elf=$(sed -n 's/^ecu=//p' built.txt)" >> "$GITHUB_OUTPUT"
+          python -m vhil.system build "systems/${{ matrix.system }}.yaml" \
+            --workdir "$RUNNER_TEMP/fw" | tee built.txt
+          echo "elf=$(sed -n 's/^${{ matrix.system }}=//p' built.txt)" >> "$GITHUB_OUTPUT"
 
       - name: Install Renode ${{ env.RENODE_VERSION }}
         run: |
@@ -47,17 +46,17 @@ jobs:
           pip install -q "robotframework==6.1" "robotframework-retryfailed==0.2.0" \
             "psutil==5.9.4" "pyyaml==6.0.*" "telnetlib3==2.0.*"
 
-      - name: Run tests/ecu_smoke.robot
+      - name: Run tests/${{ matrix.system }}_smoke.robot
         run: |
-          python -m vhil.system render systems/ecu.yaml -o "$RUNNER_TEMP/ecu.resc"
-          "$RUNNER_TEMP/renode/renode-test" tests/ecu_smoke.robot \
+          python -m vhil.system render "systems/${{ matrix.system }}.yaml" -o "$RUNNER_TEMP/system.resc"
+          "$RUNNER_TEMP/renode/renode-test" "tests/${{ matrix.system }}_smoke.robot" \
             --variable ELF:"${{ steps.fw.outputs.elf }}" \
-            --variable RESC:"$RUNNER_TEMP/ecu.resc" -r results
+            --variable RESC:"$RUNNER_TEMP/system.resc" -r results
 
       - name: Upload results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ecu-smoke-results
+          name: smoke-${{ matrix.system }}
           path: results/
           if-no-files-found: ignore

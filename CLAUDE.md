@@ -69,7 +69,9 @@ A system (`systems/*.yaml`) places boards from the catalogue (`catalog/`),
 gives each its firmware source, and wires them together. Renode scripts and
 the virtual broker's wiring are **generated** from it by `vhil/system.py`.
 Never hand-edit a generated script, and never put a car-specific name in the
-catalogue (`ecu`, not `ifs08-ecu`). Validate with
+catalogue (`ecu`, not `ifs08-ecu`). Devices (`catalog/models/`) attach to a
+board's connectors or to another device's port: the LTC6811s sit on the
+LTC6820's isoSPI chain, one per IC, in chain order. Validate with
 `python -m vhil.system validate`.
 
 ## The bench in 30 seconds
@@ -105,7 +107,11 @@ IFS_HIL recipe ─▶ ECU08.elf / AMS.elf  (same image the physical bench flashe
    access not in [`configs/peripherals.yaml`](configs/peripherals.yaml). Add an
    entry only with a reason it can't change what a test sees; otherwise model
    the hardware.
-8. **A virtual pass is not a physical pass.** When the two benches
+8. **Fit an SD card on any board whose firmware touches SDMMC** (model
+   `sd-card`). With no card, Renode's STM32 SDMMC never sets CMDSENT and the
+   HAL's no-response command wait spins for seconds, starving every other
+   task: the AMS stopped polling its battery chain after boot.
+9. **A virtual pass is not a physical pass.** When the two benches
    disagree, it's a model gap until proven otherwise. File an issue;
    don't tune the test to agree.
 
