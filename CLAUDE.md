@@ -108,7 +108,8 @@ IFS_HIL recipe ─▶ ECU08.elf / AMS.elf  (same image the physical bench flashe
    peripheral guard (`vhil/peripheral_guard.py`) fails a session on any such
    access not in [`configs/peripherals.yaml`](configs/peripherals.yaml). Add an
    entry only with a reason it can't change what a test sees; otherwise model
-   the hardware.
+   the hardware. A gap that is tracked but not yet modelled may be listed as
+   "KNOWN GAP #<issue>", and its entry goes when the issue closes.
 8. **Fit an SD card on any board whose firmware touches SDMMC** (model
    `sd-card`). With no card, Renode's STM32 SDMMC never sets CMDSENT and the
    HAL's no-response command wait spins for seconds, starving every other
