@@ -106,9 +106,17 @@ def pytest_collection_modifyitems(config, items):
     if _bench is None:
         return
     gaps = yaml.safe_load(Path(config.getoption("--vhil-gaps")).read_text()) or []
+    # Gap paths are relative to the IFS_HIL checkout pytest runs from. Not the
+    # nodeid: that is relative to the rootdir, which a pytest.ini further up
+    # (this repo's, when IFS_HIL is checked out inside it) moves.
+    here = config.invocation_params.dir
     for item in items:
+        try:
+            path = item.path.relative_to(here).as_posix()
+        except ValueError:
+            continue
         for gap in gaps:
-            if item.nodeid.startswith(gap["path"]):
+            if (path + "::" + item.name).startswith(gap["path"]):
                 item.add_marker(pytest.mark.skip(reason=f"vhil gap: {gap['why']}"))
                 break
 
