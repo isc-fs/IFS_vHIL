@@ -9,7 +9,6 @@ firmware still runs the unit tests.
 """
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
@@ -17,16 +16,6 @@ import pytest
 from vhil.bench import REPO
 from vhil.sim import Sim
 from vhil.system import System
-
-BOARDS = ("ecu", "ams")
-
-
-def pytest_addoption(parser):
-    g = parser.getgroup("vhil-sim", "native tests in virtual time (IFS_vHIL)")
-    for board in BOARDS:
-        g.addoption(f"--{board}-elf", default=os.environ.get(f"VHIL_{board.upper()}_ELF"),
-                    help=f"{board} image (default: $VHIL_{board.upper()}_ELF)")
-    g.addoption("--sim-log-dir", default=None, help="keep each Sim's Renode log here")
 
 
 @pytest.fixture(scope="session")
