@@ -110,3 +110,88 @@ jobs:
             vhil-renode.log
             candump.log
           if-no-files-found: ignore
+
+  # M3 (#11): the ECU and the AMS on one ACU bus (systems/ecu-ams.yaml), and
+  # IFS_HIL's real-AMS block against the emulated AMS. Every test must run:
+  # a skip here means the live AMS was not there.
+  ecu-ams:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check out IFS_HIL
+        uses: actions/checkout@v4
+        with:
+          repository: isc-fs/IFS_HIL
+          ref: ${{ inputs.ifs_hil_ref || 'dev' }}
+          path: ifs_hil
+
+      - name: Arm GNU toolchain (pinned like IFS_HIL's recipe)
+        uses: carlosperate/arm-none-eabi-gcc-action@v1
+        with:
+          release: '14.2.Rel1'
+
+      - name: Build the ECU and AMS firmware from systems/ecu-ams.yaml
+        id: fw
+        env:
+          ECU_REF: ${{ inputs.ecu_ref }}
+        run: |
+          pip install -q pyyaml "jsonschema>=4"
+          python -m vhil.system build systems/ecu-ams.yaml --workdir "$RUNNER_TEMP/fw" \
+            ${ECU_REF:+--ref "ecu=$ECU_REF"} | tee built.txt
+          echo "ecu=$(sed -n 's/^ecu=//p' built.txt)" >> "$GITHUB_OUTPUT"
+          echo "ams=$(sed -n 's/^ams=//p' built.txt)" >> "$GITHUB_OUTPUT"
+
+      - name: Install Renode ${{ env.RENODE_VERSION }}
+        run: |
+          curl -sSL -o renode.tar.gz \
+            "https://github.com/renode/renode/releases/download/v${RENODE_VERSION}/renode-${RENODE_VERSION}.linux-portable.tar.gz"
+          mkdir -p "$RUNNER_TEMP/renode"
+          tar xzf renode.tar.gz -C "$RUNNER_TEMP/renode" --strip-components=1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install IFS_HIL (core deps only, as off-bench)
+        run: pip install -q -e ifs_hil
+
+      - name: Create vcan can0 / can1 / can2
+        run: |
+          sudo apt-get install -y -qq "linux-modules-extra-$(uname -r)" can-utils >/dev/null
+          sudo modprobe vcan
+          for i in 0 1 2; do
+            sudo ip link add "can$i" type vcan
+            sudo ip link set "can$i" txqueuelen 1000 up
+          done
+          nohup candump -L -t a can0 can1 can2 > candump.log 2>&1 &
+
+      - name: Run IFS_HIL's real-AMS block against the virtual ECU + AMS
+        env:
+          RENODE: ${{ runner.temp }}/renode/renode
+          VHIL_SYSTEM: systems/ecu-ams.yaml
+          VHIL_FIRMWARE: ams=${{ steps.fw.outputs.ams }}
+        run: |
+          set +e
+          scripts/run-ifs-hil.sh ifs_hil "${{ steps.fw.outputs.ecu }}" \
+            tests/hil/vcu/test_block_f_real_ams.py \
+            --vhil-log "$GITHUB_WORKSPACE/vhil-renode.log" \
+            --junitxml="$GITHUB_WORKSPACE/junit.xml" | tee pytest.txt
+          rc=${PIPESTATUS[0]}
+          if grep -q "^SKIPPED" pytest.txt; then
+            echo "::error::a real-AMS test skipped: the live AMS was not exercised"; exit 1
+          fi
+          exit $rc
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ifs-hil-ecu-ams-virtual
+          path: |
+            junit.xml
+            pytest.txt
+            vhil-renode.log
+            candump.log
+          if-no-files-found: ignore
