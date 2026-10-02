@@ -28,6 +28,15 @@ sram2:
 rcc:
     hseFrequency: 24000000
 
+// Renode times the core at 100 MIPS unless told otherwise, so code that busy-
+// waits (the ECU's bit-banged nRF24, cycle-counted delays) took 5x longer in
+// virtual time than on the 528 MHz part and delayed lower-priority tasks: the
+// ECU's 0x704 landed up to 25 ms late. One instruction per cycle is the M7's
+// nominal rate. The wall-clock bench lowers it to keep up with real time
+// (vhil/bench.py, WALL_CLOCK_MIPS).
+cpu:
+    PerformanceInMips: 528
+
 // --- Peripherals the H733 has and the H743 platform lacks
 
 // Third FDCAN (the ECU's dash bus). Shares the 10 KB message RAM with FDCAN1/2.

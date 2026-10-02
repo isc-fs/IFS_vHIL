@@ -43,9 +43,9 @@ Branch names are `<type>/<kebab-slug>`: `feat/`, `fix/`, `docs/`, `chore/`,
 
 ## Issues
 
-Work is planned and tracked in issues. Each phase in
-[`proposal.md`](../proposal.md#5-plan) has one issue with a checklist and an
-exit criterion (#1–#4). Bugs and model gaps get their own issue, labelled
+Work is planned and tracked in issues. Each roadmap milestone in
+[`vision.md`](../vision.md#5-roadmap) has one issue with a checklist and an
+exit criterion. Bugs and model gaps get their own issue, labelled
 `bug` or `enhancement`.
 
 - A PR says which issue it advances: `Part of #1`.

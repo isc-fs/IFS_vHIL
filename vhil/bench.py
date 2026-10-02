@@ -19,6 +19,13 @@ REPO = Path(__file__).resolve().parent.parent
 DEFAULT_RENODE = os.environ.get(
     "RENODE", str(Path.home() / "vhil-tools/renode_1.17.0-portable/renode"))
 
+# IFS_HIL's suites measure wall-clock time, so the bench must keep up with the
+# host clock. The ECU never sleeps (its idle task spins), so host cost scales
+# with the core's MIPS: at the platform's faithful 528 an i9 manages 0.6x real
+# time, at Renode's default 100 about 1.3x. The bench trades busy-wait timing
+# fidelity for real time; native tests (vhil.sim) keep the platform's value.
+WALL_CLOCK_MIPS = 100
+
 
 def _free_port() -> int:
     with socket.socket() as s:
@@ -55,6 +62,9 @@ class VirtualBench:
         self._monitor = RenodeMonitor(port)
         m = self._monitor
         m.execute(f"include @{script}")
+        for board in self.system.boards:
+            m.execute(f'mach set "{board}"')
+            m.execute(f"cpu PerformanceInMips {WALL_CLOCK_MIPS}")
         # Carriers start unpowered: off their CAN buses, while the emulation
         # runs so virtual time stays paced to host time (see broker.py). The
         # suite's relay fixture powers them, which resets them.

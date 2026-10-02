@@ -5,13 +5,14 @@ ISC Racing Team's Formula Student STM32 firmware. It runs the same images
 [IFS_HIL](https://github.com/isc-fs/IFS_HIL) flashes to real carriers, on
 emulated STM32H733 boards in [Renode](https://github.com/renode/renode).
 This file is the fast path for an assistant entering a new session:
-operational, not architectural. For the why, read
+operational, not architectural. For where the project is going, read
+[`docs/vision.md`](docs/vision.md); for the Phase 0/1 design and findings,
 [`docs/proposal.md`](docs/proposal.md).
 
 Author: Raul Moran (ISC Racing Team). Repo:
 [`isc-fs/IFS_vHIL`](https://github.com/isc-fs/IFS_vHIL), working branch
-`dev`. Work is tracked in issues: one per phase (#1–#4), plus bugs as they
-come.
+`dev`. Work is tracked in issues: one per roadmap milestone (M1 #10, M2 #2,
+M3 #11 … M7 #15, plus #3 and #4), and bugs as they come.
 
 ---
 
@@ -124,6 +125,7 @@ RENODE=<renode> scripts/explore.sh systems/ecu.yaml <elf> 5       # boot + CAN l
 RENODE=<renode> scripts/probe.sh systems/ecu.yaml <elf> 1 "nvic Frequency"
 <renode-dir>/renode-test tests/ecu_smoke.robot --variable ELF:<elf> --variable RESC:build/ecu.resc
 python -m pytest tests/unit                                       # host-only, no Renode
+python -m pytest tests/sim --ecu-elf <elf>                        # native tests in virtual time (vhil/sim.py)
 ```
 
 Pinned versions: Renode **1.17.0**, Arm GNU **14.2.Rel1**. Bump deliberately,

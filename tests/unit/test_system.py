@@ -117,3 +117,16 @@ def _ams(tmp_path, devices):
 def test_bad_devices_are_rejected_with_a_reason(tmp_path, devices, message):
     with pytest.raises(SystemError, match=message):
         System(_ams(tmp_path, devices))
+
+
+def test_each_board_sets_its_image_inside_its_own_machine(tmp_path):
+    """A Renode variable set while a machine is selected is local to it, so
+    each $elf_<board> must follow its own `mach create`."""
+    p = tmp_path / "s.yaml"
+    p.write_text("kind: system\nid: t\nboards:\n"
+                 "  ecu: {board: mlc-carrier, firmware: ecu}\n"
+                 "  ams: {board: mlc-carrier, firmware: ams}\n"
+                 "buses:\n  can_acu: {kind: can, nodes: [ecu.FDCAN2, ams.FDCAN1]}\n")
+    lines = System(p).render_renode({"ecu": Path("/fw/ecu.elf"), "ams": Path("/fw/ams.elf")}).splitlines()
+    for board in ("ecu", "ams"):
+        assert lines.index(f"$elf_{board}=@/fw/{board}.elf") == lines.index(f'mach create "{board}"') + 1

@@ -228,10 +228,12 @@ class System:
             var = f"elf_{b.name}"
             out.append(f"# --- {b.name}: {b.board['id']} running {b.firmware['id']} "
                        f"({b.firmware['repo']})")
+            out.append(f'mach create "{b.name}"')
             if b.name in firmware:
+                # After `mach create`: a variable set while a machine is
+                # selected is local to it, so the next board would not see it.
                 out.append(f"${var}=@{Path(firmware[b.name]).resolve().as_posix()}")
-            out += [f'mach create "{b.name}"',
-                    f"machine LoadPlatformDescription @{(REPO / rn['repl']).as_posix()}"]
+            out.append(f"machine LoadPlatformDescription @{(REPO / rn['repl']).as_posix()}")
             out += rn.get("setup", [])
             for name in self.devices_on(b.name):
                 dev = self.devices[name]
