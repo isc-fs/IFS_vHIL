@@ -124,6 +124,15 @@ class BoardIO:
     def set_input(self, port: str, pin: int, level: bool) -> None:
         self.sim.monitor(f"{port} OnGPIO {pin} {_arg(level)}", board=self.board)
 
+    def set_voltage(self, pin: str, volts: float) -> None:
+        """Drive an analog input pin of the board (catalogue analog_in), e.g.
+        set_voltage("PF7", 1.65)."""
+        _, kind, target = self.sim.system.resolve(f"{self.board}.{pin}")
+        if kind != "analog":
+            raise ValueError(f"{self.board}.{pin} is {kind}, not an analog input")
+        self.sim.monitor(f"{target['adc']} SetVoltage {round(volts * 1e6)} {target['channel']}",
+                         board=self.board)
+
     def watch(self, port: str, pin: int) -> str:
         self.sim.monitor(f'{self.probe} Watch "{port}" {pin}', board=self.board)
         return f"{port}:{pin}"

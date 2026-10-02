@@ -36,7 +36,9 @@ def test_ecu_system_renders_the_bench_setup():
     s = System(REPO / "systems" / "ecu.yaml").render_renode(socketcan=True)
     assert 'emulation SetGlobalQuantum "0.0005"' in s
     assert "stm32h733.repl" in s
-    assert "logLevel 3 sysbus.adc3" in s
+    # The H73x ADC3 model is compiled once, before any machine loads its repl.
+    assert s.index("include @") < s.index('mach create "ecu"')
+    assert s.count("models/renode/Stm32H7Adc3.cs") == 1
     for controller, bus in (("fdcan1", "can_inv"), ("fdcan2", "can_acu"), ("fdcan3", "can_dash")):
         assert f"connector Connect sysbus.{controller} {bus}" in s
     assert "sysbus LoadELF $elf_ecu" in s
@@ -87,7 +89,7 @@ def test_unknown_catalogue_entries_are_rejected(tmp_path):
 
 def test_ams_renders_the_isospi_chain_in_order():
     s = System(REPO / "systems" / "ams.yaml").render_renode()
-    assert s.count("include @") == 1 and "models/renode/IsoSpi.cs" in s
+    assert s.count("models/renode/IsoSpi.cs") == 1        # shared by both models, once
     bridge = s.index("isospi: SPI.Ltc6820 @ spi1")
     assert "9 -> isospi@0" in s
     positions = [s.index(f"cells{i}: SPI.Ltc6811 @ isospi {i}") for i in range(10)]

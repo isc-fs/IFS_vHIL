@@ -59,5 +59,18 @@ usart10: UART.STM32F7_USART @ sysbus 0x40011C00
     frequency: 132000000
     IRQ -> nvic@156
 
+// ADC3 — on the H72x/H73x a different 12-bit block from the H743's ADC that
+// stm32h7.repl puts here (RM0468; register map in stm32h733xx.h). Our model,
+// models/renode/Stm32H7Adc3.cs, loaded by catalog/platforms/stm32h733.yaml.
+// INN3 shares PF8 with INP7 (AMS ams_config.hpp:695-696, ECU io_signals.cpp:37).
+// ADC3_IRQn = 127 (stm32h733xx.h). A repl can't redeclare stm32h7.repl's
+// adc3, so that one is taken off the bus and this one takes its address.
+adc3: @ none
+
+adc3_h73x: Analog.STM32H7_ADC3 @ sysbus 0x58026000
+    referenceVoltage: 3.3
+    negativeInputs: "3:7"
+    IRQ -> nvic@127
+
 // SPI1 — the AMS's LTC6820 isoSPI master. The base platform only tags it.
 spi1: SPI.STM32H7_SPI @ sysbus 0x40013000
