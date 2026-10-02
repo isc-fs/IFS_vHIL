@@ -89,6 +89,16 @@ def test_validate_reports_a_broken_graph(spec):
     assert reply["type"] == ERROR and "spi" in reply["content"]
 
 
+def test_rpc_replies_match_pipeline_managers_api():
+    """Shapes from its api_specification/common_types.json."""
+    rpc = EditorMethods()
+    assert rpc.frontend_on_connect() == {}
+    for item in rpc.app_capabilities_get():
+        assert set(item) <= {"name", "stopName", "iconName", "procedureName",
+                             "allowToRunInParallelWith", "requireResponse"}
+    assert set(rpc.specification_get()) == {"type", "content"}
+
+
 def test_rpc_import_export_round_trip():
     rpc = EditorMethods()
     text = (REPO / "systems" / "ecu.yaml").read_text()
@@ -97,4 +107,4 @@ def test_rpc_import_export_round_trip():
     assert imported["type"] == OK
     exported = rpc.dataflow_export(dataflow=imported["content"])
     assert exported["type"] == OK and exported["filename"] == "ecu.yaml"
-    assert yaml.safe_load(exported["content"]) == yaml.safe_load(text)
+    assert yaml.safe_load(base64.b64decode(exported["content"])) == yaml.safe_load(text)

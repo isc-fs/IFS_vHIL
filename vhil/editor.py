@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import base64 as b64
 import json
+import logging
 import os
 import sys
 import tempfile
@@ -136,7 +137,8 @@ def to_dataflow(doc: dict, spec: dict | None = None) -> dict:
         t = types[type_name]
         props = [{"id": f"p:{name}:{p['name']}", "name": p["name"],
                   "value": values.get(p["name"], p.get("default"))} for p in t["properties"]]
-        ifaces = [{"id": f"i:{name}:{i['name']}", "name": i["name"], "direction": i["direction"]}
+        ifaces = [{"id": f"i:{name}:{i['name']}", "name": i["name"], "direction": i["direction"],
+                   **({"side": i["side"]} if "side" in i else {})}
                   for i in t["interfaces"]]
         n = {"id": f"n:{name}", "name": type_name, "instanceName": name,
              "position": {"x": x, "y": y}, "properties": props, "interfaces": ifaces}
@@ -303,8 +305,15 @@ class EditorMethods:
     def specification_get(self, **_):
         return {"type": OK, "content": self.spec}
 
+    def app_capabilities_get(self, **_):
+        # Navbar buttons (common_types navbar_items): returned bare, not wrapped.
+        return [{"name": "Validate system", "iconName": "Validate",
+                 "procedureName": "dataflow_validate"},
+                {"name": "Run 2 s of virtual time", "iconName": "Run",
+                 "procedureName": "dataflow_run"}]
+
     def frontend_on_connect(self, **_):
-        return {"type": OK}
+        return {}   # null_or_empty
 
     def dataflow_validate(self, dataflow, **_):
         try:
@@ -320,7 +329,9 @@ class EditorMethods:
             doc = from_dataflow(dataflow, self.spec)
         except (SystemError, KeyError) as e:
             return {"type": ERROR, "content": str(e)}
-        return {"type": OK, "content": dump_system(doc), "filename": f"{doc['id']}.yaml"}
+        # content is a JSON object or a base64 string; a YAML file is the latter.
+        return {"type": OK, "content": b64.b64encode(dump_system(doc).encode()).decode(),
+                "filename": f"{doc['id']}.yaml"}
 
     def dataflow_import(self, external_application_dataflow, mime="", base64=False, **_):
         text = external_application_dataflow
@@ -367,10 +378,65 @@ class EditorMethods:
             return {"type": ERROR, "content": f"{type(e).__name__}: {e}"}
 
 
+class _Logged:
+    """Logs every call the editor makes and what it got back."""
+
+    def __init__(self, methods: EditorMethods):
+        self._methods = methods
+
+    def __dir__(self):
+        return [n for n in dir(self._methods) if not n.startswith("_")]
+
+    def __getattribute__(self, name):
+        if name.startswith("_"):
+            return object.__getattribute__(self, name)
+        fn = getattr(object.__getattribute__(self, "_methods"), name)
+        if not callable(fn):
+            return fn
+
+        async def call(**kwargs):
+            try:
+                result = fn(**kwargs)
+                if hasattr(result, "__await__"):
+                    result = await result
+            except Exception:
+                logging.exception("%s(%s) raised", name, ", ".join(kwargs))
+                raise
+            summary = result.get("type") if isinstance(result, dict) else type(result).__name__
+            logging.info("%s(%s) -> %s", name, ", ".join(kwargs), summary)
+            if isinstance(result, dict) and result.get("type") == ERROR:
+                logging.info("  %s", result.get("content"))
+            return result
+        return call
+
+
+class _ServedMethods(EditorMethods):
+    """EditorMethods with a run that doesn't block the connection and shows
+    its result: Pipeline Manager only displays progress for a plain OK."""
+
+    client = None
+
+    async def dataflow_run(self, dataflow, **kwargs):
+        import asyncio
+        result = await asyncio.get_running_loop().run_in_executor(
+            None, lambda: EditorMethods.dataflow_run(self, dataflow, **kwargs))
+        ok = result["type"] == OK
+        text = str(result.get("content", ""))
+        await self.client.notify("terminal_write", {
+            "name": "Terminal", "message": text.replace("\n", "\r\n") + "\r\n"})
+        await self.client.notify("notification_send", {
+            "type": "info" if ok else "error",
+            "title": "Run finished" if ok else "Run failed", "details": text})
+        return result
+
+
 async def _serve(host: str, port: int) -> None:
     from pipeline_manager_backend_communication.communication_backend import CommunicationBackend
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     client = CommunicationBackend(host, port)
-    await client.initialize_client(EditorMethods())
+    methods = _ServedMethods()
+    methods.client = client
+    await client.initialize_client(_Logged(methods))
     await client.start_json_rpc_client()
 
 
