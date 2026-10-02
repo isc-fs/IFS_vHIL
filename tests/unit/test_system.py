@@ -59,6 +59,27 @@ def test_ecu_bench_wiring():
         {(0, 0, 3), (0, 1, 7), (0, 2, 2)}
 
 
+def test_ecu_ams_share_the_acu_bus_and_power_separately():
+    """M3 (#11): one ACU bus, two carriers; each relay powers only its own
+    board's CAN controllers (vhil/broker.py)."""
+    system = System(REPO / "systems" / "ecu-ams.yaml")
+    assert system.buses["can_acu"]["nodes"] == ["ecu.FDCAN2", "ams.FDCAN1"]
+    cfg = system.bench_config()
+    carriers = {c["machine"]: c for c in cfg["carriers"]}
+    assert carriers["ecu"]["relay"]["pin"] == 3 and carriers["ecu"]["ina_addr"] == 0x45
+    assert carriers["ams"]["relay"]["pin"] == 1 and carriers["ams"]["ina_addr"] == 0x41
+    assert carriers["ams"]["can"] == {"sysbus.fdcan1": "can_acu"}
+    assert set(carriers["ecu"]["can"].values()) == {"can_inv", "can_acu", "can_dash"}
+    assert {(r["machine"], r["dac"], r["channel"], r["adc_channel"]) for r in cfg["dac_routes"]
+            if r["machine"] == "ams"} == {("ams", 3, 0, 3), ("ams", 3, 1, 7)}
+
+
+def test_gaps_name_systems_that_exist():
+    ids = {yaml.safe_load(p.read_text())["id"] for p in SYSTEMS}
+    for gap in yaml.safe_load((REPO / "configs" / "gaps.yaml").read_text()) or []:
+        assert set(gap.get("systems", [])) <= ids, gap["path"]
+
+
 def _system(tmp_path, body):
     p = tmp_path / "s.yaml"
     p.write_text("kind: system\nid: t\nboards:\n  ecu: {board: mlc-carrier, firmware: ecu}\n" + body)
