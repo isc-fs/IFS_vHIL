@@ -49,13 +49,9 @@
   offsets: [0x2C]
   why: "PRESC, which the F7-family USART model lacks (as for usart10). Baud rate is not modelled, so the prescaler cannot change what a test sees"
 
-- peripheral: sdmmc
-  offsets: [0x4, 0x2C]
-  why: "CLKCR.WIDBUS (bus width) and DCTRL.DTEN. The model moves whole blocks regardless of bus width, and the CPSM's CMDTRANS starts the data path the H7 HAL uses"
-
-- peripheral: sdmmc
-  offsets: [0x50, 0x58]
-  why: "KNOWN GAP #21: IDMACTRL/IDMABASE0 are tags, so the AMS's FatFs DMA transfers never complete and SD logging is vacuous. Remove with #21"
+- peripheral: sdmmc1
+  offsets: [0x2C]
+  why: "DCTRL.DTEN, which Renode's SDMMC base defines as a tag. The H7 HAL starts the data path with CMD.CMDTRANS, which the model handles; DTEN does not change what moves"
 
 - peripheral: i2c2
   offsets: [0x4, 0x10]

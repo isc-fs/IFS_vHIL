@@ -2,7 +2,8 @@ kind: platform
 id: stm32h733
 description: >-
   STM32H733ZG (Cortex-M7, 1 MB flash). Renode ships only H743/H753/H747, so
-  this reuses its stm32h7.repl and adds FDCAN3, TIM23, USART10, SPI1 and the H73x ADC3, plus
+  this reuses its stm32h7.repl and adds FDCAN3, TIM23, USART10, SPI1, the H73x ADC3 and
+  SDMMC1 with IDMA, plus
   the 24 MHz HSE of the MLC carriers. Addresses and IRQs from ST's
   stm32h733xx.h.
 backend: renode
@@ -12,3 +13,5 @@ renode:
   sources:
     # The H72x/H73x ADC3 (Renode models only the H743's).
     - models/renode/Stm32H7Adc3.cs
+    # SDMMC with its internal DMA (Renode's tags IDMA).
+    - models/renode/Stm32H7Sdmmc.cs
