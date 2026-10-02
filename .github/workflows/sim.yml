@@ -48,6 +48,15 @@ jobs:
           VHIL_ECU_ELF: ${{ steps.fw.outputs.ecu }}
         run: python -m pytest tests/sim -v --sim-log-dir sim-logs
 
+      - name: Emulation speed on this runner
+        if: always()
+        env:
+          RENODE: ${{ runner.temp }}/renode/renode
+        run: |
+          nproc
+          python scripts/speed.py systems/ecu.yaml "ecu=${{ steps.fw.outputs.ecu }}" --mips 100 528 \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+
       - name: Upload Renode logs
         if: always()
         uses: actions/upload-artifact@v4
