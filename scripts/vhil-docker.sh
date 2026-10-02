@@ -5,7 +5,7 @@
 # VHIL_DOCKER_CONTEXT=default and load vcan on the host.
 #
 #   scripts/vhil-docker.sh vm                    create/start the VM, with vcan
-#   scripts/vhil-docker.sh image                 build the image (docker/Dockerfile)
+#   scripts/vhil-docker.sh image                 (re)build the images (docker/)
 #   scripts/vhil-docker.sh fw [ecu ams ...]      build firmware from systems/<s>.yaml
 #   scripts/vhil-docker.sh unit                  tests/unit + validate every system
 #   scripts/vhil-docker.sh smoke <ecu|ams>       tests/<s>_smoke.robot
@@ -13,6 +13,7 @@
 #   scripts/vhil-docker.sh speed [mips ...]      scripts/speed.py on the ECU
 #   scripts/vhil-docker.sh ifs-hil [suite] [pytest args]
 #                                                IFS_HIL's ECU suite over vcan
+#   scripts/vhil-docker.sh editor                system editor on http://localhost:5050
 #   scripts/vhil-docker.sh shell                 a shell in the container
 #   scripts/vhil-docker.sh run <cmd...>          any command in the container
 #
@@ -24,8 +25,11 @@ set -euo pipefail
 repo=$(cd "$(dirname "$0")/.." && pwd)
 profile=${VHIL_COLIMA_PROFILE:-vhil}
 context=${VHIL_DOCKER_CONTEXT:-colima-$profile}
-image=${VHIL_IMAGE:-ifs-vhil}
+base_image=${VHIL_IMAGE:-ifs-vhil}
+editor_image=$base_image-editor
+image=$base_image
 docker=(docker --context "$context")
+run_args=(--privileged --network host)
 
 vm() {
     if ! colima status "$profile" >/dev/null 2>&1; then
@@ -49,8 +53,14 @@ vm() {
     fi
 }
 
+build_images() {
+    "${docker[@]}" build -t "$base_image" "$repo/docker"
+    "${docker[@]}" build -t "$editor_image" --build-arg BASE="$base_image" \
+        -f "$repo/docker/editor.Dockerfile" "$repo/docker"
+}
+
 ensure_image() {
-    "${docker[@]}" image inspect "$image" >/dev/null 2>&1 || "${docker[@]}" build -t "$image" "$repo/docker"
+    "${docker[@]}" image inspect "$image" >/dev/null 2>&1 || build_images
 }
 
 # Run a script in the container. Host networking puts can0..can2 in the
@@ -60,9 +70,10 @@ in_container() {
     ensure_image
     local tty=()
     [ -t 0 ] && [ -t 1 ] && tty=(-it)
-    "${docker[@]}" run --rm ${tty[@]+"${tty[@]}"} --privileged --network host \
+    "${docker[@]}" run --rm ${tty[@]+"${tty[@]}"} "${run_args[@]}" \
         -v "$repo:/work" -v vhil-data:/vhil \
         -e IFS_HIL_REF="${IFS_HIL_REF:-dev}" -e FW_REFS="${FW_REFS:-}" \
+        -e EDITOR_URL="http://localhost:${VHIL_EDITOR_PORT:-5050}" \
         "$image" bash -c "$1" vhil "${@:2}"
 }
 
@@ -75,7 +86,7 @@ need_elf() { [ -n "$(elf "$1")" ] || { echo "no $1 firmware: run \`scripts/vhil-
 cmd=${1:-help}; shift || true
 case "$cmd" in
 vm) vm ;;
-image) "${docker[@]}" build -t "$image" "$repo/docker" ;;
+image) build_images ;;
 fw)
     [ $# -gt 0 ] || set -- ecu ams
     in_container "$prelude"'
@@ -130,6 +141,14 @@ ifs-hil)
             echo "error: tests skipped for a missing SocketCAN interface" >&2; exit 1
         fi
         exit $rc' "$@" ;;
+editor)
+    # Its own network: the UI port is published (Colima forwards it to the
+    # Mac); Run needs no vcan. Images come from the last `fw`. Not 5000 on
+    # the host: macOS's AirPlay Receiver holds it.
+    image=$editor_image run_args=(-p "${VHIL_EDITOR_PORT:-5050}:5000")
+    in_container "$prelude"'
+        export VHIL_ECU_ELF=$(elf ecu) VHIL_AMS_ELF=$(elf ams) PM_HOST=0.0.0.0
+        exec scripts/editor.sh' ;;
 shell) in_container 'exec bash' ;;
 run) in_container 'exec "$@"' "$@" ;;
 *) sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; [ "$cmd" = help ] ;;

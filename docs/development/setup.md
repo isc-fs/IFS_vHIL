@@ -14,6 +14,7 @@ scripts/vhil-docker.sh unit
 scripts/vhil-docker.sh smoke ecu   # or ams
 scripts/vhil-docker.sh sim
 scripts/vhil-docker.sh ifs-hil     # IFS_HIL's ECU smoke suite over vcan can0..can2
+scripts/vhil-docker.sh editor      # system editor on http://localhost:5050
 scripts/vhil-docker.sh shell
 ```
 
@@ -53,6 +54,14 @@ installs exactly these on `ubuntu-latest`. It is the reference setup.
 The editor UI is Antmicro's [Pipeline Manager](https://github.com/antmicro/kenning-pipeline-manager)
 (Apache-2.0) in server mode, talking to `python -m vhil.editor serve`.
 
+In Docker: `scripts/vhil-docker.sh editor`, then open http://localhost:5050
+(not 5000: macOS's AirPlay Receiver holds that port). The image
+([`docker/editor.Dockerfile`](../../docker/editor.Dockerfile)) pins Pipeline
+Manager to a release whose format matches `vhil/editor.py`'s
+`FORMAT_VERSION`; Run uses the images from the last `vhil-docker.sh fw`.
+"Load file" imports a system YAML through the backend; "Save file" writes
+it back onto the original text, comments kept. Natively:
+
 1. Node.js ≥ 20.18 (the Node 22 LTS `linux-x64` tarball from nodejs.org,
    unpacked to `~/vhil-tools/node`; no sudo needed).
 2. Pipeline Manager in its own venv (it pins old dependency versions):
@@ -61,7 +70,7 @@ The editor UI is Antmicro's [Pipeline Manager](https://github.com/antmicro/kenni
    `pip install -e ~/vhil-tools/kenning-pipeline-manager` and
    `pip install git+https://github.com/antmicro/kenning-pipeline-manager-backend-communication.git`,
    and `PATH=~/vhil-tools/node/bin:$PATH ./build server-app` in the checkout.
-3. The same backend library in this repo's venv.
+3. The same backend library, and `ruamel.yaml==0.18.*`, in this repo's venv.
 4. `scripts/editor.sh`, then open http://localhost:5000. Load a system with
    `python -m vhil.editor to-graph systems/ams.yaml -o ams.json` and drop the
    file on the canvas. Run needs `VHIL_<FIRMWARE>_ELF` (e.g. `VHIL_AMS_ELF`).
