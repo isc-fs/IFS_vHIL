@@ -233,7 +233,7 @@ def test_the_fault_latch_outlives_warm_resets_not_a_power_cut(ecu):
 
 
 @pytest.mark.xfail(strict=True, reason=(
-    "IFS08-CE-ECU firmware bug: vApplicationStackOverflowHook (freertos.c:145-152) "
+    "isc-fs/IFS08-CE-ECU#252: vApplicationStackOverflowHook (freertos.c:145-152) "
     "latches 0xF5 and returns, so the ECU runs on with a corrupted stack and never "
     "resets; DiagTask only reads the latch at boot (diag_task.cpp:31), so the "
     "overflow is never reported. error_latch.hpp:4-5 says the hooks spin into the "
@@ -248,7 +248,7 @@ def test_a_stack_overflow_resets_and_names_itself(ecu):
 # -- TX overload -------------------------------------------------------------------
 
 IFS_HIL_128 = pytest.mark.xfail(strict=True, reason=(
-    "IFS08-CE-ECU firmware bug, root cause of IFS_HIL#128: a pit-diag tick that "
+    "isc-fs/IFS08-CE-ECU#251, root cause of IFS_HIL#128: a pit-diag tick that "
     "coincides with the uDV tick posts 18 ACU frames (control_task.cpp:305-338,"
     "377-396) into FDCAN2's 16-deep TX FIFO (fdcan.c:115) faster than the bus "
     "drains it; CanTxTask ignores the refusal (can_tx_task.cpp:50-52, whose comment "
