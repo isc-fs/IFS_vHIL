@@ -14,8 +14,9 @@ AMS facts (IFS08-CE-AMS Core/Inc/can/messages/*.def, app_init_task.cpp):
   once per second each.
   0x4A2[7] heartbeat, +1 per frame mod 256; 0x6C9 bytes 0-3 LE FDCAN1
   bus-off recovery count (pit_comms_health.def).
-  0x100 (VCU heartbeat, 10 ms) locks the AMS in Car mode: 0x4A2[5] bits 3:2
-  = 01 (safety_task.cpp:400).
+  Run (E-051): 0x100 every 10 ms (LE u16 link volts, bit 17 valid), TSMS
+  PF9 held, one DASH_CHG PF10 press on a drained link locks Car and
+  precharges; the link at the pack voltage completes it (state 3).
 """
 import re
 
@@ -178,22 +179,37 @@ def test_bus_noise_neither_resets_nor_deafens(ams):
     assert can.count(PIT_ACK, since_us=t1) == 1
 
 
+def _to_run(ams):
+    can, io = ams.can("can_acu"), ams.io("ams")
+    can.send_periodic("vcu", VCU, (0).to_bytes(2, "little") + b"\x02", period_ms=10)
+    io.set_input("sysbus.gpioPortF", 9, True)            # TSMS
+    ams.run_for(ms=100)
+    io.set_input("sysbus.gpioPortF", 10, True)           # DASH_CHG press
+    ams.run_for(ms=50)
+    io.set_input("sysbus.gpioPortF", 10, False)
+    ams.run_for(ms=100)
+    can.update_periodic("vcu", (352).to_bytes(2, "little") + b"\x02")
+    ams.run_for(ms=200)
+    assert ams.read_symbol("ams", "g_state_telemetry") == 3, "did not reach Run"
+
+
 @pytest.mark.soak
-@pytest.mark.parametrize("car", [False, True], ids=["idle", "car-locked"])
-def test_soak_30_minutes(ams, car):
-    """E-050, E-051: 30 min of virtual time idle, or Car-locked with a live
-    VCU heartbeat: Start throughout, zero cadence outliers, heartbeat
-    continuous."""
+@pytest.mark.parametrize("run", [False, True], ids=["idle", "run"])
+def test_soak_30_minutes(ams, run):
+    """E-050, E-051: 30 min of virtual time idle in Start, or in Run with a
+    live VCU heartbeat: the state held throughout, zero cadence outliers,
+    heartbeat continuous."""
     can = ams.can("can_acu")
-    if car:
-        can.send_periodic("vcu", VCU, bytes(3), period_ms=10)
+    if run:
+        _to_run(ams)
+    expected = 3 if run else 0
     t0 = ams.now_us()
     for _ in range(30):
         ams.run_for(ms=60_000)
-        assert ams.read_symbol("ams", "g_state_telemetry") == 0, "the AMS left Start"
+        assert ams.read_symbol("ams", "g_state_telemetry") == expected, "the AMS changed state"
     frames = can.frames(TEMPS, since_us=t0)
     deltas = [b.t_us - a.t_us for a, b in zip(frames, frames[1:])]
     assert len(frames) >= 3599 and all(abs(d - 500_000) <= 25_000 for d in deltas)
     assert all((b.data[7] - a.data[7]) % 256 == 1 for a, b in zip(frames, frames[1:]))
-    if car:
+    if run:
         assert (frames[-1].data[5] >> 2) & 3 == 1, "not Car-locked"
