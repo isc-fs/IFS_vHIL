@@ -16,7 +16,7 @@ node types:
             port it provides (an LTC6820 provides `isospi`) and the port it
             attaches to (an LTC6811 attaches to `isospi`), with count/params
 
-What is not a graph (id, description, time, bench wiring) travels in the
+What is not a graph (id, description, time, port, bench wiring) travels in the
 graph's additionalData, unchanged by the editor. Formats:
 https://antmicro.github.io/kenning-pipeline-manager/specification-format.html
 https://antmicro.github.io/kenning-pipeline-manager/dataflow-format.html
@@ -57,7 +57,8 @@ _BOARD_PORTS = (("can", "can", "right"), ("spi", "spi", "left"), ("sdmmc", "sdmm
 _MODEL_HOST_PORTS = (("spi", "spi"), ("cs", "gpio"), ("sdmmc", "sdmmc"))
 # Field order in a written system file.
 _DEVICE_FIELDS = ("model", "spi", "cs", "sdmmc", "outputs", "attach", "count", "params")
-_SYSTEM_FIELDS = ("kind", "id", "description", "time", "boards", "buses", "devices", "bench")
+_SYSTEM_FIELDS = ("kind", "id", "description", "time", "boards", "buses", "devices", "port",
+                  "bench")
 
 
 def _catalog(kind: str, catalog: Path = CATALOG) -> dict[str, dict]:
@@ -197,7 +198,7 @@ def to_dataflow(doc: dict, spec: dict | None = None, source: str | None = None) 
             port = models[dev["model"]]["interface"]["attach"]
             connect(f"i:{dev['attach']}:{port}", f"i:{name}:{port}")
 
-    extra = {k: doc[k] for k in ("id", "description", "time", "bench") if k in doc}
+    extra = {k: doc[k] for k in ("id", "description", "time", "port", "bench") if k in doc}
     if source is not None:
         extra["source"] = source
     return {"version": FORMAT_VERSION, "entryGraph": GRAPH_ID,
@@ -287,6 +288,8 @@ def from_dataflow(dataflow: dict, spec: dict | None = None) -> dict:
     if devices:
         doc["devices"] = {k: {f: v[f] for f in _DEVICE_FIELDS if f in v}
                           for k, v in devices.items()}
+    if "port" in extra:
+        doc["port"] = extra.pop("port")
     if "bench" in extra:
         doc["bench"] = extra.pop("bench")
     return {k: doc[k] for k in _SYSTEM_FIELDS if k in doc}

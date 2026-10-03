@@ -231,6 +231,9 @@ namespace Antmicro.Renode.Peripherals.SPI
             muxChannel = 0;
             Respond = true;
             BreakDownstream = false;
+            CorruptPec = false;
+            corruptNext = 0;
+            corrupting = false;
             commandCounts.Clear();
             badCommandPec = badWritePec = wakes = 0;
             rx.Clear();
@@ -261,6 +264,7 @@ namespace Antmicro.Renode.Peripherals.SPI
             relayed.Clear();
             reply = null;
             command = null;
+            corrupting = false;
             if(!BreakDownstream)
             {
                 Downstream?.BeginTransaction();
@@ -294,7 +298,16 @@ namespace Antmicro.Renode.Peripherals.SPI
             // Own segment first, then downstream's stream delayed by one segment.
             if(p < 8)
             {
-                return Respond ? reply[p] : (byte)0xFF;
+                if(!Respond)
+                {
+                    return 0xFF;
+                }
+                if(p == 7 && (CorruptPec || corruptNext > 0))
+                {
+                    corrupting = true;
+                    return (byte)(reply[p] ^ 0x01);   // one PEC bit flipped
+                }
+                return reply[p];
             }
             return relayed[p - 8];
         }
@@ -304,6 +317,10 @@ namespace Antmicro.Renode.Peripherals.SPI
             if(!BreakDownstream)
             {
                 Downstream?.EndTransaction();
+            }
+            if(corrupting && corruptNext > 0)
+            {
+                corruptNext--;
             }
             if(command == null)
             {
@@ -330,6 +347,16 @@ namespace Antmicro.Renode.Peripherals.SPI
         // Cut the isoSPI link to the next chip: nothing beyond it hears
         // commands or answers.
         public bool BreakDownstream { get; set; }
+
+        // Flip a bit of this chip's reply PEC, so the host rejects its segment
+        // while every other chip's data stays clean: every read while set, or
+        // just the next n reads (EMI that clears on a re-read).
+        public bool CorruptPec { get; set; }
+
+        public void CorruptNextReplies(int n)
+        {
+            corruptNext = Math.Max(0, n);
+        }
 
         public void SetCell(int cell, int millivolts)
         {
@@ -684,6 +711,8 @@ namespace Antmicro.Renode.Peripherals.SPI
         private readonly List<byte> rx = new List<byte>();
         private readonly List<byte> relayed = new List<byte>();
         private readonly SortedDictionary<ushort, int> commandCounts = new SortedDictionary<ushort, int>();
+        private int corruptNext;
+        private bool corrupting;
         private ushort gpio1Result;
         private int muxChannel;
         private byte[] reply;
