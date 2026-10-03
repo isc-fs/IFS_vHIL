@@ -31,6 +31,10 @@
   offsets: [0x2C, 0x54, 0xEC, 0xF0]
   why: "PLLCFGR fractional/range bits (0x2C), D2CCIP2R USBSEL (0x54), and the H72x/H73x-only enable bits the H743 RCC model treats as reserved: APB1HENR.TIM23EN bit 24 (0xEC) and APB2ENR.USART10EN bit 7 (0xF0), per stm32h733xx.h. Renode does not gate clocks, so those peripherals run regardless; frequencies come from the PLL dividers, which are modelled"
 
+- peripheral: rcc
+  offsets: [0xD0, 0x130]
+  why: "RCC_RSR and its RCC_C1_RSR mirror are owned by models/renode/VhilResetFlags.cs through bus hooks: reads return its flags and an RMVF write clears them there. The RCC model's own field underneath is shadowed, so its unhandled-bit warning is moot"
+
 - peripheral: usart10
   offsets: [0x08, 0x2C]
   why: "CR3.EIE (error interrupt) and PRESC, which the F7-family USART model lacks. Baud rate is not modelled, so the prescaler cannot change what a test sees"
