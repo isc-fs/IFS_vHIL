@@ -17,3 +17,8 @@ renode:
     - models/renode/Stm32H7Sdmmc.cs
     # FDCAN with fault hooks for tests (Renode's MCAN has no error states).
     - models/renode/Stm32H7Fdcan.cs
+    # RCC_RSR reset-source flags across resets (Renode's RCC resets them).
+    - models/renode/VhilResetFlags.cs
+  # After each board's platform loads; {board} is its machine name.
+  setup:
+    - emulation CreateVhilResetFlags "vhil_reset_{board}" "{board}"

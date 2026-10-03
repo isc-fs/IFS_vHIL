@@ -28,6 +28,11 @@ sram2:
 rcc:
     hseFrequency: 24000000
 
+// IWDG1's clock is the LSI, ~32 kHz (RM0468 Rev 3 §8.5, p. 318); stm32h7.repl
+// clocks it at 56 kHz, which made every watchdog timeout 1.75x too short.
+watchdog:
+    frequency: 32000
+
 // Renode times the core at 100 MIPS unless told otherwise, so code that busy-
 // waits (the ECU's bit-banged nRF24, cycle-counted delays) took 5x longer in
 // virtual time than on the 528 MHz part and delayed lower-priority tasks: the
