@@ -474,6 +474,77 @@
               }
             }
           }
+        },
+        "port": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "step_ms",
+            "signals"
+          ],
+          "description": "The co-simulation port (vhil/cosim.py): named signals a plant exchanges with the system at a fixed virtual-time step.",
+          "properties": {
+            "step_ms": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "signals": {
+              "type": "object",
+              "propertyNames": {
+                "$ref": "#/$defs/name"
+              },
+              "additionalProperties": {
+                "type": "object",
+                "additionalProperties": false,
+                "description": "Exactly one of analog (a voltage the plant drives onto an analog input), gpio_in (a level the plant drives onto a GPIO input), gpio_out (a GPIO output the plant reads), can_rx (frames the plant receives from the system) or can_tx (frames the plant sends to it).",
+                "properties": {
+                  "analog": {
+                    "$ref": "#/$defs/endpoint"
+                  },
+                  "gpio_in": {
+                    "$ref": "#/$defs/endpoint"
+                  },
+                  "gpio_out": {
+                    "$ref": "#/$defs/endpoint"
+                  },
+                  "can_rx": {
+                    "type": "object",
+                    "required": [
+                      "bus",
+                      "id"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "bus": {
+                        "$ref": "#/$defs/name"
+                      },
+                      "id": {
+                        "type": "integer"
+                      }
+                    }
+                  },
+                  "can_tx": {
+                    "type": "object",
+                    "required": [
+                      "bus",
+                      "id"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "bus": {
+                        "$ref": "#/$defs/name"
+                      },
+                      "id": {
+                        "type": "integer"
+                      }
+                    }
+                  }
+                },
+                "minProperties": 1,
+                "maxProperties": 1
+              }
+            }
+          }
         }
       }
     },
