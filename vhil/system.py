@@ -287,7 +287,7 @@ class System:
                 # selected is local to it, so the next board would not see it.
                 out.append(f"${var}=@{Path(firmware[b.name]).resolve().as_posix()}")
             out.append(f"machine LoadPlatformDescription @{(REPO / rn['repl']).as_posix()}")
-            out += rn.get("setup", [])
+            out += [line.format(board=b.name) for line in rn.get("setup", [])]
             for name in self.devices_on(b.name):
                 dev = self.devices[name]
                 if dev["model_doc"]["backend"] == "analog":

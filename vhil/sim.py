@@ -258,7 +258,7 @@ class Sim:
         when the board has no VBAT."""
         from vhil.broker import power_on_commands
         vbat = self.system.boards[board].board.get("vbat", True)
-        for command in power_on_commands(vbat):
+        for command in power_on_commands(board, vbat):
             self.monitor(command, board=board)
 
     def read_symbol(self, board: str, symbol: str, size: int = 1) -> int:

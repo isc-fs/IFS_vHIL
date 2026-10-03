@@ -38,7 +38,7 @@ REPO = Path(__file__).resolve().parent.parent
 RTC_BKP = range(0x58004050, 0x58004050 + 20 * 4, 4)
 
 
-def power_on_commands(vbat: bool) -> list[str]:
+def power_on_commands(machine: str, vbat: bool) -> list[str]:
     """Monitor commands that power a board on, with its machine selected.
     Shared by the virtual broker and vhil.sim, so both mean the same thing.
 
@@ -48,9 +48,12 @@ def power_on_commands(vbat: bool) -> list[str]:
     read the old value. The reset macro reloads the image and sets VTOR.
     Renode 1.17: Reset zeroes BASEPRI as read, but not the masking it applies
     (renode/renode#1021); a cut inside a FreeRTOS critical section left the
-    next boot unable to take the TIM23 HAL tick, hanging in HAL_Delay."""
+    next boot unable to take the TIM23 HAL tick, hanging in HAL_Delay.
+    The reset-flag model is told the reset is a power-on, so RCC_RSR reads
+    POR (models/renode/VhilResetFlags.cs)."""
     wipe = [] if vbat else [f"sysbus WriteDoubleWord {addr:#x} 0x0" for addr in RTC_BKP]
-    return wipe + ["machine Reset", 'cpu SetRegister "BasePri" 0x0']
+    return wipe + [f"vhil_reset_{machine} PowerOn", "machine Reset",
+                   'cpu SetRegister "BasePri" 0x0']
 
 
 def make_backend(fake_cls, monitor: RenodeMonitor, config: dict):
@@ -99,7 +102,7 @@ def make_backend(fake_cls, monitor: RenodeMonitor, config: dict):
             if value:
                 with lock:
                     monitor.execute(f'mach set "{machine}"')
-                    for command in power_on_commands(vbat[machine]):
+                    for command in power_on_commands(machine, vbat[machine]):
                         monitor.execute(command)
                 set_buses(machine, connect=True)
             else:
