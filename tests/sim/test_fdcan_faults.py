@@ -11,6 +11,9 @@ Firmware facts:
     a dead FDCAN1 (inverter) must not take down the 0x100 heartbeat on it.
   Both: HAL_FDCAN_Init failure in MX_FDCANx_Init calls Error_Handler()
     (AMS main.c:490, ECU fdcan.c:70).
+  ECU FDCAN2: prescaler 3, TSEG1 10, TSEG2 5 on the 24 MHz HSE kernel clock
+    = 500 kbit/s (fdcan.c:96-99,242); a pit-diag tick (0x7E0 DE AD BE EF
+    arms it) puts 15+ frames on the ACU bus at once (control_task.cpp:377-396).
 The error physics (TEC/REC, ACK, bit errors) stays on the physical bench.
 """
 import pytest
@@ -143,3 +146,21 @@ def test_fail_init_fails_the_bring_up(ecu):
     pc = ecu.monitor("sysbus FindSymbolAt `cpu PC`", board="ecu").strip()
     assert pc.startswith("Error_Handler"), f"ECU at {pc}"
     assert ecu.can("can_acu").count([VCU_HEARTBEAT]) == 0
+
+
+def test_wire_timing_paces_tx_at_the_bit_rate(ecu):
+    """The hook itself: NBTP holds what HAL_FDCAN_Init wrote, and a burst
+    leaves one frame time apart (>= 47 bits, 94 us at 500 kbit/s) instead of
+    in the instant the firmware queued it."""
+    _fdcan(ecu, "ecu", 2, "WireTiming true")
+    ecu.run_for(ms=1000)
+    nbtp = ecu.monitor("sysbus ReadDoubleWord 0x4000A41C", board="ecu")   # FDCAN2 + NBTP
+    assert int(nbtp.strip(), 16) == 0x00020904
+    can = ecu.can("can_acu")
+    can.send(0x7E0, bytes.fromhex("DEADBEEF"))
+    t = ecu.run_for(ms=500)
+    status = can.frames([0x700], since_us=t - 300_000)[0].t_us
+    tick = [f.t_us for f in can.frames([VCU_HEARTBEAT], since_us=status - 10_000) if f.t_us <= status][-1]
+    burst = [f for f in can.frames(since_us=tick) if f.t_us < tick + 9_000]  # that tick's frames
+    span_us = burst[-1].t_us - burst[0].t_us
+    assert len(burst) >= 15 and span_us >= (len(burst) - 1) * 94, f"{len(burst)} frames in {span_us} us"
