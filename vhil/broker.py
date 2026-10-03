@@ -70,12 +70,20 @@ def make_backend(fake_cls, monitor: RenodeMonitor, config: dict):
     lock = threading.Lock()
     can_of = {c["machine"]: c.get("can", {}) for c in config.get("carriers", [])}
 
+    def checked(command: str) -> str:
+        """Run a power-path command and log anything Renode says back: these
+        commands print nothing when they work, so any reply is a clue (#63)."""
+        reply = monitor.execute(command).strip()
+        if reply:
+            log.warning("monitor: %s -> %s", command, reply)
+        return reply
+
     def set_buses(machine: str, connect: bool) -> None:
         verb = "Connect" if connect else "Disconnect"
         with lock:
             monitor.execute(f'mach set "{machine}"')
             for controller, hub in can_of[machine].items():
-                monitor.execute(f"connector {verb} {controller} {hub}")
+                checked(f"connector {verb} {controller} {hub}")
 
     class VirtualHardwareManager(fake_cls):
         def __init__(self) -> None:
@@ -105,7 +113,7 @@ def make_backend(fake_cls, monitor: RenodeMonitor, config: dict):
                 with lock:
                     monitor.execute(f'mach set "{machine}"')
                     for command in power_on_commands(machine, vbat[machine]):
-                        monitor.execute(command)
+                        checked(command)
                 set_buses(machine, connect=True)
             else:
                 set_buses(machine, connect=False)
