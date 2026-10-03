@@ -141,6 +141,18 @@ def test_ssa_2_legs_follow_the_current(tmp_path, amps, p_v, n_v):
     assert levels["ams.PF7"] == pytest.approx(p_v) and levels["ams.PF8"] == pytest.approx(n_v)
 
 
+def test_port_signals_must_point_at_the_right_kind(tmp_path):
+    p = tmp_path / "s.yaml"
+    p.write_text("kind: system\nid: t\nboards:\n  ecu: {board: mlc-carrier, firmware: ecu}\n"
+                 "port:\n  step_ms: 10\n  signals:\n    apps1: {analog: ecu.PB5}\n")
+    with pytest.raises(SystemError, match="is gpio, not analog"):
+        System(p)
+    p.write_text("kind: system\nid: t\nboards:\n  ecu: {board: mlc-carrier, firmware: ecu}\n"
+                 "port:\n  step_ms: 10\n  signals:\n    x: {can_tx: {bus: nope, id: 1}}\n")
+    with pytest.raises(SystemError, match="no bus 'nope'"):
+        System(p)
+
+
 def _ams(tmp_path, devices):
     p = tmp_path / "s.yaml"
     p.write_text("kind: system\nid: t\nboards:\n  ams: {board: mlc-carrier, firmware: ams}\n"
