@@ -22,8 +22,8 @@ from vhil.system import REPO
 POWER_ON, PIN, SOFTWARE, IWDG = 1, 2, 3, 4
 BOARDS = {"ams": ("ams.yaml", 0x6CA), "ecu": ("ecu.yaml", 0x704)}
 ECU_POR_AS_PIN = pytest.mark.xfail(strict=True, reason=(
-    "ECU firmware: reset_cause.cpp checks PINRSTF before PORRSTF, and a power-on "
-    "sets both (RM0468 Table 52 row 1), so it reports Pin"))
+    "IFS08-CE-ECU#245: reset_cause.cpp checks PINRSTF before PORRSTF, and a "
+    "power-on sets both (RM0468 Table 52 row 1), so it reports Pin"))
 
 
 def _software_reset(sim, board):
