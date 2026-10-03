@@ -265,7 +265,7 @@ All of these test the backplane, not firmware. Classed **B**, with no vHIL equiv
   - BmsModuleOffline before BmsStale
   - the 95 % precharge ratio
   - VcuFreshMs and ChargeReqFreshMs edges
-- **Open-wire (ADOW, reason 16):** interior and endpoint conductors, retry within a poll. Needs an open-wire model.
+- **Open-wire (ADOW, reason 16):** interior and endpoint conductors, retry within a poll. Modelled (#24, `OpenWire` on each LTC6811); `tests/sim/test_ams_open_wire.py` covers an interior, the bottom and both chips' top conductors. The model's endpoints read exactly 0, so they pass the firmware's exact-zero rules; silicon may read a few mV (open_wire.hpp GAP).
 - **Temperature:**
   - disconnect (reason 13): a channel that was valid and then reads open faults in under 360 ms; one that was never valid doesn't
   - OT/UT for both values of `TempFaultsTrusted`
