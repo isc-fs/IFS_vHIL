@@ -164,6 +164,13 @@
           "additionalProperties": {
             "$ref": "#/$defs/peripheral"
           }
+        },
+        "i2c": {
+          "type": "object",
+          "description": "Connector name -> I2C controller.",
+          "additionalProperties": {
+            "$ref": "#/$defs/peripheral"
+          }
         }
       }
     },
@@ -453,6 +460,10 @@
               "sdmmc": {
                 "$ref": "#/$defs/endpoint"
               },
+              "i2c": {
+                "$ref": "#/$defs/endpoint",
+                "description": "The board's I2C connector the device's targets sit on."
+              },
               "attach": {
                 "$ref": "#/$defs/name",
                 "description": "Device whose port this one attaches to."
@@ -582,6 +593,10 @@
             "sdmmc": {
               "type": "boolean"
             },
+            "i2c": {
+              "type": "boolean",
+              "description": "An I2C target (or several, renode.targets) on an I2C connector."
+            },
             "attach": {
               "type": "string",
               "description": "Kind of port on another device this model attaches to, e.g. isospi."
@@ -620,9 +635,6 @@
         },
         "renode": {
           "type": "object",
-          "required": [
-            "type"
-          ],
           "additionalProperties": false,
           "properties": {
             "source": {
@@ -632,6 +644,34 @@
             "type": {
               "type": "string",
               "description": "Type as used in a platform description, e.g. SPI.Ltc6811Chain."
+            },
+            "targets": {
+              "type": "object",
+              "minProperties": 1,
+              "propertyNames": {
+                "$ref": "#/$defs/name"
+              },
+              "description": "For an i2c model: one peripheral per I2C target, named <device>_<target>, e.g. a BMI088's accelerometer and gyroscope dies.",
+              "additionalProperties": {
+                "type": "object",
+                "required": [
+                  "type",
+                  "address"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "description": "Type as used in a platform description."
+                  },
+                  "address": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 127,
+                    "description": "7-bit I2C address."
+                  }
+                }
+              }
             },
             "params": {
               "type": "object",
@@ -655,7 +695,19 @@
                 }
               }
             }
-          }
+          },
+          "oneOf": [
+            {
+              "required": [
+                "type"
+              ]
+            },
+            {
+              "required": [
+                "targets"
+              ]
+            }
+          ]
         },
         "analog": {
           "type": "object",

@@ -18,6 +18,10 @@ spi:
   SPI1: sysbus.spi1
 sdmmc:
   SDMMC1: sysbus.sdmmc1
+i2c:
+  # PF0 SDA / PF1 SCL, to the carrier's BMI088 (MAIN_LITE IC1; IFS08-CE-AMS
+  # stm32h7xx_hal_msp.c:282-291, ams_config.hpp:343-346).
+  I2C2: sysbus.i2c2_h7
 gpio:
   # Software chip-select of SPI1 on the AMS (main.h: LTC_CS, PB9).
   PB9: {port: sysbus.gpioPortB, pin: 9}
