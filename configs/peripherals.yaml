@@ -47,7 +47,7 @@
 
 - peripheral: gpioPortF
   offsets: [0x4]
-  why: "OTYPER OT0/OT1: open-drain on PF0/PF1 (I2C2). No electrical model; the BMI088 behind them is #59"
+  why: "OTYPER OT0/OT1: open-drain on PF0/PF1 (I2C2 to the BMI088). The I2C model works at transaction level (models/renode/Stm32H7I2c.cs), with no electrical bus for the pin drive to act on"
 
 - peripheral: usart*
   offsets: [0x2C]
@@ -57,13 +57,9 @@
   offsets: [0x2C]
   why: "DCTRL.DTEN, which Renode's SDMMC base defines as a tag. The H7 HAL starts the data path with CMD.CMDTRANS, which the model handles; DTEN does not change what moves"
 
-- peripheral: i2c2
-  offsets: [0x4, 0x10]
-  why: "KNOWN GAP #59: CR2.NACK and TIMINGR (bus timing, not modelled). The bits themselves are harmless; the BMI088 behind them is not modelled, so the AMS's ImuTask times out"
-
 - peripheral: dma1
-  offsets: [0x8, 0x24]
-  why: "KNOWN GAP #59: DMA1 Stream0 (I2C2 RX for the BMI088) flag clears in LIFCR and SxFCR.FS. Harmless as bits; the transfer they serve is the missing IMU"
+  offsets: [0x8, 0x10, 0x24]
+  why: "DMA1 Stream0, the AMS's I2C2 RX from the BMI088. HAL_DMA_Init / HAL_DMA_Start_IT clear FEIF0/DMEIF0/TEIF0/HTIF0 in LIFCR, enable TEIE/DMEIE in S0CR and write back S0FCR's read-only FS. Renode's STM32DMA never raises a FIFO, direct-mode or transfer error (the emulated bus has none), so those flags are never set and their interrupts never fire either way; the transfer itself and its TCIF are modelled"
 
 # The CAN bootloader's accesses (boards with a bootloader, e.g. ecu-bl.yaml).
 
