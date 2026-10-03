@@ -181,6 +181,16 @@ class System:
                 raise SystemError(f"device '{name}': unknown params {sorted(unknown)}")
         for name in self.devices:
             self.board_of_device(name)   # every device reaches a board, no cycles
+        for name, spec in self.doc.get("port", {}).get("signals", {}).items():
+            (kind, value), = spec.items()
+            if kind in ("can_rx", "can_tx"):
+                if value["bus"] not in self.buses:
+                    raise SystemError(f"port signal '{name}': no bus '{value['bus']}'")
+                continue
+            _, got, _ = self.resolve(value)
+            want = "analog" if kind == "analog" else "gpio"
+            if got != want:
+                raise SystemError(f"port signal '{name}': '{value}' is {got}, not {want}")
         for c in self.bench.get("carriers", []):
             if c["board"] not in self.boards:
                 raise SystemError(f"bench carrier '{c['board']}' is not a board in this system")
