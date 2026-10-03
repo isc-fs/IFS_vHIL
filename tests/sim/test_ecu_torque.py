@@ -312,7 +312,7 @@ def test_a_failed_apps_sensor_removes_torque(active, pin, volts, immediate):
 
 
 @pytest.mark.xfail(strict=True, reason=(
-    "firmware: an APPS shorted to supply reads 100 % (apps_pct clamps any raw >= max, "
+    "isc-fs/IFS08-CE-ECU#247: an APPS shorted to supply reads 100 % (apps_pct clamps any raw >= max, "
     "control.cpp:16) and is never treated as a failure; with the other sensor at >= 90 % "
     "they agree, so FS T11.8.8/T11.9.2 (short to supply = implausibility, safe state "
     "within T11.9.4's 500 ms) is not met and full torque stays commanded"))
