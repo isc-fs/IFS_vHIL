@@ -39,7 +39,7 @@ def test_ecu_system_renders_the_bench_setup():
     # The H73x ADC3 model is compiled once, before any machine loads its repl.
     assert s.index("include @") < s.index('mach create "ecu"')
     assert s.count("models/renode/Stm32H7Adc3.cs") == 1
-    for controller, bus in (("fdcan1", "can_inv"), ("fdcan2", "can_acu"), ("fdcan3", "can_dash")):
+    for controller, bus in (("fdcan1_h7", "can_inv"), ("fdcan2_h7", "can_acu"), ("fdcan3_h7", "can_dash")):
         assert f"connector Connect sysbus.{controller} {bus}" in s
     assert "sysbus LoadELF $elf_ecu" in s
     assert "cpu VectorTableOffset 0x08020000" in s
@@ -53,8 +53,8 @@ def test_ecu_bench_wiring():
     (carrier,) = cfg["carriers"]
     assert carrier["machine"] == "ecu" and carrier["relay"] == {"addr": 0x20, "port": 0, "pin": 3}
     assert carrier["ina_addr"] == 0x45
-    assert carrier["can"] == {"sysbus.fdcan1": "can_inv", "sysbus.fdcan2": "can_acu",
-                              "sysbus.fdcan3": "can_dash"}
+    assert carrier["can"] == {"sysbus.fdcan1_h7": "can_inv", "sysbus.fdcan2_h7": "can_acu",
+                              "sysbus.fdcan3_h7": "can_dash"}
     assert {(r["dac"], r["channel"], r["adc_channel"]) for r in cfg["dac_routes"]} == \
         {(0, 0, 3), (0, 1, 7), (0, 2, 2)}
 
@@ -68,7 +68,7 @@ def test_ecu_ams_share_the_acu_bus_and_power_separately():
     carriers = {c["machine"]: c for c in cfg["carriers"]}
     assert carriers["ecu"]["relay"]["pin"] == 3 and carriers["ecu"]["ina_addr"] == 0x45
     assert carriers["ams"]["relay"]["pin"] == 1 and carriers["ams"]["ina_addr"] == 0x41
-    assert carriers["ams"]["can"] == {"sysbus.fdcan1": "can_acu"}
+    assert carriers["ams"]["can"] == {"sysbus.fdcan1_h7": "can_acu"}
     assert set(carriers["ecu"]["can"].values()) == {"can_inv", "can_acu", "can_dash"}
     assert {(r["machine"], r["dac"], r["channel"], r["adc_channel"]) for r in cfg["dac_routes"]
             if r["machine"] == "ams"} == {("ams", 3, 0, 3), ("ams", 3, 1, 7)}
