@@ -22,31 +22,38 @@ import yaml
 REPO = Path(__file__).resolve().parent.parent
 DEFAULT_ALLOW = REPO / "configs" / "peripherals.yaml"
 
+# With more than one machine, Renode prefixes the source with the machine:
+# "] ams/sdmmc:" rather than "] sdmmc:". Without the optional prefix the guard
+# saw nothing at all on a multi-board system.
+_SOURCE = r"\] (?:([\w.-]+)/)?"
 _UNHANDLED = re.compile(
-    r"\] ([\w.]+): Unhandled (read|write) (?:from|to) offset (0x[0-9A-Fa-f]+)")
+    _SOURCE + r"([\w.]+): Unhandled (read|write) (?:from|to) offset (0x[0-9A-Fa-f]+)")
 _NONEXISTENT = re.compile(
-    r"\] sysbus: .*?(?:\(tag: '([^']+)'\) )?(?:Read|Write)\w* (?:from|to) "
+    _SOURCE + r"sysbus: .*?(?:\(tag: '([^']+)'\) )?(?:Read|Write)\w* (?:from|to) "
     r"non existing peripheral at (0x[0-9A-Fa-f]+)")
 
 
 def scan(log_text: str) -> Counter:
-    """Count distinct unmodelled accesses, keyed by what they hit."""
+    """Count distinct unmodelled accesses, keyed by (kind, name, number,
+    machine); machine is None on a one-machine system."""
     found: Counter = Counter()
     for line in log_text.splitlines():
         m = _UNHANDLED.search(line)
         if m:
-            found[("peripheral", m.group(1), int(m.group(3), 16))] += 1
+            found[("peripheral", m.group(2), int(m.group(4), 16), m.group(1))] += 1
             continue
         m = _NONEXISTENT.search(line)
         if m:
-            tag, addr = m.group(1), int(m.group(2), 16)
-            found[("tag", tag, None) if tag else ("address", None, addr)] += 1
+            machine, tag, addr = m.group(1), m.group(2), int(m.group(3), 16)
+            found[("tag", tag, None, machine) if tag else ("address", None, addr, machine)] += 1
     return found
 
 
 def _allowed(key, rules) -> bool:
-    kind, name, num = key
+    kind, name, num, machine = key
     for r in rules:
+        if "machine" in r and r["machine"] != machine:
+            continue
         if kind == "peripheral" and "peripheral" in r:
             if fnmatch.fnmatch(name, r["peripheral"]) and \
                     ("offsets" not in r or num in r["offsets"]):
@@ -60,16 +67,17 @@ def _allowed(key, rules) -> bool:
 
 def unexplained(log_text: str, rules: list) -> list[tuple[tuple, int]]:
     return sorted(((k, n) for k, n in scan(log_text).items() if not _allowed(k, rules)),
-                  key=lambda kn: (kn[0][0], str(kn[0][1]), kn[0][2] or 0))
+                  key=lambda kn: (str(kn[0][3]), kn[0][0], str(kn[0][1]), kn[0][2] or 0))
 
 
 def describe(key) -> str:
-    kind, name, num = key
+    kind, name, num, machine = key
+    where = f"{machine}: " if machine else ""
     if kind == "peripheral":
-        return f"{name} register offset 0x{num:X}"
+        return f"{where}{name} register offset 0x{num:X}"
     if kind == "tag":
-        return f"tagged region '{name}'"
-    return f"unmapped address 0x{num:08X}"
+        return f"{where}tagged region '{name}'"
+    return f"{where}unmapped address 0x{num:08X}"
 
 
 def load_rules(path: Path = DEFAULT_ALLOW) -> list:

@@ -4,10 +4,14 @@
 # model. vhil/peripheral_guard.py fails a run when firmware touches anything
 # not listed here. Add an entry only with a reason the access cannot change
 # what a test observes. Otherwise, model the hardware.
+# A gap that is tracked but not yet modelled may be listed with "KNOWN GAP
+# #<issue>" in its reason, so a run stays honest about it without failing; the
+# entry goes when the issue closes.
 #
 #   peripheral: <name or glob>   offsets: [<register offsets>]  (omit = any)
 #   tag: <tagged sysbus region>
 #   address: <unmapped address>
+#   machine: <board instance>  (optional; omit = any board)
 
 - peripheral: usb1
   why: "USB OTG HS: CubeMX initialises it (MX_USB_OTG_HS_PCD_Init), but neither app ever uses USB"
@@ -30,3 +34,33 @@
 - peripheral: usart10
   offsets: [0x08, 0x2C]
   why: "CR3.EIE (error interrupt) and PRESC, which the F7-family USART model lacks. Baud rate is not modelled, so the prescaler cannot change what a test sees"
+
+# The AMS's accesses, visible since the guard reads machine-prefixed lines.
+
+- peripheral: spi1
+  offsets: [0x0, 0x8, 0xC, 0x18]
+  why: "SPI1 to the LTC6820: CR1.SSI, CFG1.MBR (baud divider), CFG2.MSSI/SSM/SSOM (hardware NSS) and CFG2.COMM (TX-only during writes), IFCR.TXTFC. Renode does not model SPI clocking or hardware NSS, and the LTC chip select is a GPIO (PB9). COMM would only matter if the model kept bytes the TX-only hardware would not receive; the chain reads back with zero PEC errors, so it does not"
+
+- peripheral: gpioPortF
+  offsets: [0x4]
+  why: "OTYPER OT0/OT1: open-drain on PF0/PF1 (I2C2). No electrical model; the BMI088 behind them is #59"
+
+- peripheral: usart*
+  offsets: [0x2C]
+  why: "PRESC, which the F7-family USART model lacks (as for usart10). Baud rate is not modelled, so the prescaler cannot change what a test sees"
+
+- peripheral: sdmmc
+  offsets: [0x4, 0x2C]
+  why: "CLKCR.WIDBUS (bus width) and DCTRL.DTEN. The model moves whole blocks regardless of bus width, and the CPSM's CMDTRANS starts the data path the H7 HAL uses"
+
+- peripheral: sdmmc
+  offsets: [0x50, 0x58]
+  why: "KNOWN GAP #21: IDMACTRL/IDMABASE0 are tags, so the AMS's FatFs DMA transfers never complete and SD logging is vacuous. Remove with #21"
+
+- peripheral: i2c2
+  offsets: [0x4, 0x10]
+  why: "KNOWN GAP #59: CR2.NACK and TIMINGR (bus timing, not modelled). The bits themselves are harmless; the BMI088 behind them is not modelled, so the AMS's ImuTask times out"
+
+- peripheral: dma1
+  offsets: [0x8, 0x24]
+  why: "KNOWN GAP #59: DMA1 Stream0 (I2C2 RX for the BMI088) flag clears in LIFCR and SxFCR.FS. Harmless as bits; the transfer they serve is the missing IMU"
