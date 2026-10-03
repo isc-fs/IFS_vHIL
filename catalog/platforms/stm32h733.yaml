@@ -17,8 +17,14 @@ renode:
     - models/renode/Stm32H7Sdmmc.cs
     # FDCAN with fault hooks for tests (Renode's MCAN has no error states).
     - models/renode/Stm32H7Fdcan.cs
+    # One owner for the RCC's bus hooks, shared by the two models below.
+    - models/renode/VhilRccHooks.cs
     # RCC_RSR reset-source flags across resets (Renode's RCC resets them).
     - models/renode/VhilResetFlags.cs
+    # RCC xxxRSTR peripheral resets with the H733's bits (Renode's has the
+    # H743's, and doesn't know the models this platform adds).
+    - models/renode/VhilRccResets.cs
   # After each board's platform loads; {board} is its machine name.
   setup:
     - emulation CreateVhilResetFlags "vhil_reset_{board}" "{board}"
+    - emulation CreateVhilRccResets "vhil_rcc_{board}" "{board}"

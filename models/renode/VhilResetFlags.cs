@@ -48,21 +48,24 @@ namespace Antmicro.Renode.Testing
         {
             this.machine = machine;
             var sysbus = machine.SystemBus;
-            if(!machine.TryGetByName<IBusPeripheral>("sysbus.rcc", out var rcc)
-               || !machine.TryGetByName<IBusPeripheral>("sysbus.nvic", out var nvic))
+            if(!machine.TryGetByName<IBusPeripheral>("sysbus.nvic", out var nvic))
             {
-                throw new ArgumentException("needs sysbus.rcc and sysbus.nvic");
+                throw new ArgumentException("needs sysbus.nvic");
             }
-            sysbus.SetHookAfterPeripheralRead<uint>(rcc, (value, offset) =>
-                offset == RsrOffset || offset == C1RsrOffset ? rsr : value);
-            sysbus.SetHookBeforePeripheralWrite<uint>(rcc, (value, offset) =>
+            // The RCC's hooks are shared with VhilRccResets.cs (VhilRccHooks.cs).
+            var rcc = VhilRccHooks.For(machine);
+            foreach(var offset in new[] { RsrOffset, C1RsrOffset })
             {
-                if((offset == RsrOffset || offset == C1RsrOffset) && (value & Rmvf) != 0)
+                rcc.OnRead(offset, _ => rsr);
+                rcc.OnWrite(offset, value =>
                 {
-                    rsr = 0;
-                }
-                return value;
-            });
+                    if((value & Rmvf) != 0)
+                    {
+                        rsr = 0;
+                    }
+                    return value;
+                });
+            }
             sysbus.SetHookBeforePeripheralWrite<uint>(nvic, (value, offset) =>
             {
                 if(offset == Aircr && (value >> 16) == AircrKey && (value & SysResetReq) != 0)
