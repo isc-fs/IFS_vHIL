@@ -127,6 +127,27 @@ namespace Antmicro.Renode.Testing
             }
         }
 
+        // Standard frames streamed from now at one frame per gapUs on average:
+        // "id:hex id:hex ..." (ids in decimal). They go `burst` at a time, a
+        // burst every burst * gapUs: each synced action costs a pause of the
+        // emulation, and lands on a sync-quantum boundary anyway. Each burst
+        // schedules the next from inside its own synced callback, as
+        // SendPeriodic's Tick does: a future time scheduled from the monitor
+        // is never sent (#73), one scheduled from a callback is.
+        public void SendSequence(string frames, ulong gapUs, int burst = 1)
+        {
+            var list = new List<CANMessageFrame>();
+            foreach(var item in frames.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                var parts = item.Split(':');
+                list.Add(new CANMessageFrame(uint.Parse(parts[0]), Bytes(parts.Length > 1 ? parts[1] : ""), false));
+            }
+            if(list.Count > 0)
+            {
+                SequenceStep(list, 0, NowMicros(), gapUs, Math.Max(burst, 1));
+            }
+        }
+
         // Send once at an absolute virtual time (us); in the past = now.
         public void SendAt(ulong atUs, uint id, string hex, bool extended = false)
         {
@@ -195,6 +216,22 @@ namespace Antmicro.Renode.Testing
                 }
                 SendFrame(new CANMessageFrame(job.Id, job.Data, job.Extended));
                 Tick(job, atUs + job.PeriodUs);
+            });
+        }
+
+        private void SequenceStep(List<CANMessageFrame> list, int index, ulong atUs, ulong gapUs, int burst)
+        {
+            Schedule(atUs, () =>
+            {
+                var end = Math.Min(index + burst, list.Count);
+                for(var i = index; i < end; i++)
+                {
+                    SendFrame(list[i]);
+                }
+                if(end < list.Count)
+                {
+                    SequenceStep(list, end, atUs + gapUs * (ulong)burst, gapUs, burst);
+                }
             });
         }
 

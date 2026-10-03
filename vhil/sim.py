@@ -107,6 +107,14 @@ class CanBus:
         if items:
             self.sim.monitor(f'{self.probe} SendBatch "{items}"')
 
+    def send_sequence(self, frames, gap_us: int, burst: int = 1) -> None:
+        """Standard frames [(id, data), ...] streamed from now at one per
+        gap_us on average, `burst` frames every burst * gap_us (each burst is
+        a synced action: a burst > 1 is much cheaper to emulate)."""
+        items = " ".join(f"{can_id}:{bytes(data).hex()}" for can_id, data in frames)
+        if items:
+            self.sim.monitor(f'{self.probe} SendSequence "{items}" {int(gap_us)} {int(burst)}')
+
     def send_at(self, at_us: int, can_id: int, data: bytes = b"", extended: bool = False) -> None:
         self.sim.monitor(f'{self.probe} SendAt {at_us} {can_id} "{data.hex()}" {_arg(extended)}')
 
