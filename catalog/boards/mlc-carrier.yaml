@@ -21,6 +21,10 @@ sdmmc:
 gpio:
   # Software chip-select of SPI1 on the AMS (main.h: LTC_CS, PB9).
   PB9: {port: sysbus.gpioPortB, pin: 9}
+  # The ECU's RTDS buzzer output and START button input (main.h: RTDS_Pin
+  # PB4, START_Pin PB5).
+  PB4: {port: sysbus.gpioPortB, pin: 4}
+  PB5: {port: sysbus.gpioPortB, pin: 5}
 analog_in:
   # ADC3 inputs routed to the carrier connector (IFS_HIL vcu_profile.yaml).
   PF7: {adc: sysbus.adc3_h73x, channel: 3}
