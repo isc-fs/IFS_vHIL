@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable, Optional
 
+from vhil import elf
 from vhil.bench import DEFAULT_RENODE, REPO, _free_port
 from vhil.renode import RenodeMonitor
 from vhil.system import System
@@ -268,10 +269,11 @@ class Sim:
             self.monitor(command, board=board)
 
     def read_symbol(self, board: str, symbol: str, size: int = 1) -> int:
-        """Read a firmware global by its linker symbol (1, 2 or 4 bytes)."""
-        address = self.monitor(f'sysbus GetSymbolAddress "{symbol}"', board=board).strip()
+        """Read a firmware global by its linker symbol (1, 2 or 4 bytes). The
+        address comes from the board's ELF, not Renode's lookup (vhil/elf.py)."""
+        address, _ = elf.symbol(self.firmware[board], symbol)
         op = {1: "ReadByte", 2: "ReadWord", 4: "ReadDoubleWord"}[size]
-        return int(self.monitor(f"sysbus {op} {address}", board=board).strip(), 16)
+        return int(self.monitor(f"sysbus {op} {address:#x}", board=board).strip(), 16)
 
     def monitor(self, command: str, board: Optional[str] = None) -> str:
         if self._monitor is None:
