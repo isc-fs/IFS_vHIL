@@ -344,7 +344,7 @@ def test_an_idle_session_closes_after_30_s(ecu):
 
 
 @pytest.mark.xfail(strict=True, reason=(
-    "firmware: CalSession never leaves Committing after a durable commit. "
+    "isc-fs/IFS08-CE-ECU#248: CalSession never leaves Committing after a durable commit. "
     "control_task.cpp:244 overrides only the one reply to Committed; the "
     "session's own state_ stays Committing (cal_session.cpp:157, no "
     "persist-ok hook), so the 100 ms stream and POLL say Committing until "
