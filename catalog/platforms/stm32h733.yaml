@@ -15,3 +15,5 @@ renode:
     - models/renode/Stm32H7Adc3.cs
     # SDMMC with its internal DMA (Renode's tags IDMA).
     - models/renode/Stm32H7Sdmmc.cs
+    # FDCAN with fault hooks for tests (Renode's MCAN has no error states).
+    - models/renode/Stm32H7Fdcan.cs

@@ -39,8 +39,28 @@ cpu:
 
 // --- Peripherals the H733 has and the H743 platform lacks
 
+// FDCAN1..3 with fault hooks (bus-off, TX FIFO full, failed bring-up) for
+// tests: models/renode/Stm32H7Fdcan.cs, Renode's MCAN unchanged until a hook
+// is set. stm32h7.repl's fdcan1/fdcan2 are taken off the bus and replaced;
+// same addresses and IRQs (FDCAN1_IT0/1 19/21, FDCAN2_IT0/1 20/22, FDCAN_CAL
+// 63; stm32h733xx.h), all on the shared 10 KB message RAM.
+fdcan1: @ none
+fdcan2: @ none
+
+fdcan1_h7: CAN.STM32H7_FDCAN @ sysbus 0x4000A000
+    Line0 -> nvic@19
+    Line1 -> nvic@21
+    Calibration -> nvic@63
+    messageRAM: canMessageRAM
+
+fdcan2_h7: CAN.STM32H7_FDCAN @ sysbus 0x4000A400
+    Line0 -> nvic@20
+    Line1 -> nvic@22
+    Calibration -> nvic@63
+    messageRAM: canMessageRAM
+
 // Third FDCAN (the ECU's dash bus). Shares the 10 KB message RAM with FDCAN1/2.
-fdcan3: CAN.MCAN @ sysbus 0x4000D400
+fdcan3_h7: CAN.STM32H7_FDCAN @ sysbus 0x4000D400
     Line0 -> nvic@159
     Line1 -> nvic@160
     Calibration -> nvic@63

@@ -11,9 +11,9 @@ script=$(mktemp --suffix=.resc)
 python3 -m vhil.system render "$1" --firmware "$board=$(realpath "$2")" -o "$script"
 "$renode" --disable-gui --plain --console -e "
 include @$script
-logLevel 0 sysbus.fdcan1
-logLevel 0 sysbus.fdcan2
-logLevel 0 sysbus.fdcan3
+logLevel 0 sysbus.fdcan1_h7
+logLevel 0 sysbus.fdcan2_h7
+logLevel 0 sysbus.fdcan3_h7
 emulation RunFor \"${3:-3}\"
 cpu PC
 quit

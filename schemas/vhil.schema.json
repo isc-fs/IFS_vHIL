@@ -14,7 +14,7 @@
     },
     "peripheral": {
       "type": "string",
-      "description": "A backend path to a peripheral, e.g. Renode's sysbus.fdcan1.",
+      "description": "A backend path to a peripheral, e.g. Renode's sysbus.fdcan1_h7.",
       "minLength": 1
     },
     "address": {
