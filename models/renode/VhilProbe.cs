@@ -115,6 +115,18 @@ namespace Antmicro.Renode.Testing
             SendAt(0, id, hex, extended);
         }
 
+        // Several standard frames now, in order, in one monitor call:
+        // "id:hex id:hex ..." (ids in decimal). The co-simulation port sends a
+        // step's frames this way.
+        public void SendBatch(string frames)
+        {
+            foreach(var item in frames.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                var parts = item.Split(':');
+                Send(uint.Parse(parts[0]), parts.Length > 1 ? parts[1] : "");
+            }
+        }
+
         // Send once at an absolute virtual time (us); in the past = now.
         public void SendAt(ulong atUs, uint id, string hex, bool extended = false)
         {
