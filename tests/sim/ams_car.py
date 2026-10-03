@@ -48,9 +48,12 @@ class Car:
             self.can.stop_periodic("vcu")
             self._vcu = False
 
-    def charger(self) -> None:
-        """The charger's 0x101 "CHRG" request at 2 Hz."""
-        self.can.send_periodic("chrg", CHARGE_REQ, b"CHRG", period_ms=500)
+    def charger(self, payload: bytes = b"CHRG") -> None:
+        """The charger's 0x101 charge-mode request at 2 Hz."""
+        self.can.send_periodic("chrg", CHARGE_REQ, payload, period_ms=500)
+
+    def charger_unplugged(self) -> None:
+        self.can.stop_periodic("chrg")
 
     # -- the cockpit ------------------------------------------------------
     def tsms(self, on: bool) -> None:
