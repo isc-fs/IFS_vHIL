@@ -23,7 +23,8 @@ def firmware(request):
     def get(board: str) -> Path:
         elf = request.config.getoption(f"--{board}-elf")
         if not elf or not Path(elf).is_file():
-            pytest.skip(f"no {board} image (--{board}-elf or VHIL_{board.upper()}_ELF)")
+            env = f"VHIL_{board.upper().replace('-', '_')}_ELF"
+            pytest.skip(f"no {board} image (--{board}-elf or {env})")
         return Path(elf)
     return get
 
@@ -37,7 +38,11 @@ def make_sim(request, firmware):
 
     def make(system: str, **kwargs) -> Sim:
         sys_file = REPO / "systems" / f"{system}.yaml"
-        fw = {board: firmware(board) for board in System(sys_file).boards}
+        fw = {}
+        for b in System(sys_file).boards.values():
+            fw[b.name] = firmware(b.name)
+            if b.bootloader is not None:
+                fw[f"{b.name}.bootloader"] = firmware(b.bootloader["id"])
         sim = Sim(sys_file, fw, **_with_log(kwargs, log_dir, system, len(sims))).start()
         sims.append(sim)
         return sim

@@ -92,7 +92,12 @@ def specification(catalog: Path = CATALOG) -> dict:
             "description": board.get("description", ""),
             "interfaces": interfaces,
             "properties": [{"name": "firmware", "type": "select", "values": firmware,
-                            "default": firmware[0]}],
+                            "default": firmware[0]},
+                           {"name": "bootloader", "type": "select", "values": [""] + firmware,
+                            "default": "",
+                            "description": "Firmware in sector 0, as provisioned (empty: none)."},
+                           {"name": "node_id", "type": "integer", "default": 0, "min": 0, "max": 14,
+                            "description": "The bootloader's node ID (0: no bootloader)."}],
             "additionalData": {"vhil": {"kind": "board"}},
         })
     nodes.append({
@@ -160,7 +165,8 @@ def to_dataflow(doc: dict, spec: dict | None = None, source: str | None = None) 
         connections.append({"id": f"c:{len(connections)}", "from": a, "to": b})
 
     for row, (name, b) in enumerate(doc["boards"].items()):
-        node(b["board"], name, {"firmware": b["firmware"]}, 0, 420 * row)
+        node(b["board"], name, {"firmware": b["firmware"], "bootloader": b.get("bootloader", ""),
+                                "node_id": b.get("node_id", 0)}, 0, 420 * row)
     for row, (name, bus) in enumerate(doc.get("buses", {}).items()):
         n = node(BUS_NODE, name, {"host_netdev": bus.get("host_netdev", "")}, 520, 160 * row)
         # One stub per connection, spread along the bus, facing the boards
@@ -235,6 +241,10 @@ def from_dataflow(dataflow: dict, spec: dict | None = None) -> dict:
         kind = kinds[n["name"]]
         if kind == "board":
             boards[name] = {"board": n["name"], "firmware": props["firmware"]}
+            if props.get("bootloader"):
+                boards[name]["bootloader"] = props["bootloader"]
+            if props.get("node_id"):
+                boards[name]["node_id"] = props["node_id"]
         elif kind == "bus":
             buses[name] = {"kind": "can", "nodes": []}
             if props.get("host_netdev"):

@@ -52,11 +52,11 @@ class VirtualBench:
         self._proc = self._monitor = None
 
     def start(self) -> "VirtualBench":
-        for board in self.system.boards:
-            if board not in self.firmware:
-                raise ValueError(f"no firmware image for board '{board}'")
-            if not self.firmware[board].is_file():
-                raise FileNotFoundError(self.firmware[board])
+        for image in self.system.images():
+            if image not in self.firmware:
+                raise ValueError(f"no firmware image for '{image}'")
+            if not self.firmware[image].is_file():
+                raise FileNotFoundError(self.firmware[image])
         script = Path(tempfile.mkdtemp(prefix="vhil-")) / f"{self.system.id}.resc"
         script.write_text(self.system.render_renode(self.firmware, socketcan=self.socketcan))
         port = _free_port()

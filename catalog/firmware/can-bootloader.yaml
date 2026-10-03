@@ -1,0 +1,20 @@
+kind: firmware
+id: can-bootloader
+description: >-
+  The CAN bootloader of the MLC carriers (isc-fs/stm32-can-bootloader):
+  sector 0, classic CAN on FDCAN1/2/3 at 500 kbps, wire protocol 0.2. It
+  validates the application's metadata record and jumps to it after a 2 s
+  auto-jump window, or stays to erase, program and verify over CAN for
+  `cf` (isc-fs/can-flasher). Node ID from its NVM, seeded at provisioning.
+repo: isc-fs/stm32-can-bootloader
+ref: v1.7.0
+submodules: false
+build:
+  toolchain: Arm GNU 14.2.Rel1
+  configure: cmake --preset Release
+  build: cmake --build build/Release
+  elf: build/Release/CAN_BL.elf
+  recipe_source: stm32-can-bootloader PROVISIONING.md (Release preset)
+load:
+  # Linked at the reset vector: the board boots through it.
+  vector_table: 0x08000000

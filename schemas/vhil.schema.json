@@ -291,6 +291,16 @@
               },
               "firmware": {
                 "$ref": "#/$defs/id"
+              },
+              "bootloader": {
+                "$ref": "#/$defs/id",
+                "description": "Firmware (catalog/firmware) in sector 0 ahead of the application, as the board is provisioned. The board then boots through it from a provisioned flash image."
+              },
+              "node_id": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 14,
+                "description": "The bootloader's node ID, seeded as an SWD provisioning burn does (0x1..0xE)."
               }
             }
           }
