@@ -91,3 +91,16 @@ def test_the_pacing_watch_flags_a_stalled_emulation(monkeypatch, caplog):
         broker.watch_pacing(Monitor(), threading.Lock(), iterations=4)
     stalls = [r for r in caplog.records if "behind host time" in r.getMessage()]
     assert len(stalls) == 1 and "250 ms behind" in stalls[0].getMessage()
+
+
+def test_power_on_connects_the_buses_before_the_reset():
+    """#63: the firmware must never run unconnected after power-on. The CPU
+    is halted, the buses connected, then the board reset and released."""
+    backend, monitor = _backend("ecu.yaml")
+    monitor.commands.clear()
+    backend.tca_write_pin(0x20, 0, 3, True)          # K4 = MLC4 = ECU
+    cmds = [c for _, c in monitor.commands]
+    connects = [i for i, c in enumerate(cmds) if c.startswith("connector Connect")]
+    assert len(connects) == 3
+    assert cmds.index("cpu IsHalted true") < min(connects)
+    assert max(connects) < cmds.index("machine Reset") < cmds.index("cpu IsHalted false")
