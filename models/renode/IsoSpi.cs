@@ -345,6 +345,15 @@ namespace Antmicro.Renode.Peripherals.SPI
             }
         }
 
+        // Open (or reconnect) cell-sense conductor C<conductor>, 0..12: C0 is
+        // the bottom of cell 1, C<n> the top of cell n. A broken wire is on
+        // the battery module, so it survives the AMS's resets.
+        public void OpenWire(int conductor, bool open)
+        {
+            CheckRange(conductor, CellsPerIc + 1, "conductor");
+            openWires[conductor] = open;
+        }
+
         public int CellMillivolts(int cell)
         {
             CheckRange(cell, CellsPerIc, "cell");
@@ -430,11 +439,14 @@ namespace Antmicro.Renode.Peripherals.SPI
             command = opcode;
             commandCounts[opcode] = CommandCount(opcode) + 1;
 
-            if(IsAdcv(opcode) || IsAdow(opcode))
+            if(IsAdcv(opcode))
             {
-                // With no wire modelled open, ADOW reads what ADCV would,
-                // which is what the AMS open-wire check expects when healthy.
                 Array.Copy(cells, cellResults, CellsPerIc);
+                return;
+            }
+            if(IsAdow(opcode))
+            {
+                ConvertOpenWire(pullUp: (opcode & AdowPup) != 0);
                 return;
             }
             if(IsAdax(opcode))
@@ -504,10 +516,49 @@ namespace Antmicro.Renode.Peripherals.SPI
             return data6.Concat(new[] { (byte)(pec >> 8), (byte)pec }).ToArray();
         }
 
+        // ADOW: the cells converted with a test current on every C pin, up
+        // (PUP = 1) or down. A connected conductor holds its pin; an open one
+        // follows the current to its neighbour, C<n+1> pulled up or C<n-1>
+        // pulled down, so the cell below it and the one above see the sum or
+        // nothing, the ADC saturating. That is the datasheet's open-wire
+        // signature ("Open Wire Check (ADOW Command)"): an interior C<n> gives
+        // CELL<n+1>(PU) - CELL<n+1>(PD) < -400 mV, C0 gives CELL1(PU) = 0 and
+        // the top conductor CELL<N>(PD) = 0. A simplification of the physics,
+        // exact at the endpoints where silicon may read a few mV.
+        private void ConvertOpenWire(bool pullUp)
+        {
+            var pin = new int[CellsPerIc + 1];        // C0..C12 potentials, 100 uV
+            for(var n = 1; n <= CellsPerIc; n++)
+            {
+                pin[n] = pin[n - 1] + cells[n - 1];
+            }
+            var level = (int[])pin.Clone();
+            for(var n = 0; n <= CellsPerIc; n++)
+            {
+                if(!openWires[n])
+                {
+                    continue;
+                }
+                if(pullUp && n < CellsPerIc)
+                {
+                    level[n] = pin[n + 1];
+                }
+                else if(!pullUp && n > 0)
+                {
+                    level[n] = pin[n - 1];
+                }
+            }
+            for(var c = 0; c < CellsPerIc; c++)
+            {
+                cellResults[c] = (ushort)Math.Max(0, Math.Min(0xFFFF, level[c + 1] - level[c]));
+            }
+        }
+
         // Fixed bits per the LTC6811 command table; MD, DCP/PUP and CH/CHG
         // vary (AMS: ADCV 0x360, ADOW 0x368/0x328, ADAX 0x561).
         private static bool IsAdcv(ushort op) => (op & 0x668) == 0x260;
         private static bool IsAdow(ushort op) => (op & 0x628) == 0x228;
+        private const ushort AdowPup = 0x40;          // ADOW bit 6 (AMS 0x368 up, 0x328 down)
         private static bool IsAdax(ushort op) => (op & 0x678) == 0x460;
 
         private static byte[] Words(ushort[] values, int first)
@@ -627,6 +678,7 @@ namespace Antmicro.Renode.Peripherals.SPI
         private readonly byte[] config = new byte[6];
         private readonly byte[] comm = new byte[6];
         private readonly ushort[] cells = new ushort[CellsPerIc];
+        private readonly bool[] openWires = new bool[CellsPerIc + 1];
         private readonly ushort[] cellResults = new ushort[CellsPerIc];
         private readonly ushort[] aux = new ushort[MuxChannels];
         private readonly List<byte> rx = new List<byte>();
