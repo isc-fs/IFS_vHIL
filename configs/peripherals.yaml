@@ -60,3 +60,17 @@
 - peripheral: dma1
   offsets: [0x8, 0x24]
   why: "KNOWN GAP #59: DMA1 Stream0 (I2C2 RX for the BMI088) flag clears in LIFCR and SxFCR.FS. Harmless as bits; the transfer they serve is the missing IMU"
+
+# The CAN bootloader's accesses (boards with a bootloader, e.g. ecu-bl.yaml).
+
+- peripheral: flashController
+  offsets: [0x14]
+  why: "CCR1 clears of WRPERR/STRBERR/RDPERR/RDSERR. The model never sets those errors, so clearing them changes nothing"
+
+- peripheral: flashController
+  offsets: [0x28, 0x30, 0x40, 0x70]
+  why: "KNOWN GAP #67: option-byte status (PRAR_CUR1 write-protection area, SCAR_CUR1 secure area, BOOT_CURR) and the ECC fail address read 0: no protection, no ECC error. The bootloader's WRP latch can't be exercised until modelled"
+
+- peripheral: rcc
+  offsets: [0x7C, 0x84, 0x90, 0x94, 0x98, 0x9C]
+  why: "KNOWN GAP #68: the bootloader's HAL_DeInit peripheral resets (xxxRSTR), H73x-only bits the H743 RCC model treats as reserved. Renode doesn't reset peripherals from these registers; the app reinitialises what it uses"
