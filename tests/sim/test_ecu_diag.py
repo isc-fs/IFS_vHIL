@@ -661,7 +661,7 @@ def test_gps_before_any_sentence_and_southwest(ecu, contract):
 
 
 @pytest.mark.xfail(strict=True, reason=(
-    "IFS08-CE-ECU: has_fix is never aged. GpsService stamps last_tick_ms "
+    "isc-fs/IFS08-CE-ECU#249: has_fix is never aged. GpsService stamps last_tick_ms "
     "(gps_service.cpp:26) and nothing reads it; gps_tx.cpp:45 publishes the "
     "parser's last has_fix, so a GPS that falls silent after a fix keeps "
     "0x509 has_fix = 1 and 0x508 on the frozen position for ever, against "
