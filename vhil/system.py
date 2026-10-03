@@ -18,10 +18,14 @@ import json
 import shutil
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
+
+from vhil import flash_image
+from vhil.flash_image import FLASH_BASE
 
 REPO = Path(__file__).resolve().parent.parent
 SCHEMA = REPO / "schemas" / "vhil.schema.json"
@@ -65,6 +69,8 @@ class Board:
     board: dict         # catalogue board
     platform: dict      # catalogue platform
     firmware: dict      # catalogue firmware source
+    bootloader: dict | None = None   # catalogue firmware in sector 0, if provisioned
+    node_id: int | None = None       # the bootloader's node ID
 
     def endpoint(self, connector: str) -> tuple[str, object]:
         """(kind, target) for a connector or pin: ('can'|'spi'|'sdmmc', peripheral),
@@ -85,8 +91,11 @@ class System:
         self.boards: dict[str, Board] = {}
         for name, spec in self.doc["boards"].items():
             board = _entry("board", spec["board"], catalog)
-            self.boards[name] = Board(name, board, _entry("platform", board["platform"], catalog),
-                                      _entry("firmware", spec["firmware"], catalog))
+            self.boards[name] = Board(
+                name, board, _entry("platform", board["platform"], catalog),
+                _entry("firmware", spec["firmware"], catalog),
+                _entry("firmware", spec["bootloader"], catalog) if "bootloader" in spec else None,
+                spec.get("node_id"))
         self.buses = self.doc.get("buses", {})
         self.bench = self.doc.get("bench", {})
         self.devices = {name: dict(spec, model_doc=_entry("model", spec["model"], catalog))
@@ -100,7 +109,20 @@ class System:
         kind, target = self.boards[name].endpoint(connector)
         return self.boards[name], kind, target
 
+    def images(self) -> list[str]:
+        """The firmware images a run needs: one per board, plus
+        "<board>.bootloader" for each board with a bootloader."""
+        out = []
+        for b in self.boards.values():
+            out.append(b.name)
+            if b.bootloader is not None:
+                out.append(f"{b.name}.bootloader")
+        return out
+
     def _check(self) -> None:
+        for b in self.boards.values():
+            if (b.bootloader is None) != (b.node_id is None):
+                raise SystemError(f"board '{b.name}': a bootloader needs a node_id, and only it")
         seen: dict[str, str] = {}
         for bus, spec in self.buses.items():
             for node in spec["nodes"]:
@@ -307,8 +329,25 @@ class System:
                         self._renode_device(name, dev), '"""']
             for controller, bus in self.can_of(b.name).items():
                 out.append(f"connector Connect {controller} {bus}")
-            out += ["macro reset", '"""', f"    sysbus LoadELF ${var}"]
-            vtor = b.firmware.get("load", {}).get("vector_table")
+            if b.bootloader is not None:
+                # Flash as a provisioned board holds it, loaded once: flash
+                # survives a reset (and a power cut), so what the bootloader
+                # programs stays. A reset starts the bootloader, as on the chip.
+                # Without the images, the script expects $flash_<board> and
+                # $elf_<board>_bootloader, as it expects $elf_<board>.
+                if b.name in firmware and f"{b.name}.bootloader" in firmware:
+                    flash = "@" + self._flash_image(b, firmware).as_posix()
+                    bl_elf = "@" + self._image(firmware, b.name + ".bootloader").as_posix()
+                else:
+                    flash, bl_elf = f"$flash_{b.name}", f"$elf_{b.name}_bootloader"
+                out += [f"sysbus LoadBinary {flash} 0x{FLASH_BASE:08X}",
+                        f"sysbus LoadSymbolsFrom {bl_elf}",
+                        f"sysbus LoadSymbolsFrom ${var}",
+                        "macro reset", '"""']
+                vtor = b.bootloader.get("load", {}).get("vector_table")
+            else:
+                out += ["macro reset", '"""', f"    sysbus LoadELF ${var}"]
+                vtor = b.firmware.get("load", {}).get("vector_table")
             if vtor is not None:
                 out.append(f"    {cpu} VectorTableOffset 0x{vtor:08X}")
             out += ['"""', "runMacro $reset", ""]
@@ -320,6 +359,27 @@ class System:
                         f'machine CreateSocketCANBridge "br_{bus}" "{spec["host_netdev"]}"',
                         f"connector Connect br_{bus} {bus}"]
         return "\n".join(out).rstrip() + "\n"
+
+    @staticmethod
+    def _image(firmware: dict, key: str) -> Path:
+        if key not in firmware:
+            raise SystemError(f"no firmware image for '{key}'")
+        return Path(firmware[key]).resolve()
+
+    def _flash_image(self, b: Board, firmware: dict) -> Path:
+        """The board's provisioned flash (vhil.flash_image), from the flat
+        .bin next to each ELF (build_firmware writes them)."""
+        def flat(elf: Path) -> bytes:
+            binary = elf.with_suffix(".bin")
+            if not binary.exists():
+                subprocess.run(["arm-none-eabi-objcopy", "-O", "binary", str(elf), str(binary)],
+                               check=True)
+            return binary.read_bytes()
+        data = flash_image.build(flat(self._image(firmware, b.name + ".bootloader")),
+                                 flat(self._image(firmware, b.name)), b.node_id)
+        path = Path(tempfile.mkdtemp(prefix=f"vhil-flash-{b.name}-")) / "flash.bin"
+        path.write_bytes(data)
+        return path
 
     def bench_config(self) -> dict:
         """The virtual broker's wiring (see vhil/broker.py)."""
@@ -338,18 +398,21 @@ class System:
     def build_firmware(self, workdir: Path, refs: dict[str, str] | None = None,
                        log=print) -> dict[str, Path]:
         """Clone each firmware source at its ref and build it with its recipe.
-        Returns board instance -> ELF; a flat .bin is written next to it."""
+        Returns image key (System.images: "<board>", "<board>.bootloader")
+        -> ELF; a flat .bin is written next to it."""
         refs, built, workdir = refs or {}, {}, Path(workdir)
         by_source: dict[tuple, Path] = {}
-        for b in self.boards.values():
-            fw = b.firmware
-            ref = refs.get(b.name, fw["ref"])
+        sources = [(b.name, b.firmware) for b in self.boards.values()]
+        sources += [(f"{b.name}.bootloader", b.bootloader)
+                    for b in self.boards.values() if b.bootloader is not None]
+        for name, fw in sources:
+            ref = refs.get(name, fw["ref"])
             key = (fw["id"], fw["repo"], ref)
             if key not in by_source:
                 src = workdir / f"{fw['id']}@{ref.replace('/', '_')}"
                 if src.exists():
                     shutil.rmtree(src)
-                log(f"[{b.name}] cloning {fw['repo']}@{ref}")
+                log(f"[{name}] cloning {fw['repo']}@{ref}")
                 cmd = ["git", "clone", "-q", "--depth", "1", "-b", ref,
                        f"https://github.com/{fw['repo']}", str(src)]
                 if fw.get("submodules"):
@@ -358,14 +421,14 @@ class System:
                 # Build output goes to stderr: stdout carries only the
                 # board=elf results, so callers can parse it.
                 for step in ("configure", "build"):
-                    log(f"[{b.name}] {fw['build'][step]}")
+                    log(f"[{name}] {fw['build'][step]}")
                     subprocess.run(fw["build"][step], shell=True, cwd=src, check=True,
                                    stdout=sys.stderr)
                 elf = src / fw["build"]["elf"]
                 subprocess.run(["arm-none-eabi-objcopy", "-O", "binary", str(elf),
                                 str(elf.with_suffix(".bin"))], check=True)
                 by_source[key] = elf
-            built[b.name] = by_source[key]
+            built[name] = by_source[key]
         return built
 
 

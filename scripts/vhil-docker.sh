@@ -90,7 +90,7 @@ case "$cmd" in
 vm) vm ;;
 image) build_images ;;
 fw)
-    [ $# -gt 0 ] || set -- ecu ams
+    [ $# -gt 0 ] || set -- ecu ams ecu-bl
     in_container "$prelude"'
         refs=(); for r in $FW_REFS; do refs+=(--ref "$r"); done
         mkdir -p /vhil/fw
@@ -112,7 +112,7 @@ smoke)
 sim)
     in_container "$prelude"'
         need_elf ecu; need_elf ams
-        VHIL_ECU_ELF=$(elf ecu) VHIL_AMS_ELF=$(elf ams) \
+        VHIL_ECU_ELF=$(elf ecu) VHIL_AMS_ELF=$(elf ams) VHIL_CAN_BOOTLOADER_ELF=$(elf ecu.bootloader) \
             python -m pytest tests/sim -v --sim-log-dir results/sim-logs "$@"' "$@" ;;
 speed)
     [ $# -gt 0 ] || set -- 100 528
@@ -125,7 +125,7 @@ ifs-hil)
         # The other boards of $VHIL_SYSTEM run their last-built images.
         export VHIL_SYSTEM=${VHIL_SYSTEM:-systems/ecu.yaml}
         VHIL_FIRMWARE=
-        for b in $(python -c "import sys; from vhil.system import System; print(*System(sys.argv[1]).boards)" "$VHIL_SYSTEM"); do
+        for b in $(python -c "import sys; from vhil.system import System; print(*System(sys.argv[1]).images())" "$VHIL_SYSTEM"); do
             [ "$b" = ecu ] && continue
             need_elf "$b"; VHIL_FIRMWARE+="$b=$(elf "$b") "
         done

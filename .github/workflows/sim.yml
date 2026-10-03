@@ -32,11 +32,12 @@ jobs:
         id: fw
         run: |
           pip install -q pyyaml "jsonschema>=4" pytest
-          for s in ecu ams; do
+          for s in ecu ams ecu-bl; do
             python -m vhil.system build "systems/$s.yaml" --workdir "$RUNNER_TEMP/fw" | tee -a built.txt
           done
-          echo "ecu=$(sed -n 's/^ecu=//p' built.txt)" >> "$GITHUB_OUTPUT"
-          echo "ams=$(sed -n 's/^ams=//p' built.txt)" >> "$GITHUB_OUTPUT"
+          echo "ecu=$(sed -n 's/^ecu=//p' built.txt | tail -1)" >> "$GITHUB_OUTPUT"
+          echo "ams=$(sed -n 's/^ams=//p' built.txt | tail -1)" >> "$GITHUB_OUTPUT"
+          echo "bootloader=$(sed -n 's/^ecu.bootloader=//p' built.txt | tail -1)" >> "$GITHUB_OUTPUT"
 
       - name: Install Renode ${{ env.RENODE_VERSION }}
         run: |
@@ -53,6 +54,7 @@ jobs:
           RENODE: ${{ runner.temp }}/renode/renode
           VHIL_ECU_ELF: ${{ steps.fw.outputs.ecu }}
           VHIL_AMS_ELF: ${{ steps.fw.outputs.ams }}
+          VHIL_CAN_BOOTLOADER_ELF: ${{ steps.fw.outputs.bootloader }}
         run: python -m pytest tests/sim -v --sim-log-dir sim-logs
 
       - name: Emulation speed on this runner

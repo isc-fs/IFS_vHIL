@@ -1,0 +1,32 @@
+kind: system
+id: ams-bl
+description: >-
+  One AMS as in ams.yaml, provisioned as the car's boards are: the CAN
+  bootloader in sector 0 boots first, validates the application and jumps
+  to it, or stays to be flashed over CAN.
+time:
+  quantum_s: 0.0005
+boards:
+  # Provisioned as on the car: the CAN bootloader in sector 0, node 0x2.
+  ams: {board: mlc-carrier, firmware: ams, bootloader: can-bootloader, node_id: 2}
+buses:
+  can_acu: {kind: can, nodes: [ams.FDCAN1], host_netdev: can2}
+devices:
+  # LTC6820 on SPI1 (chip select PB9), then 5 modules x (upper + lower
+  # LTC6811) = 10 ICs on its isoSPI chain: cells0 (module 0 upper) nearest.
+  isospi: {model: ltc6820, spi: ams.SPI1, cs: ams.PB9}
+  cells: {model: ltc6811, attach: isospi, count: 10}
+  sd: {model: sd-card, sdmmc: ams.SDMMC1}
+  # The car's current sensors, at 0 A: the pack's SSA-2 differential pair on
+  # ADC3 INP3/INN3 and the DC-DC's ACS758 on INP11 (ams_config.hpp, current
+  # sensor calibration). Undriven, the legs would read 0 V, which the
+  # firmware takes for a disconnected sensor.
+  pack_current: {model: ssa-2-250a, outputs: {out_p: ams.PF7, out_n: ams.PF8}}
+  dcdc_current: {model: acs758lcb-050b, outputs: {out: ams.PC1}}
+bench:
+  carriers:
+    # MLC2: relay K2 = TCA 0x20 port 0 pin 1, current monitor INA 0x41
+    # (bench-01: 118-128 mA alive).
+    - {board: ams, slot: 2, relay: {addr: 0x20, port: 0, pin: 1}, ina_addr: 0x41, current_A: 0.12}
+  # Not yet mapped: the bench's DAC4 pack-current pair and the TSMS /
+  # DASH_CHG GPIO inputs.

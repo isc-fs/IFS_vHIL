@@ -159,7 +159,7 @@ class Sim:
                 raise ValueError(f"device '{name}': unknown params {sorted(unknown)}")
             dev["params"] = {**dev.get("params", {}), **values}
         self.firmware = {b: Path(p).resolve() for b, p in firmware.items()}
-        missing = set(self.system.boards) - set(self.firmware)
+        missing = set(self.system.images()) - set(self.firmware)
         if missing:
             raise ValueError(f"no firmware for boards {sorted(missing)}")
         self.renode, self.advance_immediately, self.seed = renode, advance_immediately, seed
