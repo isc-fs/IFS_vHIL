@@ -1,0 +1,22 @@
+kind: model
+id: bmi088
+description: >-
+  Bosch BMI088 6-axis IMU on I2C: an accelerometer die and a gyroscope die,
+  each its own I2C target (models/renode/Bmi088.cs, register maps from the
+  Bosch datasheet BST-BMI088-DS001). Chip IDs, the accelerometer's
+  power-up (suspended and off until ACC_PWR_CONF/ACC_PWR_CTRL), ranges,
+  bandwidth/ODR and data registers; a read returns the value set, converted
+  at the range in force, with no noise or settling. Defaults: lying flat at
+  rest (+1 g on Z, no rotation). Test API per die (monitor): SetAcceleration
+  (mg) on <device>_acc, SetAngularRate (dps) on <device>_gyr; on both,
+  Respond (false: NACKs, as an unpowered or missing chip), ReadCount,
+  NackCount, RegisterValue.
+interface: {i2c: true}
+backend: renode
+renode:
+  source: models/renode/Bmi088.cs
+  # SDO1 and SDO2 low select the lower address of each pair (datasheet I2C
+  # interface: accelerometer 0x18/0x19, gyroscope 0x68/0x69).
+  targets:
+    acc: {type: Sensors.Bmi088Accelerometer, address: 0x18}
+    gyr: {type: Sensors.Bmi088Gyroscope, address: 0x68}
