@@ -15,6 +15,25 @@ buses:
   can_inv:  {kind: can, nodes: [ecu.FDCAN1], host_netdev: can0}
   can_dash: {kind: can, nodes: [ecu.FDCAN3], host_netdev: can1}
   can_acu:  {kind: can, nodes: [ecu.FDCAN2], host_netdev: can2}
+port:
+  # The co-simulation port (vhil/cosim.py): what the ECU's plants exchange
+  # with it. Pedal sensors and START are the driver; FDCAN1 is the inverter.
+  # The AMS frames are for a stimulus standing in for the AMS, which this
+  # system lacks (ecu-ams.yaml has the real one).
+  step_ms: 10
+  signals:
+    apps1:      {analog: ecu.PF8}
+    apps2:      {analog: ecu.PF9}
+    brake:      {analog: ecu.PF7}
+    start:      {gpio_in: ecu.PB5}
+    rtds:       {gpio_out: ecu.PB4}
+    inv_cmd:    {can_rx: {bus: can_inv, id: 0x360}}
+    inv_torque: {can_rx: {bus: can_inv, id: 0x362}}
+    inv_state:  {can_tx: {bus: can_inv, id: 0x461}}
+    inv_vdc:    {can_tx: {bus: can_inv, id: 0x466}}
+    inv_rpm:    {can_tx: {bus: can_inv, id: 0x463}}
+    ams_ok_precharge: {can_tx: {bus: can_acu, id: 0x020}}
+    ams_status:       {can_tx: {bus: can_acu, id: 0x4A0}}
 bench:
   carriers:
     # MLC4: relay K4 = TCA 0x20 port 0 pin 3, current monitor INA 0x45.
