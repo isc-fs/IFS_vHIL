@@ -61,3 +61,75 @@ def test_a_power_cycle_clears_the_latch(latched):
     status, boot = _arm_and_read(latched)
     assert (status.data[0], status.data[6]) == (START, 0), f"0x6C0 {status.data.hex()}"
     assert int.from_bytes(boot.data[0:4], "little") == 0, "jump reason survived a power cut"
+
+
+# -- the boot trigger: honoured, refused, ignored -------------------------------
+#
+# bootloader.hpp:61-74: honoured only in Start and Error, only for exactly
+# 0x002 B0 07 AD 11 (DLC 4) on the ACU bus; it stamps BKP0R = BlBootReqMagic
+# (0xB00710AD, ams_config.hpp:958) and resets. Refused in an energised state,
+# reported in 0x6C0 byte 2 bit 3 (boot_trigger_refused, pit_fsm_status.def).
+# Energising needs TSMS (PF9) high, a DASH_CHG (PF10) rising edge, and in Car
+# mode a fresh VCU heartbeat with the DC link discharged (rearm_permitted,
+# state_machine.hpp): ams.yaml has no ECU, so 0x100 is a stimulus here.
+
+BKP0R = 0x58004050
+BL_BOOT_REQ_MAGIC = 0xB00710AD
+HEALTH, SOFTWARE = 0x6CA, 3
+PRECHARGE = 1
+
+
+def _cause(sim):
+    return sim.can("can_acu").last(HEALTH).data[5]
+
+
+def _bkp0r(sim):
+    return int(sim.monitor(f"sysbus ReadDoubleWord {BKP0R:#x}", board="ams").strip(), 16)
+
+
+@pytest.fixture
+def ams(firmware):
+    with Sim(REPO / "systems" / "ams.yaml", {"ams": firmware("ams")}) as sim:
+        _arm_and_read(sim)
+        yield sim
+
+
+def test_the_trigger_in_start_stamps_bkp0r_and_resets(ams):
+    """D-051: BKP0R = BlBootReqMagic, then a software reset."""
+    assert _cause(ams) != SOFTWARE
+    ams.can("can_acu").send(*BOOT_TRIGGER)
+    ams.run_for(ms=200)
+    assert _bkp0r(ams) == BL_BOOT_REQ_MAGIC
+    ams.run_for(ms=2500)
+    assert _cause(ams) == SOFTWARE, "no software reset after the trigger"
+
+
+@pytest.mark.parametrize("can_id, data", [
+    (0x003, "B007AD11"),          # wrong ID
+    (0x002, "B007AD"),            # wrong DLC
+    (0x002, "B007AD12"),          # wrong payload
+], ids=["id", "dlc", "payload"])
+def test_a_near_miss_trigger_is_ignored(ams, can_id, data):
+    """D-045 (the wrong-bus case needs the AMS's FDCAN2 on a bus)."""
+    ams.can("can_acu").send(can_id, bytes.fromhex(data))
+    ams.run_for(ms=2500)
+    assert _bkp0r(ams) != BL_BOOT_REQ_MAGIC and _cause(ams) != SOFTWARE
+
+
+def test_the_trigger_is_refused_while_energised(ams):
+    """Refused in Precharge (energised): no reset, reported in 0x6C0."""
+    can, io = ams.can("can_acu"), ams.io("ams")
+    can.send_periodic("vcu", 0x100, bytes([0, 0, 0x02]), 10)     # 0 V, dc_bus_valid
+    io.set_input("sysbus.gpioPortF", 9, True)                    # TSMS
+    ams.run_for(ms=200)
+    io.set_input("sysbus.gpioPortF", 10, True)                   # DASH_CHG edge
+    ams.run_for(ms=100)
+    io.set_input("sysbus.gpioPortF", 10, False)
+    ams.run_for(ms=1100)                                         # 0x6C0 is 1 Hz
+    assert can.last(PIT_FSM).data[0] == PRECHARGE, "AMS did not energise"
+    can.send(*BOOT_TRIGGER)                                      # well inside PrechargeMaxMs (5 s)
+    ams.run_for(ms=1200)
+    status = can.last(PIT_FSM)
+    assert status.data[0] == PRECHARGE and status.data[2] & 0x08, \
+        f"0x6C0 {status.data.hex()}: refusal not reported, or left Precharge"
+    assert _bkp0r(ams) != BL_BOOT_REQ_MAGIC and _cause(ams) != SOFTWARE, "rebooted while energised"
