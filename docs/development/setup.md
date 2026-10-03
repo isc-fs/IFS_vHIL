@@ -24,6 +24,29 @@ Colima's Ubuntu image lacks `linux-modules-extra` for its shipped kernel, so
 `vm` moves it to the current generic kernel once and restarts. On a Linux
 host, load vcan and set `VHIL_DOCKER_CONTEXT=default`.
 
+### When a native test fails
+
+A failing test in `tests/sim` gets a **snapshot** of every Sim it touched,
+per board, in the pytest report (section `vhil snapshot`): virtual time, PC,
+LR and SP with their symbols, the core registers, the active exception and
+SCB fault registers, and the FreeRTOS view (running task, every task's state,
+priority and stack high-water mark), read from RAM through the ELF's symbols
+([`vhil/snapshot.py`](../../vhil/snapshot.py)). With `--sim-log-dir` (CI's
+`sim-logs` artifact) the full snapshot goes to
+`<sim-log-dir>/failures/<test>/<n>-<system>-<board>.txt` and the report keeps a
+few lines. It costs nothing until a test fails, and it only reads.
+
+To see how the firmware got there, re-run the test with `--vhil-trace`: each
+CPU keeps its last 4096 translation blocks (`--vhil-trace 20000` for more),
+and the snapshot adds them, symbolised, and collapsed into a call-ish trace
+(`[NRF24_BitBangTransfer -> HAL_GPIO_WritePin -> ...] x 3`). The hook runs
+on every block, so the emulation is 5-8x slower (`test_ecu_boot.py`: 17 s
+to 89 s); it is opt-in for that reason.
+
+```sh
+scripts/vhil-docker.sh sim -k heartbeat_only --vhil-trace     # results/sim-logs/failures/
+```
+
 ## Environment
 
 Linux, or WSL2 on Windows. The Renode SocketCAN bridge used from Phase 1 is
