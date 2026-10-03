@@ -141,7 +141,7 @@ python -m vhil.editor spec|to-graph|to-system|serve              # system editor
 ```
 
 In Docker (any host, including macOS): `scripts/vhil-docker.sh
-vm|fw|unit|smoke <s>|sim|speed|ifs-hil [suite]|shell` runs the same jobs
+vm|fw|unit|smoke <s>|sim|coverage|speed|ifs-hil [suite]|shell` runs the same jobs
 as CI ([`docs/development/setup.md`](docs/development/setup.md#docker-any-host-nothing-installed-natively)).
 
 Pinned versions: Renode **1.17.0**, Arm GNU **14.2.Rel1**. Bump deliberately,

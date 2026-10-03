@@ -14,11 +14,14 @@ go as fast as it can (`advance_immediately`, the default).
 Instrumentation (tests/sim/conftest.py turns it on for every Sim of a run
 through INSTRUMENT): `trace` keeps the last N translation blocks per CPU for
 failure snapshots (vhil/snapshot.py; a C# hook on every block, 5-8x
-slower).
+slower), `coverage_dir` logs every translated block per CPU for
+vhil/coverage.py (5-25% slower; a reset retranslates, and logs, everything).
 """
 from __future__ import annotations
 
 import itertools
+import json
+import os
 import re
 import subprocess
 import tempfile
@@ -39,6 +42,7 @@ TRACE_SOURCE = REPO / "models" / "renode" / "VhilTrace.cs"
 class Instrumentation:
     """Defaults for every Sim that doesn't set its own (conftest options)."""
     trace: int = 0                       # blocks kept per CPU; 0 = off
+    coverage_dir: Optional[Path] = None  # where translated-block logs go
     # Called with the Sim when a `with Sim(...)` block exits on an exception,
     # before Renode stops: the last chance to snapshot it (tests/sim/conftest.py).
     on_error_exit: Optional[Callable[["Sim"], None]] = None
@@ -47,6 +51,7 @@ class Instrumentation:
 INSTRUMENT = Instrumentation()
 _live: list["Sim"] = []          # started and not stopped yet
 _activity = itertools.count(1)   # bumped on every monitor command
+_coverage_seq = itertools.count()
 
 
 def live_sims() -> list["Sim"]:
@@ -187,9 +192,10 @@ class Sim:
                  renode: str = DEFAULT_RENODE, advance_immediately: bool = True,
                  seed: int = 1, log_path: Path | None = None,
                  params: dict[str, dict] | None = None,
-                 trace: Optional[int] = None):
+                 trace: Optional[int] = None, coverage_dir: Optional[Path] = None):
         """params overrides device params for this run, e.g.
-        {"sd": {"image": "card.img"}}. trace defaults to INSTRUMENT's."""
+        {"sd": {"image": "card.img"}}. trace and coverage_dir default to
+        INSTRUMENT's."""
         self.system = System(Path(system))
         for name, values in (params or {}).items():
             dev = self.system.devices[name]
@@ -204,6 +210,8 @@ class Sim:
         self.renode, self.advance_immediately, self.seed = renode, advance_immediately, seed
         self.log_path = log_path
         self.trace_blocks = INSTRUMENT.trace if trace is None else trace
+        self.coverage_dir = INSTRUMENT.coverage_dir if coverage_dir is None else coverage_dir
+        self.coverage_logs: dict[str, Path] = {}
         self.last_activity = 0
         self._mach: Optional[str] = None
         self._proc = self._monitor = None
@@ -233,8 +241,26 @@ class Sim:
             for board in self.system.boards:
                 m.execute(f'emulation CreateVhilTrace "vhil_trace_{board}" "{board}" '
                           f'{self.trace_blocks}')
+        if self.coverage_dir:
+            self._start_coverage(Path(self.coverage_dir))
         _live.append(self)
         return self
+
+    def _start_coverage(self, root: Path) -> None:
+        """Renode logs every block it translates, with its disassembly, to the
+        CPU's LogFile. A block is translated the first time it runs, so the
+        addresses in the log are the code that executed (vhil/coverage.py)."""
+        raw = root / "raw"
+        raw.mkdir(parents=True, exist_ok=True)
+        stem = f"{self.system.id}-{os.getpid()}-{next(_coverage_seq)}"
+        for board in self.system.boards:
+            log = (raw / f"{stem}-{board}.tblog").resolve()
+            self.monitor(f"cpu LogFile @{log.as_posix()}", board=board)
+            self.monitor("cpu LogTranslatedBlocks true", board=board)
+            self.coverage_logs[board] = log
+            (raw / f"{stem}-{board}.json").write_text(json.dumps(
+                {"system": self.system.id, "board": board, "log": log.name,
+                 "images": [str(p) for p in self.images_of(board)]}, indent=1))
 
     def images_of(self, board: str) -> list[Path]:
         """The ELF images a board's CPU runs: its app, then its bootloader."""

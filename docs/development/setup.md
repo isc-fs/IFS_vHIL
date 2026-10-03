@@ -13,6 +13,7 @@ scripts/vhil-docker.sh fw          # build ECU + AMS from their systems
 scripts/vhil-docker.sh unit
 scripts/vhil-docker.sh smoke ecu   # or ams
 scripts/vhil-docker.sh sim
+scripts/vhil-docker.sh coverage   # firmware coverage of tests/sim (below)
 scripts/vhil-docker.sh ifs-hil     # IFS_HIL's ECU smoke suite over vcan can0..can2
 scripts/vhil-docker.sh editor      # system editor on http://localhost:5050
 scripts/vhil-docker.sh shell
@@ -45,6 +46,25 @@ to 89 s); it is opt-in for that reason.
 
 ```sh
 scripts/vhil-docker.sh sim -k heartbeat_only --vhil-trace     # results/sim-logs/failures/
+```
+
+### Firmware coverage
+
+`--vhil-coverage DIR` records which code of each image ran
+([`vhil/coverage.py`](../../vhil/coverage.py)): Renode logs every block it
+translates, and a block is translated the first time it runs. The cost is
+5% on a plain ECU boot and about 25% over a mix of suites with power cycles
+(a reset flushes the translation cache, so the code is logged again), which
+is why CI doesn't turn it on. At the end of the session DIR holds, per image, `<image>.info`
+(lcov, files with DWARF line info), `<image>.functions.tsv` (every function,
+hit or not) and `summary.txt` / `summary.md` (functions and lines hit per
+source file). Hits are 0/1, not counts; an image without line info (the CAN
+bootloader's Release build) gets function coverage only.
+
+```sh
+scripts/vhil-docker.sh coverage 'test_ecu_*'                  # results/coverage/
+python -m vhil.coverage cov-ams/ cov-ecu/ -o cov/            # merge runs (their raw/ logs)
+genhtml results/coverage/ECU08.info -o results/coverage/html  # lcov's HTML, if installed
 ```
 
 ## Environment
