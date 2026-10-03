@@ -100,6 +100,12 @@ class CanBus:
     def send(self, can_id: int, data: bytes = b"", extended: bool = False) -> None:
         self.sim.monitor(f'{self.probe} Send {can_id} "{data.hex()}" {_arg(extended)}')
 
+    def send_batch(self, frames) -> None:
+        """Standard frames [(id, data), ...] now, in order, in one call."""
+        items = " ".join(f"{can_id}:{bytes(data).hex()}" for can_id, data in frames)
+        if items:
+            self.sim.monitor(f'{self.probe} SendBatch "{items}"')
+
     def send_at(self, at_us: int, can_id: int, data: bytes = b"", extended: bool = False) -> None:
         self.sim.monitor(f'{self.probe} SendAt {at_us} {can_id} "{data.hex()}" {_arg(extended)}')
 
