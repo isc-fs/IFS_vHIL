@@ -10,6 +10,7 @@ FROM python:3.11-bookworm
 ARG TARGETARCH
 ARG RENODE_VERSION=1.17.0
 ARG ARM_GNU_VERSION=14.2.rel1
+ARG CAN_FLASHER_VERSION=3.1.1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         cmake ninja-build git iproute2 can-utils xz-utils dosfstools mtools \
@@ -38,6 +39,17 @@ RUN case "$TARGETARCH" in \
     && mkdir -p /opt/arm-gnu \
     && tar xJf /tmp/gcc.tar.xz -C /opt/arm-gnu --strip-components=1 \
     && rm /tmp/gcc.tar.xz
+
+# can-flasher (`cf`, isc-fs/can-flasher): the host side of the CAN
+# bootloader, which IFS_HIL's flashing tests drive over SocketCAN.
+RUN case "$TARGETARCH" in \
+        amd64) triple=x86_64-unknown-linux-gnu ;; \
+        arm64) triple=aarch64-unknown-linux-gnu ;; \
+    esac \
+    && curl -fsSL "https://github.com/isc-fs/can-flasher/releases/download/v${CAN_FLASHER_VERSION}/can-flasher-v${CAN_FLASHER_VERSION}-${triple}.tar.gz" \
+       | tar xz -C /tmp \
+    && install -m 0755 "/tmp/can-flasher-v${CAN_FLASHER_VERSION}-${triple}/can-flasher" /usr/local/bin/can-flasher \
+    && rm -rf /tmp/can-flasher-*
 
 # vHIL + renode-test (Renode 1.17's tests/requirements.txt) + IFS_HIL's core
 # dependencies (its pyproject; the Pi-only [bench] extras stay out).

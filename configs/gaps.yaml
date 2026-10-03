@@ -9,3 +9,13 @@
 - path: tests/hil/vcu/test_block_f_real_ams.py
   systems: [ecu, ecu-bl]
   why: "needs a live AMS on the ACU bus: run it on systems/ecu-ams.yaml (M3, #11)"
+
+- path: tests/hil/vcu/test_block_a_boot.py::test_a002_bl_discover
+  systems: [ecu, ecu-ams]
+  why: "needs the CAN bootloader on the board: run it on systems/ecu-bl.yaml (#4)"
+- path: tests/hil/vcu/test_block_a_boot.py::test_a006_bl_round_trip
+  systems: [ecu, ecu-ams]
+  why: "needs the CAN bootloader on the board: run it on systems/ecu-bl.yaml (#4)"
+- path: tests/hil/vcu/test_block_a_boot.py::test_a003_flash_and_jump
+  systems: [ecu, ecu-ams]
+  why: "needs the CAN bootloader on the board: run it on systems/ecu-bl.yaml (#4)"

@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# sudo for IFS_HIL's suites on the virtual bench; run-ifs-hil.sh puts this
+# directory first on PATH.
+#
+# IFS_HIL's bus fixtures retime each CAN link: `ip link set canN down`,
+# `... type can bitrate B sample-point S`, txqueuelen, `up`. On a vcan link
+# bit timing doesn't exist (Renode doesn't model it either, see
+# configs/peripherals.yaml): the `type can` call fails, and the `down` only
+# breaks every socket open on the link (#63). On vcan links those two are
+# no-ops here; everything else runs, through the real sudo where there is
+# one, else directly (the Docker image runs as root).
+opts=()
+while [ "${1#-}" != "$1" ]; do opts+=("$1"); shift; done   # sudo's own options (-n)
+if [ "$1 $2 $3" = "ip link set" ] && ip -details link show "$4" 2>/dev/null | grep -qw vcan; then
+    case " ${*:5} " in
+        " down "|" type can "*) exit 0 ;;
+    esac
+fi
+here=$(cd "$(dirname "$0")" && pwd)
+real=$(PATH=$(printf '%s' "$PATH" | tr ':' '\n' | grep -vx "$here" | paste -sd: -) command -v sudo)
+if [ -n "$real" ]; then
+    exec "$real" ${opts[@]+"${opts[@]}"} "$@"
+fi
+exec "$@"

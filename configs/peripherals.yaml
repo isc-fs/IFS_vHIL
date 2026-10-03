@@ -68,6 +68,10 @@
 # The CAN bootloader's accesses (boards with a bootloader, e.g. ecu-bl.yaml).
 
 - peripheral: flashController
+  offsets: [0xC]
+  why: "CR1.PSIZE1, the programming parallelism (x8..x64). It sets how fast a flash word programs, not what is written, and the model programs instantly"
+
+- peripheral: flashController
   offsets: [0x14]
   why: "CCR1 clears of WRPERR/STRBERR/RDPERR/RDSERR. The model never sets those errors, so clearing them changes nothing"
 

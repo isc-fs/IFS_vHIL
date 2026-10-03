@@ -31,6 +31,10 @@ else
     echo "warning: can0..can2 not present; CAN-side tests will skip" >&2
 fi
 
+# vcan has no bit timing: IFS_HIL's bus-retiming sudo calls become no-ops
+# on vcan links (scripts/shims/sudo).
+export PATH="$here/scripts/shims:$PATH"
+
 cd "$ifs_hil"
 targets=$(python3 -m tools.bench suite --dut ecu --suite "$suite")
 firmware=(--vhil-firmware "ecu=$elf")

@@ -195,3 +195,96 @@ jobs:
             vhil-renode.log
             candump.log
           if-no-files-found: ignore
+
+  # #4: the ECU provisioned with the real CAN bootloader (systems/ecu-bl.yaml),
+  # and IFS_HIL's boot block: discover, round trip, flash and jump through
+  # can-flasher over vcan. A skip fails the job: it would mean the flashing
+  # path never ran.
+  ecu-bl:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      CAN_FLASHER_VERSION: 3.1.1
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check out IFS_HIL
+        uses: actions/checkout@v4
+        with:
+          repository: isc-fs/IFS_HIL
+          ref: ${{ inputs.ifs_hil_ref || 'dev' }}
+          path: ifs_hil
+
+      - name: Arm GNU toolchain (pinned like IFS_HIL's recipe)
+        uses: carlosperate/arm-none-eabi-gcc-action@v1
+        with:
+          release: '14.2.Rel1'
+
+      - name: Build the ECU and its bootloader from systems/ecu-bl.yaml
+        id: fw
+        env:
+          ECU_REF: ${{ inputs.ecu_ref }}
+        run: |
+          pip install -q pyyaml "jsonschema>=4"
+          python -m vhil.system build systems/ecu-bl.yaml --workdir "$RUNNER_TEMP/fw" \
+            ${ECU_REF:+--ref "ecu=$ECU_REF"} | tee built.txt
+          echo "ecu=$(sed -n 's/^ecu=//p' built.txt)" >> "$GITHUB_OUTPUT"
+          echo "bootloader=$(sed -n 's/^ecu.bootloader=//p' built.txt)" >> "$GITHUB_OUTPUT"
+
+      - name: Install Renode ${{ env.RENODE_VERSION }}
+        run: |
+          curl -sSL -o renode.tar.gz \
+            "https://github.com/renode/renode/releases/download/v${RENODE_VERSION}/renode-${RENODE_VERSION}.linux-portable.tar.gz"
+          mkdir -p "$RUNNER_TEMP/renode"
+          tar xzf renode.tar.gz -C "$RUNNER_TEMP/renode" --strip-components=1
+
+      - name: Install can-flasher ${{ env.CAN_FLASHER_VERSION }}
+        run: |
+          curl -fsSL "https://github.com/isc-fs/can-flasher/releases/download/v${CAN_FLASHER_VERSION}/can-flasher-v${CAN_FLASHER_VERSION}-x86_64-unknown-linux-gnu.tar.gz" \
+            | tar xz -C "$RUNNER_TEMP"
+          sudo install -m 0755 "$RUNNER_TEMP/can-flasher-v${CAN_FLASHER_VERSION}-x86_64-unknown-linux-gnu/can-flasher" /usr/local/bin/can-flasher
+          can-flasher --version
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install IFS_HIL (core deps only, as off-bench)
+        run: pip install -q -e ifs_hil
+
+      - name: Create vcan can0 / can1 / can2
+        run: |
+          sudo apt-get install -y -qq "linux-modules-extra-$(uname -r)" >/dev/null
+          sudo modprobe vcan
+          for i in 0 1 2; do
+            sudo ip link add "can$i" type vcan
+            sudo ip link set "can$i" txqueuelen 1000 up
+          done
+
+      - name: Run IFS_HIL's boot block through the bootloader
+        env:
+          RENODE: ${{ runner.temp }}/renode/renode
+          VHIL_SYSTEM: systems/ecu-bl.yaml
+          VHIL_FIRMWARE: ecu.bootloader=${{ steps.fw.outputs.bootloader }}
+        run: |
+          set +e
+          scripts/run-ifs-hil.sh ifs_hil "${{ steps.fw.outputs.ecu }}" \
+            tests/hil/vcu/test_block_a_boot.py \
+            --vhil-log "$GITHUB_WORKSPACE/vhil-renode.log" \
+            --junitxml="$GITHUB_WORKSPACE/junit.xml" | tee pytest.txt
+          rc=${PIPESTATUS[0]}
+          if grep -q "^SKIPPED" pytest.txt; then
+            echo "::error::a boot-block test skipped: the flashing path did not run"; exit 1
+          fi
+          exit $rc
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ifs-hil-ecu-bl-virtual
+          path: |
+            junit.xml
+            pytest.txt
+            vhil-renode.log
+          if-no-files-found: ignore
