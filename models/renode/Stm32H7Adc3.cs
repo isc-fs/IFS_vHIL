@@ -21,6 +21,11 @@
 // A differential channel reads INP<n> minus the pin that is its INN<n>,
 // given by negativeInputs ("n:m" = INN<n> shares the pin of INP<m>).
 //
+// Fault injection: while ConversionFault is true a started conversion never
+// ends (no EOC, DR unchanged), as when the ADC kernel clock is lost; the
+// HAL's poll for EOC then times out.
+//     sysbus.adc3 ConversionFault true
+//
 using System;
 using System.Collections.Generic;
 using Antmicro.Renode.Core;
@@ -48,6 +53,9 @@ namespace Antmicro.Renode.Peripherals.Analog
 
         // Conversions done since reset: lets a test see the firmware sample.
         public ulong Conversions { get; private set; }
+
+        // Fault injection (see the header): started conversions never end.
+        public bool ConversionFault { get; set; }
 
         public void SetVoltage(ulong microvolts, int channel)
         {
@@ -188,6 +196,10 @@ namespace Antmicro.Renode.Peripherals.Analog
         // rank: EOS, then wrap (continuous) or stop (single, ADSTART clears).
         private void ConvertNext()
         {
+            if(ConversionFault)
+            {
+                return;
+            }
             var length = (int)(regs[SQR1 / 4] & 0xF) + 1;
             regs[DR / 4] = Convert(SequenceChannel(rank));
             Conversions++;
