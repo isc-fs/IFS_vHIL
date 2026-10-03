@@ -252,6 +252,15 @@ class Sim:
         sim.call("sysbus.spi1.isospi.cells7", "SetCell", 2, 3480)."""
         return self.monitor(" ".join([path, method] + [_arg(a) for a in args]), board=board)
 
+    def power_cycle(self, board: str) -> None:
+        """Cut and restore a board's power, as the virtual broker's relay does
+        (vhil.broker.power_on_commands): a cold boot, the backup domain wiped
+        when the board has no VBAT."""
+        from vhil.broker import power_on_commands
+        vbat = self.system.boards[board].board.get("vbat", True)
+        for command in power_on_commands(vbat):
+            self.monitor(command, board=board)
+
     def read_symbol(self, board: str, symbol: str, size: int = 1) -> int:
         """Read a firmware global by its linker symbol (1, 2 or 4 bytes)."""
         address = self.monitor(f'sysbus GetSymbolAddress "{symbol}"', board=board).strip()
