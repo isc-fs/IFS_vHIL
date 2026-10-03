@@ -2,6 +2,8 @@ name: Native tests (virtual time)
 
 # Builds the firmware each system declares, then runs tests/sim on Renode
 # through vhil.sim: assertions on virtual timestamps, not wall clock.
+# Sharded by suite so the whole set doesn't serialise every PR; the `sim`
+# job (the required check) passes only when every shard did.
 
 on:
   pull_request:
@@ -13,9 +15,14 @@ env:
   RENODE_VERSION: 1.17.0
 
 jobs:
-  sim:
+  shard:
+    name: sim (${{ matrix.shard }})
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [ams, ecu, other]
     steps:
       - uses: actions/checkout@v4
 
@@ -49,16 +56,25 @@ jobs:
       - name: FAT tools for SD card images
         run: sudo apt-get install -y -qq dosfstools mtools >/dev/null
 
-      - name: Run tests/sim
+      - name: Run this shard of tests/sim
         env:
           RENODE: ${{ runner.temp }}/renode/renode
           VHIL_ECU_ELF: ${{ steps.fw.outputs.ecu }}
           VHIL_AMS_ELF: ${{ steps.fw.outputs.ams }}
           VHIL_CAN_BOOTLOADER_ELF: ${{ steps.fw.outputs.bootloader }}
-        run: python -m pytest tests/sim -v --sim-log-dir sim-logs
+          SHARD: ${{ matrix.shard }}
+        run: |
+          # ams: test_ams_*, ecu: test_ecu_*, other: every other test file.
+          case "$SHARD" in
+            ams)   files=$(ls tests/sim/test_ams_*.py) ;;
+            ecu)   files=$(ls tests/sim/test_ecu_*.py) ;;
+            other) files=$(ls tests/sim/test_*.py | grep -v -e '/test_ams_' -e '/test_ecu_') ;;
+          esac
+          echo "$files"
+          python -m pytest $files -v --sim-log-dir sim-logs
 
       - name: Emulation speed on this runner
-        if: always()
+        if: always() && matrix.shard == 'ecu'
         env:
           RENODE: ${{ runner.temp }}/renode/renode
         run: |
@@ -70,6 +86,14 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: sim-logs
+          name: sim-logs-${{ matrix.shard }}
           path: sim-logs/
           if-no-files-found: ignore
+
+  sim:
+    needs: shard
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every shard passed
+        run: test "${{ needs.shard.result }}" = success
