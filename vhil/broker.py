@@ -21,8 +21,10 @@ from __future__ import annotations
 
 import argparse
 import logging
+import re
 import sys
 import threading
+import time
 from pathlib import Path
 
 
@@ -136,7 +138,47 @@ def make_backend(fake_cls, monitor: RenodeMonitor, config: dict):
             h["backend"] = "virtual"
             return h
 
-    return VirtualHardwareManager()
+    backend = VirtualHardwareManager()
+    backend.monitor_lock = lock
+    return backend
+
+
+def virtual_seconds(info: str) -> float:
+    """Elapsed virtual time from `emulation GetTimeSourceInfo`."""
+    h, m, s = re.search(r"Elapsed Virtual Time: (\d+):(\d+):([\d.]+)", info).groups()
+    return int(h) * 3600 + int(m) * 60 + float(s)
+
+
+def watch_pacing(monitor: RenodeMonitor, lock: threading.Lock,
+                 period_s: float = 0.25, stall_s: float = 0.15,
+                 iterations: int | None = None) -> None:
+    """Log whenever virtual time falls behind host time by more than stall_s
+    within one period. IFS_HIL's suites time the bench by the wall clock;
+    when Renode stops advancing (host starved, a long monitor command) and
+    later repays the interval by running fast, they see a silent bus and then
+    a burst (#63). The log line pins a wall-clock failure on the emulation."""
+    last_wall = last_virt = None
+    failed = False
+    while iterations is None or iterations > 0:
+        if iterations is not None:
+            iterations -= 1
+        time.sleep(period_s)
+        try:
+            with lock:
+                virt = virtual_seconds(monitor.execute("emulation GetTimeSourceInfo"))
+        except Exception as e:                 # monitor busy or emulation gone
+            if not failed:
+                log.warning("pacing watch: cannot read virtual time (%s)", e)
+                failed = True
+            continue
+        wall = time.monotonic()
+        if last_wall is not None:
+            lag = (wall - last_wall) - (virt - last_virt)
+            if lag > stall_s:
+                log.warning("emulation fell %.0f ms behind host time (%.0f ms wall, "
+                            "%.0f ms virtual)", lag * 1000, (wall - last_wall) * 1000,
+                            (virt - last_virt) * 1000)
+        last_wall, last_virt = wall, virt
 
 
 def main(argv=None) -> int:
@@ -160,6 +202,8 @@ def main(argv=None) -> int:
     config = System(args.system).bench_config()
     monitor = RenodeMonitor(args.renode_port)
     backend = make_backend(FakeHardwareManager, monitor, config)
+    threading.Thread(target=watch_pacing, args=(monitor, backend.monitor_lock),
+                     name="pacing", daemon=True).start()
     log.info("virtual broker on %s (Renode monitor :%d)", args.socket, args.renode_port)
     serve(backend, args.socket)
     return 0
