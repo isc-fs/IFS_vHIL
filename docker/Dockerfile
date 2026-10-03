@@ -12,7 +12,7 @@ ARG RENODE_VERSION=1.17.0
 ARG ARM_GNU_VERSION=14.2.rel1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        cmake ninja-build git iproute2 can-utils xz-utils \
+        cmake ninja-build git iproute2 can-utils xz-utils dosfstools mtools \
         libicu72 libgtk-3-0 \
     && rm -rf /var/lib/apt/lists/*
 

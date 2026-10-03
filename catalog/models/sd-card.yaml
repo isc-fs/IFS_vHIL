@@ -1,13 +1,20 @@
 kind: model
 id: sd-card
 description: >-
-  SD card on an SD/MMC controller, in memory (Renode's built-in SD.SDCard).
+  SD card on an SD/MMC controller (Renode's built-in SD.SDCard), in memory
+  or backed by a card image (param image). The firmware does not format
+  cards: give it a FAT32 image to see it log.
   Fitting one matters even when nothing is read: with no card, Renode's
   STM32 SDMMC never sets CMDSENT, and the HAL's no-response command wait
   then spins for seconds.
 interface: {sdmmc: true}
 params:
   capacity: 0x8000000      # 128 MiB
+  # A card image file to back the card with ("" = in memory). Writes go to
+  # the file, so a test can read the card after a run.
+  image: ""
 backend: renode
 renode:
   type: SD.SDCard
+  params: {image: imageFile}
+  set_also: {image: {persistent: true}}

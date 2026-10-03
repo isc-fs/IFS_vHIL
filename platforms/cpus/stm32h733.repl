@@ -72,5 +72,15 @@ adc3_h73x: Analog.STM32H7_ADC3 @ sysbus 0x58026000
     negativeInputs: "3:7"
     IRQ -> nvic@127
 
+// SDMMC1 with its internal DMA, which the AMS's FatFs transfers use. Our
+// model, models/renode/Stm32H7Sdmmc.cs; stm32h7.repl's STM32HSDMMC only tags
+// IDMA. SDMMC1_BASE = D1_AHB1PERIPH_BASE + 0x7000, SDMMC1_IRQn = 49
+// (stm32h733xx.h:2219, 109). As for ADC3, the base platform's is taken off
+// the bus and this one takes its address.
+sdmmc: @ none
+
+sdmmc1: SD.STM32H7_SDMMC @ sysbus 0x52007000
+    IRQ -> nvic@49
+
 // SPI1 — the AMS's LTC6820 isoSPI master. The base platform only tags it.
 spi1: SPI.STM32H7_SPI @ sysbus 0x40013000

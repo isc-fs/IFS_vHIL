@@ -17,7 +17,7 @@ can:
 spi:
   SPI1: sysbus.spi1
 sdmmc:
-  SDMMC1: sysbus.sdmmc
+  SDMMC1: sysbus.sdmmc1
 gpio:
   # Software chip-select of SPI1 on the AMS (main.h: LTC_CS, PB9).
   PB9: {port: sysbus.gpioPortB, pin: 9}

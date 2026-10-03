@@ -223,8 +223,19 @@ class System:
         rn = dev["model_doc"]["renode"]
         local = lambda path: path.split(".", 1)[1] if path.startswith("sysbus.") else path
         params = self._params(dev)
-        body = [f"    {rn.get('params', {}).get(k, k)}: "
-                f"{str(v).lower() if isinstance(v, bool) else v}" for k, v in params.items()]
+        # An empty string is an unset param: left out, so Renode picks the
+        # constructor without it. A set one may bring arguments with it.
+        args = {}
+        for k, v in params.items():
+            if v == "":
+                continue
+            args[rn.get("params", {}).get(k, k)] = v
+            args.update(rn.get("set_also", {}).get(k, {}))
+        def value(v):
+            if isinstance(v, bool):
+                return str(v).lower()
+            return f'"{v}"' if isinstance(v, str) else v
+        body = [f"    {k}: {value(v)}" for k, v in args.items()]
         lines = []
         if "attach" in dev:
             for i in range(dev.get("count", 1)):

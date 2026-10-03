@@ -31,7 +31,7 @@ Blockers among the `virtual-needs` tests:
 |---|---|---|
 | ADC3 model for the H73x ([#19](https://github.com/isc-fs/IFS_vHIL/issues/19)) | 32 | ECU pedals (21), AMS pack current (11). Biggest single unblocker |
 | CAN bootloader emulation ([#4](https://github.com/isc-fs/IFS_vHIL/issues/4)) | 13 | Flash, jump, discover, jump reason |
-| SDMMC IDMA model | 7 | AMS SD logger. Today the mount fails, so the logger tests pass vacuously |
+| SDMMC IDMA model | 7 | AMS SD logger. Modelled (#21, `models/renode/Stm32H7Sdmmc.cs`): the AMS mounts a FAT32 card image, logs, and seals; `tests/sim/test_ams_sd.py` reads the card back |
 | ECU + AMS in one system (M3, [#11](https://github.com/isc-fs/IFS_vHIL/issues/11)) | 3 | ECU side of the real-AMS tests |
 | FDCAN bus-off injection hook | 2 | AMS recovery logic; real error physics stays physical |
 | RTC backup domain across warm reset | 2 | Error-latch persistence, HIL_CLEAR build |

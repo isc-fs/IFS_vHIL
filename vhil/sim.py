@@ -147,8 +147,17 @@ class BoardIO:
 class Sim:
     def __init__(self, system: Path | str, firmware: dict[str, Path | str], *,
                  renode: str = DEFAULT_RENODE, advance_immediately: bool = True,
-                 seed: int = 1, log_path: Path | None = None):
+                 seed: int = 1, log_path: Path | None = None,
+                 params: dict[str, dict] | None = None):
+        """params overrides device params for this run, e.g.
+        {"sd": {"image": "card.img"}}."""
         self.system = System(Path(system))
+        for name, values in (params or {}).items():
+            dev = self.system.devices[name]
+            unknown = set(values) - set(dev["model_doc"].get("params", {}))
+            if unknown:
+                raise ValueError(f"device '{name}': unknown params {sorted(unknown)}")
+            dev["params"] = {**dev.get("params", {}), **values}
         self.firmware = {b: Path(p).resolve() for b, p in firmware.items()}
         missing = set(self.system.boards) - set(self.firmware)
         if missing:
