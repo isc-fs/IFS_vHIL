@@ -22,7 +22,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [ams, ecu, other]
+        shard: [ams, ecu, ams-bootloader, bootloader, other]
     steps:
       - uses: actions/checkout@v4
 
@@ -64,11 +64,17 @@ jobs:
           VHIL_CAN_BOOTLOADER_ELF: ${{ steps.fw.outputs.bootloader }}
           SHARD: ${{ matrix.shard }}
         run: |
-          # ams: test_ams_*, ecu: test_ecu_*, other: every other test file.
+          # Flashing over CAN at the bus rate is minutes of emulation per
+          # image, so the *bootloader* files get shards of their own:
+          # ams-bootloader, and bootloader (the rest). ams: test_ams_*,
+          # ecu: test_ecu_*, other: every other test file.
+          bl='bootloader'
           case "$SHARD" in
-            ams)   files=$(ls tests/sim/test_ams_*.py) ;;
-            ecu)   files=$(ls tests/sim/test_ecu_*.py) ;;
-            other) files=$(ls tests/sim/test_*.py | grep -v -e '/test_ams_' -e '/test_ecu_') ;;
+            ams-bootloader) files=tests/sim/test_ams_bootloader.py ;;
+            bootloader) files=$(ls tests/sim/test_*.py | grep "$bl" | grep -v '/test_ams_') ;;
+            ams)   files=$(ls tests/sim/test_ams_*.py | grep -v "$bl") ;;
+            ecu)   files=$(ls tests/sim/test_ecu_*.py | grep -v "$bl") ;;
+            other) files=$(ls tests/sim/test_*.py | grep -v -e '/test_ams_' -e '/test_ecu_' -e "$bl") ;;
           esac
           echo "$files"
           python -m pytest $files -v --sim-log-dir sim-logs
