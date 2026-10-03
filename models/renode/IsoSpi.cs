@@ -235,7 +235,7 @@ namespace Antmicro.Renode.Peripherals.SPI
             corruptNext = 0;
             corrupting = false;
             commandCounts.Clear();
-            badCommandPec = badWritePec = wakes = 0;
+            badCommandPec = badWritePec = wakes = adcvWhileDischarging = 0;
             rx.Clear();
             relayed.Clear();
             reply = null;
@@ -416,6 +416,11 @@ namespace Antmicro.Renode.Peripherals.SPI
         // DCC (discharge) bits last written, cells 1..12.
         public int DischargeBits => config[4] | ((config[5] & 0x0F) << 8);
 
+        // Cell conversions started with a discharge switch on: the host is
+        // meant to quiesce balancing first, or the reading includes the
+        // balance current's IR drop.
+        public int AdcvWhileDischarging => adcvWhileDischarging;
+
         public int CommandCount(int opcode)
         {
             return commandCounts.TryGetValue((ushort)opcode, out var n) ? n : 0;
@@ -468,6 +473,10 @@ namespace Antmicro.Renode.Peripherals.SPI
 
             if(IsAdcv(opcode))
             {
+                if(DischargeBits != 0)
+                {
+                    adcvWhileDischarging++;   // the conversion sees the balance load
+                }
                 Array.Copy(cells, cellResults, CellsPerIc);
                 return;
             }
@@ -718,6 +727,7 @@ namespace Antmicro.Renode.Peripherals.SPI
         private byte[] reply;
         private ushort? command;
         private int badCommandPec;
+        private int adcvWhileDischarging;
         private int badWritePec;
         private int wakes;
     }
