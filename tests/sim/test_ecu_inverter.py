@@ -306,7 +306,7 @@ def test_inverter_leaving_the_drive_is_redriven(ecu, left_to):
 
 
 @pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
-    "ECU firmware gap: inv_present (control_task.cpp:92, InvStaleMs=200) is "
+    "isc-fs/IFS08-CE-ECU#246: inv_present (control_task.cpp:92, InvStaleMs=200) is "
     "computed but never read by Controller::step (control.cpp:187-233, 300-308); "
     "a silent inverter in Active keeps its held inv_state and keeps being "
     "commanded TorqueEnable + torque"))
