@@ -1,0 +1,16 @@
+/* SPDX-License-Identifier: proprietary */
+/*
+ * 0x4A0  AMS_status -- RX from the AMS. Lets the ECU distinguish AMS Start
+ * (re-armable) from Error (latched) -- byte 0 fsm_state == 5 means Error, in
+ * which case the ECU inhibits instead of retrying precharge. AMS-owned layout
+ * (see IFS08-CE-AMS ams_status.def); the ECU consumes fsm_state + ams_ok.
+ */
+
+CAN_MSG(AMS_status, 0x4A0, 8, "AMS", 500)
+    FIELD_LE (fsm_state,          uint8_t,  0, 8,  1, 0, "enum")
+    FIELD_LE (ams_ok,             uint8_t,  1, 8,  1, 0, "bool")
+    FIELD_LE (module_online_mask, uint8_t,  2, 8,  1, 0, "bitmask")
+    FIELD_LE (reserved_b3,        uint8_t,  3, 8,  1, 0, "")
+    FIELD_BE (min_cell_mV,        uint16_t, 4, 16, 1, 0, "mV")
+    FIELD_BE (max_cell_mV,        uint16_t, 6, 16, 1, 0, "mV")
+CAN_MSG_END(AMS_status)
