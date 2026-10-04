@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import re
 import sqlite3
@@ -37,11 +38,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Literal, Optional, Union
 
-from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from vhil.server.workspace import SYSTEM_ID
 from vhil.system import System, SystemError
+
+log = logging.getLogger("vhil.server.runs")
 
 STATES = ("queued", "running", "passed", "failed", "error", "cancelled")
 TERMINAL = frozenset({"passed", "failed", "error", "cancelled"})
@@ -56,7 +60,7 @@ MAX_ATTEMPTS = 2
 
 # A git ref we pass to `git clone -b` and use in a directory name: no option
 # look-alikes, no path climbing.
-_REF = re.compile(r"^(?!-)(?!.*\.\.)[\w./-]{1,100}$")
+_REF = re.compile(r"^(?!-)(?!.*\.\.)[\w./-]{1,100}\Z", re.ASCII)
 _SELECT = re.compile(r"^tests/(?!.*\.\.)[\w/.-]+\.py(::[\w\[\]\-.,=]+)*$")
 _HEX = re.compile(r"^([0-9a-fA-F]{2})*$")
 
@@ -168,6 +172,14 @@ class RunRequest(_Model):
     firmware: dict[str, Optional[str]] = {}
     scenario: Scenario
 
+    @field_validator("system")
+    @classmethod
+    def _system(cls, v: str) -> str:
+        if not SYSTEM_ID.match(v):
+            raise ValueError("system must be a system id: lowercase letters, digits and '-', "
+                             "at most 64")
+        return v
+
     @field_validator("firmware")
     @classmethod
     def _refs(cls, v: dict) -> dict:
@@ -242,14 +254,15 @@ CREATE TABLE IF NOT EXISTS runs (
     worker     TEXT,
     heartbeat  REAL,
     attempts   INTEGER NOT NULL DEFAULT 0,
-    ref_name   TEXT NOT NULL DEFAULT ''
+    ref_name   TEXT NOT NULL DEFAULT '',
+    owner      TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS runs_state ON runs (state, id);
 """
 # Columns added after the first release: a database created before them
 # gets them on open.
 _ADDED = {"heartbeat": "REAL", "attempts": "INTEGER NOT NULL DEFAULT 0",
-          "ref_name": "TEXT NOT NULL DEFAULT ''"}
+          "ref_name": "TEXT NOT NULL DEFAULT ''", "owner": "TEXT NOT NULL DEFAULT ''"}
 
 
 class RunStore:
@@ -300,13 +313,15 @@ class RunStore:
         return _row(rows[0]) if rows else None
 
     def create(self, system: str, ref: str, firmware: dict, scenario: dict,
-               ref_name: str = "") -> int:
+               ref_name: str = "", owner: str = "") -> int:
         """A queued run. `ref`: the workspace commit its system file is read
-        at ("" outside git); `ref_name`: the branch/tag/commit it was asked as."""
+        at ("" outside git); `ref_name`: the branch/tag/commit it was asked as;
+        `owner`: the login of who started it ("dev" in dev mode)."""
         row = self._write(
-            "INSERT INTO runs (state, system, ref, firmware, scenario, created, ref_name) "
-            "VALUES ('queued', ?, ?, ?, ?, ?, ?) RETURNING id",
-            (system, ref, json.dumps(firmware), json.dumps(scenario), now_iso(), ref_name))
+            "INSERT INTO runs (state, system, ref, firmware, scenario, created, ref_name, owner) "
+            "VALUES ('queued', ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+            (system, ref, json.dumps(firmware), json.dumps(scenario), now_iso(), ref_name,
+             owner))
         return row["id"]
 
     def get(self, run_id: int) -> Optional[dict]:
@@ -504,6 +519,44 @@ def _kinds(text: Optional[str]) -> Optional[set]:
     return kinds
 
 
+# -- artifacts -------------------------------------------------------------------
+#
+# A run's directory holds what the firmware, the sim and pytest wrote, and a
+# pytest scenario runs any test of the workspace: none of it is the app's own
+# content. Served from the app's origin as text/html or image/svg+xml it would
+# run script there (stored XSS). So no artifact is ever rendered: text is
+# text/plain, anything else an attachment, and every response carries nosniff
+# and `Content-Security-Policy: sandbox` (no script, a unique origin) in case
+# a browser renders it anyway. The run page's views (JUnit, snapshots, logs)
+# fetch artifacts as text and escape them.
+
+ARTIFACT_HEADERS = {"X-Content-Type-Options": "nosniff",
+                    "Content-Security-Policy": "sandbox; default-src 'none'",
+                    "Cache-Control": "private, no-cache"}
+
+
+def _is_text(path: Path) -> bool:
+    with open(path, "rb") as f:
+        head = f.read(8192)
+    if b"\0" in head:
+        return False
+    try:
+        head.decode("utf-8")
+    except UnicodeDecodeError as e:
+        return e.start >= len(head) - 3      # a character cut by the 8 KiB window
+    return True
+
+
+def artifact_response(path: Path) -> FileResponse:
+    if _is_text(path):
+        return FileResponse(path, media_type="text/plain; charset=utf-8",
+                            content_disposition_type="inline", filename=path.name,
+                            headers=ARTIFACT_HEADERS)
+    return FileResponse(path, media_type="application/octet-stream",
+                        content_disposition_type="attachment", filename=path.name,
+                        headers=ARTIFACT_HEADERS)
+
+
 # -- runs at a saved ref -------------------------------------------------------------
 #
 # The editor saves a system as a one-file commit on a branch of the workspace
@@ -659,8 +712,24 @@ def router(settings, workspace) -> APIRouter:
             raise HTTPException(404, f"no run {run_id}")
         return run
 
+    def login(request: Request) -> str:
+        user = getattr(request.state, "user", None) or {}
+        return user.get("login") or ""
+
+    def may_cancel(request: Request, run: dict) -> bool:
+        """Its owner or an admin (VHIL_ADMINS); anyone in dev mode. A run
+        from before owners were recorded (owner "") is an admin's."""
+        if settings.auth == "dev":
+            return True
+        who = login(request)
+        return bool(who) and (who.lower() == run.get("owner", "").lower()
+                              or settings.is_admin(who))
+
+    def shown(request: Request, run: dict) -> dict:
+        return {**run, "can_cancel": run["state"] not in TERMINAL and may_cancel(request, run)}
+
     @r.post("", status_code=201)
-    def create(req: RunRequest):
+    def create(req: RunRequest, request: Request):
         head = workspace.ref()
         commit = head
         if req.ref:
@@ -698,24 +767,30 @@ def router(settings, workspace) -> APIRouter:
         if errors:
             raise HTTPException(422, errors)
         run_id = store.create(req.system, commit, req.firmware, req.scenario.model_dump(),
-                              ref_name=req.ref or "")
+                              ref_name=req.ref or "", owner=login(request))
         return {"run_id": run_id}
 
     @r.get("")
-    def history(limit: int = Query(100, ge=1, le=1000), state: Optional[str] = None,
-                system: Optional[str] = None):
+    def history(request: Request, limit: int = Query(100, ge=1, le=1000),
+                state: Optional[str] = None, system: Optional[str] = None):
         if state is not None and state not in STATES:
             raise HTTPException(422, f"unknown state '{state}'")
-        return store.list(limit, state, system)
+        return [shown(request, run) for run in store.list(limit, state, system)]
 
     @r.get("/{run_id}")
-    def get(run_id: int):
-        return run_or_404(run_id)
+    def get(run_id: int, request: Request):
+        return shown(request, run_or_404(run_id))
 
     @r.post("/{run_id}/cancel")
-    def cancel(run_id: int):
-        run_or_404(run_id)
-        return store.cancel(run_id)
+    def cancel(run_id: int, request: Request):
+        run = run_or_404(run_id)
+        if not may_cancel(request, run):
+            raise HTTPException(403, f"run {run_id} is {run.get('owner') or 'nobody'}'s: only its "
+                                     f"owner or an admin may cancel it")
+        if run.get("owner", "").lower() != login(request).lower():
+            log.warning("run %s (owner %r) cancelled by admin %r", run_id, run.get("owner"),
+                        login(request))
+        return shown(request, store.cancel(run_id))
 
     @r.get("/{run_id}/trace")
     def trace(run_id: int, since_us: int = Query(0, ge=0), kinds: Optional[str] = None,
@@ -745,7 +820,7 @@ def router(settings, workspace) -> APIRouter:
         path = (root / name).resolve()
         if name.startswith("/") or not path.is_relative_to(root) or not path.is_file():
             raise HTTPException(404, f"no artifact '{name}'")
-        return FileResponse(path)
+        return artifact_response(path)
 
     @r.websocket("/{run_id}/live")
     async def live(ws: WebSocket, run_id: int, kinds: Optional[str] = None):

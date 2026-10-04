@@ -2,8 +2,10 @@
 scenario executor against a fake Sim. The real Sim end to end is
 tests/sim/test_server_runs.py."""
 import json
+import sqlite3
 import threading
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -947,3 +949,101 @@ def test_live_restarts_when_a_new_attempt_replaces_the_trace(client, settings, s
             got.append(rec)
     t.join()
     assert got == TRACE_RECORDS + TRACE_RECORDS[:1]
+
+
+# -- ownership ------------------------------------------------------------------------
+
+def github_app(settings, monkeypatch, admins=()):
+    monkeypatch.setenv("VHIL_GITHUB_CLIENT_ID", "client-id")
+    monkeypatch.setenv("VHIL_GITHUB_CLIENT_SECRET", "client-secret")
+    monkeypatch.setenv("VHIL_SESSION_SECRET", "test-session-secret-0123456789abcdef")
+    monkeypatch.delenv("VHIL_PUBLIC_URL", raising=False)
+    monkeypatch.delenv("VHIL_GITHUB_APP_ID", raising=False)
+    return create_app(replace(settings, auth="github", admins=frozenset(admins)))
+
+
+def as_user(app, login):
+    """A client signed in as `login` (a session as the OAuth callback makes it)."""
+    c = TestClient(app)
+    cookie, session = app.state.auth.new_session({"login": login, "name": login, "avatar_url": ""})
+    c.cookies.set("vhil_session", cookie)
+    c.headers["X-CSRF-Token"] = app.state.auth.csrf_token(session)
+    return c
+
+
+def test_a_run_records_its_owner_and_only_they_or_an_admin_may_cancel_it(settings, monkeypatch):
+    app = github_app(settings, monkeypatch, admins={"carol"})
+    alice, bob, carol = (as_user(app, n) for n in ("alice", "bob", "Carol"))
+    first = post(alice).json()["run_id"]
+    second = post(alice).json()["run_id"]
+    assert alice.get(f"/api/runs/{first}").json()["owner"] == "alice"
+    assert alice.get(f"/api/runs/{first}").json()["can_cancel"] is True
+    assert {r["id"]: r["can_cancel"] for r in bob.get("/api/runs").json()} == {first: False,
+                                                                               second: False}
+    r = bob.post(f"/api/runs/{first}/cancel")
+    assert r.status_code == 403 and "alice" in r.text
+    assert alice.get(f"/api/runs/{first}").json()["state"] == "queued"
+    assert alice.post(f"/api/runs/{first}/cancel").json()["state"] == "cancelled"
+    # An admin (VHIL_ADMINS, case-insensitive) may cancel anyone's run.
+    assert carol.get(f"/api/runs/{second}").json()["can_cancel"] is True
+    assert carol.post(f"/api/runs/{second}/cancel").json()["state"] == "cancelled"
+
+
+def test_a_run_from_before_owners_is_an_admins_to_cancel(settings, monkeypatch, store):
+    app = github_app(settings, monkeypatch, admins={"carol"})
+    run_id = store.create("ecu", "", {}, RUN)       # owner ''
+    assert as_user(app, "alice").post(f"/api/runs/{run_id}/cancel").status_code == 403
+    assert as_user(app, "carol").post(f"/api/runs/{run_id}/cancel").status_code == 200
+
+
+def test_dev_mode_runs_belong_to_dev_and_anyone_cancels(client):
+    run_id = post(client).json()["run_id"]
+    run = client.get(f"/api/runs/{run_id}").json()
+    assert run["owner"] == "dev" and run["can_cancel"] is True
+
+
+def test_an_old_database_gets_the_owner_column(tmp_path):
+    db = sqlite3.connect(tmp_path / "old.db")
+    db.execute("CREATE TABLE runs (id INTEGER PRIMARY KEY AUTOINCREMENT, state TEXT NOT NULL, "
+               "system TEXT NOT NULL, ref TEXT NOT NULL DEFAULT '', firmware TEXT NOT NULL DEFAULT "
+               "'{}', scenario TEXT NOT NULL, created TEXT NOT NULL, started TEXT, finished TEXT, "
+               "virtual_us INTEGER NOT NULL DEFAULT 0, summary TEXT NOT NULL DEFAULT '{}', "
+               "worker TEXT)")
+    db.execute("INSERT INTO runs (state, system, scenario, created) VALUES ('queued', 'ecu', '{}', 'x')")
+    db.commit()
+    db.close()
+    assert RunStore(tmp_path / "old.db").get(1)["owner"] == ""
+
+
+@pytest.mark.parametrize("system", ["../ecu", "ECU", "ecu/x", "-ecu", "ecu\n", "e" * 65])
+def test_the_run_requests_system_is_a_system_id(client, system):
+    r = client.post("/api/runs", json={"system": system, "scenario": RUN})
+    assert r.status_code == 422 and "system id" in r.text
+
+
+@pytest.mark.parametrize("ref", ["feаt/x", "a\nb", "dev\n", "-x"])
+def test_refs_are_plain_ascii(client, ref):
+    assert post(client, ref=ref).status_code == 422
+    assert post(client, firmware={"ecu": ref}).status_code == 422
+
+
+# -- artifacts are never rendered (stored XSS) ---------------------------------------------
+
+def test_artifacts_are_plain_text_or_attachments_never_markup(client, settings):
+    run_id = post(client).json()["run_id"]
+    d = settings.results / str(run_id)
+    d.mkdir(parents=True)
+    (d / "x.html").write_text("<script>alert(1)</script>")
+    (d / "x.svg").write_text('<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"/>')
+    (d / "blob.bin").write_bytes(b"\x00\x01<html>\xff")
+    for name in ("x.html", "x.svg"):
+        r = client.get(f"/api/runs/{run_id}/artifacts/{name}")
+        assert r.status_code == 200 and r.text.startswith("<")
+        assert r.headers["content-type"] == "text/plain; charset=utf-8"
+        assert r.headers["x-content-type-options"] == "nosniff"
+        assert r.headers["content-security-policy"].startswith("sandbox")
+    r = client.get(f"/api/runs/{run_id}/artifacts/blob.bin")
+    assert r.headers["content-type"] == "application/octet-stream"
+    assert r.headers["content-disposition"].startswith("attachment")
+    assert r.headers["content-security-policy"].startswith("sandbox")
+    assert r.content == b"\x00\x01<html>\xff"

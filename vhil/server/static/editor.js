@@ -23,7 +23,7 @@ async function call(method, path, body) {
     const d = data.detail;
     const errors = d?.errors ?? (Array.isArray(d) ? d.map((e) => `${e.loc.join(".")}: ${e.msg}`)
       : [typeof d === "string" ? d : `${r.status} ${r.statusText}`]);
-    throw Object.assign(new Error(errors.join("; ")), { errors, status: r.status });
+    throw Object.assign(new Error(errors.join("; ")), { errors, status: r.status, detail: d });
   }
   return data;
 }
@@ -235,9 +235,19 @@ export async function editorPage(view, initialId) {
     if (!state.id) throw new Error("open a system first");
     const body = { dataflow: await currentGraph(), branch: saveForm.elements.branch.value.trim(),
       message: saveForm.elements.message.value };
-    const out = state.isNew
-      ? await call("POST", "/api/systems", { id: state.id, ...body })
-      : await call("PUT", `/api/systems/${encodeURIComponent(state.id)}`, body);
+    const send = (b) => state.isNew
+      ? call("POST", "/api/systems", { id: state.id, ...b })
+      : call("PUT", `/api/systems/${encodeURIComponent(state.id)}`, b);
+    let out;
+    try {
+      out = await send(body);
+    } catch (e) {
+      // Another member saved this branch last (vhil/server/systems_write.py):
+      // moving it is a takeover, which the server logs.
+      if (e.status !== 409 || !e.detail?.takeover) throw e;
+      if (!confirm(`${e.message}\n\nTake the branch over? This is logged.`)) throw e;
+      out = await send({ ...body, takeover: true });
+    }
     state.isNew = false;
     if (out.changed) {
       state.savedBranch = out.branch;
