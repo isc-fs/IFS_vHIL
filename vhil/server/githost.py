@@ -5,10 +5,10 @@ Two seams, each with a GitHub implementation and a fake for tests:
   GitHost     push a workspace branch, open a PR against the base branch
   RefLister   a firmware repo's branches and tags (git ls-remote)
 
-The GitHub implementations take a token from the environment
-(VHIL_GITHUB_TOKEN) for now. M5.5 swaps in GitHub App installation tokens
-(docs/architecture/m5-web-app.md, "Auth"): only `token` changes. Without a
-token the host is unavailable and the API says so (409); nothing is pushed.
+GitHubHost pushes and opens PRs with the GitHub App's installation token for
+this repository when the App is configured (vhil.server.github_app, M5.5),
+else with VHIL_GITHUB_TOKEN. Without either the host is unavailable and the
+API says so (409); nothing is pushed.
 """
 from __future__ import annotations
 
@@ -19,6 +19,11 @@ import tempfile
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
+from typing import Callable, Union
+
+# A token, or a function returning one when it is needed (an App installation
+# token is minted on use and renewed before it expires).
+Token = Union[str, Callable[[], str], None]
 
 
 class HostUnavailable(Exception):
@@ -56,15 +61,21 @@ class GitHost(ABC):
 
 
 class GitHubHost(GitHost):
-    def __init__(self, token: str | None, repo: str, api: str = "https://api.github.com"):
+    def __init__(self, token: Token, repo: str, api: str = "https://api.github.com"):
         self.token, self.repo, self.api = token, repo, api
 
     def _need_token(self) -> str:
         if not self.token:
             raise HostUnavailable(
-                "no GitHub credentials: set VHIL_GITHUB_TOKEN (contents + pull requests write "
-                f"on {self.repo}) for the API service, or wait for the GitHub App (M5.5). "
+                "no GitHub credentials: configure the GitHub App (VHIL_GITHUB_APP_ID / "
+                "VHIL_GITHUB_APP_KEY) or set VHIL_GITHUB_TOKEN (contents + pull requests write "
+                f"on {self.repo}) for the API service. "
                 "The branch was saved in the workspace; push it and open the PR by hand.")
+        if callable(self.token):
+            try:
+                return self.token()
+            except Exception as e:  # noqa: BLE001 - the App's own errors, network
+                raise HostError(f"no GitHub App token for {self.repo}: {e}")
         return self.token
 
     def push(self, workspace: Path, branch: str) -> None:
