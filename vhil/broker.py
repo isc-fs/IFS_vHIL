@@ -40,6 +40,16 @@ REPO = Path(__file__).resolve().parent.parent
 RTC_BKP = range(0x58004050, 0x58004050 + 20 * 4, 4)
 
 
+# After a power-on, where a CPU must not be (#125), and the system-control
+# registers that say why it is there (ARMv7-M ARM B3.2: ICSR, SHCSR, CFSR,
+# HFSR, MMFAR, BFAR).
+BOOT_CHECK_S = 0.5
+FAULT_HANDLERS = ("HardFault_Handler", "MemManage_Handler", "BusFault_Handler",
+                  "UsageFault_Handler", "Default_Handler")
+SCB_FAULT_REGS = (("ICSR", 0xE000ED04), ("SHCSR", 0xE000ED24), ("CFSR", 0xE000ED28),
+                  ("HFSR", 0xE000ED2C), ("MMFAR", 0xE000ED34), ("BFAR", 0xE000ED38))
+
+
 def power_on_commands(machine: str, vbat: bool) -> list[str]:
     """Monitor commands that power a board on, with its machine selected.
     Shared by the virtual broker and vhil.sim, so both mean the same thing.
@@ -61,7 +71,7 @@ def power_on_commands(machine: str, vbat: bool) -> list[str]:
                    'cpu SetRegister "BasePri" 0x0']
 
 
-def make_backend(fake_cls, monitor: RenodeMonitor, config: dict):
+def make_backend(fake_cls, monitor: RenodeMonitor, config: dict, boot_check: bool = False):
     """Build the backend as a subclass of IFS_HIL's FakeHardwareManager."""
 
     carriers = {(c["relay"]["addr"], c["relay"]["port"], c["relay"]["pin"]): c
@@ -148,6 +158,27 @@ def make_backend(fake_cls, monitor: RenodeMonitor, config: dict):
                          self._on(machine, f"sysbus FindSymbolAt {pc}").strip())
             self._powered[machine] = value
             log.info("%s %s", machine, "powered" if value else "unpowered")
+            if value and boot_check:
+                timer = threading.Timer(BOOT_CHECK_S, self._check_boot, args=(machine,))
+                timer.daemon = True
+                timer.start()
+
+        def _check_boot(self, machine):
+            """#125: a board found in a fault handler shortly after power-on
+            leaves its fault state in the log, while it is still there."""
+            try:
+                if not self._powered.get(machine):
+                    return
+                pc = self._on(machine, "cpu PC").strip()
+                sym = self._on(machine, f"sysbus FindSymbolAt {pc}").strip()
+                if not any(h in sym for h in FAULT_HANDLERS):
+                    return
+                regs = {name: self._on(machine, f"sysbus ReadDoubleWord {addr:#x}").strip()
+                        for name, addr in SCB_FAULT_REGS}
+                log.warning("%s in %s (pc %s) %.1f s after power-on: %s", machine, sym, pc,
+                            BOOT_CHECK_S, " ".join(f"{k}={v}" for k, v in regs.items()))
+            except Exception as e:                    # never take the broker down
+                log.warning("%s boot check failed: %s", machine, e)
 
         def ina_current(self, addr):
             carrier = by_ina.get(addr)
@@ -233,7 +264,7 @@ def main(argv=None) -> int:
     from vhil.system import System
     config = System(args.system).bench_config()
     monitor = RenodeMonitor(args.renode_port)
-    backend = make_backend(FakeHardwareManager, monitor, config)
+    backend = make_backend(FakeHardwareManager, monitor, config, boot_check=True)
     threading.Thread(target=watch_pacing, args=(monitor, backend.monitor_lock),
                      name="pacing", daemon=True).start()
     log.info("virtual broker on %s (Renode monitor :%d)", args.socket, args.renode_port)
