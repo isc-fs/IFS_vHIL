@@ -64,3 +64,16 @@ def test_power_on_wipes_the_backup_domain_without_vbat():
     wipes = [c for c in cmds if c.startswith("sysbus WriteDoubleWord 0x580040")]
     assert len(wipes) == 20 and "sysbus WriteDoubleWord 0x58004054 0x0" in wipes
     assert cmds.index(wipes[-1]) < cmds.index("machine Reset")
+
+
+def test_power_on_connects_the_buses_before_the_reset():
+    """#63: the firmware must never run unconnected after power-on. The CPU
+    is halted, the buses connected, then the board reset and released."""
+    backend, monitor = _backend("ecu.yaml")
+    monitor.commands.clear()
+    backend.tca_write_pin(0x20, 0, 3, True)          # K4 = MLC4 = ECU
+    cmds = [c for _, c in monitor.commands]
+    connects = [i for i, c in enumerate(cmds) if c.startswith("connector Connect")]
+    assert len(connects) == 3
+    assert cmds.index("cpu IsHalted true") < min(connects)
+    assert max(connects) < cmds.index("machine Reset") < cmds.index("cpu IsHalted false")

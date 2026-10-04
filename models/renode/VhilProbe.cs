@@ -128,10 +128,20 @@ namespace Antmicro.Renode.Testing
         }
 
         // Send once at an absolute virtual time (us); in the past = now.
+        // Two hops: called from the monitor thread, a future timestamp is
+        // built in that thread's time domain and the master time source runs
+        // the action at its next sync instead, i.e. now (#73); scheduled from
+        // inside a synced callback, as the periodic sender's later ticks are,
+        // it fires on time.
         public void SendAt(ulong atUs, uint id, string hex, bool extended = false)
         {
             var frame = new CANMessageFrame(id, Bytes(hex), extended);
-            Schedule(atUs, () => SendFrame(frame));
+            if(atUs <= NowMicros())
+            {
+                Schedule(0, () => SendFrame(frame));
+                return;
+            }
+            Schedule(0, () => Schedule(atUs, () => SendFrame(frame)));
         }
 
         // Send every periodUs from startUs (0 = now) until StopPeriodic(key).
@@ -187,6 +197,13 @@ namespace Antmicro.Renode.Testing
 
         private void Tick(Periodic job, ulong atUs)
         {
+            if(atUs > NowMicros())
+            {
+                // A future start from the monitor thread: hop into the synced
+                // context first, as SendAt does.
+                Schedule(0, () => Tick(job, atUs));
+                return;
+            }
             Schedule(atUs, () =>
             {
                 if(job.Stopped)
