@@ -4,7 +4,8 @@ description: >-
   STM32H733ZG (Cortex-M7, 1 MB flash). Renode ships only H743/H753/H747, so
   this reuses its stm32h7.repl and adds FDCAN3, TIM23, USART10, SPI1, the H73x
   ADC3, SDMMC1 with IDMA and an I2C2 that NACKs, plus the 24 MHz HSE of the
-  MLC carriers. Addresses and IRQs from ST's stm32h733xx.h.
+  MLC carriers, and a flash controller with non-volatile option bytes and
+  sector write protection. Addresses and IRQs from ST's stm32h733xx.h.
 backend: renode
 renode:
   repl: platforms/cpus/stm32h733.repl
@@ -14,6 +15,9 @@ renode:
     - models/renode/Stm32H7Adc3.cs
     # SDMMC with its internal DMA (Renode's tags IDMA).
     - models/renode/Stm32H7Sdmmc.cs
+    # Flash controller with non-volatile option bytes and sector write
+    # protection (Renode's tags them and never raises WRPERR).
+    - models/renode/Stm32H7Flash.cs
     # FDCAN with fault hooks for tests (Renode's MCAN has no error states).
     - models/renode/Stm32H7Fdcan.cs
     # I2C master that NACKs an unanswered address (Renode's never does).
@@ -30,3 +34,6 @@ renode:
   setup:
     - emulation CreateVhilResetFlags "vhil_reset_{board}" "{board}"
     - emulation CreateVhilRccResets "vhil_rcc_{board}" "{board}"
+  # A board's write_protect (systems/*.yaml): its option bytes as burned
+  # before the first power-on (models/renode/Stm32H7Flash.cs).
+  write_protect: "sysbus.flashController_h7 WriteProtectedSectors {mask:#04x}"
