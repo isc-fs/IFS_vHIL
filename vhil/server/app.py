@@ -53,7 +53,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.include_router(systems_write.router)
     app.include_router(runs.router(settings, ws))
-    app.include_router(runs.tests_router(ws))
+    app.include_router(runs.pickers_router(ws))
     app.include_router(decode.router(settings, ws))
 
     @app.get("/")

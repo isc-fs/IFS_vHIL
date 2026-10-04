@@ -25,9 +25,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import sqlite3
 import subprocess
+import tempfile
 import sys
 import threading
 import time
@@ -239,13 +241,15 @@ CREATE TABLE IF NOT EXISTS runs (
     summary    TEXT NOT NULL DEFAULT '{}',
     worker     TEXT,
     heartbeat  REAL,
-    attempts   INTEGER NOT NULL DEFAULT 0
+    attempts   INTEGER NOT NULL DEFAULT 0,
+    ref_name   TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS runs_state ON runs (state, id);
 """
 # Columns added after the first release: a database created before them
 # gets them on open.
-_ADDED = {"heartbeat": "REAL", "attempts": "INTEGER NOT NULL DEFAULT 0"}
+_ADDED = {"heartbeat": "REAL", "attempts": "INTEGER NOT NULL DEFAULT 0",
+          "ref_name": "TEXT NOT NULL DEFAULT ''"}
 
 
 class RunStore:
@@ -295,11 +299,14 @@ class RunStore:
             db.close()
         return _row(rows[0]) if rows else None
 
-    def create(self, system: str, ref: str, firmware: dict, scenario: dict) -> int:
+    def create(self, system: str, ref: str, firmware: dict, scenario: dict,
+               ref_name: str = "") -> int:
+        """A queued run. `ref`: the workspace commit its system file is read
+        at ("" outside git); `ref_name`: the branch/tag/commit it was asked as."""
         row = self._write(
-            "INSERT INTO runs (state, system, ref, firmware, scenario, created) "
-            "VALUES ('queued', ?, ?, ?, ?, ?) RETURNING id",
-            (system, ref, json.dumps(firmware), json.dumps(scenario), now_iso()))
+            "INSERT INTO runs (state, system, ref, firmware, scenario, created, ref_name) "
+            "VALUES ('queued', ?, ?, ?, ?, ?, ?) RETURNING id",
+            (system, ref, json.dumps(firmware), json.dumps(scenario), now_iso(), ref_name))
         return row["id"]
 
     def get(self, run_id: int) -> Optional[dict]:
@@ -497,6 +504,79 @@ def _kinds(text: Optional[str]) -> Optional[set]:
     return kinds
 
 
+# -- runs at a saved ref -------------------------------------------------------------
+#
+# The editor saves a system as a one-file commit on a branch of the workspace
+# (vhil/server/gitstore.py) and never checks it out. A run at such a ref
+# reads systems/<id>.yaml as it is at the ref's commit (`git cat-file`, into
+# the run's directory) and runs it with the worker's own catalogue, models,
+# platforms and code. That is the run CI would make of the branch only if
+# the two trees agree on everything but system files, so a ref that changes
+# anything else a run reads (CODE_PATHS: catalog/, vhil/, models/, ...) is
+# refused instead of run differently. A pytest scenario reads the tests and
+# systems of the checked-out tree, so it runs only at the workspace's HEAD.
+
+# What a `run` scenario reads besides its system file. A ref may differ from
+# the workspace's HEAD only outside these.
+CODE_PATHS = ("catalog/", "vhil/", "models/", "platforms/", "schemas/", "scripts/", "docker/",
+              "configs/")
+
+
+def _git(root: Path, *args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True,
+                          env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
+
+
+def resolve_ref(root: Path, ref: str) -> Optional[str]:
+    """The commit a branch (local, or only on origin), tag or commit names in
+    the workspace; None if none."""
+    for cand in (ref, f"refs/remotes/origin/{ref}"):
+        out = _git(root, "rev-parse", "--verify", "--quiet", f"{cand}^{{commit}}")
+        if out.returncode == 0:
+            return out.stdout.strip()
+    return None
+
+
+def code_changes(root: Path, a: str, b: str) -> list[str]:
+    """Files under CODE_PATHS that differ between commits a and b."""
+    out = _git(root, "diff", "--name-only", a, b, "--", *CODE_PATHS)
+    if out.returncode != 0:
+        raise RuntimeError(f"git diff {a} {b}: {out.stderr.strip()}")
+    return [line for line in out.stdout.splitlines() if line]
+
+
+def system_at(root: Path, commit: str, system_id: str) -> Optional[str]:
+    out = _git(root, "cat-file", "blob", f"{commit}:systems/{system_id}.yaml")
+    return out.stdout if out.returncode == 0 else None
+
+
+def materialise_system(root: Path, commit: str, system_id: str, dest: Path) -> Path:
+    """systems/<id>.yaml as of `commit`, written to dest/<id>.yaml (the file
+    name is its id, as System requires)."""
+    text = system_at(root, commit, system_id)
+    if text is None:
+        raise RuntimeError(f"no systems/{system_id}.yaml at {commit[:12]}")
+    dest.mkdir(parents=True, exist_ok=True)
+    path = dest / f"{system_id}.yaml"
+    path.write_text(text)
+    return path
+
+
+def workspace_refs(root: Path) -> dict:
+    """{head, branches, tags}: what a run can be started at."""
+    out = _git(root, "for-each-ref", "--format=%(refname)",
+               "refs/heads", "refs/remotes/origin", "refs/tags")
+    branches, tags = set(), []
+    for ref in out.stdout.splitlines() if out.returncode == 0 else []:
+        if ref.startswith("refs/tags/"):
+            tags.append(ref.removeprefix("refs/tags/"))
+        elif ref != "refs/remotes/origin/HEAD":
+            branches.add(ref.removeprefix("refs/heads/").removeprefix("refs/remotes/origin/"))
+    head = _git(root, "rev-parse", "HEAD")
+    return {"head": head.stdout.strip() if head.returncode == 0 else "",
+            "branches": sorted(branches), "tags": sorted(tags, reverse=True)}
+
+
 # -- the tests a pytest scenario can select -------------------------------------
 
 class TestCatalog:
@@ -546,14 +626,19 @@ class TestCatalog:
             return out
 
 
-def tests_router(workspace) -> APIRouter:
-    """GET /api/tests: the start form's pytest picker (TestCatalog)."""
+def pickers_router(workspace) -> APIRouter:
+    """The start form's pickers: GET /api/tests (TestCatalog) and
+    GET /api/workspace/refs (workspace_refs)."""
     catalog = TestCatalog(workspace.root)
-    r = APIRouter(prefix="/api/tests", tags=["runs"])
+    r = APIRouter(tags=["runs"])
 
-    @r.get("")
+    @r.get("/api/tests")
     def tests():
         return catalog.collect()
+
+    @r.get("/api/workspace/refs")
+    def refs():
+        return workspace_refs(workspace.root)
 
     return r
 
@@ -576,23 +661,44 @@ def router(settings, workspace) -> APIRouter:
 
     @r.post("", status_code=201)
     def create(req: RunRequest):
-        try:
-            path = workspace.system_path(req.system)
-        except NotFound:
-            raise HTTPException(422, f"no system '{req.system}' in the workspace")
-        try:
-            system = System(path)
-        except SystemError as e:
-            raise HTTPException(422, f"system '{req.system}' does not validate: {e}")
+        head = workspace.ref()
+        commit = head
+        if req.ref:
+            if not _REF.match(req.ref):
+                raise HTTPException(422, f"ref {req.ref!r} is not a plain git ref")
+            commit = resolve_ref(workspace.root, req.ref) if head else None
+            if not commit:
+                raise HTTPException(422, f"no ref '{req.ref}' in the workspace "
+                                         f"({'no git' if not head else 'not a branch, tag or commit'})")
+        with tempfile.TemporaryDirectory(prefix="vhil-run-") as tmp:
+            if commit and commit != head:
+                # Runs at a saved ref (above): the ref's system file, this tree's code.
+                if isinstance(req.scenario, PytestScenario):
+                    raise HTTPException(422, f"a pytest scenario runs the workspace's tests and "
+                                             f"systems as checked out: ref {req.ref} is not HEAD")
+                changed = code_changes(workspace.root, head, commit)
+                if changed:
+                    raise HTTPException(422, f"ref {req.ref} changes what a run reads besides its "
+                                             f"system file, so it would not run as in CI: "
+                                             f"{', '.join(changed[:10])}")
+                try:
+                    path = materialise_system(workspace.root, commit, req.system, Path(tmp))
+                except RuntimeError:
+                    raise HTTPException(422, f"no system '{req.system}' at {req.ref}")
+            else:
+                try:
+                    path = workspace.system_path(req.system)
+                except NotFound:
+                    raise HTTPException(422, f"no system '{req.system}' in the workspace")
+            try:
+                system = System(path)
+            except SystemError as e:
+                raise HTTPException(422, f"system '{req.system}' does not validate: {e}")
         errors = check_against_system(req, system, workspace.root)
         if errors:
             raise HTTPException(422, errors)
-        # Workers run the workspace as checked out; a run at another ref of
-        # the system file arrives with the git-backed editor (M5.4, #116).
-        head = workspace.ref()
-        if req.ref and not (head and head.startswith(req.ref)):
-            raise HTTPException(422, f"ref {req.ref} is not the workspace's ({head or 'no git'})")
-        run_id = store.create(req.system, head, req.firmware, req.scenario.model_dump())
+        run_id = store.create(req.system, commit, req.firmware, req.scenario.model_dump(),
+                              ref_name=req.ref or "")
         return {"run_id": run_id}
 
     @r.get("")

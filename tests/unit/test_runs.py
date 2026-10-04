@@ -171,7 +171,7 @@ def test_a_pytest_scenario_is_accepted(client):
     ({"system": "ecu", "firmware": {"ecu": "a/../../b"}, "scenario": RUN}, "plain git ref"),
     ({"system": "ecu", "scenario": {"kind": "pytest", "select": "tests/../etc/x.py"}}, "select"),
     ({"system": "ecu", "scenario": {"kind": "pytest", "select": "tests/sim/test_nope.py"}}, "no file"),
-    ({"system": "ecu", "ref": "0000000", "scenario": RUN}, "not the workspace"),
+    ({"system": "ecu", "ref": "0000000", "scenario": RUN}, "no ref"),
 ])
 def test_bad_requests_are_422_and_say_why(client, body, needle):
     r = client.post("/api/runs", json=body)

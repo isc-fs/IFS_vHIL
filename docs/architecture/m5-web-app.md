@@ -56,7 +56,15 @@ All JSON; times in microseconds of virtual time.
   (`vhil.system validate`), commits on `branch`, returns `{ref}`
 - `POST /api/systems/{id}/pr` `{branch, title}` → PR URL (GitHub App)
 - `POST /api/runs` `{system, ref?, firmware: {board: ref?}, scenario}` →
-  `{run_id}`. A scenario is either
+  `{run_id}`. `ref` is any branch, tag or commit of the workspace (the
+  editor's saved branches; `GET /api/workspace/refs` lists them); the run
+  records its commit and runs `systems/<id>.yaml` as it is there, copied
+  into the run's directory, so the shared checkout never moves. The rest
+  (catalogue, models, platforms, code) is the worker's tree, so a ref that
+  differs from the workspace's HEAD in any of those is refused rather than
+  run differently from CI; a saved branch only ever changes a system file.
+  A pytest scenario reads the checked-out tests and systems: HEAD only.
+  Board `firmware_ref`s of the system as saved pick the images. A scenario is either
   `{"kind": "run", "virtual_ms": N, "stimuli": [...]}` (stimuli: CAN
   send / periodic, GPIO set, analog set at virtual times) or
   `{"kind": "pytest", "select": "tests/sim/test_x.py::test_y"}`

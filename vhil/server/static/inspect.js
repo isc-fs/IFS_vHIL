@@ -85,7 +85,7 @@ export async function renderRun(view, { api, esc }, id, tab) {
         ${TERMINAL.has(r.state) ? "" : `<button data-cancel>Cancel</button>`}</h2>
       <dl class="meta">
         <div><dt>System</dt><dd><a href="#/systems/${esc(r.system)}">${esc(r.system)}</a></dd></div>
-        <div><dt>Ref</dt><dd><code>${esc((r.ref || "working tree").slice(0, 12))}</code></dd></div>
+        <div><dt>Ref</dt><dd>${r.ref_name ? `${esc(r.ref_name)} ` : ""}<code>${esc((r.ref || "working tree").slice(0, 12))}</code></dd></div>
         <div><dt>Scenario</dt><dd>${esc(sc.kind === "run" ? `run ${sc.virtual_ms} ms` : `pytest ${sc.select || ""}`)}</dd></div>
         <div><dt>Virtual</dt><dd>${ms(r.virtual_us)} ms</dd></div>
         <div><dt>Wall</dt><dd>${duration(wallSeconds(r))}</dd></div>

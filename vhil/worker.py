@@ -51,7 +51,9 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from vhil.server.config import Settings
-from vhil.server.runs import HEARTBEAT_S, MAX_ATTEMPTS, RECLAIM_AFTER_S, TRACE, RunStore
+from vhil.server.runs import (HEARTBEAT_S, MAX_ATTEMPTS, RECLAIM_AFTER_S, TRACE, RunStore,
+                              code_changes, materialise_system)
+from vhil.server.workspace import Workspace
 from vhil.system import System
 
 DEFAULT_FW_DIR = Path(os.environ.get("VHIL_FW_DIR", "/vhil/fw"))
@@ -355,7 +357,9 @@ class FirmwareResolver:
         for key in system.images():
             board, _, part = key.partition(".")
             fw = system.boards[board].bootloader if part else system.boards[board].firmware
-            ref = refs.get(key) or fw["ref"]
+            # The run's ref, else the system's (firmware_ref / bootloader_ref),
+            # else the catalogue's.
+            ref = refs.get(key) or system.boards[board].ref("bootloader" if part else "firmware")
             out[key] = (ref, (self.fw_dir / f"{fw['id']}@{ref.replace('/', '_')}"
                               / fw["build"]["elf"]).resolve())
         return out
@@ -458,7 +462,7 @@ class Worker:
                 prev = (run.get("summary") or {}).get("reclaimed_from") or "a worker"
                 trace.log(0, f"attempt {run['attempts']} of {self.max_attempts}: reclaimed from "
                              f"{prev}, whose heartbeat stopped")
-            system_path = Path(self.settings.workspace) / "systems" / f"{run['system']}.yaml"
+            system_path = self._system_file(run, run_dir, trace)
             system = System(system_path)
             firmware = self.resolver.resolve(system, run["firmware"])
             trace.log(0, f"worker {self.id}; firmware " +
@@ -476,6 +480,8 @@ class Worker:
             else:
                 raise ValueError(f"unknown scenario kind '{scenario['kind']}'")
             summary["firmware"] = {k: str(p) for k, p in firmware.items()}
+            if run.get("ref"):
+                summary["system_ref"] = run["ref"]
         except Lost:
             trace.log(progress["us"], f"worker {self.id} lost the run: it was reclaimed")
             trace.close()
@@ -498,6 +504,31 @@ class Worker:
         trace.close()
         print(f"run {run_id}: {final} ({virtual_us} us)", flush=True)
         return run_id
+
+    def _system_file(self, run: dict, run_dir: Path, trace: TraceWriter) -> Path:
+        """The system file the run executes: systems/<id>.yaml as of the
+        run's commit, written into its directory, so the shared workspace's
+        HEAD and working tree never move (vhil/server/runs.py, runs at a
+        saved ref). A run queued outside git uses the working tree's file."""
+        ws = Path(self.settings.workspace)
+        commit = run.get("ref") or ""
+        if not commit:
+            return ws / "systems" / f"{run['system']}.yaml"
+        head = Workspace(ws).ref()
+        name = run.get("ref_name") or "HEAD"
+        if run["scenario"]["kind"] == "pytest":
+            if commit != head:
+                raise RuntimeError(f"the workspace is at {head[:12] or 'no commit'}, not "
+                                   f"{commit[:12]} ({name}): a pytest run needs its ref checked out")
+            path = ws / "systems" / f"{run['system']}.yaml"
+        else:
+            changed = code_changes(ws, head, commit) if commit != head else []
+            if changed:
+                raise RuntimeError(f"{name} ({commit[:12]}) and the workspace ({head[:12]}) differ "
+                                   f"in what a run reads: {', '.join(changed[:10])}")
+            path = materialise_system(ws, commit, run["system"], run_dir / "system")
+        trace.log(0, f"system systems/{run['system']}.yaml at {name} ({commit[:12]})")
+        return path
 
     def loop(self, poll_s: float = 1.0) -> None:
         print(f"worker {self.id}: {self.settings.db}", flush=True)

@@ -326,3 +326,128 @@ def test_config_names_the_editor(env, monkeypatch):
 
 def test_the_editor_page_is_served(env):
     assert env.client.get("/static/editor.js").status_code == 200
+
+
+# -- runs at a saved ref --------------------------------------------------------------
+
+def saved_ams(env, branch="feat/ams-run", fw_ref="feat/x", description="saved from the editor"):
+    text = (env.ws / "systems" / "ams.yaml").read_text()
+    doc = yaml.safe_load(text)
+    doc["boards"]["ams"]["firmware_ref"] = fw_ref
+    doc["description"] = description
+    r = put(env, "ams", yaml=editor.write_system(doc, text), branch=branch)
+    assert r.status_code == 200, r.text
+    return r.json()["ref"]
+
+
+def run_scenario(**kw):
+    return {"kind": "run", "virtual_ms": 100, **kw}
+
+
+def test_a_run_at_a_saved_branch_runs_that_file_and_leaves_the_checkout_alone(env, tmp_path):
+    from vhil.server.runs import RunStore
+    from vhil.worker import FirmwareResolver, Worker
+    from .test_runs import FakeSim
+
+    before = snapshot(env.ws)
+    sha = saved_ams(env)
+    r = env.client.post("/api/runs", json={"system": "ams", "ref": "feat/ams-run",
+                                           "scenario": run_scenario()})
+    assert r.status_code == 201, r.text
+    run_id = r.json()["run_id"]
+    run = env.client.get(f"/api/runs/{run_id}").json()
+    assert run["ref"] == sha and run["ref_name"] == "feat/ams-run"
+
+    seen = {}
+
+    class Resolver(FirmwareResolver):
+        def resolve(self, system, refs):
+            seen["expected"] = self.expected(system, refs)
+            return {k: tmp_path / f"{k}.elf" for k in system.images()}
+
+    def factory(path, firmware, log_path):
+        seen["path"] = path
+        seen["text"] = path.read_text()
+        return FakeSim(system=path)
+
+    settings = env.app.state.settings
+    worker = Worker(settings, worker_id="w", sim_factory=factory, resolver=Resolver(tmp_path))
+    assert worker.run_once() == run_id
+    run = RunStore(settings.db).get(run_id)
+    assert run["state"] == "passed", run["summary"]
+    assert run["summary"]["system_ref"] == sha
+    # The branch's file, written into the run's directory, not the checkout's.
+    assert "saved from the editor" in seen["text"]
+    assert seen["path"] == settings.results / str(run_id) / "system" / "ams.yaml"
+    assert "saved from the editor" not in (env.ws / "systems" / "ams.yaml").read_text()
+    # The saved board firmware_ref decides which image the worker resolves.
+    assert seen["expected"]["ams"][0] == "feat/x"
+    assert "ams@feat_x" in str(seen["expected"]["ams"][1])
+    trace = (settings.results / str(run_id) / "trace.jsonl").read_text()
+    assert f"at feat/ams-run ({sha[:12]})" in trace
+    assert snapshot(env.ws) == before
+
+
+def test_a_run_without_a_ref_runs_the_workspace_head(env):
+    head = git(env.ws, "rev-parse", "HEAD")
+    r = env.client.post("/api/runs", json={"system": "ams", "scenario": run_scenario()})
+    assert r.status_code == 201, r.text
+    run = env.client.get(f"/api/runs/{r.json()['run_id']}").json()
+    assert run["ref"] == head and run["ref_name"] == ""
+
+
+def test_a_ref_given_as_tag_or_short_sha_resolves(env):
+    sha = saved_ams(env)
+    git(env.ws, "tag", "t1", sha)
+    for ref in ("t1", sha[:10]):
+        r = env.client.post("/api/runs", json={"system": "ams", "ref": ref, "scenario": run_scenario()})
+        assert r.status_code == 201, r.text
+        assert env.client.get(f"/api/runs/{r.json()['run_id']}").json()["ref"] == sha
+
+
+def test_runs_at_refs_that_would_not_run_as_in_ci_are_refused(env):
+    from vhil.server.gitstore import GitStore
+    saved_ams(env)
+    store = GitStore(env.ws)
+    who = ("t", "t@example.com")
+    store.commit_file("feat/code", "catalog/firmware/ams.yaml", "kind: firmware\n", "test: code", who)
+    saved_ams(env, branch="feat/bad")
+    store.commit_file("feat/bad", "systems/ams.yaml", "kind: system\nid: ams\n", "test: break", who)
+    for body, needle in (
+            ({"ref": "feat/nope"}, "no ref 'feat/nope'"),
+            ({"ref": "--upload-pack=x"}, "plain git ref"),
+            ({"ref": "feat/code"}, "catalog/firmware/ams.yaml"),
+            ({"ref": "feat/bad"}, "does not validate"),
+            ({"ref": "feat/ams-run", "system": "nope"}, "no system 'nope' at feat/ams-run"),
+            ({"ref": "feat/ams-run", "scenario": {"kind": "pytest",
+                                                 "select": "tests/sim/test_probe.py"}}, "pytest")):
+        body = {"system": "ams", "scenario": run_scenario(), **body}
+        r = env.client.post("/api/runs", json=body)
+        assert r.status_code == 422 and needle in r.text, (body, r.text)
+
+
+def test_a_worker_refuses_a_ref_the_workspace_code_moved_away_from(env, tmp_path):
+    """Queued at a ref, then the workspace's catalogue moved (a pull): the run
+    would no longer be the one CI makes, so it errors instead of running."""
+    from vhil.server.runs import RunStore
+    from vhil.worker import Worker
+    from .test_runs import FakeSim, FixedResolver
+    sha = saved_ams(env)
+    run_id = env.client.post("/api/runs", json={"system": "ams", "ref": "feat/ams-run",
+                                                "scenario": run_scenario()}).json()["run_id"]
+    (env.ws / "catalog" / "firmware" / "ams.yaml").write_text(
+        (env.ws / "catalog" / "firmware" / "ams.yaml").read_text() + "# moved\n")
+    git(env.ws, "commit", "-qam", "move the catalogue")
+    settings = env.app.state.settings
+    Worker(settings, sim_factory=lambda *a: FakeSim(), resolver=FixedResolver()).run_once()
+    run = RunStore(settings.db).get(run_id)
+    assert run["state"] == "error" and "catalog/firmware/ams.yaml" in run["summary"]["error"]
+    assert sha[:12] in run["summary"]["error"]
+
+
+def test_workspace_refs_list_branches_and_tags(env):
+    saved_ams(env)
+    git(env.ws, "tag", "v9")
+    got = env.client.get("/api/workspace/refs").json()
+    assert got["head"] == git(env.ws, "rev-parse", "HEAD")
+    assert {"dev", "feat/ams-run"} <= set(got["branches"]) and got["tags"] == ["v9"]
