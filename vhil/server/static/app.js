@@ -1,4 +1,6 @@
 // The app shell: hash routes over the JSON API (docs/architecture/m5-web-app.md).
+import { renderRuns } from "./runs.js";
+
 const view = document.getElementById("view");
 
 async function api(path) {
@@ -23,7 +25,7 @@ const routes = {
       ${s.errors.length ? `<p class="error">${esc(s.errors.join("; "))}</p>` : ""}
       <pre>${esc(s.yaml)}</pre>`;
   },
-  async runs() { view.innerHTML = `<h2>Runs</h2><p class="muted">Coming with #114.</p>`; },
+  async runs() { await renderRuns(view, { api, esc }); },
   async editor() { view.innerHTML = `<h2>Editor</h2><p class="muted">Coming with #116.</p>`; },
 };
 
