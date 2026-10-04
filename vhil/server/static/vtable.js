@@ -37,6 +37,9 @@ export class VirtualTable {
     this.body = this.root.querySelector(".vt-body");
     this.spacer = this.root.querySelector(".vt-spacer");
     this.rows = this.root.querySelector(".vt-rows");
+    // The row height as a CSS variable, set through the CSSOM: a style
+    // attribute in markup is inline style, which the app's CSP refuses.
+    this.rows.style.setProperty("--vt-row-h", `${rowHeight}px`);
     this._range = { start: -1, end: -1 };
     this.body.addEventListener("scroll", () => this.draw());
     this.rows.addEventListener("click", (ev) => {
@@ -74,7 +77,7 @@ export class VirtualTable {
     this.rows.style.transform = `translateY(${start * this.rowHeight}px)`;
     let html = "";
     for (let i = start; i < end; i++) {
-      html += `<div class="vt-row${i === this.selected ? " sel" : ""}" data-i="${i}" style="height:${this.rowHeight}px">${this.render(i)}</div>`;
+      html += `<div class="vt-row${i === this.selected ? " sel" : ""}" data-i="${i}">${this.render(i)}</div>`;
     }
     this.rows.innerHTML = html;
   }
