@@ -14,27 +14,30 @@ locally (see [Local test](#local-test)).
 browser ─────────▶│ VHIL_SITE          VHIL_EDITOR_SITE          │◀──────── editor iframe
                   │   │                  │ forward_auth /api/me  │
                   └───┼──────────────────┼───────────────────────┘
-                      ▼                  ▼
-                     api ─────────────  editor (Pipeline Manager + vhil.editor)
-                      │  SQLite (WAL)          │
-          volume db ──┤                        │
-          volume runs ┤◀── worker × VHIL_WORKERS (Renode, unprivileged)
-                      │         └── volume fw (firmware builds)
-       volume workspace (the app's IFS_vHIL clone) ◀── workspace (one-shot: clone/fetch/checkout)
-                      └── backup (DB + saved branches → backups)
+          [frontend]  ▼        [editor]  ▼  (internal)
+                     api                editor (Pipeline Manager + vhil.editor)
+                      │  SQLite (WAL)
+          volume db ──┤                                        [jobs] (internal)
+          volume runs ┤◀── worker × VHIL_WORKERS (Renode) ──┐
+                      │         └── volume fw              ├── egress ──▶ github.com only
+       volume workspace ◀──────── workspace (one-shot) ─────┘  [egress]
+                      └── backup (no network; DB + saved branches → backups)
 ```
 
 | Service | Image | What it does |
 |---|---|---|
+| `volume-owner` | `ifs-vhil` | One-shot, first on every `up`: chowns to uid 10001 whatever in the volumes isn't yet (volumes made when the services still ran as root); a no-op after |
+| `egress` | `ifs-vhil` | [`deploy/egress_proxy.py`](../deploy/egress_proxy.py): the workers' and the workspace's only way out, CONNECT to `VHIL_EGRESS_ALLOW` |
 | `workspace` | `ifs-vhil` | One-shot, runs before the others on every `up`: clones IFS_vHIL into the `workspace` volume if empty, `git fetch`es, checks out `VHIL_WORKSPACE_REF` detached ([`deploy/workspace.sh`](../deploy/workspace.sh)) |
 | `api` | `ifs-vhil` | `python -m vhil.server`: the shell, systems read/save, runs, inspect, login. Healthcheck `GET /api/health` |
 | `worker` | `ifs-vhil` | `python -m vhil.worker`, `VHIL_WORKERS` replicas: claims queued runs, runs Renode, builds missing firmware into `fw` |
 | `editor` | `ifs-vhil-editor` | Pipeline Manager + `vhil.editor`, embedded by the shell |
-| `proxy` | `caddy:2.11.6-alpine` | TLS, the only published ports: 80, 443 (app), 5443 (editor) |
+| `proxy` | `caddy:2.11.6-alpine` (by digest) | TLS, security headers, the only published ports: 80, 443 (app), 5443 (editor) |
 | `backup` | `ifs-vhil` | Snapshots the DB and the saved branches every `VHIL_BACKUP_INTERVAL_H` ([`deploy/backup.py`](../deploy/backup.py)) |
 
-Every long-running service has `restart: unless-stopped`, CPU/memory limits
-(`VHIL_*_CPUS` / `VHIL_*_MEMORY`) and json-file logs rotated at 10 MB × 5.
+Every long-running service has `restart: unless-stopped`, CPU/memory/pids
+limits (`VHIL_*_CPUS` / `VHIL_*_MEMORY`, `VHIL_WORKER_PIDS`) and json-file
+logs rotated at 10 MB × 5; all of them run hardened ([Hardening](#hardening)).
 
 **The code comes from the workspace clone, not the image.** The images carry
 the toolchain (Renode, Arm GCC, Python deps, Pipeline Manager) as CI's runners
@@ -44,10 +47,9 @@ same commit, as in CI. The operator's checkout only provides
 `compose.prod.yaml`, the `Caddyfile` and the scripts in `deploy/`.
 
 **Workers need no privileges.** Run scenarios and `tests/sim` use Renode's
-in-process CAN hubs, not vcan, so workers run unprivileged on the default
-bridge network, each in its own network namespace: concurrent runs can't
-collide on Renode monitor ports or CAN links (with the dev compose's host
-network they share one namespace). If a scenario ever bridges to SocketCAN
+in-process CAN hubs, not vcan, so workers run unprivileged, each in its own
+network namespace: concurrent runs can't collide on Renode monitor ports or
+CAN links. If a scenario ever bridges to SocketCAN
 (`--vhil-socketcan`, IFS_HIL suites), give the worker `cap_add: [NET_ADMIN]`
 so it creates its vcan links in its own namespace; that needs the `vcan` module
 loaded on the host (a container can't load modules), but not `privileged`.
@@ -55,8 +57,132 @@ loaded on the host (a container can't load modules), but not `privileged`.
 **The editor** has no login of its own. Caddy serves it on a second port of
 the app's host and checks every request (WebSockets included) against the
 API's `/api/me` first: a signed-in org member (or anyone in dev mode) passes,
-everyone else gets 401. The session cookie reaches it because cookies are
-scoped to the host, not the port.
+everyone else gets 401. The session cookie reaches the gate because cookies
+are scoped to the host, not the port; Caddy cuts the app's `vhil_*` cookies
+from what it passes on to Pipeline Manager. The editor sits on an internal
+network shared with the proxy only, so the gate is the only way in.
+
+## Hardening
+
+What every service gets (`x-hardened` in the compose file), and why:
+
+| Control | Setting | Notes |
+|---|---|---|
+| Non-root | `user: "10001:10001"` | The images carry a `vhil` user (10001) and the volume mount points owned by it, so new volumes are writable; `volume-owner` fixes older ones. The images' default user stays root for `scripts/vhil-docker.sh`, which creates vcan links |
+| No capabilities | `cap_drop: [ALL]` | `volume-owner` alone adds `CHOWN` + `DAC_READ_SEARCH`, as root, with no network |
+| No privilege gain | `security_opt: [no-new-privileges:true]` | Caddy's binary carries a file capability the kernel won't exec under this, so the proxy runs a plain copy of it from its `/tmp`; binding 80/443 needs nothing, Docker sets `net.ipv4.ip_unprivileged_port_start=0` in a container |
+| Read-only root | `read_only: true` + `tmpfs: /tmp` | `HOME=/tmp`. The worker's and editor's `/tmp` are `exec`: Renode unpacks its CPU library there and dlopens it. tmpfs counts against the memory limit (`VHIL_WORKER_TMP`, default 1 GB) |
+| Limits | CPU, memory, pids on every service | pids: worker `VHIL_WORKER_PIDS` (2048: Renode's threads, `cmake --build -j`), others 64–512 |
+| Minimal mounts | per service | worker: workspace **ro**, db, runs, fw, **no secrets**; api: workspace (saves), db, runs **ro**, fw **ro**; editor: workspace **ro**; backup: db, workspace **ro**, backups; no service mounts the Docker socket |
+
+### Networks
+
+| Network | Internal | Members | Why |
+|---|---|---|---|
+| `frontend` | no | proxy, api | the proxy reaches the API; the API reaches GitHub (OAuth, pushes, `ls-remote`) |
+| `editor` | yes | proxy, editor | the editor is reachable only through the proxy's auth gate, and reaches nothing |
+| `jobs` | yes | worker, workspace, egress | no route off the host; the workers don't share a network with the API or the editor, so they can't reach their ports |
+| `egress` | no | egress | the egress proxy's own way out |
+
+Workers talk to the API only through the DB file and the `runs` volume, never
+over the network. They reach the outside only through `egress`
+([`deploy/egress_proxy.py`](../deploy/egress_proxy.py), standard library
+only): an HTTP CONNECT proxy that tunnels TLS to `VHIL_EGRESS_ALLOW`
+(default `github.com,.githubusercontent.com`: firmware clones and the
+workspace fetch) on `VHIL_EGRESS_PORTS` (443), refuses every other host and
+plain HTTP, and refuses an allowed name that resolves to a private,
+loopback, link-local, multicast or reserved address, so DNS can't aim it at
+the metadata service or the host. git finds it through `https_proxy`. With no
+route at all on `jobs`, `169.254.169.254` is unreachable from a worker,
+whatever it runs. A firmware recipe that fetches from another host (CMake
+`FetchContent`, a submodule elsewhere) needs that host added to
+`VHIL_EGRESS_ALLOW`.
+
+**Host firewall (defence in depth).** The `frontend` network (the API) has a
+normal route out, and a misconfiguration could give one to a worker. On a
+cloud host, block the metadata address for every container in Docker's
+`DOCKER-USER` chain (it runs before Docker's own rules), and persist it with
+your distribution's mechanism:
+
+```sh
+# iptables (Docker's default backend)
+sudo iptables -I DOCKER-USER -d 169.254.169.254/32 -j REJECT
+sudo ip6tables -I DOCKER-USER -d fd00:ec2::254/128 -j REJECT    # AWS IPv6 IMDS
+# nftables hosts, same effect, ahead of Docker's own rules
+sudo nft add table inet vhil-guard
+sudo nft add chain inet vhil-guard fwd '{ type filter hook forward priority -10; }'
+sudo nft add rule inet vhil-guard fwd ip daddr 169.254.169.254 reject
+```
+
+To restrict the API's egress too (GitHub, the registry and Let's Encrypt are
+the proxy's), add per-bridge rules in `DOCKER-USER` keyed on the
+`frontend` bridge interface (`docker network inspect ifs-vhil-prod_frontend`
+gives its id; the bridge is `br-<first 12 chars>`), allowing only
+established traffic and TCP 443, and resolve GitHub's ranges from
+`https://api.github.com/meta`; that list changes, so it is not set up by
+default.
+
+### Secrets
+
+Secrets are files, never environment values or command-line arguments:
+
+| File in `VHIL_SECRETS_DIR` | Mounted as (compose secret) | Read through | Used by |
+|---|---|---|---|
+| `session_secret` | `/run/secrets/session_secret` | `VHIL_SESSION_SECRET_FILE` | api |
+| `github_client_secret` | `/run/secrets/github_client_secret` | `VHIL_GITHUB_CLIENT_SECRET_FILE` | api |
+| `github-app.pem` (`VHIL_GITHUB_APP_KEY_FILE`) | `/run/secrets/github_app_key` | `VHIL_GITHUB_APP_KEY_FILE` | api |
+| `github_token` | `/run/secrets/github_token` | `VHIL_GITHUB_TOKEN_FILE` | api, workspace |
+
+Every file must exist (compose refuses a missing one); an unused one is
+empty, which the app treats as unset. Compose bind-mounts them as they are
+on the host, so the host file's owner and mode are what the container sees:
+`chown 10001:10001` and `chmod 0400` them. The app reads `<NAME>_FILE` before
+`<NAME>` (`vhil/server/config.py`, `env_secret`), so the plain variables
+still work for a local checkout, but the production compose file no longer
+passes any. A token never goes on git's command line (every process on the
+host can read argv): the API and `deploy/workspace.sh` hand it to git as an
+`http.extraHeader` in git's environment (`GIT_CONFIG_COUNT`, readable only
+by the same user and root), and it is never written into the clone's config.
+
+### Limits
+
+Runs are bounded by the API ([`vhil/server/runs.py`](../vhil/server/runs.py),
+`Limits`) and the worker, from these variables (defaults in brackets):
+
+| Variable | Bounds | Refused with |
+|---|---|---|
+| `VHIL_MAX_VIRTUAL_MS` [600000] | a run's virtual time | 422 |
+| `VHIL_MAX_STIMULI` [1000] / `VHIL_MAX_WATCHES` [100] | a run scenario's stimuli / watches | 422 |
+| `VHIL_MAX_QUEUED` [50] | active (queued + running) runs, everyone | 429 |
+| `VHIL_MAX_QUEUED_PER_USER` [10] | active runs per login | 429 |
+| `VHIL_MAX_TRACE_MB` [512] | a run's `trace.jsonl` (worker) | the run ends `error` |
+| `VHIL_MAX_OUTPUT_MB` [64] | a pytest run's `pytest.txt` (worker) | the run ends `error` |
+
+A pytest run is also bounded by its own `timeout_s` (at most 6 h), Caddy
+caps request bodies at 8 MB, and each container by its CPU, memory and pids
+limits.
+
+### Residual risk
+
+- **Workers share the run database with the API.** A worker needs to claim,
+  heartbeat and finish runs, so it writes `vhil.db`; a compromised worker
+  (a malicious firmware build or test, a Renode escape) can rewrite any run's
+  state, summary or `created_by`, or queue runs that bypass the API's
+  limits. It can't reach the API, the editor, the secrets or (but for GitHub)
+  the outside. Narrowing this needs the workers to talk to an API endpoint
+  instead of the file (a claim/heartbeat/finish RPC with a worker token);
+  not done here, it changes the queue's design (M5.2).
+- **Workers share `runs` and `fw`.** One run can read or overwrite another's
+  traces and the firmware builds others will run. Builds come only from
+  repositories on the allowlist, at refs `vhil.system build` resolves.
+- **The workspace is the code.** Services run the code at
+  `VHIL_WORKSPACE_REF`: whoever can push that ref (or a tag it names) to the
+  remote controls the deployment. Pin a commit for the strongest guarantee.
+- **The API has a normal route out** (GitHub login and pushes): see the
+  host firewall above.
+- **Python packages** in the images are pinned by version, not hash, and the
+  Pipeline Manager frontend build pulls npm packages from its lock file.
+
 
 ## State
 
@@ -126,8 +252,21 @@ docker buildx build --platform linux/amd64,linux/arm64 \
     -t "$img-editor:$tag" -t "$img-editor:latest" --push docker/
 ```
 
-Then `VHIL_TAG=$tag` in `deploy/.env`. Pin a tag in production rather than
-`latest`, so an upgrade is a deliberate edit. Without a registry, build on the
+Then `VHIL_TAG=$tag` in `deploy/.env`, and the digests the push printed (or
+`docker buildx imagetools inspect "$img:$tag"`, the index digest) as
+`VHIL_DIGEST=@sha256:…` and `VHIL_EDITOR_DIGEST=@sha256:…`: a tag can be
+moved, a digest can't, so the host runs exactly what was built. Pin a tag
+and digest in production rather than `latest`, so an upgrade is a
+deliberate edit. Build the editor with `--build-arg BASE="$img:$tag@sha256:…"`
+to pin its base the same way.
+
+The images' inputs are pinned too: `python:3.11-bookworm` by digest, and
+every download in `docker/Dockerfile` and `docker/editor.Dockerfile`
+(Renode, the Arm GNU toolchain, can-flasher, Node) is checked against a
+SHA-256 hard-coded there (`sha256sum -c`), from the publisher's checksum file
+or GitHub's release asset digest; Pipeline Manager must be the pinned commit.
+Bumping a version means fetching its new hash the same way (the Dockerfiles
+say where). Without a registry, build on the
 host itself (`VHIL_DOCKER_CONTEXT=default scripts/vhil-docker.sh image` gives
 `ifs-vhil:latest` and `ifs-vhil-editor:latest`; set `VHIL_IMAGE=ifs-vhil`,
 `VHIL_TAG=latest`). GHCR packages of a public repo can be made public; if
@@ -154,7 +293,8 @@ token.
 - **DNS**: an A/AAAA record for the domain (e.g. `vhil.<team-domain>`) to the
   host.
 - **Outbound**: github.com (clone, fetch, push, firmware sources, OAuth),
-  api.github.com, the image registry, Let's Encrypt.
+  api.github.com, the image registry, Let's Encrypt. Workers and the
+  workspace one-shot reach only `VHIL_EGRESS_ALLOW`, through `egress`.
 
 ## First-time setup
 
@@ -162,9 +302,14 @@ token.
 git clone https://github.com/isc-fs/IFS_vHIL ~/ifs-vhil-deploy   # for deploy/ only
 cd ~/ifs-vhil-deploy
 cp deploy/.env.example deploy/.env && chmod 600 deploy/.env
-$EDITOR deploy/.env          # every variable is described there
-mkdir -p deploy/secrets && chmod 700 deploy/secrets
-cp ~/github-app.pem deploy/secrets/github-app.pem && chmod 600 deploy/secrets/github-app.pem
+$EDITOR deploy/.env          # every variable is described there; no secrets in it
+mkdir -p deploy/secrets
+cp ~/github-app.pem deploy/secrets/github-app.pem
+python3 -c "import secrets; print(secrets.token_urlsafe(48))" > deploy/secrets/session_secret
+$EDITOR deploy/secrets/github_client_secret           # the App's client secret
+touch deploy/secrets/github_token                     # empty unless no App yet
+sudo chown -R 10001:10001 deploy/secrets
+sudo chmod 0500 deploy/secrets && sudo chmod 0400 deploy/secrets/*
 docker compose -f deploy/compose.prod.yaml up -d
 docker compose -f deploy/compose.prod.yaml ps          # all healthy, workspace exited 0
 docker compose -f deploy/compose.prod.yaml logs workspace
@@ -174,10 +319,11 @@ curl -fsS https://vhil.example.org/api/health
 `deploy/.env` is read automatically (it sits next to the compose file) and is
 git-ignored, as is `deploy/secrets/`. In `deploy/.env` at least:
 `VHIL_SITE`, `VHIL_EDITOR_SITE`, `VHIL_PUBLIC_URL`, `VHIL_EDITOR_URL`,
-`VHIL_GITHUB_CLIENT_ID`, `VHIL_GITHUB_CLIENT_SECRET`, `VHIL_SESSION_SECRET`,
-`VHIL_GITHUB_APP_ID` (or, until the App exists, `VHIL_GITHUB_TOKEN`), and
-`VHIL_TAG`. The API refuses to start in github mode without the OAuth client
-or with a short session secret.
+`VHIL_GITHUB_CLIENT_ID`, `VHIL_GITHUB_APP_ID`, `VHIL_WORKSPACE_REF` (a tag
+or commit; the example's placeholder fails the workspace service) and
+`VHIL_TAG` (+ `VHIL_DIGEST` / `VHIL_EDITOR_DIGEST`). The secrets are the
+files above ([Secrets](#secrets)). The API refuses to start in github mode
+without the OAuth client or with a short session secret.
 
 The first run of a system whose firmware isn't built yet makes the worker
 build it (minutes). To warm `fw` up front, do what the worker does on demand
@@ -195,11 +341,11 @@ Steps: [docs/development/web-app.md, "Creating the GitHub App"](development/web-
 with **Callback URL** `https://<domain>/auth/callback` (`VHIL_PUBLIC_URL` +
 `/auth/callback`). The admin hands over, out of band (never in git, chat or
 an issue): the App ID, the Client ID, a client secret, and the private key
-`.pem`. They go into `deploy/.env` and `deploy/secrets/github-app.pem`.
+`.pem`. They go into `deploy/.env` and `deploy/secrets/github-app.pem` and `deploy/secrets/github_client_secret`.
 
 Until the App exists: `VHIL_AUTH=github` with an OAuth App for login (scope
-`read:org`) and `VHIL_GITHUB_TOKEN` (fine-grained, contents + pull requests
-write on IFS_vHIL only) for pushes.
+`read:org`) and a fine-grained token (contents + pull requests write on
+IFS_vHIL only) in `deploy/secrets/github_token` for pushes.
 
 ## Upgrade
 
@@ -218,8 +364,17 @@ stopped mid-run ends that run as `error` (SIGTERM, 30 s grace): check
 firmware builds and certificates live in volumes and carry over. To roll
 back, set `VHIL_WORKSPACE_REF` to the previous commit and recreate again.
 
-With `VHIL_WORKSPACE_REF=dev` an upgrade deploys whatever `dev` is at that
-moment; pin a tag or commit for a deployment that only changes on purpose.
+`VHIL_WORKSPACE_REF` is required and should be a tag or commit: with a
+branch, an upgrade (or any `up`) deploys whatever the branch is at that
+moment.
+
+**Upgrading from before the hardening** (services as root, secrets in
+`deploy/.env`): move `VHIL_GITHUB_CLIENT_SECRET`, `VHIL_SESSION_SECRET` and
+`VHIL_GITHUB_TOKEN` out of `deploy/.env` into the files of
+[Secrets](#secrets) (the compose file no longer passes them), set
+`VHIL_WORKSPACE_REF` to a tag or commit, and `up -d --force-recreate`:
+`volume-owner` hands the existing volumes (and a host `VHIL_BACKUP_DIR`) to
+uid 10001 on its first run.
 
 ## Backups and restore
 
@@ -234,9 +389,25 @@ keeps the newest `VHIL_BACKUP_KEEP` (14):
 
 The DB is copied with SQLite's online backup API while the api and workers
 keep writing: a raw copy of `vhil.db` without its `-wal` can lose or tear the
-latest commits. A snapshot directory appears only once complete. Copy
-`VHIL_BACKUP_DIR` off the host (rsync/restic from cron); traces (`runs`
-volume) aren't included, copy them the same way if history matters.
+latest commits. A snapshot directory appears only once complete. Snapshot
+directories are 0700 and their files 0600, owned by uid 10001: they hold
+every run's scenario and summary and unpushed branches.
+
+### Off-host copies
+
+Copy `VHIL_BACKUP_DIR` off the host, **encrypted**, from root's cron, e.g.
+with restic (client-side encryption; the repository password lives only on
+this host and in the team's password manager):
+
+```sh
+export RESTIC_REPOSITORY=sftp:backup@backup-host:/srv/restic/ifs-vhil
+export RESTIC_PASSWORD_FILE=/root/.restic-ifs-vhil      # 0400 root
+restic backup /var/backups/ifs-vhil && restic forget --keep-daily 14 --keep-monthly 6 --prune
+```
+
+or `tar -C /var/backups/ifs-vhil -c . | age -r <recipient public key> > ifs-vhil-$(date +%F).tar.age`
+and ship the `.age` file. Test a restore from the copy now and then. Traces
+(`runs` volume) aren't included; copy them the same way if history matters.
 
 ```sh
 dc="docker compose -f deploy/compose.prod.yaml"
@@ -282,13 +453,19 @@ scripts/vhil-docker.sh fw ecu      # once: ELFs it copies into the stack (no bui
 deploy/smoke.sh [workspace-ref]    # default dev
 ```
 
-It uses project `ifs-vhil-smoke`, plain HTTP on `localhost:18080` (app) and
-`:15443` (editor), dev auth and one worker, then: `/api/health` through the
-proxy, the editor through its auth gate, a save of `systems/ecu.yaml` to a
+It uses project `ifs-vhil-smoke`, plain HTTP on `127.0.0.1:18080` (app) and
+`:15443` (editor), dev auth, empty secret files and one worker, then:
+`/api/health` through the proxy, the editor through its auth gate, the
+hardening at runtime (every service uid 10001 with a read-only root and no
+capabilities; no secrets in the worker; the worker reaches neither the API,
+the editor, the metadata address nor anything off the host but GitHub through
+`egress`; the security headers), a save of `systems/ecu.yaml` to a
 branch that survives the workspace service running again, a 500 ms run of
 `systems/ecu.yaml` queued through the API and executed by the worker (passed,
-CAN frames in its trace), a snapshot, one more run, a restore (the later run
-gone), and the saved branch restored from the bundle. `down -v` at the end
+CAN frames in its trace), a snapshot (0700/0600), one more run, a restore
+(the later run gone), and the saved branch restored from the bundle. The
+services run the workspace ref's code, so to test changes to `vhil/` push the
+branch and pass it as the ref. `down -v` at the end
 (`SMOKE_KEEP=1` leaves it up). About 2 minutes after a first clone.
 
 Other local modes: `VHIL_SITE=localhost` / `VHIL_EDITOR_SITE=localhost:5443`
