@@ -31,6 +31,7 @@ from typing import Callable, Iterable, Optional
 
 from vhil import elf
 from vhil.bench import DEFAULT_RENODE, REPO, _free_port
+from vhil import renode as rn
 from vhil.renode import RenodeMonitor
 from vhil.system import System
 
@@ -104,89 +105,109 @@ def parse_edges(text: str) -> list[Edge]:
 
 def _ids(ids) -> str:
     if ids is None:
-        return ""
+        return '""'
     if isinstance(ids, int):
         ids = [ids]
-    return ",".join(f"0x{i:X}" for i in ids)
+    return rn.quote(",".join(f"0x{_int(i):X}" for i in ids))
+
+
+def _int(value) -> int:
+    """An integer argument (a whole float too), refused as anything else: a
+    bool, a string, a fraction."""
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise rn.UnsafeText(f"not an integer: {value!r}")
+    return int(value)
+
+
+def _hex(data) -> str:
+    return rn.quote(bytes(data).hex())
 
 
 def _arg(value) -> str:
+    """One monitor argument: a bool, a number or a string literal; a string
+    that could end its literal or the command is refused (vhil/renode.py)."""
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, str):
-        return f'"{value}"'
-    return str(value)
+        return rn.quote(value)
+    return rn.number(value)
 
 
 class CanBus:
     """One bus of the system, seen through its VhilCanProbe."""
 
     def __init__(self, sim: "Sim", name: str):
-        self.sim, self.name, self.probe = sim, name, f"vhil_probe_{name}"
+        self.sim, self.name, self.probe = sim, name, f"vhil_probe_{rn.ident(name)}"
 
     def frames(self, ids=None, since_us: int = 0) -> list[Frame]:
-        return parse_frames(self.sim.monitor(f'{self.probe} Frames "{_ids(ids)}" {since_us}'))
+        return parse_frames(self.sim.monitor(f'{self.probe} Frames {_ids(ids)} {_int(since_us)}'))
 
     def sent(self, ids=None, since_us: int = 0) -> list[Frame]:
         """The frames this probe sent (send, send_at, send_periodic, ...),
         stamped when they went out. frames() and count() never include them:
         they are what the bus delivered to the probe."""
-        return parse_frames(self.sim.monitor(f'{self.probe} Sent "{_ids(ids)}" {since_us}'))
+        return parse_frames(self.sim.monitor(f'{self.probe} Sent {_ids(ids)} {_int(since_us)}'))
 
     def last(self, can_id: int, since_us: int = 0) -> Optional[Frame]:
         frames = self.frames(can_id, since_us)
         return frames[-1] if frames else None
 
     def count(self, ids=None, since_us: int = 0) -> int:
-        return int(self.sim.monitor(f'{self.probe} Count "{_ids(ids)}" {since_us}').strip(), 0)
+        return int(self.sim.monitor(f'{self.probe} Count {_ids(ids)} {_int(since_us)}').strip(), 0)
 
     def send(self, can_id: int, data: bytes = b"", extended: bool = False) -> None:
-        self.sim.monitor(f'{self.probe} Send {can_id} "{data.hex()}" {_arg(extended)}')
+        self.sim.monitor(f'{self.probe} Send {_int(can_id)} {_hex(data)} {_arg(bool(extended))}')
 
     def send_batch(self, frames) -> None:
         """Standard frames [(id, data), ...] now, in order, in one call."""
-        items = " ".join(f"{can_id}:{bytes(data).hex()}" for can_id, data in frames)
+        items = " ".join(f"{_int(can_id)}:{bytes(data).hex()}" for can_id, data in frames)
         if items:
-            self.sim.monitor(f'{self.probe} SendBatch "{items}"')
+            self.sim.monitor(f'{self.probe} SendBatch {rn.quote(items)}')
 
     def send_sequence(self, frames, gap_us: int, burst: int = 1) -> None:
         """Standard frames [(id, data), ...] streamed from now at one per
         gap_us on average, `burst` frames every burst * gap_us (each burst is
         a synced action: a burst > 1 is much cheaper to emulate)."""
-        items = " ".join(f"{can_id}:{bytes(data).hex()}" for can_id, data in frames)
+        items = " ".join(f"{_int(can_id)}:{bytes(data).hex()}" for can_id, data in frames)
         if items:
-            self.sim.monitor(f'{self.probe} SendSequence "{items}" {int(gap_us)} {int(burst)}')
+            self.sim.monitor(f'{self.probe} SendSequence {rn.quote(items)} {int(gap_us)} '
+                             f'{int(burst)}')
 
     # Timing of everything the probe injects (send, send_at, send_periodic,
     # send_sequence): Renode runs it at a sync point, every time.quantum_s of
     # the system (500 us in systems/*.yaml), so a frame asked for at t goes
     # out at the first sync point at or after t (#130).
     def send_at(self, at_us: int, can_id: int, data: bytes = b"", extended: bool = False) -> None:
-        self.sim.monitor(f'{self.probe} SendAt {at_us} {can_id} "{data.hex()}" {_arg(extended)}')
+        self.sim.monitor(f'{self.probe} SendAt {_int(at_us)} {_int(can_id)} {_hex(data)} '
+                         f'{_arg(bool(extended))}')
 
     def send_periodic(self, key: str, can_id: int, data: bytes, period_ms: float,
                       start_us: int = 0, extended: bool = False) -> None:
-        self.sim.monitor(f'{self.probe} SendPeriodic "{key}" {can_id} "{data.hex()}" '
-                         f'{int(period_ms * 1000)} {start_us} {_arg(extended)}')
+        self.sim.monitor(f'{self.probe} SendPeriodic {rn.quote(key)} {_int(can_id)} '
+                         f'{_hex(data)} {int(period_ms * 1000)} {_int(start_us)} '
+                         f'{_arg(bool(extended))}')
 
     def update_periodic(self, key: str, data: bytes) -> None:
-        self.sim.monitor(f'{self.probe} UpdatePeriodic "{key}" "{data.hex()}"')
+        self.sim.monitor(f'{self.probe} UpdatePeriodic {rn.quote(key)} {_hex(data)}')
 
     def stop_periodic(self, key: str) -> None:
-        self.sim.monitor(f'{self.probe} StopPeriodic "{key}"')
+        self.sim.monitor(f'{self.probe} StopPeriodic {rn.quote(key)}')
 
 
 class BoardIO:
     """GPIO of one board: drive inputs, watch outputs."""
 
     def __init__(self, sim: "Sim", board: str):
-        self.sim, self.board, self.probe = sim, board, f"vhil_gpio_{board}"
+        self.sim, self.board, self.probe = sim, board, f"vhil_gpio_{rn.ident(board)}"
 
     def set_input(self, port: str, pin: int, level: bool) -> None:
         """Drive an input from outside the MCU, e.g. set_input("sysbus.gpioPortB",
         5, True). The level holds across the board's resets, as a switch or a
         carrier pull-up does (models/renode/VhilProbe.cs, Drive)."""
-        self.sim.monitor(f'{self.probe} Drive "{port}" {pin} {_arg(level)}', board=self.board)
+        self.sim.monitor(f'{self.probe} Drive {rn.quote(rn.path(port))} {_int(pin)} '
+                         f'{_arg(bool(level))}', board=self.board)
 
     def set_voltage(self, pin: str, volts: float) -> None:
         """Drive an analog input pin of the board (catalogue analog_in), e.g.
@@ -194,18 +215,19 @@ class BoardIO:
         _, kind, target = self.sim.system.resolve(f"{self.board}.{pin}")
         if kind != "analog":
             raise ValueError(f"{self.board}.{pin} is {kind}, not an analog input")
-        self.sim.monitor(f"{target['adc']} SetVoltage {round(volts * 1e6)} {target['channel']}",
-                         board=self.board)
+        self.sim.monitor(f"{rn.path(target['adc'])} SetVoltage {round(float(volts) * 1e6)} "
+                         f"{_int(target['channel'])}", board=self.board)
 
     def watch(self, port: str, pin: int) -> str:
-        self.sim.monitor(f'{self.probe} Watch "{port}" {pin}', board=self.board)
+        self.sim.monitor(f'{self.probe} Watch {rn.quote(rn.path(port))} {_int(pin)}',
+                         board=self.board)
         return f"{port}:{pin}"
 
     def edges(self, pin: str = "", since_us: int = 0) -> list[Edge]:
-        return parse_edges(self.sim.monitor(f'{self.probe} Edges "{pin}" {since_us}'))
+        return parse_edges(self.sim.monitor(f'{self.probe} Edges {rn.quote(pin)} {_int(since_us)}'))
 
     def level(self, pin: str) -> bool:
-        return self.sim.monitor(f'{self.probe} Level "{pin}"').strip() == "True"
+        return self.sim.monitor(f'{self.probe} Level {rn.quote(pin)}').strip() == "True"
 
 
 class Sim:
@@ -214,23 +236,25 @@ class Sim:
                  seed: int = 1, log_path: Path | None = None,
                  params: dict[str, dict] | None = None,
                  write_protect: dict[str, list[int]] | None = None,
-                 trace: Optional[int] = None, coverage_dir: Optional[Path] = None):
+                 trace: Optional[int] = None, coverage_dir: Optional[Path] = None,
+                 card_dirs: Iterable[Path | str] = ()):
         """params overrides device params for this run, e.g.
-        {"sd": {"image": "card.img"}}; write_protect a board's write-protected
-        flash sectors at power-on, as the system file's write_protect, e.g.
-        {"ecu": [0]}. trace and coverage_dir default to INSTRUMENT's."""
-        self.system = System(Path(system))
+        {"sd": {"image": "card.img"}}, checked as the system file's are;
+        write_protect a board's write-protected flash sectors at power-on, as
+        the system file's write_protect, e.g. {"ecu": [0]}. card_dirs adds
+        directories an sd-card image may come from, besides the configured
+        card-image directory (vhil.system.card_dirs), e.g. a test's tmp_path.
+        trace and coverage_dir default to INSTRUMENT's."""
+        self.system = System(Path(system), extra_card_dirs=card_dirs)
         for name, sectors in (write_protect or {}).items():
             if name not in self.system.boards:
                 raise ValueError(f"write_protect: no board '{name}' in {self.system.id}")
             self.system.boards[name].write_protect = list(sectors)
         self.system._check()
         for name, values in (params or {}).items():
-            dev = self.system.devices[name]
-            unknown = set(values) - set(dev["model_doc"].get("params", {}))
-            if unknown:
-                raise ValueError(f"device '{name}': unknown params {sorted(unknown)}")
-            dev["params"] = {**dev.get("params", {}), **values}
+            if name not in self.system.devices:
+                raise ValueError(f"params: no device '{name}' in {self.system.id}")
+            self.system.set_params(name, values)
         self.firmware = {b: Path(p).resolve() for b, p in firmware.items()}
         missing = set(self.system.images()) - set(self.firmware)
         if missing:
@@ -255,20 +279,22 @@ class Sim:
                                       stdout=log, stderr=subprocess.STDOUT)
         self._monitor = RenodeMonitor(port, timeout_s=600)
         m = self._monitor
-        m.execute(f"emulation SetSeed {self.seed}")
-        m.execute(f"include @{PROBE_SOURCE.as_posix()}")
-        m.execute(f"include @{script.as_posix()}")
+        m.execute(f"emulation SetSeed {_int(self.seed)}")
+        m.execute(f"include {rn.file_arg(PROBE_SOURCE)}")
+        m.execute(f"include {rn.file_arg(script)}")
         for bus in self.system.buses:
-            m.execute(f'emulation CreateVhilCanProbe "vhil_probe_{bus}"')
-            m.execute(f"connector Connect vhil_probe_{bus} {bus}")
+            probe = f"vhil_probe_{rn.ident(bus)}"
+            m.execute(f"emulation CreateVhilCanProbe {rn.quote(probe)}")
+            m.execute(f"connector Connect {probe} {bus}")
         for board in self.system.boards:
-            m.execute(f'emulation CreateVhilGpioProbe "vhil_gpio_{board}" "{board}"')
-        m.execute(f"emulation SetGlobalAdvanceImmediately {_arg(self.advance_immediately)}")
+            m.execute(f"emulation CreateVhilGpioProbe {rn.quote('vhil_gpio_' + rn.ident(board))} "
+                      f"{rn.quote(board)}")
+        m.execute(f"emulation SetGlobalAdvanceImmediately {_arg(bool(self.advance_immediately))}")
         if self.trace_blocks:
-            m.execute(f"include @{TRACE_SOURCE.as_posix()}")
+            m.execute(f"include {rn.file_arg(TRACE_SOURCE)}")
             for board in self.system.boards:
-                m.execute(f'emulation CreateVhilTrace "vhil_trace_{board}" "{board}" '
-                          f'{self.trace_blocks}')
+                m.execute(f"emulation CreateVhilTrace {rn.quote('vhil_trace_' + rn.ident(board))} "
+                          f"{rn.quote(board)} {_int(self.trace_blocks)}")
         if self.coverage_dir:
             self._start_coverage(Path(self.coverage_dir))
         _live.append(self)
@@ -283,7 +309,7 @@ class Sim:
         stem = f"{self.system.id}-{os.getpid()}-{next(_coverage_seq)}"
         for board in self.system.boards:
             log = (raw / f"{stem}-{board}.tblog").resolve()
-            self.monitor(f"cpu LogFile @{log.as_posix()}", board=board)
+            self.monitor(f"cpu LogFile {rn.file_arg(log)}", board=board)
             self.monitor("cpu LogTranslatedBlocks true", board=board)
             self.coverage_logs[board] = log
             (raw / f"{stem}-{board}.json").write_text(json.dumps(
@@ -368,7 +394,8 @@ class Sim:
     def call(self, path: str, method: str, *args, board: Optional[str] = None) -> str:
         """Call a peripheral or model method, e.g.
         sim.call("sysbus.spi1.isospi.cells7", "SetCell", 2, 3480)."""
-        return self.monitor(" ".join([path, method] + [_arg(a) for a in args]), board=board)
+        return self.monitor(" ".join([rn.path(path), rn.ident(method)] + [_arg(a) for a in args]),
+                            board=board)
 
     def power_cycle(self, board: str) -> None:
         """Cut and restore a board's power, as the virtual broker's relay does
@@ -384,7 +411,7 @@ class Sim:
         address comes from the board's ELF, not Renode's lookup (vhil/elf.py)."""
         address, _ = elf.symbol(self.firmware[board], symbol)
         op = {1: "ReadByte", 2: "ReadWord", 4: "ReadDoubleWord"}[size]
-        return int(self.monitor(f"sysbus {op} {address:#x}", board=board).strip(), 16)
+        return int(self.monitor(f"sysbus {op} {_int(address):#x}", board=board).strip(), 16)
 
     def monitor(self, command: str, board: Optional[str] = None) -> str:
         if self._monitor is None:
@@ -393,7 +420,7 @@ class Sim:
             board = next(iter(self.system.boards))
         self.last_activity = next(_activity)
         if board is not None:
-            self._monitor.execute(f'mach set "{board}"')
+            self._monitor.execute(f"mach set {rn.quote(rn.ident(board))}")
             self._mach = board
         return self._monitor.execute(command)
 

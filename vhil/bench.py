@@ -11,6 +11,7 @@ import tempfile
 import threading
 from pathlib import Path
 
+from vhil import renode as rn
 from vhil.broker import make_backend, watch_pacing
 from vhil.renode import RenodeMonitor
 from vhil.system import System
@@ -66,14 +67,14 @@ class VirtualBench:
             stdout=log, stderr=subprocess.STDOUT)
         self._monitor = RenodeMonitor(port)
         m = self._monitor
-        m.execute(f"include @{script}")
+        m.execute(f"include {rn.file_arg(script)}")
         # Pace to the wall clock ourselves: Renode's pacing repays every slow
         # stretch by running fast afterwards (see VhilPacer.cs).
-        m.execute(f"include @{PACER_SOURCE.as_posix()}")
+        m.execute(f"include {rn.file_arg(PACER_SOURCE)}")
         m.execute("emulation SetGlobalAdvanceImmediately true")
-        m.execute(f"emulation EnableVhilPacer {PACER_MAX_LAG_S}")
+        m.execute(f"emulation EnableVhilPacer {rn.number(PACER_MAX_LAG_S)}")
         for board in self.system.boards:
-            m.execute(f'mach set "{board}"')
+            m.execute(f"mach set {rn.quote(rn.ident(board))}")
             m.execute(f"cpu PerformanceInMips {WALL_CLOCK_MIPS}")
         # Carriers start unpowered: off their CAN buses, while the emulation
         # runs so virtual time stays paced to host time (see broker.py). The
@@ -81,9 +82,9 @@ class VirtualBench:
         config = self.system.bench_config()
         m.execute("start")
         for carrier in config.get("carriers", []):
-            m.execute(f'mach set "{carrier["machine"]}"')
+            m.execute(f"mach set {rn.quote(rn.ident(carrier['machine']))}")
             for controller, hub in carrier.get("can", {}).items():
-                m.execute(f"connector Disconnect {controller} {hub}")
+                m.execute(f"connector Disconnect {rn.path(controller)} {rn.ident(hub)}")
 
         sys.path.insert(0, str(self.ifs_hil))
         from broker.fake_bus import FakeHardwareManager

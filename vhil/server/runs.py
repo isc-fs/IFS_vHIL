@@ -59,6 +59,12 @@ MAX_ATTEMPTS = 2
 _REF = re.compile(r"^(?!-)(?!.*\.\.)[\w./-]{1,100}$")
 _SELECT = re.compile(r"^tests/(?!.*\.\.)[\w/.-]+\.py(::[\w\[\]\-.,=]+)*$")
 _HEX = re.compile(r"^([0-9a-fA-F]{2})*$")
+# Names a scenario uses to point into its system: a board or bus instance
+# (schema $defs/name) and a board connector or pin. They are matched against
+# the system before a run is queued (check_against_system); the shape is
+# checked here too, so nothing else can reach a monitor command.
+_NAME = r"^[A-Za-z_][A-Za-z0-9_]{0,63}$"
+_PIN = r"^[A-Za-z0-9_]{1,64}$"
 
 
 # -- scenario models -------------------------------------------------------------
@@ -69,7 +75,7 @@ class _Model(BaseModel):
 
 class _Can(_Model):
     at_ms: float = Field(0, ge=0)
-    bus: str
+    bus: str = Field(pattern=_NAME)
     id: int = Field(ge=0, le=0x1FFFFFFF)
     data: str = ""          # hex, up to 64 bytes (CAN FD)
     ext: bool = False
@@ -101,16 +107,16 @@ class CanPeriodic(_Can):
 class GpioSet(_Model):
     kind: Literal["gpio"]
     at_ms: float = Field(0, ge=0)
-    board: str
-    pin: str                # catalogue gpio name, e.g. "PB5"
+    board: str = Field(pattern=_NAME)
+    pin: str = Field(pattern=_PIN)      # catalogue gpio name, e.g. "PB5"
     level: bool
 
 
 class AnalogSet(_Model):
     kind: Literal["analog"]
     at_ms: float = Field(0, ge=0)
-    board: str
-    pin: str                # catalogue analog_in name, e.g. "PF7"
+    board: str = Field(pattern=_NAME)
+    pin: str = Field(pattern=_PIN)      # catalogue analog_in name, e.g. "PF7"
     volts: float = Field(ge=0, le=3.6)
 
 
@@ -119,7 +125,7 @@ Stimulus = Annotated[Union[CanSend, CanPeriodic, GpioSet, AnalogSet], Field(disc
 
 class SymbolWatch(_Model):
     kind: Literal["symbol"]
-    board: str
+    board: str = Field(pattern=_NAME)
     name: str = Field(pattern=r"^[A-Za-z_]\w{0,127}$")
     size: Literal[1, 2, 4] = 1
     period_ms: float = Field(10, ge=1)
@@ -127,8 +133,8 @@ class SymbolWatch(_Model):
 
 class PinWatch(_Model):
     kind: Literal["pin"]
-    board: str
-    pin: str
+    board: str = Field(pattern=_NAME)
+    pin: str = Field(pattern=_PIN)
 
 
 Watch = Annotated[Union[SymbolWatch, PinWatch], Field(discriminator="kind")]

@@ -323,8 +323,7 @@
                 "$ref": "#/$defs/id"
               },
               "firmware_ref": {
-                "type": "string",
-                "minLength": 1,
+                "$ref": "#/$defs/ref",
                 "description": "Branch or tag of the firmware's repo to build for this board, in place of the catalogue entry's ref. `vhil.system build --ref` still overrides it."
               },
               "bootloader": {
@@ -332,8 +331,7 @@
                 "description": "Firmware (catalog/firmware) in sector 0 ahead of the application, as the board is provisioned. The board then boots through it from a provisioned flash image."
               },
               "bootloader_ref": {
-                "type": "string",
-                "minLength": 1,
+                "$ref": "#/$defs/ref",
                 "description": "Branch or tag of the bootloader's repo, in place of its catalogue ref. Only with a bootloader."
               },
               "node_id": {
@@ -382,7 +380,8 @@
               },
               "host_netdev": {
                 "type": "string",
-                "description": "SocketCAN interface this bus is bridged to, when bridging is on."
+                "description": "SocketCAN interface this bus is bridged to, when bridging is on.",
+                "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,14}$"
               }
             }
           }
@@ -498,7 +497,11 @@
                     "string",
                     "boolean"
                   ]
-                }
+                },
+                "propertyNames": {
+                  "$ref": "#/$defs/name"
+                },
+                "description": "Overrides of the model's params, each of its default's type; a string param takes the model's param_formats format, or else letters, digits and _ . + -."
               },
               "sdmmc": {
                 "$ref": "#/$defs/endpoint"
@@ -668,6 +671,21 @@
               "string",
               "boolean"
             ]
+          },
+          "propertyNames": {
+            "$ref": "#/$defs/name"
+          }
+        },
+        "param_formats": {
+          "type": "object",
+          "description": "String param -> the format its values take. card-image: a card image file inside a card-image directory (vhil.system.card_dirs). A string param without one takes letters, digits and _ . + - only.",
+          "propertyNames": {
+            "$ref": "#/$defs/name"
+          },
+          "additionalProperties": {
+            "enum": [
+              "card-image"
+            ]
           }
         },
         "backend": {
@@ -793,6 +811,11 @@
           }
         }
       }
+    },
+    "ref": {
+      "type": "string",
+      "description": "A plain git branch or tag: no option look-alike, no '..'.",
+      "pattern": "^(?!-)(?!.*\\.\\.)[A-Za-z0-9_./-]{1,100}$"
     }
   },
   "oneOf": [

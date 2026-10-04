@@ -28,6 +28,7 @@ import time
 from pathlib import Path
 
 
+from vhil import renode as rn
 from vhil.renode import RenodeMonitor
 
 log = logging.getLogger("vhil.broker")
@@ -67,7 +68,7 @@ def power_on_commands(machine: str, vbat: bool) -> list[str]:
     POR (models/renode/VhilResetFlags.cs)."""
     wipe = [] if vbat else ([f"sysbus WriteDoubleWord {addr:#x} 0x0" for addr in RTC_BKP]
                             + ["sysbus.backupSram ZeroAll"])
-    return wipe + [f"vhil_reset_{machine} PowerOn", "machine Reset",
+    return wipe + [f"vhil_reset_{rn.ident(machine)} PowerOn", "machine Reset",
                    'cpu SetRegister "BasePri" 0x0']
 
 
@@ -91,12 +92,18 @@ def make_backend(fake_cls, monitor: RenodeMonitor, config: dict, boot_check: boo
             log.warning("monitor: %s -> %s", command, reply)
         return reply
 
+    def mach_set(machine: str) -> None:
+        monitor.execute(f"mach set {rn.quote(rn.ident(machine))}")
+
+    def connector(verb: str, controller: str, hub: str) -> str:
+        return f"connector {verb} {rn.path(controller)} {rn.ident(hub)}"
+
     def set_buses(machine: str, connect: bool) -> None:
         verb = "Connect" if connect else "Disconnect"
         with lock:
-            monitor.execute(f'mach set "{machine}"')
+            mach_set(machine)
             for controller, hub in can_of[machine].items():
-                checked(f"connector {verb} {controller} {hub}")
+                checked(connector(verb, controller, hub))
 
     class VirtualHardwareManager(fake_cls):
         def __init__(self) -> None:
@@ -105,7 +112,7 @@ def make_backend(fake_cls, monitor: RenodeMonitor, config: dict, boot_check: boo
 
         def _on(self, machine: str, command: str) -> str:
             with lock:
-                monitor.execute(f'mach set "{machine}"')
+                mach_set(machine)
                 return monitor.execute(command)
 
         def tca_write_pin(self, addr, port, pin, value):
@@ -140,11 +147,11 @@ def make_backend(fake_cls, monitor: RenodeMonitor, config: dict, boot_check: boo
             # repay above to matter.
             if value:
                 with lock:
-                    monitor.execute(f'mach set "{machine}"')
+                    mach_set(machine)
                     checked("machine Pause")
                     try:
                         for controller, hub in can_of[machine].items():
-                            checked(f"connector Connect {controller} {hub}")
+                            checked(connector("Connect", controller, hub))
                         for command in power_on_commands(machine, vbat[machine]):
                             checked(command)
                     finally:
@@ -154,14 +161,21 @@ def make_backend(fake_cls, monitor: RenodeMonitor, config: dict, boot_check: boo
                 # Where the CPU was when power went: the first clue when a
                 # boot never reaches the bus.
                 pc = self._on(machine, "cpu PC").strip()
-                log.info("%s power cut at %s %s", machine, pc,
-                         self._on(machine, f"sysbus FindSymbolAt {pc}").strip())
+                log.info("%s power cut at %s %s", machine, pc, self._symbol(machine, pc))
             self._powered[machine] = value
             log.info("%s %s", machine, "powered" if value else "unpowered")
             if value and boot_check:
                 timer = threading.Timer(BOOT_CHECK_S, self._check_boot, args=(machine,))
                 timer.daemon = True
                 timer.start()
+
+        def _symbol(self, machine: str, pc: str) -> str:
+            """The symbol at a PC Renode printed; '?' if the reply is no address."""
+            try:
+                address = int(pc.split()[-1], 0)
+            except (IndexError, ValueError):
+                return "?"
+            return self._on(machine, f"sysbus FindSymbolAt {address:#x}").strip()
 
         def _check_boot(self, machine):
             """#125: a board found in a fault handler shortly after power-on
@@ -170,7 +184,7 @@ def make_backend(fake_cls, monitor: RenodeMonitor, config: dict, boot_check: boo
                 if not self._powered.get(machine):
                     return
                 pc = self._on(machine, "cpu PC").strip()
-                sym = self._on(machine, f"sysbus FindSymbolAt {pc}").strip()
+                sym = self._symbol(machine, pc)
                 if not any(h in sym for h in FAULT_HANDLERS):
                     return
                 regs = {name: self._on(machine, f"sysbus ReadDoubleWord {addr:#x}").strip()
@@ -194,7 +208,7 @@ def make_backend(fake_cls, monitor: RenodeMonitor, config: dict, boot_check: boo
                 return
             uv = max(0, int(round(float(volts) * 1e6)))
             self._on(route["machine"],
-                     f"{route['adc']} SetVoltage {uv} {route['adc_channel']}")
+                     f"{rn.path(route['adc'])} SetVoltage {uv} {int(route['adc_channel'])}")
 
         def health(self):
             h = super().health()

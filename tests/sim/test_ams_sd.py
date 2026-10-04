@@ -91,6 +91,7 @@ def logged(tmp_path_factory, firmware, request):
         Path(log_dir).mkdir(parents=True, exist_ok=True)
         log = Path(log_dir) / "ams-sd.log"
     with Sim(system, {"ams": firmware("ams")}, params={"sd": {"image": str(img)}},
+             card_dirs=[img.parent],
              log_path=log) as sim:
         sim.monitor("sysbus.spi1.isospi.cells3 SetCell 2 3650", board="ams")       # c1_11
         sim.monitor("sysbus.spi1.isospi.cells6 SetTemperature 16 400", board="ams")  # t3_10
@@ -169,7 +170,7 @@ def runs(tmp_path_factory, firmware):
     """RUNS boots of RUN_S seconds on one card, each ended by a power cut."""
     img = _card(tmp_path_factory.mktemp("sd-runs"))
     with Sim(REPO / "systems" / "ams.yaml", {"ams": firmware("ams")},
-             params={"sd": {"image": str(img)}}) as sim:
+             params={"sd": {"image": str(img)}}, card_dirs=[img.parent]) as sim:
         for _ in range(RUNS):
             sim.run_for(ms=RUN_S * 1000)
             _cut(sim)
@@ -251,7 +252,8 @@ def dead(tmp_path_factory, firmware):
     6 s; then it answers, for 4 s more. Keeps what the AMS showed in each."""
     img = _card(tmp_path_factory.mktemp("sd-dead"))
     with Sim(REPO / "systems" / "ams.yaml", {"ams": firmware("ams")},
-             params={"sd": {"image": str(img), "dead": True}}) as sim:
+             params={"sd": {"image": str(img), "dead": True}},
+             card_dirs=[img.parent]) as sim:
         ok = sim.io("ams").watch(*AMS_OK)
         _boot_armed(sim, 5000)
         tries_at_5s = _unanswered(sim)
@@ -310,7 +312,7 @@ def dies(tmp_path_factory, firmware):
     emulate.)"""
     img = _card(tmp_path_factory.mktemp("sd-dies"))
     with Sim(REPO / "systems" / "ams.yaml", {"ams": firmware("ams")},
-             params={"sd": {"image": str(img)}}) as sim:
+             params={"sd": {"image": str(img)}}, card_dirs=[img.parent]) as sim:
         ok = sim.io("ams").watch(*AMS_OK)
         _boot_armed(sim, 5000)
         logging = sim.read_symbol("ams", LOG_STATE)
