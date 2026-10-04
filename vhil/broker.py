@@ -119,18 +119,26 @@ def make_backend(fake_cls, monitor: RenodeMonitor, config: dict):
             # pending; a booted firmware that fills its TX FIFO before the
             # Connect lands (FDCAN2's 16 slots: ~80 ms of 0x100 + 0x506) is
             # refused from then on and never writes TXBAR again, so that bus
-            # stays silent until the next power cycle. The CPU is halted
-            # first so the old firmware can't queue frames between the
-            # Connect and the reset; `machine Reset` releases the halt.
+            # stays silent until the next power cycle. The board's machine is
+            # paused (only it; the others run on) for the Connect and the
+            # reset, so the old firmware can't queue frames in between, and
+            # started after: `machine Reset` keeps a paused machine paused.
+            # Not `cpu IsHalted`: halting mid-exception-entry let a pending
+            # PendSV survive the reset (the AMS then entered it with PSP = 0)
+            # and could leave Reset waiting on the halted CPU thread (#125).
+            # The pause lasts the few commands, far too short for the pacing
+            # repay above to matter.
             if value:
                 with lock:
                     monitor.execute(f'mach set "{machine}"')
-                    checked("cpu IsHalted true")
-                    for controller, hub in can_of[machine].items():
-                        checked(f"connector Connect {controller} {hub}")
-                    for command in power_on_commands(machine, vbat[machine]):
-                        checked(command)
-                    checked("cpu IsHalted false")
+                    checked("machine Pause")
+                    try:
+                        for controller, hub in can_of[machine].items():
+                            checked(f"connector Connect {controller} {hub}")
+                        for command in power_on_commands(machine, vbat[machine]):
+                            checked(command)
+                    finally:
+                        checked("machine Start")
             else:
                 set_buses(machine, connect=False)
                 # Where the CPU was when power went: the first clue when a
