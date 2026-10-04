@@ -143,6 +143,14 @@ class CanBus:
         if items:
             self.sim.monitor(f'{self.probe} SendBatch "{items}"')
 
+    def send_sequence(self, frames, gap_us: int, burst: int = 1) -> None:
+        """Standard frames [(id, data), ...] streamed from now at one per
+        gap_us on average, `burst` frames every burst * gap_us (each burst is
+        a synced action: a burst > 1 is much cheaper to emulate)."""
+        items = " ".join(f"{can_id}:{bytes(data).hex()}" for can_id, data in frames)
+        if items:
+            self.sim.monitor(f'{self.probe} SendSequence "{items}" {int(gap_us)} {int(burst)}')
+
     def send_at(self, at_us: int, can_id: int, data: bytes = b"", extended: bool = False) -> None:
         self.sim.monitor(f'{self.probe} SendAt {at_us} {can_id} "{data.hex()}" {_arg(extended)}')
 
@@ -165,7 +173,10 @@ class BoardIO:
         self.sim, self.board, self.probe = sim, board, f"vhil_gpio_{board}"
 
     def set_input(self, port: str, pin: int, level: bool) -> None:
-        self.sim.monitor(f"{port} OnGPIO {pin} {_arg(level)}", board=self.board)
+        """Drive an input from outside the MCU, e.g. set_input("sysbus.gpioPortB",
+        5, True). The level holds across the board's resets, as a switch or a
+        carrier pull-up does (models/renode/VhilProbe.cs, Drive)."""
+        self.sim.monitor(f'{self.probe} Drive "{port}" {pin} {_arg(level)}', board=self.board)
 
     def set_voltage(self, pin: str, volts: float) -> None:
         """Drive an analog input pin of the board (catalogue analog_in), e.g.

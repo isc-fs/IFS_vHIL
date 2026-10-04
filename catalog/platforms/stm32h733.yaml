@@ -2,10 +2,9 @@ kind: platform
 id: stm32h733
 description: >-
   STM32H733ZG (Cortex-M7, 1 MB flash). Renode ships only H743/H753/H747, so
-  this reuses its stm32h7.repl and adds FDCAN3, TIM23, USART10, SPI1, the H73x ADC3 and
-  SDMMC1 with IDMA, plus
-  the 24 MHz HSE of the MLC carriers. Addresses and IRQs from ST's
-  stm32h733xx.h.
+  this reuses its stm32h7.repl and adds FDCAN3, TIM23, USART10, SPI1, the H73x
+  ADC3, SDMMC1 with IDMA and an I2C2 that NACKs, plus the 24 MHz HSE of the
+  MLC carriers. Addresses and IRQs from ST's stm32h733xx.h.
 backend: renode
 renode:
   repl: platforms/cpus/stm32h733.repl
@@ -17,6 +16,9 @@ renode:
     - models/renode/Stm32H7Sdmmc.cs
     # FDCAN with fault hooks for tests (Renode's MCAN has no error states).
     - models/renode/Stm32H7Fdcan.cs
+    # I2C master that NACKs an unanswered address (Renode's never does).
+    # Device models for I2C targets build on it, so it loads before them.
+    - models/renode/Stm32H7I2c.cs
     # RCC_RSR reset-source flags across resets (Renode's RCC resets them).
     - models/renode/VhilResetFlags.cs
   # After each board's platform loads; {board} is its machine name.
