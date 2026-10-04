@@ -1,0 +1,37 @@
+# The shared web app (M5, #13; docs/architecture/m5-web-app.md), local/dev:
+#
+#   docker compose -f docker/compose.yaml up        # then http://localhost:8080
+#
+# Images come from `scripts/vhil-docker.sh image` (ifs-vhil, ifs-vhil-editor).
+# The repository checkout is the workspace: its systems/ and catalog/ are what
+# the app shows and edits. VHIL_AUTH=dev: no login (M5.5 adds GitHub OAuth).
+name: ifs-vhil
+services:
+  api:
+    image: ifs-vhil
+    command: python -m vhil.server --host 0.0.0.0 --port 8080
+    working_dir: /work
+    volumes:
+      - ..:/work
+      - vhil-data:/vhil
+    environment:
+      VHIL_WORKSPACE: /work
+      VHIL_DATA: /vhil/server
+      VHIL_AUTH: dev
+    ports:
+      - "${VHIL_WEB_PORT:-8080}:8080"
+  editor:
+    image: ifs-vhil-editor
+    command: scripts/editor.sh
+    working_dir: /work
+    volumes:
+      - ..:/work
+      - vhil-data:/vhil
+    environment:
+      PM_HOST: 0.0.0.0
+    ports:
+      # Not 5000 on the host: macOS's AirPlay Receiver holds it.
+      - "${VHIL_EDITOR_PORT:-5050}:5000"
+volumes:
+  vhil-data:
+    external: true

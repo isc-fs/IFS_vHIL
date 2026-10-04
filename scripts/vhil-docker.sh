@@ -18,6 +18,8 @@
 #                                                IFS_HIL's ECU suite over vcan
 #                                                (VHIL_SYSTEM=systems/ecu-ams.yaml: with the AMS)
 #   scripts/vhil-docker.sh editor                system editor on http://localhost:5050
+#   scripts/vhil-docker.sh server                web app API + shell on http://localhost:8080
+#                                                (M5; full stack: docker/compose.yaml)
 #   scripts/vhil-docker.sh shell                 a shell in the container
 #   scripts/vhil-docker.sh run <cmd...>          any command in the container
 #
@@ -170,6 +172,9 @@ editor)
     in_container "$prelude"'
         export VHIL_ECU_ELF=$(elf ecu) VHIL_AMS_ELF=$(elf ams) PM_HOST=0.0.0.0
         exec scripts/editor.sh' ;;
+server)
+    run_args=(-p "${VHIL_WEB_PORT:-8080}:8080")
+    in_container 'export VHIL_DATA=/vhil/server; exec python -m vhil.server --host 0.0.0.0 --port 8080' ;;
 shell) in_container 'exec bash' ;;
 run) in_container 'exec "$@"' "$@" ;;
 *) sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'; [ "$cmd" = help ] ;;
