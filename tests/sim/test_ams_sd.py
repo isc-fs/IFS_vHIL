@@ -14,6 +14,13 @@ Firmware facts (IFS08-CE-AMS):
     holds it HIGH and BSP_SD_Init returns before touching SDMMC
     (fatfs_platform.c BSP_PlatformIsDetected); the logger retries the mount
     every tick and never blocks (sd_logger_task.cpp:1-20)
+  g_log_state 0=boot 1=no_card 2=logging 3=io_error (sd_logger_task.cpp:117):
+    1 when f_mount fails (:662-674), 3 on teardown after an I/O error
+    (:356-365, :678/:687/:750)
+  a dead card (detect LOW, no answer): BSP_SD_Init -> HAL_SD_Init
+    (bsp_driver_sd.c:42-62) runs the card identification, whose commands
+    time out on the controller (Stm32H7Sdmmc.cs header, RM0468 60.5.4); the
+    logger is SdLoggerTask at osPriorityLow (main.c:112-115)
 """
 import shutil
 import subprocess
@@ -31,6 +38,10 @@ LOG_S, AFTER_CUT_S = 8, 6
 RUNS, RUN_S = 3, 5
 COLUMNS = 314
 STATUS, TIMING = 0x4A0, 0x6C1
+SDMMC, CARD = "sysbus.sdmmc1", "sysbus.sdmmc1.sd"   # catalog/boards/mlc-carrier.yaml
+LOG_STATE = "_ZN12_GLOBAL__N_111g_log_stateE"      # sd_logger_task.cpp:117
+LOG_NO_CARD, LOG_LOGGING = 1, 2                    # sd_logger_task.cpp:117, 666, 668
+AMS_OK = ("sysbus.gpioPortB", 4)
 
 
 def _tool(name):
@@ -202,3 +213,150 @@ def test_an_empty_slot_boots_clean(firmware):
         t = [f.t_us for f in sim.can("can_acu").frames(STATUS)]
         assert t and t[0] <= 1_000_000
         assert all(abs((b - a) - 500_000) <= 10_000 for a, b in zip(t, t[1:]))
+
+
+def _unanswered(sim):
+    return int(sim.monitor(f"{SDMMC} UnansweredCommands", board="ams").strip(), 0)
+
+
+def _health(sim, ok, since_us=0):
+    """What the AMS shows of itself: FSM state, AMS_OK, the 0x4A0 cadence
+    since `since_us` and the voltage poll's worst time (0x6C1, armed)."""
+    t = [f.t_us for f in sim.can("can_acu").frames(STATUS) if f.t_us >= since_us]
+    timing = sim.can("can_acu").last(TIMING)
+    return SimpleNamespace(
+        state=sim.read_symbol("ams", "g_state_telemetry"), ok=sim.io("ams").level(ok),
+        deltas=[b - a for a, b in zip(t, t[1:])],
+        poll_max_ms=int.from_bytes(timing.data[2:4], "big") if timing else None)
+
+
+def _assert_healthy(h, what):
+    assert h.state == 0, f"{what}: FSM state {h.state}, not Start"
+    assert h.ok, f"{what}: AMS_OK low"
+    assert len(h.deltas) >= 4 and all(abs(d - 500_000) <= 10_000 for d in h.deltas), \
+        f"{what}: 0x4A0 gaps {h.deltas}"
+    assert h.poll_max_ms is not None and h.poll_max_ms < 50, \
+        f"{what}: voltage poll max {h.poll_max_ms} ms"
+
+
+def _boot_armed(sim, ms):
+    sim.run_for(ms=1500)                        # CAN up, listening for the arm
+    sim.can("can_acu").send(0x7F0, bytes.fromhex("DEADBEEF"))
+    sim.run_for(ms=ms - 1500)
+
+
+@pytest.fixture(scope="module")
+def dead(tmp_path_factory, firmware):
+    """A card in the slot (detect LOW) that never answers from power-on, for
+    6 s; then it answers, for 4 s more. Keeps what the AMS showed in each."""
+    img = _card(tmp_path_factory.mktemp("sd-dead"))
+    with Sim(REPO / "systems" / "ams.yaml", {"ams": firmware("ams")},
+             params={"sd": {"image": str(img), "dead": True}}) as sim:
+        ok = sim.io("ams").watch(*AMS_OK)
+        _boot_armed(sim, 5000)
+        tries_at_5s = _unanswered(sim)
+        sim.run_for(ms=1000)
+        dead = _health(sim, ok)
+        dead.log_state = sim.read_symbol("ams", LOG_STATE)
+        dead.tries = (tries_at_5s, _unanswered(sim))
+        sim.monitor(f"{CARD} Respond true", board="ams")
+        t = sim.now_us()
+        sim.run_for(ms=4000)
+        alive = _health(sim, ok, since_us=t)
+        alive.log_state = sim.read_symbol("ams", LOG_STATE)
+    alive.files = _ls(img)
+    return SimpleNamespace(dead=dead, alive=alive)
+
+
+def test_a_dead_card_boots_clean(dead):
+    """S-143 (dead card): detect LOW but no answer from power-on: the AMS
+    boots to a healthy Start, AMS_OK HIGH, 0x4A0 on its 500 ms and the
+    voltage poll in budget; the card identification never stalls a task."""
+    _assert_healthy(dead.dead, "dead card")
+
+
+def test_the_logger_reports_no_card_and_keeps_retrying(dead):
+    """The failed mount leaves g_log_state at no_card (sd_logger_task.cpp:668)
+    and the next drain tick tries again (:662): the controller keeps seeing
+    unanswered commands."""
+    assert dead.dead.log_state == LOG_NO_CARD
+    before, after = dead.dead.tries
+    assert after > before > 0, f"unanswered commands {before} -> {after}: no mount retries"
+
+
+def test_a_card_that_comes_alive_keeps_the_ams_healthy(dead):
+    _assert_healthy(dead.alive, "card answering again")
+
+
+@pytest.mark.xfail(strict=True, reason=(
+    "AMS firmware: a card that failed identification is never mounted until a "
+    "reboot. HAL_SD_InitCard ORs each failure into hsd1.ErrorCode "
+    "(stm32h7xx_hal_sd.c:534/:543) and nothing clears it before the retry: "
+    "BSP_SD_Init calls HAL_SD_Init again without HAL_SD_DeInit "
+    "(bsp_driver_sd.c:51), HAL_SD_Init only zeroes ErrorCode on success "
+    "(stm32h7xx_hal_sd.c:451), and HAL_SD_ConfigWideBusOperation fails on any "
+    "stale bit (stm32h7xx_hal_sd.c:2449). Seen: hsd1.ErrorCode = 0x4 "
+    "(SDMMC_ERROR_CMD_RSP_TIMEOUT) after the card answers, g_log_state stuck at 1."))
+def test_a_card_that_comes_alive_is_mounted_and_logged(dead):
+    """The logger mounts the card once it answers and starts LOG0000."""
+    assert dead.alive.log_state == LOG_LOGGING, f"g_log_state {dead.alive.log_state}"
+    assert "LOG0000.TMP" in dead.alive.files, f"card holds {dead.alive.files}"
+
+
+@pytest.fixture(scope="module")
+def dies(tmp_path_factory, firmware):
+    """Logging on a good card for 5 s, then the card stops answering; 3 s
+    more. (The logger's card-status busy-wait makes these 3 s slow to
+    emulate.)"""
+    img = _card(tmp_path_factory.mktemp("sd-dies"))
+    with Sim(REPO / "systems" / "ams.yaml", {"ams": firmware("ams")},
+             params={"sd": {"image": str(img)}}) as sim:
+        ok = sim.io("ams").watch(*AMS_OK)
+        _boot_armed(sim, 5000)
+        logging = sim.read_symbol("ams", LOG_STATE)
+        t = sim.now_us()
+        sim.monitor(f"{CARD} Respond false", board="ams")
+        sim.run_for(ms=3000)
+        after = _health(sim, ok, since_us=t)
+        after.log_state = sim.read_symbol("ams", LOG_STATE)
+        after.ok_edges = sim.io("ams").edges(ok, since_us=t)
+        after.fault = sim.read_symbol("ams", "g_fault_reason_telemetry")
+    return SimpleNamespace(logging=logging, after=after)
+
+
+def test_a_card_that_dies_mid_run_is_torn_down(dies):
+    """The first write after the card dies fails and the logger tears down
+    to io_error (sd_logger_task.cpp:356-365, :687/:750) instead of hanging
+    in the transfer."""
+    assert dies.logging == LOG_LOGGING
+    assert dies.after.log_state in (3, LOG_NO_CARD), f"g_log_state {dies.after.log_state}"
+
+
+@pytest.mark.xfail(strict=True, reason=(
+    "AMS firmware: a card that dies mid-run trips BmsStale. The failing write "
+    "enters SD_CheckStatusWithTimeout (FATFS/Target/sd_diskio.c:138-156, from "
+    "SD_write :431), which polls CMD13 without blocking for SD_TIMEOUT = 30 s "
+    "(:57); the same wait follows on every remount, since FatFs keeps the "
+    "drive initialised. SdLoggerTask is osPriorityLow (main.c:112-115) but the "
+    "timer service task is lower (configTIMER_TASK_PRIORITY 2, "
+    "FreeRTOSConfig.h:96), so the BMS poll timers (bms_poll_task.cpp:194-200, "
+    ":800-807) stop firing, BmsPollTask waits forever on bms_events (:814-815) "
+    "and SafetyTask latches Error, reason 3 = BmsStale (BmsStaleMs 350, "
+    "ams_config.hpp:162): AMS_OK falls ~600 ms after the card dies."))
+def test_a_card_that_dies_mid_run_leaves_the_ams_healthy(dies):
+    assert dies.after.ok_edges == [], f"AMS_OK edges {dies.after.ok_edges}, fault {dies.after.fault}"
+    _assert_healthy(dies.after, "card died mid-run")
+
+
+def test_a_board_with_no_sd_device_boots_clean(firmware):
+    """No card model at all and card detect left LOW: commands find no card
+    and time out (CMDSENT / CTIMEOUT), so nothing spins on a missing CMDSENT
+    (formerly CLAUDE.md invariant 8): healthy Start, logger at no_card."""
+    sim = Sim(REPO / "systems" / "ams.yaml", {"ams": firmware("ams")})
+    del sim.system.devices["sd"]
+    with sim:
+        ok = sim.io("ams").watch(*AMS_OK)
+        _boot_armed(sim, 6000)
+        _assert_healthy(_health(sim, ok), "no sd device")
+        assert sim.read_symbol("ams", LOG_STATE) == LOG_NO_CARD
+        assert _unanswered(sim) > 0
