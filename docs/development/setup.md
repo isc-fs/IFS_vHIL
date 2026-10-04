@@ -118,8 +118,20 @@ it back onto the original text, comments kept. Natively:
    `python -m vhil.editor to-graph systems/ams.yaml -o ams.json` and drop the
    file on the canvas. Run needs `VHIL_<FIRMWARE>_ELF` (e.g. `VHIL_AMS_ELF`).
 
-Pipeline Manager's `./validate <spec> <dataflow>` checks generated files
-against its own schema: `python -m vhil.editor spec -o spec.json`.
+The image applies our patches in [`docker/pm/`](../../docker/pm) on top of
+the pinned release before building the frontend (natively: `git apply
+docker/pm/*.patch` in the checkout before step 2's `./build`).
+`bus-per-instance.patch` fixes graphs with more than one CAN bus: v0.5.2
+shares one `bus` object between every node of a type, so on load each bus
+takes the stubs of the last and the connections to the others dangle
+("Missing dst s:can_inv:0").
+
+`python -m vhil.editor check [systems...]` runs Pipeline Manager's
+`./validate <spec> <dataflow>...` on the specification and each system's
+dataflow (default: `systems/*.yaml`). It loads them through the frontend's
+own code, so it catches what a schema check misses. In Docker:
+`scripts/vhil-docker.sh editor-check`; `tests/unit` runs it too when
+`$PM_DIR` points at a checkout (the editor image).
 
 **From the web app** (`#/editor`, M5.4): the shell embeds the editor
 (`VHIL_EDITOR_URL`, default http://localhost:5050) and loads a system into it

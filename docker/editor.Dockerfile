@@ -19,8 +19,15 @@ RUN case "$TARGETARCH" in amd64) a=x64 ;; arm64) a=arm64 ;; esac \
     && mv "/opt/node-v${NODE_VERSION}-linux-${a}" /opt/node
 ENV PATH=/opt/node/bin:$PATH
 
-# Pipeline Manager in its own venv: it pins old dependency versions.
+# Pipeline Manager in its own venv: it pins old dependency versions. Our
+# patches (docker/pm/) go on before the frontend is built:
+#   bus-per-instance  every node of a type shared one `bus` object, so a
+#                     graph with two CAN buses lost all but the last bus's
+#                     stubs on load ("Missing dst s:<bus>:0"). Not fixed
+#                     upstream as of v0.5.2 / main.
+COPY pm/ /tmp/pm-patches/
 RUN git clone -q --depth 1 -b "$PM_REF" https://github.com/antmicro/kenning-pipeline-manager /opt/pm \
+    && git -C /opt/pm apply /tmp/pm-patches/*.patch \
     && python -m venv /opt/pm-venv \
     && /opt/pm-venv/bin/pip install --no-cache-dir -e /opt/pm \
     && cd /opt/pm && PATH=/opt/pm-venv/bin:$PATH ./build server-app

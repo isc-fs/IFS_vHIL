@@ -21,6 +21,8 @@
 #   scripts/vhil-docker.sh server                web app API + shell on http://localhost:8080
 #                                                (M5; full stack: docker/compose.yaml)
 #   scripts/vhil-docker.sh worker [--once ...]   run worker for the server's queue (vhil.worker)
+#   scripts/vhil-docker.sh editor-check [systems...]
+#                                                Pipeline Manager loads every system's graph
 #   scripts/vhil-docker.sh shell                 a shell in the container
 #   scripts/vhil-docker.sh run <cmd...>          any command in the container
 #
@@ -173,6 +175,11 @@ editor)
     in_container "$prelude"'
         export VHIL_ECU_ELF=$(elf ecu) VHIL_AMS_ELF=$(elf ams) PM_HOST=0.0.0.0
         exec scripts/editor.sh' ;;
+editor-check)
+    # Pipeline Manager's ./validate (its frontend's load) on each system's
+    # dataflow, in the editor image where the patched checkout lives.
+    image=$editor_image
+    in_container 'exec python -m vhil.editor check "$@"' "$@" ;;
 server)
     run_args=(-p "${VHIL_WEB_PORT:-8080}:8080")
     # Auth settings pass through when set (docs/development/web-app.md).
@@ -185,5 +192,5 @@ worker)
     in_container 'export VHIL_DATA=/vhil/server VHIL_FW_DIR=/vhil/fw; exec python -m vhil.worker "$@"' "$@" ;;
 shell) in_container 'exec bash' ;;
 run) in_container 'exec "$@"' "$@" ;;
-*) sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'; [ "$cmd" = help ] ;;
+*) sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'; [ "$cmd" = help ] ;;
 esac
