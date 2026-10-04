@@ -33,11 +33,12 @@ import tempfile
 import sys
 import threading
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Literal, Optional, Union
 
-from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -53,6 +54,40 @@ TRACE = "trace.jsonl"
 HEARTBEAT_S = 10.0
 RECLAIM_AFTER_S = 60.0
 MAX_ATTEMPTS = 2
+
+
+def _env_int(name: str, default: int) -> int:
+    v = os.environ.get(name, "")
+    return int(v) if v.strip() else default
+
+
+@dataclass(frozen=True)
+class Limits:
+    """What one user, or everyone, may ask of the workers (docs/deploy.md,
+    "Limits"). Each is an environment variable, read when the API starts
+    (the worker reads max_trace_bytes / max_output_bytes)."""
+    max_virtual_ms: int = 600_000           # VHIL_MAX_VIRTUAL_MS
+    max_active: int = 50                    # VHIL_MAX_QUEUED: queued + running, everyone
+    max_active_per_user: int = 10           # VHIL_MAX_QUEUED_PER_USER
+    max_stimuli: int = 1000                 # VHIL_MAX_STIMULI
+    max_watch: int = 100                    # VHIL_MAX_WATCHES
+    max_trace_bytes: int = 512 << 20        # VHIL_MAX_TRACE_MB: a run's trace.jsonl
+    max_output_bytes: int = 64 << 20        # VHIL_MAX_OUTPUT_MB: a pytest run's output
+
+    @classmethod
+    def from_env(cls) -> "Limits":
+        d = cls()
+        return cls(max_virtual_ms=_env_int("VHIL_MAX_VIRTUAL_MS", d.max_virtual_ms),
+                   max_active=_env_int("VHIL_MAX_QUEUED", d.max_active),
+                   max_active_per_user=_env_int("VHIL_MAX_QUEUED_PER_USER", d.max_active_per_user),
+                   max_stimuli=_env_int("VHIL_MAX_STIMULI", d.max_stimuli),
+                   max_watch=_env_int("VHIL_MAX_WATCHES", d.max_watch),
+                   max_trace_bytes=_env_int("VHIL_MAX_TRACE_MB", d.max_trace_bytes >> 20) << 20,
+                   max_output_bytes=_env_int("VHIL_MAX_OUTPUT_MB", d.max_output_bytes >> 20) << 20)
+
+
+class QueueFull(Exception):
+    """Too many active runs, for the user or for everyone (HTTP 429)."""
 
 # A git ref we pass to `git clone -b` and use in a directory name: no option
 # look-alikes, no path climbing.
@@ -242,14 +277,15 @@ CREATE TABLE IF NOT EXISTS runs (
     worker     TEXT,
     heartbeat  REAL,
     attempts   INTEGER NOT NULL DEFAULT 0,
-    ref_name   TEXT NOT NULL DEFAULT ''
+    ref_name   TEXT NOT NULL DEFAULT '',
+    created_by TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS runs_state ON runs (state, id);
 """
 # Columns added after the first release: a database created before them
 # gets them on open.
 _ADDED = {"heartbeat": "REAL", "attempts": "INTEGER NOT NULL DEFAULT 0",
-          "ref_name": "TEXT NOT NULL DEFAULT ''"}
+          "ref_name": "TEXT NOT NULL DEFAULT ''", "created_by": "TEXT NOT NULL DEFAULT ''"}
 
 
 class RunStore:
@@ -300,13 +336,39 @@ class RunStore:
         return _row(rows[0]) if rows else None
 
     def create(self, system: str, ref: str, firmware: dict, scenario: dict,
-               ref_name: str = "") -> int:
+               ref_name: str = "", created_by: str = "", max_active: Optional[int] = None,
+               max_active_per_user: Optional[int] = None) -> int:
         """A queued run. `ref`: the workspace commit its system file is read
-        at ("" outside git); `ref_name`: the branch/tag/commit it was asked as."""
-        row = self._write(
-            "INSERT INTO runs (state, system, ref, firmware, scenario, created, ref_name) "
-            "VALUES ('queued', ?, ?, ?, ?, ?, ?) RETURNING id",
-            (system, ref, json.dumps(firmware), json.dumps(scenario), now_iso(), ref_name))
+        at ("" outside git); `ref_name`: the branch/tag/commit it was asked as;
+        `created_by`: the user's login. Raises QueueFull when the active runs
+        (queued or running) already number `max_active`, or `max_active_per_user`
+        of `created_by`'s: counted and inserted under one write lock, so
+        concurrent requests can't overshoot."""
+        db = self._connect()
+        try:
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                active = "SELECT count(*) FROM runs WHERE state IN ('queued', 'running')"
+                if max_active is not None and \
+                        db.execute(active).fetchone()[0] >= max_active:
+                    raise QueueFull(f"the queue is full ({max_active} active runs): "
+                                    "try again when some have finished")
+                if max_active_per_user is not None and db.execute(
+                        active + " AND created_by = ?", (created_by,)).fetchone()[0] \
+                        >= max_active_per_user:
+                    raise QueueFull(f"{created_by or 'you'} already has {max_active_per_user} "
+                                    "queued or running runs: wait for one to finish or cancel one")
+                row = db.execute(
+                    "INSERT INTO runs (state, system, ref, firmware, scenario, created, ref_name, "
+                    "created_by) VALUES ('queued', ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+                    (system, ref, json.dumps(firmware), json.dumps(scenario), now_iso(), ref_name,
+                     created_by)).fetchone()
+                db.execute("COMMIT")
+            except BaseException:
+                db.execute("ROLLBACK")
+                raise
+        finally:
+            db.close()
         return row["id"]
 
     def get(self, run_id: int) -> Optional[dict]:
@@ -645,10 +707,26 @@ def pickers_router(workspace) -> APIRouter:
 
 # -- the API -------------------------------------------------------------------
 
-def router(settings, workspace) -> APIRouter:
+def check_limits(req: RunRequest, limits: Limits) -> list[str]:
+    """What in the request is over the per-run limits (Limits)."""
+    sc, errors = req.scenario, []
+    if isinstance(sc, RunScenario):
+        if sc.virtual_ms > limits.max_virtual_ms:
+            errors.append(f"virtual_ms: {sc.virtual_ms} is over this server's limit of "
+                          f"{limits.max_virtual_ms}")
+        if len(sc.stimuli) > limits.max_stimuli:
+            errors.append(f"stimuli: {len(sc.stimuli)} is over the limit of {limits.max_stimuli}")
+        if len(sc.watch) > limits.max_watch:
+            errors.append(f"watch: {len(sc.watch)} is over the limit of {limits.max_watch}")
+    return errors
+
+
+def router(settings, workspace, limits: Optional[Limits] = None) -> APIRouter:
     """/api/runs over settings.db and settings.results."""
+    from vhil.server.auth import current_user
     from vhil.server.workspace import NotFound
 
+    limits = limits or Limits.from_env()
     store = RunStore(settings.db)
     results = Path(settings.results)
     r = APIRouter(prefix="/api/runs", tags=["runs"])
@@ -660,7 +738,10 @@ def router(settings, workspace) -> APIRouter:
         return run
 
     @r.post("", status_code=201)
-    def create(req: RunRequest):
+    def create(req: RunRequest, user: dict = Depends(current_user)):
+        over = check_limits(req, limits)
+        if over:
+            raise HTTPException(422, over)
         head = workspace.ref()
         commit = head
         if req.ref:
@@ -697,8 +778,13 @@ def router(settings, workspace) -> APIRouter:
         errors = check_against_system(req, system, workspace.root)
         if errors:
             raise HTTPException(422, errors)
-        run_id = store.create(req.system, commit, req.firmware, req.scenario.model_dump(),
-                              ref_name=req.ref or "")
+        try:
+            run_id = store.create(req.system, commit, req.firmware, req.scenario.model_dump(),
+                                  ref_name=req.ref or "", created_by=user.get("login", ""),
+                                  max_active=limits.max_active,
+                                  max_active_per_user=limits.max_active_per_user)
+        except QueueFull as e:
+            raise HTTPException(429, str(e))
         return {"run_id": run_id}
 
     @r.get("")
