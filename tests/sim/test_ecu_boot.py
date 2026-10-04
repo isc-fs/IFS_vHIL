@@ -6,10 +6,17 @@ Firmware facts (IFS08-CE-ECU):
   0x704 health every DiagPeriodMs, ungated            diag_task.cpp:53-65
   OK_STATUS (PD14) high, ERR_STATUS (PD15) low
   unless the state is AmsError, every tick            control_task.cpp:372-375
+  0x704: BE u16 free / min-free heap; byte 4 bits 0-4 = control, CAN RX,
+  CAN TX, telemetry, diag stepped since the last frame (CAN RX steps on its
+  wait timeout too, so a quiet bus keeps it set), bits 5-7 = bench stubs
+  announced (StubNoAms, StubNoInverter, StubStart: all false in the car's
+  image); byte 6 uptime s      pit_diag_health.def, diag_task.cpp:36-70,
+                                                      can_rx_task.cpp:33-43
 """
 import pytest
 
-from vhil.sim import assert_period
+from vhil.sim import Sim, assert_period
+from vhil.system import REPO
 
 HEARTBEAT = 0x100
 HEALTH = 0x704
@@ -81,3 +88,53 @@ def test_same_trace_at_any_speed(make_sim):
         sim.stop()
     assert traces[0], "no frames at all"
     assert traces[0] == traces[1]
+
+
+ALL_TASKS = 0x1F
+
+
+@pytest.fixture(scope="module")
+def running(make_sim):
+    """One ECU on quiet buses for 30 s of virtual time."""
+    sim = make_sim("ecu")
+    sim.run_for(ms=30_000)
+    return sim
+
+
+def test_every_task_steps_every_health_period(running):
+    """Task liveness: all five tasks advance between consecutive 0x704s on a
+    quiet bus, and no bench stub is announced."""
+    frames = running.can("can_acu").frames(HEALTH)
+    assert len(frames) >= 28
+    assert {f.data[4] for f in frames[1:]} == {ALL_TASKS}
+
+
+def test_the_heap_settles_and_does_not_leak(running):
+    """Heap trace: after boot the free and min-free heap stop moving."""
+    frames = running.can("can_acu").frames(HEALTH)[2:]
+    free = {int.from_bytes(f.data[0:2], "big") for f in frames}
+    low = {int.from_bytes(f.data[2:4], "big") for f in frames}
+    assert len(low) == 1, f"min-free heap kept falling: {sorted(low)}"
+    assert all(f >= min(low) > 0 for f in free)
+
+
+def test_uptime_counts_seconds(running):
+    up = [f.data[6] for f in running.can("can_acu").frames(HEALTH)]
+    assert all(b - a == 1 for a, b in zip(up, up[1:])), f"uptime {up}"
+
+
+def test_traffic_on_the_other_buses_does_not_disturb_the_acu_bus(firmware):
+    """Bus independence: 1000 frames/s on each of the inverter and dash buses
+    (IDs nothing listens to) for 5 s: 0x100 keeps its exact 10 ms, every task
+    keeps stepping."""
+    with Sim(REPO / "systems" / "ecu.yaml", {"ecu": firmware("ecu")}) as sim:
+        sim.run_for(ms=1000)
+        for bus in ("can_inv", "can_dash"):
+            for k in range(10):
+                sim.can(bus).send_periodic(f"{bus}{k}", 0x7A0 + k, bytes([k] * 8), period_ms=10,
+                                           start_us=sim.now_us() + 1000 * k)
+        t0 = sim.now_us()
+        sim.run_for(ms=5000)
+        hb = sim.can("can_acu").frames(HEARTBEAT, since_us=t0)
+        assert_period(hb, period_us=CONTROL_PERIOD_US, tolerance_us=0, min_count=490)
+        assert {f.data[4] for f in sim.can("can_acu").frames(HEALTH, since_us=t0)} == {ALL_TASKS}
