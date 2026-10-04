@@ -19,7 +19,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
@@ -71,6 +71,7 @@ class Board:
     firmware: dict      # catalogue firmware source
     bootloader: dict | None = None   # catalogue firmware in sector 0, if provisioned
     node_id: int | None = None       # the bootloader's node ID
+    write_protect: list[int] = field(default_factory=list)   # WRP'd flash sectors at power-on
 
     def endpoint(self, connector: str) -> tuple[str, object]:
         """(kind, target) for a connector or pin: ('can'|'spi'|'sdmmc'|'i2c',
@@ -95,7 +96,7 @@ class System:
                 name, board, _entry("platform", board["platform"], catalog),
                 _entry("firmware", spec["firmware"], catalog),
                 _entry("firmware", spec["bootloader"], catalog) if "bootloader" in spec else None,
-                spec.get("node_id"))
+                spec.get("node_id"), list(spec.get("write_protect", [])))
         self.buses = self.doc.get("buses", {})
         self.bench = self.doc.get("bench", {})
         self.devices = {name: dict(spec, model_doc=_entry("model", spec["model"], catalog))
@@ -123,6 +124,9 @@ class System:
         for b in self.boards.values():
             if (b.bootloader is None) != (b.node_id is None):
                 raise SystemError(f"board '{b.name}': a bootloader needs a node_id, and only it")
+            if b.write_protect and "write_protect" not in b.platform.get("renode", {}):
+                raise SystemError(f"board '{b.name}': platform {b.platform['id']} has no "
+                                  f"option bytes to write-protect sectors in")
         seen: dict[str, str] = {}
         for bus, spec in self.buses.items():
             for node in spec["nodes"]:
@@ -333,6 +337,11 @@ class System:
                 out.append(f"${var}=@{Path(firmware[b.name]).resolve().as_posix()}")
             out.append(f"machine LoadPlatformDescription @{(REPO / rn['repl']).as_posix()}")
             out += [line.format(board=b.name) for line in rn.get("setup", [])]
+            if b.write_protect:
+                # Option bytes are flash: burned once, before the first boot,
+                # they survive every reset and power cycle (not in the macro).
+                mask = sum(1 << s for s in b.write_protect)
+                out.append(rn["write_protect"].format(mask=mask))
             for name in self.devices_on(b.name):
                 dev = self.devices[name]
                 if dev["model_doc"]["backend"] == "analog":

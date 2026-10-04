@@ -3,7 +3,8 @@
 A minimal client of isc-fs/stm32-can-bootloader v1.7.0, speaking through a
 Sim bus (`sim.can(bus)`) instead of SocketCAN, so a test flashes a board with
 every frame and reply stamped in virtual time. It does what the suites need:
-discover, connect, firmware info, erase / write / CRC / verify, jump, reset.
+discover, connect, firmware info, health, erase / write / CRC / verify, jump,
+reset, and the option bytes (read, the one-way sector-0 WRP latch).
 
 Wire format (bootloader Core/Inc/bl_proto.h:1-60, cross-checked against
 can-flasher v3.1.1 src/protocol/ids.rs and src/session/mod.rs:905-935):
@@ -52,12 +53,21 @@ DIR_NODE_TO_HOST = 0x10
 MSG_CMD, MSG_ACK, MSG_NACK, MSG_NOTIFY = 0x00, 0x01, 0x02, 0x03
 MSG_DISCOVER_REQUEST, MSG_DISCOVER_REPLY = 0x04, 0x05
 
-CONNECT, DISCONNECT, DISCOVER, GET_FW_INFO = 0x01, 0x02, 0x03, 0x04
+CONNECT, DISCONNECT, DISCOVER, GET_FW_INFO, GET_HEALTH = 0x01, 0x02, 0x03, 0x04, 0x05
 FLASH_ERASE, FLASH_WRITE, FLASH_READ_CRC, FLASH_VERIFY = 0x10, 0x11, 0x12, 0x13
+OB_READ, OB_APPLY_WRP = 0x50, 0x51
 RESET, JUMP = 0x60, 0x61
 
 NACK_PROTECTED_ADDR, NACK_OUT_OF_BOUNDS, NACK_CRC_MISMATCH = 0x01, 0x02, 0x03
-NACK_BAD_SESSION, NACK_NO_VALID_APP, NACK_UNSUPPORTED = 0x06, 0x0C, 0xFE
+NACK_BAD_SESSION, NACK_FLASH_HW, NACK_NO_VALID_APP = 0x06, 0x07, 0x0C
+NACK_OB_WRONG_TOKEN, NACK_UNSUPPORTED = 0x0F, 0xFE
+
+# OB_APPLY_WRP's confirmation token, ASCII "WRP\0" LE (bl_obyte.h:33).
+OB_APPLY_TOKEN = 0x00505257
+HEALTH_FLAG_SESSION_ACTIVE = 1 << 0             # bl_health.h:42-44
+HEALTH_FLAG_VALID_APP_PRESENT = 1 << 1
+HEALTH_FLAG_WRP_PROTECTED = 1 << 4              # sector 0 WRP'd in the option bytes
+DTC_FLASH_HW = 0x0010                           # bl_dtc.h:46
 
 RESET_HARD, RESET_SOFT, RESET_STAY_IN_BL, RESET_TO_APP = 0, 1, 2, 3   # bl_proto.c:745-752
 
@@ -228,6 +238,49 @@ class FwInfo:
         return (min(self.major, 255) << 16) | (min(self.minor, 255) << 8) | min(self.patch, 255)
 
 
+@dataclass(frozen=True)
+class Health:
+    """GET_HEALTH's 32-byte record (bl_health.h:50-66)."""
+    uptime_s: int
+    reset_cause: int
+    flags: int
+    flash_write_count: int
+    dtc_count: int
+    last_dtc_code: int
+    fdcan_recovery_count: int
+    max_flash_op_ms: int
+
+    @classmethod
+    def parse(cls, record: bytes) -> "Health":
+        if len(record) < 32:
+            raise ValueError(f"health record of {len(record)} B, expected 32")
+        return cls(*struct.unpack_from("<8I", record))
+
+    @property
+    def wrp_protected(self) -> bool:
+        return bool(self.flags & HEALTH_FLAG_WRP_PROTECTED)
+
+
+@dataclass(frozen=True)
+class ObStatus:
+    """OB_READ's 16-byte bl_ob_status_t (bl_obyte.h:38-45), filled from
+    HAL_FLASHEx_OBGetConfig (bl_obyte.c:19-34): wrp_sector_mask has bit N set
+    when sector N is write-protected (WPSN_CUR1 inverted), user_config is
+    OPTSR_CUR without its BOR and RDP fields, rdp_level and bor_level the low
+    bytes of the HAL's RDPLevel and BORLevel."""
+    wrp_sector_mask: int
+    user_config: int
+    rdp_level: int
+    bor_level: int
+
+    @classmethod
+    def parse(cls, record: bytes) -> "ObStatus":
+        if len(record) < 16:
+            raise ValueError(f"option-byte record of {len(record)} B, expected 16")
+        mask, user, rdp, bor = struct.unpack_from("<IIBB", record)
+        return cls(mask, user, rdp, bor)
+
+
 class Nack(Exception):
     def __init__(self, opcode: int, code: Optional[int]):
         super().__init__(f"NACK to opcode {opcode:#04x}: code {code if code is None else hex(code)}")
@@ -354,6 +407,20 @@ class CanBootloader:
 
     def fw_info(self) -> FwInfo:
         return FwInfo.parse(self.command(GET_FW_INFO))
+
+    def health(self) -> Health:
+        return Health.parse(self.command(GET_HEALTH))
+
+    def ob_read(self) -> ObStatus:
+        """OB_READ: not session-gated (bl_proto.c:1065-1082)."""
+        return ObStatus.parse(self.command(OB_READ))
+
+    def apply_wrp(self, sector_mask: int = 0x01, token: int = OB_APPLY_TOKEN) -> None:
+        """OB_APPLY_WRP: write-protect sector 0 in the option bytes, one way
+        over CAN (bl_proto.c:1084-1172). Session-gated; the bootloader ACKs
+        before it programs the option bytes, and refuses any mask but sector 0
+        (NACK_UNSUPPORTED) or a wrong token (NACK_OB_WRONG_TOKEN)."""
+        self.command(OB_APPLY_WRP, struct.pack("<II", token, sector_mask))
 
     def erase(self, start: int, length: int) -> None:
         check_app_range(start, length)

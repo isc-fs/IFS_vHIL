@@ -98,7 +98,10 @@ def specification(catalog: Path = CATALOG) -> dict:
                             "default": "",
                             "description": "Firmware in sector 0, as provisioned (empty: none)."},
                            {"name": "node_id", "type": "integer", "default": 0, "min": 0, "max": 14,
-                            "description": "The bootloader's node ID (0: no bootloader)."}],
+                            "description": "The bootloader's node ID (0: no bootloader)."},
+                           {"name": "write_protect", "type": "text", "default": "",
+                            "description": "Flash sectors write-protected in the option bytes "
+                                           "at power-on, comma-separated (e.g. 0; empty: none)."}],
             "additionalData": {"vhil": {"kind": "board"}},
         })
     nodes.append({
@@ -167,7 +170,9 @@ def to_dataflow(doc: dict, spec: dict | None = None, source: str | None = None) 
 
     for row, (name, b) in enumerate(doc["boards"].items()):
         node(b["board"], name, {"firmware": b["firmware"], "bootloader": b.get("bootloader", ""),
-                                "node_id": b.get("node_id", 0)}, 0, 420 * row)
+                                "node_id": b.get("node_id", 0),
+                                "write_protect": ",".join(str(s) for s in b.get("write_protect", []))},
+             0, 420 * row)
     for row, (name, bus) in enumerate(doc.get("buses", {}).items()):
         n = node(BUS_NODE, name, {"host_netdev": bus.get("host_netdev", "")}, 520, 160 * row)
         # One stub per connection, spread along the bus, facing the boards
@@ -246,6 +251,8 @@ def from_dataflow(dataflow: dict, spec: dict | None = None) -> dict:
                 boards[name]["bootloader"] = props["bootloader"]
             if props.get("node_id"):
                 boards[name]["node_id"] = props["node_id"]
+            if str(props.get("write_protect", "")).strip():
+                boards[name]["write_protect"] = [int(s) for s in str(props["write_protect"]).split(",")]
         elif kind == "bus":
             buses[name] = {"kind": "can", "nodes": []}
             if props.get("host_netdev"):

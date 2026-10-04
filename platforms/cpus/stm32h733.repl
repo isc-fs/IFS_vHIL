@@ -124,3 +124,17 @@ i2c2_h7: I2C.STM32H7_I2C @ sysbus 0x40005800
     EventInterrupt -> nvic@33
     ErrorInterrupt -> nvic@34
     DmaReceive -> dmamux1@35
+
+// Flash controller with the option bytes (WRP, RDP, boot address, PCROP and
+// secure-area bounds) as non-volatile state and sector write protection
+// enforced on erase and program. Our model, models/renode/Stm32H7Flash.cs;
+// stm32h7.repl's STM32H7_FlashController tags PRAR/SCAR/BOOT/OPTSR2 and
+// never raises WRPERR. FLASH_R_BASE = D1_AHB1PERIPH_BASE + 0x2000, FLASH_IRQn
+// = 4 (stm32h733xx.h:2215, 65). As for ADC3, the base platform's is taken off
+// the bus and this one takes its address.
+flashController: @ none
+
+flashController_h7: MTD.STM32H733_FlashController @ sysbus 0x52002000
+    flash1: flashBank1
+    flash2: flashBank2
+    -> nvic@4
