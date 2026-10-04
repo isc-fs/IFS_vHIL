@@ -16,3 +16,23 @@ table { border-collapse: collapse; width: 100%; }
 th, td { text-align: left; padding: .4rem .6rem; border-bottom: 1px solid var(--line); vertical-align: top; }
 pre { background: var(--code); padding: .75rem; overflow-x: auto; font-size: .8125rem; }
 .error { color: var(--accent); }
+
+/* Editor page (editor.js) */
+body[data-page="editor"] main { max-width: none; }
+.ed-bar { display: flex; gap: .75rem; align-items: center; flex-wrap: wrap; margin-bottom: .75rem; }
+.ed-grid { display: grid; grid-template-columns: minmax(0, 1fr) 20rem; gap: 1rem; }
+#ed-frame { width: 100%; height: calc(100vh - 13rem); min-height: 28rem; border: 1px solid var(--line); }
+.ed-grid aside { display: flex; flex-direction: column; gap: 1rem; min-width: 0; }
+.ed-grid h3 { font-size: .95rem; margin: 0 0 .4rem; }
+.ed-grid form, .ed-grid label { display: flex; flex-direction: column; gap: .3rem; }
+.ed-grid form { gap: .5rem; }
+.ed-grid .row { display: flex; gap: .5rem; justify-content: flex-end; }
+.ed-fw-row { margin-bottom: .6rem; font-size: .875rem; }
+input, textarea, select, button { font: inherit; color: var(--fg); background: var(--bg);
+  border: 1px solid var(--line); border-radius: 4px; padding: .3rem .45rem; }
+button { cursor: pointer; }
+button:disabled { opacity: .5; cursor: default; }
+button.link { border: 0; padding: 0; color: var(--accent); font-size: .8rem; background: none; }
+#ed-msg ul { margin: .3rem 0; padding-left: 1.2rem; }
+#ed-msg pre { max-height: 20rem; }
+@media (max-width: 52rem) { .ed-grid { grid-template-columns: 1fr; } }
