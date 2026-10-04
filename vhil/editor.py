@@ -97,9 +97,15 @@ def specification(catalog: Path = CATALOG) -> dict:
             "interfaces": interfaces,
             "properties": [{"name": "firmware", "type": "select", "values": firmware,
                             "default": firmware[0]},
+                           {"name": "firmware_ref", "type": "text", "default": "",
+                            "description": "Branch or tag of the firmware to build "
+                                           "(empty: the catalogue's)."},
                            {"name": "bootloader", "type": "select", "values": [""] + firmware,
                             "default": "",
                             "description": "Firmware in sector 0, as provisioned (empty: none)."},
+                           {"name": "bootloader_ref", "type": "text", "default": "",
+                            "description": "Branch or tag of the bootloader to build "
+                                           "(empty: the catalogue's)."},
                            {"name": "node_id", "type": "integer", "default": 0, "min": 0, "max": 14,
                             "description": "The bootloader's node ID (0: no bootloader)."},
                            {"name": "write_protect", "type": "text", "default": "",
@@ -173,6 +179,8 @@ def to_dataflow(doc: dict, spec: dict | None = None, source: str | None = None) 
 
     for row, (name, b) in enumerate(doc["boards"].items()):
         node(b["board"], name, {"firmware": b["firmware"], "bootloader": b.get("bootloader", ""),
+                                "firmware_ref": b.get("firmware_ref", ""),
+                                "bootloader_ref": b.get("bootloader_ref", ""),
                                 "node_id": b.get("node_id", 0),
                                 "write_protect": ",".join(str(s) for s in b.get("write_protect", []))},
              0, 420 * row)
@@ -254,8 +262,12 @@ def from_dataflow(dataflow: dict, spec: dict | None = None) -> dict:
         kind = kinds[n["name"]]
         if kind == "board":
             boards[name] = {"board": n["name"], "firmware": props["firmware"]}
+            if str(props.get("firmware_ref") or "").strip():
+                boards[name]["firmware_ref"] = str(props["firmware_ref"]).strip()
             if props.get("bootloader"):
                 boards[name]["bootloader"] = props["bootloader"]
+            if str(props.get("bootloader_ref") or "").strip():
+                boards[name]["bootloader_ref"] = str(props["bootloader_ref"]).strip()
             if props.get("node_id"):
                 boards[name]["node_id"] = props["node_id"]
             if str(props.get("write_protect", "")).strip():

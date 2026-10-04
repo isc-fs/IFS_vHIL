@@ -72,6 +72,13 @@ class Board:
     bootloader: dict | None = None   # catalogue firmware in sector 0, if provisioned
     node_id: int | None = None       # the bootloader's node ID
     write_protect: list[int] = field(default_factory=list)   # WRP'd flash sectors at power-on
+    firmware_ref: str | None = None     # this system's ref for the firmware, over the catalogue's
+    bootloader_ref: str | None = None   # likewise for the bootloader
+
+    def ref(self, image: str = "firmware") -> str:
+        """The branch or tag to build: the system's, else the catalogue's."""
+        fw = self.firmware if image == "firmware" else self.bootloader
+        return (self.firmware_ref if image == "firmware" else self.bootloader_ref) or fw["ref"]
 
     def endpoint(self, connector: str) -> tuple[str, object]:
         """(kind, target) for a connector or pin: ('can'|'spi'|'sdmmc'|'i2c',
@@ -96,7 +103,8 @@ class System:
                 name, board, _entry("platform", board["platform"], catalog),
                 _entry("firmware", spec["firmware"], catalog),
                 _entry("firmware", spec["bootloader"], catalog) if "bootloader" in spec else None,
-                spec.get("node_id"), list(spec.get("write_protect", [])))
+                spec.get("node_id"), list(spec.get("write_protect", [])),
+                spec.get("firmware_ref"), spec.get("bootloader_ref"))
         self.buses = self.doc.get("buses", {})
         self.bench = self.doc.get("bench", {})
         self.devices = {name: dict(spec, model_doc=_entry("model", spec["model"], catalog))
@@ -124,6 +132,8 @@ class System:
         for b in self.boards.values():
             if (b.bootloader is None) != (b.node_id is None):
                 raise SystemError(f"board '{b.name}': a bootloader needs a node_id, and only it")
+            if b.bootloader_ref is not None and b.bootloader is None:
+                raise SystemError(f"board '{b.name}': a bootloader_ref needs a bootloader")
             if b.write_protect and "write_protect" not in b.platform.get("renode", {}):
                 raise SystemError(f"board '{b.name}': platform {b.platform['id']} has no "
                                   f"option bytes to write-protect sectors in")
@@ -430,15 +440,17 @@ class System:
     def build_firmware(self, workdir: Path, refs: dict[str, str] | None = None,
                        log=print) -> dict[str, Path]:
         """Clone each firmware source at its ref and build it with its recipe.
+        The ref is `refs[image]` if given, else the board's firmware_ref /
+        bootloader_ref in the system file, else the catalogue entry's.
         Returns image key (System.images: "<board>", "<board>.bootloader")
         -> ELF; a flat .bin is written next to it."""
         refs, built, workdir = refs or {}, {}, Path(workdir)
         by_source: dict[tuple, Path] = {}
-        sources = [(b.name, b.firmware) for b in self.boards.values()]
-        sources += [(f"{b.name}.bootloader", b.bootloader)
+        sources = [(b.name, b.firmware, b.ref("firmware")) for b in self.boards.values()]
+        sources += [(f"{b.name}.bootloader", b.bootloader, b.ref("bootloader"))
                     for b in self.boards.values() if b.bootloader is not None]
-        for name, fw in sources:
-            ref = refs.get(name, fw["ref"])
+        for name, fw, default_ref in sources:
+            ref = refs.get(name, default_ref)
             key = (fw["id"], fw["repo"], ref)
             if key not in by_source:
                 src = workdir / f"{fw['id']}@{ref.replace('/', '_')}"

@@ -1,0 +1,67 @@
+# The shared web app (M5, #13; docs/architecture/m5-web-app.md), local/dev:
+#
+#   docker compose -f docker/compose.yaml up        # then http://localhost:8080
+#
+# Images come from `scripts/vhil-docker.sh image` (ifs-vhil, ifs-vhil-editor).
+# The repository checkout is the workspace: its systems/ and catalog/ are what
+# the app shows and edits; `worker` executes the runs the api queues.
+# VHIL_AUTH=dev: no login. For GitHub login set VHIL_AUTH=github and the
+# VHIL_GITHUB_* / VHIL_SESSION_SECRET variables (docs/development/web-app.md),
+# e.g. from an env file kept out of git.
+name: ifs-vhil
+services:
+  api:
+    image: ifs-vhil
+    command: python -m vhil.server --host 0.0.0.0 --port 8080
+    working_dir: /work
+    volumes:
+      - ..:/work
+      - vhil-data:/vhil
+    environment:
+      VHIL_WORKSPACE: /work
+      VHIL_DATA: /vhil/server
+      VHIL_AUTH: dev
+      # Where the browser reaches the editor service (the shell embeds it).
+      VHIL_EDITOR_URL: http://localhost:${VHIL_EDITOR_PORT:-5050}
+      # Pushing saved system branches and opening PRs (until the GitHub App).
+      VHIL_GITHUB_TOKEN: ${VHIL_GITHUB_TOKEN:-}
+      # Saves commit to the mounted checkout's refs (never its tree); it is
+      # owned by the host user, not the container's.
+      GIT_CONFIG_COUNT: 1
+      GIT_CONFIG_KEY_0: safe.directory
+      GIT_CONFIG_VALUE_0: /work
+    ports:
+      - "${VHIL_WEB_PORT:-8080}:8080"
+  worker:
+    # Claims queued runs (vhil/worker.py); scale with --scale worker=N.
+    # Privileged + host network like the wrapper's runs (vcan); shares the
+    # run table and results with the api through the vhil-data volume, and
+    # reuses (or builds into) /vhil/fw like `scripts/vhil-docker.sh fw`.
+    image: ifs-vhil
+    command: python -m vhil.worker
+    working_dir: /work
+    privileged: true
+    network_mode: host
+    volumes:
+      - ..:/work
+      - vhil-data:/vhil
+    environment:
+      VHIL_WORKSPACE: /work
+      VHIL_DATA: /vhil/server
+      VHIL_AUTH: dev
+      VHIL_FW_DIR: /vhil/fw
+  editor:
+    image: ifs-vhil-editor
+    command: scripts/editor.sh
+    working_dir: /work
+    volumes:
+      - ..:/work
+      - vhil-data:/vhil
+    environment:
+      PM_HOST: 0.0.0.0
+    ports:
+      # Not 5000 on the host: macOS's AirPlay Receiver holds it.
+      - "${VHIL_EDITOR_PORT:-5050}:5000"
+volumes:
+  vhil-data:
+    external: true

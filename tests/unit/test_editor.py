@@ -58,6 +58,18 @@ def test_every_system_survives_the_round_trip(spec, path):
 
 
 @pytest.mark.parametrize("path", SYSTEMS, ids=lambda p: p.name)
+def test_firmware_refs_survive_the_round_trip(spec, path):
+    """The picker's per-board refs (#116) are board properties in the graph."""
+    doc = yaml.safe_load(path.read_text())
+    for b in doc["boards"].values():
+        b["firmware_ref"] = "feat/x"
+        if "bootloader" in b:
+            b["bootloader_ref"] = "v1.6.2"
+    assert from_dataflow(to_dataflow(doc, spec), spec) == doc
+    assert validate(doc) == []
+
+
+@pytest.mark.parametrize("path", SYSTEMS, ids=lambda p: p.name)
 def test_connections_reference_interfaces_that_exist(spec, path):
     graph = to_dataflow(yaml.safe_load(path.read_text()), spec)["graphs"][0]
     ifaces = {i["id"] for n in graph["nodes"] for i in n["interfaces"]}

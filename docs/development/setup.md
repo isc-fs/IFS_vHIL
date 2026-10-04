@@ -133,6 +133,28 @@ own code, so it catches what a schema check misses. In Docker:
 `scripts/vhil-docker.sh editor-check`; `tests/unit` runs it too when
 `$PM_DIR` points at a checkout (the editor image).
 
+**From the web app** (`#/editor`, M5.4): the shell embeds the editor
+(`VHIL_EDITOR_URL`, default http://localhost:5050) and loads a system into it
+over Pipeline Manager's postMessage API. Save commits `systems/<id>.yaml` on
+the branch you name, in the API's workspace, with git plumbing: no checkout
+moves, `dev`/`main` are never written, a branch checked out in the workspace
+is refused (`vhil/server/gitstore.py`). The file is validated first as
+`python -m vhil.system validate` would. The firmware picker sets a board's
+`firmware_ref` (a branch or tag of the catalogue repo, listed with `git
+ls-remote`). Open PR pushes the branch and opens a PR to `dev`; it needs
+`VHIL_GITHUB_TOKEN` (contents + pull requests write) on the API until the
+GitHub App (M5.5) replaces it. Without it the button is off and the branch
+stays local. Known gap: Pipeline Manager 0.5.2 rejects the graphs of the
+systems with more than one CAN bus ("Missing dst s:can_inv:0": the earlier
+buses' stubs are not found), so the ECU systems don't load in the editor yet;
+single-bus systems such as `ams` do.
+
+### Web app (M5)
+
+`scripts/vhil-docker.sh server` serves the shared web app on
+http://localhost:8080 with no login (`VHIL_AUTH=dev`). GitHub login, the
+GitHub App and their environment: [`web-app.md`](web-app.md).
+
 ## Branching
 
 `main` is the release branch. Feature work lands on `dev` first, and `dev`

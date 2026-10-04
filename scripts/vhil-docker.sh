@@ -18,6 +18,9 @@
 #                                                IFS_HIL's ECU suite over vcan
 #                                                (VHIL_SYSTEM=systems/ecu-ams.yaml: with the AMS)
 #   scripts/vhil-docker.sh editor                system editor on http://localhost:5050
+#   scripts/vhil-docker.sh server                web app API + shell on http://localhost:8080
+#                                                (M5; full stack: docker/compose.yaml)
+#   scripts/vhil-docker.sh worker [--once ...]   run worker for the server's queue (vhil.worker)
 #   scripts/vhil-docker.sh editor-check [systems...]
 #                                                Pipeline Manager loads every system's graph
 #   scripts/vhil-docker.sh shell                 a shell in the container
@@ -177,7 +180,17 @@ editor-check)
     # dataflow, in the editor image where the patched checkout lives.
     image=$editor_image
     in_container 'exec python -m vhil.editor check "$@"' "$@" ;;
+server)
+    run_args=(-p "${VHIL_WEB_PORT:-8080}:8080")
+    # Auth settings pass through when set (docs/development/web-app.md).
+    for v in VHIL_AUTH VHIL_GITHUB_ORG VHIL_GITHUB_CLIENT_ID VHIL_GITHUB_CLIENT_SECRET \
+             VHIL_SESSION_SECRET VHIL_PUBLIC_URL VHIL_GITHUB_APP_ID VHIL_GITHUB_APP_KEY; do
+        run_args+=(-e "$v")
+    done
+    in_container 'export VHIL_DATA=/vhil/server; exec python -m vhil.server --host 0.0.0.0 --port 8080' ;;
+worker)
+    in_container 'export VHIL_DATA=/vhil/server VHIL_FW_DIR=/vhil/fw; exec python -m vhil.worker "$@"' "$@" ;;
 shell) in_container 'exec bash' ;;
 run) in_container 'exec "$@"' "$@" ;;
-*) sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'; [ "$cmd" = help ] ;;
+*) sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'; [ "$cmd" = help ] ;;
 esac
