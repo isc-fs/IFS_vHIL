@@ -82,10 +82,11 @@ export async function renderRun(view, { api, esc }, id, tab) {
       ? `${sum.tests} tests · ${sum.failures} failed · ${sum.errors} errors · ${sum.skipped} skipped` : "";
     root.querySelector(".run-head").innerHTML = `
       <h2>Run ${r.id} <span class="badge state-${esc(r.state)}">${esc(r.state)}</span>
-        ${TERMINAL.has(r.state) ? "" : `<button data-cancel>Cancel</button>`}</h2>
+        ${r.can_cancel ? `<button data-cancel>Cancel</button>` : ""}</h2>
       <dl class="meta">
         <div><dt>System</dt><dd><a href="#/systems/${esc(r.system)}">${esc(r.system)}</a></dd></div>
         <div><dt>Ref</dt><dd>${r.ref_name ? `${esc(r.ref_name)} ` : ""}<code>${esc((r.ref || "working tree").slice(0, 12))}</code></dd></div>
+        ${r.owner ? `<div><dt>Owner</dt><dd>${esc(r.owner)}</dd></div>` : ""}
         <div><dt>Scenario</dt><dd>${esc(sc.kind === "run" ? `run ${sc.virtual_ms} ms` : `pytest ${sc.select || ""}`)}</dd></div>
         <div><dt>Virtual</dt><dd>${ms(r.virtual_us)} ms</dd></div>
         <div><dt>Wall</dt><dd>${duration(wallSeconds(r))}</dd></div>
@@ -144,7 +145,7 @@ export async function renderRun(view, { api, esc }, id, tab) {
   // -- frames --------------------------------------------------------------------
   const builders = {};
   builders.frames = (el) => {
-    el.innerHTML = `<form class="filters" onsubmit="return false">
+    el.innerHTML = `<form class="filters">
         <label>Bus <select name="bus"><option value="">all</option></select></label>
         <label class="grow">IDs <input name="ids" placeholder="0x100, 700-70D, status" autocomplete="off"></label>
         <label>From ms <input name="from" type="number" step="any" min="0"></label>
@@ -155,6 +156,9 @@ export async function renderRun(view, { api, esc }, id, tab) {
       <p class="muted contract-note"></p>
       <div class="split"><div class="frames-table"></div><aside class="frame-detail muted">Select a frame.</aside></div>`;
     const form = el.querySelector("form");
+    // Enter in a field must not submit (and reload); a handler in markup would
+    // be inline script, which the CSP refuses (vhil/server/security.py).
+    form.addEventListener("submit", (ev) => ev.preventDefault());
     // idx: the record indices that pass the filters; selRec: the selected
     // record, kept across a rescan (new filters, the contract arriving).
     const F = S.frames = { idx: [], scanned: 0, opts: {}, form, selRec: null, rebuilt: false,

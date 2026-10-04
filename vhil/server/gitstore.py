@@ -19,6 +19,11 @@ the remote's copy of it (origin/<branch>), else the base branch (origin/dev,
 dev). A branch checked out in any worktree is refused: moving its ref under
 that tree would make the tree look like it reverted the save. `dev` and
 `main` are never written; changes reach them through a PR.
+
+Who saved a commit is recorded as a `Vhil-User: <login>` trailer
+(OWNER_TRAILER), so the API can refuse to move a branch another member last
+saved (vhil/server/systems_write.py). A save's message can't forge it: lines
+that look like these trailers are dropped from the message first.
 """
 from __future__ import annotations
 
@@ -32,7 +37,19 @@ import threading
 from pathlib import Path
 
 PROTECTED = frozenset({"dev", "main", "master", "HEAD"})
-_BRANCH = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$")
+_BRANCH = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}\Z")
+OWNER_TRAILER = "Vhil-User"
+TAKEOVER_TRAILER = "Vhil-Takeover-From"
+_OURS = re.compile(rf"^\s*({OWNER_TRAILER}|{TAKEOVER_TRAILER})\s*:", re.I | re.M)
+_LOGIN = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$")
+# GitHub's noreply address: <login>@ or <id>+<login>@users.noreply.github.com
+# (what a github-mode save before owner trailers wrote, systems_write._author).
+_NOREPLY = re.compile(r"^(?:\d+\+)?([A-Za-z0-9-]{1,39})@users\.noreply\.github\.com$", re.I)
+
+
+def clean_message(message: str) -> str:
+    """A save's message without lines posing as our trailers."""
+    return "\n".join(line for line in message.splitlines() if not _OURS.match(line))
 
 
 class GitError(Exception):
@@ -100,6 +117,32 @@ class GitStore:
                     return sha
         return self.base_commit()
 
+    def branch_tip(self, branch: str) -> str | None:
+        """The commit a save on `branch` would move (local, else origin's
+        copy); None for a branch that doesn't exist yet."""
+        for ref in (f"refs/heads/{branch}", f"refs/remotes/origin/{branch}"):
+            sha = self.rev(ref)
+            if sha:
+                return sha
+        return None
+
+    def owner(self, commit: str) -> str | None:
+        """Who saved `commit`: its Vhil-User trailer, else the login of a
+        GitHub noreply author address; None when neither says."""
+        raw = self.git("cat-file", "commit", commit)
+        header, _, message = raw.partition("\n\n")
+        last = message.strip().split("\n\n")[-1]
+        for line in reversed(last.splitlines()):
+            key, sep, value = line.partition(":")
+            if sep and key.strip().lower() == OWNER_TRAILER.lower() and _LOGIN.match(value.strip()):
+                return value.strip()
+        for line in header.splitlines():
+            if line.startswith("author "):
+                email = line.rsplit("<", 1)[-1].split(">", 1)[0]
+                m = _NOREPLY.match(email)
+                return m.group(1) if m else None
+        return None
+
     def checked_out(self) -> set[str]:
         """Branches checked out in the workspace or any of its worktrees."""
         out = self.git("worktree", "list", "--porcelain")
@@ -123,12 +166,21 @@ class GitStore:
                 tar.extractall(dest)
 
     def commit_file(self, branch: str, path: str, text: str, message: str,
-                    author: tuple[str, str], must_not_exist: bool = False) -> dict:
+                    author: tuple[str, str], must_not_exist: bool = False,
+                    trailers: dict[str, str] | None = None,
+                    expect_parent: str | None = None) -> dict:
         """Commit `text` as `path` on `branch` (created from the base if new).
+        `trailers` end the message (e.g. {OWNER_TRAILER: login}); with
+        `expect_parent`, the save is refused (Conflict) if the branch no longer
+        builds on that commit: what the caller checked is what it moves.
         Returns {ref, branch, parent, created, changed}."""
         self.check_branch(branch)
+        message = clean_message(message)
         if not message.strip():
             raise GitError("a commit needs a message")
+        if trailers:
+            message = message.rstrip() + "\n\n" + "".join(
+                f"{k}: {v}\n" for k, v in trailers.items())
         name, email = author
         with self._lock:
             if branch in self.checked_out():
@@ -136,6 +188,8 @@ class GitStore:
                                f"save to another branch")
             local = self.rev(f"refs/heads/{branch}")
             parent = self.parent(branch)
+            if expect_parent is not None and parent != expect_parent:
+                raise Conflict(f"branch '{branch}' moved during the save; retry")
             if must_not_exist and self.read(parent, path) is not None:
                 raise Conflict(f"{path} already exists on {branch if local else self.base}")
             blob = self.git("hash-object", "-w", "--stdin", input=text)

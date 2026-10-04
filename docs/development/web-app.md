@@ -5,11 +5,17 @@ has two auth modes, picked by `VHIL_AUTH`:
 
 | Mode | Who can use it | For |
 |---|---|---|
-| `dev` (default) | anyone who reaches the port, as the fixed user `dev` | a local checkout: `scripts/vhil-docker.sh server`, `docker compose -f docker/compose.yaml up` |
-| `github` | members of `VHIL_GITHUB_ORG` (default `isc-fs`), after GitHub login | the shared deployment |
+| `github` (default) | members of `VHIL_GITHUB_ORG` (default `isc-fs`), after GitHub login | the shared deployment |
+| `dev` | anyone who reaches the port, as the fixed user `dev` | a local checkout: `scripts/vhil-docker.sh server`, `docker compose -f docker/compose.yaml up` |
 
-Dev mode binds to `127.0.0.1` by default (`python -m vhil.server`); don't
-expose it on a network.
+Unset `VHIL_AUTH` means `github`: the server fails closed, and without the
+GitHub settings below it refuses to start. Dev mode needs `VHIL_AUTH=dev`, and
+`python -m vhil.server` then refuses to listen on anything but loopback
+(`--host 127.0.0.1`, the default) unless `VHIL_ALLOW_DEV_ON_NETWORK=1` says the
+port is reachable from this machine only some other way: a container whose
+port is published on the host's `127.0.0.1` (what `vhil-docker.sh server` and
+`docker/compose.yaml` do), or a test. It logs a warning whenever dev mode
+starts. Never set it on a host.
 
 ## How it works
 
@@ -37,6 +43,26 @@ expose it on a network.
   `X-CSRF-Token`: a token derived from the session, in the `vhil_csrf` cookie
   and in `GET /api/me`. The shell's `api(path, {method, ...})` helper in
   `static/app.js` adds it; use that helper for writes.
+- **Ownership**: a run records who started it (`owner`: the login; `dev` in
+  dev mode), shown in the history and on the run page. Only its owner or an
+  admin (`VHIL_ADMINS`) may cancel it (403 otherwise; an admin's cancel is
+  logged). A save records its saver as a `Vhil-User: <login>` trailer on the
+  commit (`vhil/server/gitstore.py`); a save that would move a branch whose
+  tip someone else saved (its trailer, else its GitHub noreply author; a tip
+  with neither counts as someone else's) is 409 `{errors, owner, takeover:
+  true}` unless the saver is an admin or sends `takeover: true`, which is
+  logged and recorded as a `Vhil-Takeover-From` trailer. The Editor asks before
+  it retries with `takeover`. Dev mode has one user and no ownership checks.
+- **Headers** (`vhil/server/security.py`): every response carries a strict
+  Content-Security-Policy (`default-src 'self'`, no inline script or style,
+  `connect-src` this site and its WebSocket, `frame-src` this site and
+  `VHIL_EDITOR_URL`'s origin, `frame-ancestors 'self'`), `X-Frame-Options:
+  SAMEORIGIN`, `X-Content-Type-Options: nosniff` and `Referrer-Policy:
+  same-origin`. So the shell's code has no inline `<script>`, `style=""` or
+  `on*=` handlers: set styles through `el.style` and handlers with
+  `addEventListener`. Run artifacts (`/api/runs/{id}/artifacts/…`) are never
+  rendered: text as `text/plain; charset=utf-8`, anything else as an
+  attachment, with `Content-Security-Policy: sandbox`.
 - **GitHub App** (`vhil/server/github_app.py`): firmware clones and
   system-file pushes / PRs use the App, never a person's token.
   `app.state.github_app.token_for("isc-fs/IFS08-CE-ECU")` returns an
@@ -52,7 +78,9 @@ On a host these come from `deploy/.env` ([`docs/deploy.md`](../deploy.md),
 
 | Variable | Mode | Meaning |
 |---|---|---|
-| `VHIL_AUTH` | both | `dev` or `github` |
+| `VHIL_AUTH` | both | `github` (default) or `dev` |
+| `VHIL_ALLOW_DEV_ON_NETWORK` | dev | `1`: allow dev mode off loopback (a container published on 127.0.0.1 only; tests) |
+| `VHIL_ADMINS` | github | comma-separated GitHub logins that may cancel any run and save over any branch |
 | `VHIL_GITHUB_ORG` | github | org whose members may log in, and where the App is installed (default `isc-fs`) |
 | `VHIL_GITHUB_CLIENT_ID` | github | OAuth client ID (from the GitHub App, or an OAuth App) |
 | `VHIL_GITHUB_CLIENT_SECRET` | github | its client secret |

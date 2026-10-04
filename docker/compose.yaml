@@ -5,9 +5,13 @@
 # Images come from `scripts/vhil-docker.sh image` (ifs-vhil, ifs-vhil-editor).
 # The repository checkout is the workspace: its systems/ and catalog/ are what
 # the app shows and edits; `worker` executes the runs the api queues.
-# VHIL_AUTH=dev: no login. For GitHub login set VHIL_AUTH=github and the
-# VHIL_GITHUB_* / VHIL_SESSION_SECRET variables (docs/development/web-app.md),
-# e.g. from an env file kept out of git.
+# VHIL_AUTH=dev: no login, set explicitly (unset means github: the server
+# fails closed). The server refuses dev mode off loopback; the api listens on
+# 0.0.0.0 inside its container, so its port is published on the host's
+# 127.0.0.1 only and VHIL_ALLOW_DEV_ON_NETWORK=1 says so. For GitHub login set
+# VHIL_AUTH=github, drop that override, and set the VHIL_GITHUB_* /
+# VHIL_SESSION_SECRET variables (docs/development/web-app.md), e.g. from an
+# env file kept out of git.
 name: ifs-vhil
 services:
   api:
@@ -21,6 +25,7 @@ services:
       VHIL_WORKSPACE: /work
       VHIL_DATA: /vhil/server
       VHIL_AUTH: dev
+      VHIL_ALLOW_DEV_ON_NETWORK: "1"   # the port below is on 127.0.0.1 only
       # Where the browser reaches the editor service (the shell embeds it).
       VHIL_EDITOR_URL: http://localhost:${VHIL_EDITOR_PORT:-5050}
       # Pushing saved system branches and opening PRs (until the GitHub App).
@@ -31,7 +36,7 @@ services:
       GIT_CONFIG_KEY_0: safe.directory
       GIT_CONFIG_VALUE_0: /work
     ports:
-      - "${VHIL_WEB_PORT:-8080}:8080"
+      - "127.0.0.1:${VHIL_WEB_PORT:-8080}:8080"
   worker:
     # Claims queued runs (vhil/worker.py); scale with --scale worker=N.
     # Privileged + host network like the wrapper's runs (vcan); shares the

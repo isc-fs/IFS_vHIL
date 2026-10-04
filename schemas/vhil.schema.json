@@ -325,6 +325,7 @@
               "firmware_ref": {
                 "type": "string",
                 "minLength": 1,
+                "pattern": "^(?![-/])(?!.*\\.\\.)(?!.*//)[A-Za-z0-9._/+-]{1,100}(?<![./])$(?![\\s\\S])",
                 "description": "Branch or tag of the firmware's repo to build for this board, in place of the catalogue entry's ref. `vhil.system build --ref` still overrides it."
               },
               "bootloader": {
@@ -334,6 +335,7 @@
               "bootloader_ref": {
                 "type": "string",
                 "minLength": 1,
+                "pattern": "^(?![-/])(?!.*\\.\\.)(?!.*//)[A-Za-z0-9._/+-]{1,100}(?<![./])$(?![\\s\\S])",
                 "description": "Branch or tag of the bootloader's repo, in place of its catalogue ref. Only with a bootloader."
               },
               "node_id": {
