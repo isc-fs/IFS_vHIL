@@ -114,10 +114,12 @@ IFS_HIL recipe ─▶ ECU08.elf / AMS.elf  (same image the physical bench flashe
    entry only with a reason it can't change what a test sees; otherwise model
    the hardware. A gap that is tracked but not yet modelled may be listed as
    "KNOWN GAP #<issue>", and its entry goes when the issue closes.
-8. **Fit an SD card on any board whose firmware touches SDMMC** (model
-   `sd-card`). With no card, Renode's STM32 SDMMC never sets CMDSENT and the
-   HAL's no-response command wait spins for seconds, starving every other
-   task: the AMS stopped polling its battery chain after boot.
+8. **SDMMC1 times out commands no card answers** (`Stm32H7Sdmmc.cs`, after
+   RM0468 60.5.4): CMDSENT without a response, CTIMEOUT with one, DTIMEOUT
+   for a read's data. Renode's own STM32 SDMMC never set CMDSENT with no card,
+   and the HAL's no-response command wait spun for seconds, starving every
+   other task (the AMS dropped AMS_OK). Keep that behaviour; a board may now go
+   without an `sd-card`, and `dead: true` / `Respond false` gives a dead one.
 9. **Neither bench is ground truth; the car is.** Model what the car's
    hardware does (schematics, datasheets) and what the firmware intends,
    not what the physical bench happens to do: it has its own artifacts
