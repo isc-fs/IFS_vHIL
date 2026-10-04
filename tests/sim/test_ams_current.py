@@ -11,10 +11,19 @@ Firmware facts (IFS08-CE-AMS):
   both sampled every 50 ms, IIR-filtered (shift 4), sent as BE i16
   deciamps [pack | dcdc] on 0x135                   acu_tx_encoders.hpp:165-170
   CurrentStale = fault reason 9                     safety_predicates.hpp:53
+  CurrentOverLimit (10): |filtered| > CurrentMaxMa = 185 A, no debounce
+    beyond the IIR itself (filtered -= f >> 4; += mA >> 4 every 50 ms;
+    current_service.cpp:84-89, safety_predicates.hpp:244)
+  CurrentSensorFault (8): the OUT_P leg outside 700..2300 mV for
+    CurrentDisconnectConfirm = 3 reads in a row (current_task.cpp:202-212)
+  Error latches for the boot (state_machine.hpp step: sticky ERROR)
   0x6C0 byte 6 = fault reason once 0x7F0 DE AD BE EF arms the pit stream
                                                    pit_fsm_status.def, ams_config.hpp:588
 """
 import pytest
+
+from vhil.sim import Sim
+from vhil.system import REPO
 
 VREF = 3.3
 CURRENT_ZERO_COUNT = 2054
@@ -25,6 +34,9 @@ DCDC_MV_PER_A_E1 = 264
 CURRENTS = 0x135
 PIT_ARM, PIT_FSM = 0x7F0, 0x6C0
 CURRENT_STALE = 9
+SENSOR_FAULT, OVER_LIMIT = 8, 10
+CURRENT_MAX_MA = 185_000
+ERROR = 5
 
 COMMON_MODE_V = 1.44       # the sensor's output common mode (ams_config.hpp:692)
 SETTLE_MS = 8000           # 10 time constants of the 800 ms IIR (residue < 0.01 %)
@@ -43,6 +55,29 @@ def _pack_dA(vp, vn):
     delta = _code_diff(vp, vn) - CURRENT_ZERO_COUNT
     diff_uV = int(delta * 2 * 3300 * 1000 / 4095)
     return int(diff_uV * 10 / CURRENT_MV_PER_A_E1) / 100
+
+
+def _pack_mA(vp, vn):
+    """adc_to_mA exactly (current_service.cpp:34-40), C truncation."""
+    delta = _code_diff(vp, vn) - CURRENT_ZERO_COUNT
+    diff_uV = int(delta * 2 * 3300 * 1000 / 4095)
+    return int(diff_uV * 10 / CURRENT_MV_PER_A_E1)
+
+
+def _legs(amps):
+    half = amps * CURRENT_MV_PER_A_E1 / 10 / 1000 / 2
+    return COMMON_MODE_V + half, COMMON_MODE_V - half
+
+
+def _samples_to_trip(f0, mA, limit=400):
+    """50 ms samples until the firmware's IIR passes CurrentMaxMa, or None."""
+    f = f0
+    for n in range(1, limit + 1):
+        f -= f >> 4
+        f += mA >> 4
+        if abs(f) > CURRENT_MAX_MA:
+            return n
+    return None
 
 
 def _dcdc_dA(v):
@@ -114,3 +149,78 @@ def test_current_never_goes_stale(ams):
     assert status, "no 0x6C0 after arming the pit stream"
     reasons = {f.data[6] for f in status}
     assert CURRENT_STALE not in reasons, f"fault reasons seen: {sorted(reasons)}"
+
+
+@pytest.fixture
+def fresh(firmware):
+    """A booted AMS past its grace, at 0 A, for tests that latch Error."""
+    with Sim(REPO / "systems" / "ams.yaml", {"ams": firmware("ams")}) as sim:
+        sim.run_for(ms=3000)
+        yield sim
+
+
+def _ms_to_error(sim, limit_ms, step_ms=10):
+    for elapsed in range(step_ms, limit_ms + step_ms, step_ms):
+        sim.run_for(ms=step_ms)
+        if sim.read_symbol("ams", "g_state_telemetry") == ERROR:
+            return elapsed
+    return None
+
+
+def _drive(sim, amps):
+    vp, vn = _legs(amps)
+    io = sim.io("ams")
+    io.set_voltage("PF7", vp)
+    io.set_voltage("PF8", vn)
+    return _pack_mA(vp, vn)
+
+
+def test_just_under_the_limit_never_trips(fresh):
+    """J-100: 180 A held for 8 s (ten IIR time constants) stays healthy."""
+    _drive(fresh, 180)
+    fresh.run_for(ms=SETTLE_MS)
+    assert fresh.read_symbol("ams", "g_state_telemetry") == 0
+
+
+@pytest.mark.parametrize("amps", [190, -190, 300], ids=["190A", "charge-190A", "300A"])
+def test_over_current_trips_on_the_filter_curve(fresh, amps):
+    """J-101, J-102, I-100: the trip comes when the IIR crosses 185 A, either
+    sign, at the sample the firmware's own filter predicts (IFS_HIL's J-102
+    profile says 200 A: drift)."""
+    f0 = _pack_mA(*_legs(0))
+    mA = _drive(fresh, amps)
+    n = _samples_to_trip(f0, mA)
+    assert n is not None
+    elapsed = _ms_to_error(fresh, n * 50 + 500)
+    assert elapsed is not None, f"no trip at {amps} A ({mA} mA)"
+    assert abs(elapsed - n * 50) <= 70, f"tripped after {elapsed} ms, filter says {n * 50} ms"
+    assert fresh.read_symbol("ams", "g_fault_reason_telemetry") == OVER_LIMIT
+
+
+def test_the_over_current_latch_survives_the_current_falling(fresh):
+    """K-101: back to 0 A, still Error."""
+    _drive(fresh, 300)
+    assert _ms_to_error(fresh, 3000) is not None
+    _drive(fresh, 0)
+    fresh.run_for(ms=SETTLE_MS)
+    assert fresh.read_symbol("ams", "g_state_telemetry") == ERROR
+
+
+@pytest.mark.parametrize("volts", [0.0, 0.6, 2.5], ids=["open", "low", "rail"])
+def test_a_disconnected_leg_faults_the_sensor(fresh, volts):
+    """N-001..N-003: OUT_P outside 700..2300 mV for three reads -> reason 8,
+    inside ~3 samples."""
+    fresh.io("ams").set_voltage("PF7", volts)
+    elapsed = _ms_to_error(fresh, 400)
+    assert elapsed is not None and elapsed <= 220, f"Error after {elapsed} ms"
+    assert fresh.read_symbol("ams", "g_fault_reason_telemetry") == SENSOR_FAULT
+
+
+def test_a_leg_glitch_shorter_than_the_confirmation_is_ignored(fresh):
+    """N-004: out of window for at most two reads."""
+    io = fresh.io("ams")
+    io.set_voltage("PF7", 0.0)
+    fresh.run_for(ms=80)
+    io.set_voltage("PF7", COMMON_MODE_V)
+    fresh.run_for(ms=1000)
+    assert fresh.read_symbol("ams", "g_state_telemetry") == 0
