@@ -10,9 +10,18 @@ the emulation is paused, every observation carries its virtual timestamp,
 and stimulus can be scheduled at an exact virtual time. A test therefore
 gets the same result on a slow laptop, a CI runner, or with Renode told to
 go as fast as it can (`advance_immediately`, the default).
+
+Instrumentation (tests/sim/conftest.py turns it on for every Sim of a run
+through INSTRUMENT): `trace` keeps the last N translation blocks per CPU for
+failure snapshots (vhil/snapshot.py; a C# hook on every block, 5-8x
+slower), `coverage_dir` logs every translated block per CPU for
+vhil/coverage.py (5-25% slower; a reset retranslates, and logs, everything).
 """
 from __future__ import annotations
 
+import itertools
+import json
+import os
 import re
 import subprocess
 import tempfile
@@ -26,6 +35,33 @@ from vhil.renode import RenodeMonitor
 from vhil.system import System
 
 PROBE_SOURCE = REPO / "models" / "renode" / "VhilProbe.cs"
+TRACE_SOURCE = REPO / "models" / "renode" / "VhilTrace.cs"
+
+
+@dataclass
+class Instrumentation:
+    """Defaults for every Sim that doesn't set its own (conftest options)."""
+    trace: int = 0                       # blocks kept per CPU; 0 = off
+    coverage_dir: Optional[Path] = None  # where translated-block logs go
+    # Called with the Sim when a `with Sim(...)` block exits on an exception,
+    # before Renode stops: the last chance to snapshot it (tests/sim/conftest.py).
+    on_error_exit: Optional[Callable[["Sim"], None]] = None
+
+
+INSTRUMENT = Instrumentation()
+_live: list["Sim"] = []          # started and not stopped yet
+_activity = itertools.count(1)   # bumped on every monitor command
+_coverage_seq = itertools.count()
+
+
+def live_sims() -> list["Sim"]:
+    return list(_live)
+
+
+def activity() -> int:
+    """A mark to compare Sim.last_activity with: the Sims a test touched are
+    the ones whose last_activity is above the mark taken when it started."""
+    return next(_activity)
 
 
 @dataclass(frozen=True)
@@ -107,6 +143,14 @@ class CanBus:
         if items:
             self.sim.monitor(f'{self.probe} SendBatch "{items}"')
 
+    def send_sequence(self, frames, gap_us: int, burst: int = 1) -> None:
+        """Standard frames [(id, data), ...] streamed from now at one per
+        gap_us on average, `burst` frames every burst * gap_us (each burst is
+        a synced action: a burst > 1 is much cheaper to emulate)."""
+        items = " ".join(f"{can_id}:{bytes(data).hex()}" for can_id, data in frames)
+        if items:
+            self.sim.monitor(f'{self.probe} SendSequence "{items}" {int(gap_us)} {int(burst)}')
+
     def send_at(self, at_us: int, can_id: int, data: bytes = b"", extended: bool = False) -> None:
         self.sim.monitor(f'{self.probe} SendAt {at_us} {can_id} "{data.hex()}" {_arg(extended)}')
 
@@ -129,7 +173,10 @@ class BoardIO:
         self.sim, self.board, self.probe = sim, board, f"vhil_gpio_{board}"
 
     def set_input(self, port: str, pin: int, level: bool) -> None:
-        self.sim.monitor(f"{port} OnGPIO {pin} {_arg(level)}", board=self.board)
+        """Drive an input from outside the MCU, e.g. set_input("sysbus.gpioPortB",
+        5, True). The level holds across the board's resets, as a switch or a
+        carrier pull-up does (models/renode/VhilProbe.cs, Drive)."""
+        self.sim.monitor(f'{self.probe} Drive "{port}" {pin} {_arg(level)}', board=self.board)
 
     def set_voltage(self, pin: str, volts: float) -> None:
         """Drive an analog input pin of the board (catalogue analog_in), e.g.
@@ -155,9 +202,11 @@ class Sim:
     def __init__(self, system: Path | str, firmware: dict[str, Path | str], *,
                  renode: str = DEFAULT_RENODE, advance_immediately: bool = True,
                  seed: int = 1, log_path: Path | None = None,
-                 params: dict[str, dict] | None = None):
+                 params: dict[str, dict] | None = None,
+                 trace: Optional[int] = None, coverage_dir: Optional[Path] = None):
         """params overrides device params for this run, e.g.
-        {"sd": {"image": "card.img"}}."""
+        {"sd": {"image": "card.img"}}. trace and coverage_dir default to
+        INSTRUMENT's."""
         self.system = System(Path(system))
         for name, values in (params or {}).items():
             dev = self.system.devices[name]
@@ -171,6 +220,11 @@ class Sim:
             raise ValueError(f"no firmware for boards {sorted(missing)}")
         self.renode, self.advance_immediately, self.seed = renode, advance_immediately, seed
         self.log_path = log_path
+        self.trace_blocks = INSTRUMENT.trace if trace is None else trace
+        self.coverage_dir = INSTRUMENT.coverage_dir if coverage_dir is None else coverage_dir
+        self.coverage_logs: dict[str, Path] = {}
+        self.last_activity = 0
+        self._mach: Optional[str] = None
         self._proc = self._monitor = None
 
     # -- lifecycle -----------------------------------------------------------
@@ -193,9 +247,40 @@ class Sim:
         for board in self.system.boards:
             m.execute(f'emulation CreateVhilGpioProbe "vhil_gpio_{board}" "{board}"')
         m.execute(f"emulation SetGlobalAdvanceImmediately {_arg(self.advance_immediately)}")
+        if self.trace_blocks:
+            m.execute(f"include @{TRACE_SOURCE.as_posix()}")
+            for board in self.system.boards:
+                m.execute(f'emulation CreateVhilTrace "vhil_trace_{board}" "{board}" '
+                          f'{self.trace_blocks}')
+        if self.coverage_dir:
+            self._start_coverage(Path(self.coverage_dir))
+        _live.append(self)
         return self
 
+    def _start_coverage(self, root: Path) -> None:
+        """Renode logs every block it translates, with its disassembly, to the
+        CPU's LogFile. A block is translated the first time it runs, so the
+        addresses in the log are the code that executed (vhil/coverage.py)."""
+        raw = root / "raw"
+        raw.mkdir(parents=True, exist_ok=True)
+        stem = f"{self.system.id}-{os.getpid()}-{next(_coverage_seq)}"
+        for board in self.system.boards:
+            log = (raw / f"{stem}-{board}.tblog").resolve()
+            self.monitor(f"cpu LogFile @{log.as_posix()}", board=board)
+            self.monitor("cpu LogTranslatedBlocks true", board=board)
+            self.coverage_logs[board] = log
+            (raw / f"{stem}-{board}.json").write_text(json.dumps(
+                {"system": self.system.id, "board": board, "log": log.name,
+                 "images": [str(p) for p in self.images_of(board)]}, indent=1))
+
+    def images_of(self, board: str) -> list[Path]:
+        """The ELF images a board's CPU runs: its app, then its bootloader."""
+        return [p for p in (self.firmware.get(board), self.firmware.get(f"{board}.bootloader"))
+                if p is not None]
+
     def stop(self) -> None:
+        if self in _live:
+            _live.remove(self)
         if self._monitor is not None:
             try:
                 self._monitor.execute("quit")
@@ -213,7 +298,16 @@ class Sim:
     def __enter__(self) -> "Sim":
         return self.start()
 
-    def __exit__(self, *exc) -> None:
+    def __exit__(self, exc_type, *exc) -> None:
+        # An error or a failed assertion, not a skip or a KeyboardInterrupt
+        # (pytest's skip and fail are BaseExceptions; fail is "Failed").
+        failed = exc_type is not None and (issubclass(exc_type, Exception)
+                                           or exc_type.__name__ == "Failed")
+        if failed and INSTRUMENT.on_error_exit is not None:
+            try:
+                INSTRUMENT.on_error_exit(self)
+            except Exception:
+                pass   # never mask the exception that is on its way out
         self.stop()
 
     # -- time --------------------------------------------------------------
@@ -280,8 +374,10 @@ class Sim:
             raise RuntimeError("Sim not started")
         if board is None and len(self.system.boards) == 1:
             board = next(iter(self.system.boards))
+        self.last_activity = next(_activity)
         if board is not None:
             self._monitor.execute(f'mach set "{board}"')
+            self._mach = board
         return self._monitor.execute(command)
 
 

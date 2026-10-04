@@ -233,7 +233,7 @@ namespace Antmicro.Renode.Testing
                 [6] = new[] { "timer12" }, [7] = new[] { "timer13" }, [8] = new[] { "timer14" },
                 [9] = new[] { "lptimer1" }, [17] = new[] { "usart2" }, [18] = new[] { "usart3" },
                 [19] = new[] { "uart4" }, [20] = new[] { "uart5" }, [21] = new[] { "i2c1" },
-                [22] = new[] { "i2c2" }, [23] = new[] { "i2c3" }, [30] = new[] { "uart7" },
+                [22] = new[] { "i2c2_h7" }, [23] = new[] { "i2c3" }, [30] = new[] { "uart7" },
                 [31] = new[] { "uart8" },
             }},
             // §8.7.33 p. 420-421: CRS 1, SWPMI 2, OPAMP 4, MDIOS 5, FDCAN 8 (the

@@ -9,10 +9,10 @@ The system file stays the source of truth (vision principle 1): the editor's
 graph is a view of it, translated both ways here. Catalogue entries become
 node types:
 
-  board     a node with one typed connector per CAN/SPI/SDMMC/GPIO/analog pin;
+  board     a node with one typed connector per CAN/SPI/SDMMC/I2C/GPIO/analog pin;
             its firmware is a select property
   CAN bus   a node with a BUS interface: connect any number of CAN connectors
-  model     a node per chip model: its host-side ports (spi, cs, sdmmc), the
+  model     a node per chip model: its host-side ports (spi, cs, sdmmc, i2c), the
             port it provides (an LTC6820 provides `isospi`) and the port it
             attaches to (an LTC6811 attaches to `isospi`), with count/params
 
@@ -52,11 +52,11 @@ BUS_SIZE, BUS_PITCH = 120, 40
 
 # Board catalogue section -> interface type and side.
 _BOARD_PORTS = (("can", "can", "right"), ("spi", "spi", "left"), ("sdmmc", "sdmmc", "left"),
-                ("gpio", "gpio", "left"), ("analog_in", "analog", "left"))
+                ("i2c", "i2c", "left"), ("gpio", "gpio", "left"), ("analog_in", "analog", "left"))
 # Model host-side ports: system device field -> interface type.
-_MODEL_HOST_PORTS = (("spi", "spi"), ("cs", "gpio"), ("sdmmc", "sdmmc"))
+_MODEL_HOST_PORTS = (("spi", "spi"), ("cs", "gpio"), ("sdmmc", "sdmmc"), ("i2c", "i2c"))
 # Field order in a written system file.
-_DEVICE_FIELDS = ("model", "spi", "cs", "sdmmc", "outputs", "attach", "count", "params")
+_DEVICE_FIELDS = ("model", "spi", "cs", "sdmmc", "i2c", "outputs", "attach", "count", "params")
 _SYSTEM_FIELDS = ("kind", "id", "description", "time", "boards", "buses", "devices", "port",
                   "bench")
 

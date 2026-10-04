@@ -10,6 +10,9 @@
 #   scripts/vhil-docker.sh unit                  tests/unit + validate every system
 #   scripts/vhil-docker.sh smoke <ecu|ams>       tests/<s>_smoke.robot
 #   scripts/vhil-docker.sh sim [pytest args]     tests/sim in virtual time
+#   scripts/vhil-docker.sh coverage [glob] [pytest args]
+#                                                firmware coverage of tests/sim/<glob>.py
+#                                                (default test_*) into results/coverage
 #   scripts/vhil-docker.sh speed [mips ...]      scripts/speed.py on the ECU
 #   scripts/vhil-docker.sh ifs-hil [suite] [pytest args]
 #                                                IFS_HIL's ECU suite over vcan
@@ -114,6 +117,14 @@ sim)
         need_elf ecu; need_elf ams
         VHIL_ECU_ELF=$(elf ecu) VHIL_AMS_ELF=$(elf ams) VHIL_CAN_BOOTLOADER_ELF=$(elf ecu.bootloader) \
             python -m pytest tests/sim -v --sim-log-dir results/sim-logs "$@"' "$@" ;;
+coverage)
+    in_container "$prelude"'
+        need_elf ecu; need_elf ams
+        glob=${1:-test_*}; glob=${glob%.py}; shift || true
+        files=$(ls tests/sim/$glob.py)
+        VHIL_ECU_ELF=$(elf ecu) VHIL_AMS_ELF=$(elf ams) VHIL_CAN_BOOTLOADER_ELF=$(elf ecu.bootloader) \
+            python -m pytest $files -v --sim-log-dir results/sim-logs \
+                --vhil-coverage results/coverage "$@"' "$@" ;;
 speed)
     [ $# -gt 0 ] || set -- 100 528
     in_container "$prelude"'
@@ -161,5 +172,5 @@ editor)
         exec scripts/editor.sh' ;;
 shell) in_container 'exec bash' ;;
 run) in_container 'exec "$@"' "$@" ;;
-*) sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; [ "$cmd" = help ] ;;
+*) sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'; [ "$cmd" = help ] ;;
 esac
