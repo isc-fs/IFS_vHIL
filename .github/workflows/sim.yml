@@ -22,7 +22,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [ams, ecu, other]
+        # <group>-<k>: the group's test files, sorted, round-robin over its
+        # shards (ams 3, ecu 2), so each stays well inside the timeout as
+        # suites are added (sim (ams) alone had reached 42 of 45 min).
+        # Flashing over CAN at the bus rate is minutes of emulation per image,
+        # so the *bootloader* files get shards of their own: ams-bootloader,
+        # and bootloader (the rest).
+        shard: [ams-1, ams-2, ams-3, ecu-1, ecu-2, ams-bootloader, bootloader, other]
     steps:
       - uses: actions/checkout@v4
 
@@ -64,17 +70,22 @@ jobs:
           VHIL_CAN_BOOTLOADER_ELF: ${{ steps.fw.outputs.bootloader }}
           SHARD: ${{ matrix.shard }}
         run: |
-          # ams: test_ams_*, ecu: test_ecu_*, other: every other test file.
+          # ams-k: test_ams_*, ecu-k: test_ecu_*, other: every other test file.
+          bl='bootloader'
           case "$SHARD" in
-            ams)   files=$(ls tests/sim/test_ams_*.py) ;;
-            ecu)   files=$(ls tests/sim/test_ecu_*.py) ;;
-            other) files=$(ls tests/sim/test_*.py | grep -v -e '/test_ams_' -e '/test_ecu_') ;;
+            ams-bootloader) all=tests/sim/test_ams_bootloader.py; n=1 ;;
+            bootloader) all=$(ls tests/sim/test_*.py | grep "$bl" | grep -v '/test_ams_'); n=1 ;;
+            ams-*) all=$(ls tests/sim/test_ams_*.py | grep -v "$bl"); n=3 ;;
+            ecu-*) all=$(ls tests/sim/test_ecu_*.py | grep -v "$bl"); n=2 ;;
+            other) all=$(ls tests/sim/test_*.py | grep -v -e '/test_ams_' -e '/test_ecu_' -e "$bl"); n=1 ;;
           esac
+          k=${SHARD##*-}; case "$k" in [0-9]*) ;; *) k=1 ;; esac
+          files=$(echo "$all" | sort | awk -v n="$n" -v k="$k" '(NR - 1) % n == k - 1')
           echo "$files"
           python -m pytest $files -v --sim-log-dir sim-logs
 
       - name: Emulation speed on this runner
-        if: always() && matrix.shard == 'ecu'
+        if: always() && matrix.shard == 'ecu-1'
         env:
           RENODE: ${{ runner.temp }}/renode/renode
         run: |
