@@ -6,8 +6,12 @@ The contract is the firmware's own: the .def files of the source each board's
 image was built from (vhil/candef.py), found next to the ELF the worker ran
 (the run summary's `firmware`, or, before the run has finished, the path the
 worker's FirmwareResolver gives the run's refs). A .def does not say which
-bus a frame rides, so a board's messages apply to every bus it sits on (the
-system's `buses`). Where two boards on one bus declare the same id, the
+bus a frame rides; the catalogue firmware does (`can.contract`: the board
+connectors the contract rides, System.contract_buses), so a board's
+messages apply on those buses only: the ECU's on its ACU bus, not on the
+dash bus, whose own 0x510/0x511 would otherwise decode as the uDV's. A
+firmware that names none applies on every bus the board sits on. Where two
+boards on one bus declare the same id, the
 sender's declaration wins: each repo carries the frames it consumes "so the
 generated DBC documents the whole contract", but the sender owns the layout
 (IFS08-CE-ECU all_messages.inc). A board's sender name is the one most of its
@@ -64,7 +68,8 @@ def run_contract(run: dict, workspace: Path, fw_dir: Path) -> dict:
             continue
         out["boards"][board] = {"elf": str(elf), "source": str(candef.messages_dir(elf.parent)),
                                 "sender": _sender(contracts[board]),
-                                "messages": len(contracts[board])}
+                                "messages": len(contracts[board]),
+                                "buses": system.contract_buses(board)}
     def owns(entry: tuple[str, candef.Message]) -> bool:
         board, msg = entry
         return msg.sender == out["boards"][board]["sender"]
@@ -72,7 +77,7 @@ def run_contract(run: dict, workspace: Path, fw_dir: Path) -> dict:
     for bus in system.buses:
         merged: dict[int, tuple[str, candef.Message]] = {}
         for board in system.boards:
-            if board not in contracts or bus not in system.can_of(board).values():
+            if board not in contracts or bus not in out["boards"][board]["buses"]:
                 continue
             for can_id, msg in contracts[board].items():
                 win, lose = merged.get(can_id), (board, msg)

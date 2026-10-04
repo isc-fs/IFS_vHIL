@@ -247,6 +247,25 @@
               "description": "VTOR to set at reset, as a bootloader would."
             }
           }
+        },
+        "can": {
+          "type": "object",
+          "required": [
+            "contract"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "contract": {
+              "description": "The board CAN connectors (e.g. FDCAN2) the firmware's CAN contract (its .def messages, Core/Inc/can/messages) rides: a .def names no bus. A board running this firmware decodes those messages only on the buses these connectors are on; without it, on every bus the board is on.",
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_]+$"
+              }
+            }
+          }
         }
       }
     },

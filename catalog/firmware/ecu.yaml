@@ -14,3 +14,13 @@ load:
   # Linked at 0x08020000 behind the bootloader, and never sets VTOR itself:
   # the bootloader does that before jumping, so the loader must too.
   vector_table: 0x08020000
+can:
+  # Every message in the .def contract rides FDCAN2, the ACU bus: each DSL
+  # frame is built with CanBus::Acu (control_task.cpp:318 0x100,
+  # udv_tx.cpp:17, gps_tx.cpp:15, pit_diag.cpp:29), the contract is decoded
+  # off the ACU bus only (vehicle_service.cpp:238, bootloader.hpp:80), and
+  # all_messages.inc places the uDV/GPS frames there. FDCAN1 carries the
+  # inverter frames, not in the DSL yet (all_messages.inc TODO(inverter)),
+  # and FDCAN3 the dash frames 0x510-0x521 (telemetry_task.cpp:54-177),
+  # whose ids collide with the uDV's 0x510/0x511 on the ACU bus.
+  contract: [FDCAN2]

@@ -566,9 +566,9 @@ export async function renderRun(view, { api, esc }, id, tab) {
     S.contract = c;
     const boards = Object.entries(c.boards || {});
     const bad = boards.filter(([, b]) => b.error).map(([n, b]) => `${n}: ${b.error}`);
-    const ok = boards.filter(([, b]) => !b.error).map(([n, b]) => `${n} ${b.messages} messages`);
+    const ok = boards.filter(([, b]) => !b.error).map(([n, b]) => `${n} ${b.messages} messages on ${(b.buses || []).join(", ") || "no bus"}`);
     S.contractNote = (c.error ? `No decoding: ${c.error}. ` : "") +
-      (ok.length ? `Decoded against the firmware's .def contract (${ok.join(", ")}); a .def names no bus, so a board's messages apply on every bus it is on.` : "") +
+      (ok.length ? `Decoded against the firmware's .def contract (${ok.join("; ")}), on the buses its catalogue entry says it rides.` : "") +
       (bad.length ? ` Not decoded: ${bad.join("; ")}.` : "") +
       (c.conflicts?.length ? ` ${c.conflicts.length} id(s) declared differently by two boards: ${c.conflicts.map((x) => `${x.bus} ${dec.hexId(x.id)} (${x.kept} kept)`).join(", ")}.` : "");
     for (const f of S.rec.frame) f._d = undefined;

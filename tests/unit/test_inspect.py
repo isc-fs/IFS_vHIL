@@ -62,8 +62,11 @@ def test_contract_maps_each_boards_messages_onto_its_buses(client, store):
     assert acu[str(0x700)]["name"] == "PitDiag_status" and acu[str(0x700)]["board"] == "ecu"
     assert acu[str(0x135)]["name"] == "ACU_currents" and acu[str(0x135)]["board"] == "ams"
     assert acu[str(0x4A0)]["board"] == "ams" and acu[str(0x4A0)]["sender"] == "AMS"
-    # The AMS is only on the ACU bus; the ECU's contract applies to all three.
-    assert str(0x135) not in c["buses"]["can_inv"] and str(0x700) in c["buses"]["can_inv"]
+    # Each contract rides the bus its catalogue firmware names (can.contract):
+    # the ECU's FDCAN2 and the AMS's FDCAN1 are both can_acu, and nothing of
+    # either decodes on the ECU's inverter or dash bus.
+    assert c["boards"]["ecu"]["buses"] == ["can_acu"] and c["boards"]["ams"]["buses"] == ["can_acu"]
+    assert c["buses"]["can_inv"] == {} and c["buses"]["can_dash"] == {}
     assert c["conflicts"] == []
     f = {x["name"]: x for x in acu[str(0x135)]["fields"]}
     assert f["current_accu_dA"] == {"name": "current_accu_dA", "be": True, "signed": True, "start": 7,
@@ -80,7 +83,32 @@ def test_two_boards_declaring_one_id_differently_is_a_conflict_the_sender_wins(t
     assert c["conflicts"] == [{"bus": "can_acu", "id": 0x4A0, "name": "AMS_status",
                                "kept": "ams", "dropped": "ecu"}]
     assert c["buses"]["can_acu"][str(0x4A0)]["dlc"] == 8
-    assert c["buses"]["can_inv"][str(0x4A0)]["dlc"] == 6     # only the ECU there
+    assert str(0x4A0) not in c["buses"]["can_inv"]     # neither contract rides it
+
+
+def test_the_dash_frames_0x510_0x511_do_not_decode_as_the_udvs(client, store):
+    """The ECU sends its own dash frames 0x510/0x511 on FDCAN3
+    (telemetry_task.cpp:78,85); the uDV's UDV_r2d_request 0x510 and the
+    ECU's VCU_r2d_confirm 0x511 ride the ACU bus (all_messages.inc)."""
+    run_id = _finished(store, "ecu", {"ecu": ELFS["ecu"]})
+    c = client.get(f"/api/runs/{run_id}/contract").json()
+    assert c["boards"]["ecu"]["buses"] == ["can_acu"]
+    assert c["buses"]["can_dash"] == {} and c["buses"]["can_inv"] == {}
+    assert c["buses"]["can_acu"], "the contract still decodes on the ACU bus"
+
+
+def test_contract_buses_follow_the_catalogue_firmware(tmp_path):
+    """System.contract_buses, which the contract uses: the buses of the
+    connectors `can.contract` names, or every bus of the board without it."""
+    from vhil.system import System
+    assert System(REPO / "systems" / "ecu-ams.yaml").contract_buses("ecu") == ["can_acu"]
+    assert System(REPO / "systems" / "ecu-ams.yaml").contract_buses("ams") == ["can_acu"]
+    catalog = tmp_path / "catalog"
+    shutil.copytree(REPO / "catalog", catalog)
+    fw = catalog / "firmware" / "ecu.yaml"
+    fw.write_text(fw.read_text().split("\ncan:\n")[0] + "\n")
+    assert System(REPO / "systems" / "ecu.yaml", catalog).contract_buses("ecu") == \
+        ["can_inv", "can_dash", "can_acu"]
 
 
 def test_a_running_run_uses_the_elf_the_worker_will_resolve(tmp_path, store):

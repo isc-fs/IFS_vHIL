@@ -14,3 +14,8 @@ load:
   # Linked at 0x08020000 behind the bootloader. The AMS sets VTOR itself
   # (main.c), so this only mirrors what the bootloader leaves.
   vector_table: 0x08020000
+can:
+  # The application is FDCAN1-only, the accumulator/vehicle bus
+  # (can_isr.cpp:6-11, app_init_task.cpp:103-114): the whole .def contract
+  # rides it.
+  contract: [FDCAN1]
