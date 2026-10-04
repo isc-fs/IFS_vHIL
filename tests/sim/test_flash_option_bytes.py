@@ -174,7 +174,7 @@ def test_factory_option_bytes_read_back(ecu):
 
 
 @pytest.mark.xfail(strict=True, reason=(
-    "stm32-can-bootloader v1.7.0 bl_obyte.c:31 stores (uint8_t)(ob.RDPLevel & 0xFF); "
+    "isc-fs/stm32-can-bootloader#191: v1.7.0 bl_obyte.c:31 stores (uint8_t)(ob.RDPLevel & 0xFF); "
     "the HAL's RDPLevel is OB_RDP_LEVEL_x = 0xAA00/0x5500/0xCC00 "
     "(stm32h7xx_hal_flash_ex.h:295-297), so OB_READ's rdp_level is 0 at every level"))
 def test_ob_read_reports_the_rdp_level(ecu):
@@ -254,7 +254,7 @@ def test_the_bootloader_latches_wrp_over_can(ecu, app):
 
 
 @pytest.mark.xfail(strict=True, reason=(
-    "stm32-can-bootloader v1.7.0 bl_obyte.c:90-98 expects HAL_FLASH_OB_Launch to reset "
+    "isc-fs/stm32-can-bootloader#192: v1.7.0 bl_obyte.c:90-98 expects HAL_FLASH_OB_Launch to reset "
     "the MCU and returns BL_OB_ERR_HARDWARE when it comes back; on the H7 it returns "
     "HAL_OK with the option bytes programmed (RM0468 §4.4.2-4.4.3, "
     "stm32h7xx_hal_flash.c:973-1000), so every successful latch logs DTC FLASH_HW "
