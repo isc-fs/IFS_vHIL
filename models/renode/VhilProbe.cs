@@ -8,9 +8,11 @@
 //                      emulation CreateVhilCanProbe "probe_can_acu"
 //                      connector Connect probe_can_acu can_acu
 //   VhilGpioProbe  one per board. Watches any GPIO output by name and keeps
-//                  its edge history.
+//                  its edge history, and drives GPIO inputs from outside the
+//                  MCU: a driven level holds across the board's resets.
 //                      emulation CreateVhilGpioProbe "probe_gpio_ecu" "ecu"
 //                      probe_gpio_ecu Watch "sysbus.gpioPortB" 4
+//                      probe_gpio_ecu Drive "sysbus.gpioPortE" 3 true
 //
 // Both answer the monitor in plain text, one record per line, so the Python
 // side (vhil/sim.py) parses without a serializer. Times are microseconds of
@@ -24,6 +26,7 @@ using System.Text;
 using Antmicro.Renode.Core;
 using Antmicro.Renode.Core.CAN;
 using Antmicro.Renode.Peripherals;
+using Antmicro.Renode.Peripherals.Bus;
 using Antmicro.Renode.Peripherals.CAN;
 using Antmicro.Renode.Time;
 using Antmicro.Renode.Utilities;
@@ -127,6 +130,27 @@ namespace Antmicro.Renode.Testing
             }
         }
 
+        // Standard frames streamed from now at one frame per gapUs on average:
+        // "id:hex id:hex ..." (ids in decimal). They go `burst` at a time, a
+        // burst every burst * gapUs: each synced action costs a pause of the
+        // emulation, and lands on a sync-quantum boundary anyway. Each burst
+        // schedules the next from inside its own synced callback, as
+        // SendPeriodic's Tick does: a future time scheduled from the monitor
+        // is never sent (#73), one scheduled from a callback is.
+        public void SendSequence(string frames, ulong gapUs, int burst = 1)
+        {
+            var list = new List<CANMessageFrame>();
+            foreach(var item in frames.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                var parts = item.Split(':');
+                list.Add(new CANMessageFrame(uint.Parse(parts[0]), Bytes(parts.Length > 1 ? parts[1] : ""), false));
+            }
+            if(list.Count > 0)
+            {
+                SequenceStep(list, 0, NowMicros(), gapUs, Math.Max(burst, 1));
+            }
+        }
+
         // Send once at an absolute virtual time (us); in the past = now.
         // Two hops: called from the monitor thread, a future timestamp is
         // built in that thread's time domain and the master time source runs
@@ -215,6 +239,22 @@ namespace Antmicro.Renode.Testing
             });
         }
 
+        private void SequenceStep(List<CANMessageFrame> list, int index, ulong atUs, ulong gapUs, int burst)
+        {
+            Schedule(atUs, () =>
+            {
+                var end = Math.Min(index + burst, list.Count);
+                for(var i = index; i < end; i++)
+                {
+                    SendFrame(list[i]);
+                }
+                if(end < list.Count)
+                {
+                    SequenceStep(list, end, atUs + gapUs * (ulong)burst, gapUs, burst);
+                }
+            });
+        }
+
         private static void Schedule(ulong atUs, Action action)
         {
             var now = TimeDomainsManager.Instance.GetEffectiveVirtualTimeStamp();
@@ -288,6 +328,53 @@ namespace Antmicro.Renode.Testing
         public VhilGpioProbe(IMachine machine)
         {
             this.machine = machine;
+            // A level driven from outside the MCU (a switch, a pull-up on the
+            // carrier) doesn't change because the MCU resets, but Renode's
+            // GPIO ports clear their inputs on machine Reset. Put them back
+            // once the reset is done (MachineReset fires after the
+            // peripherals' Reset), before the firmware runs again.
+            machine.MachineReset += _ => Reapply();
+        }
+
+        // Drive an input pin of a GPIO port from outside, e.g.
+        // Drive "sysbus.gpioPortE" 3 true. The level holds until driven again,
+        // across resets and power cycles.
+        public void Drive(string port, int pin, bool level)
+        {
+            var receiver = Input(port);
+            bool hooked;
+            lock(sync)
+            {
+                driven[Tuple.Create(port, pin)] = level;
+                hooked = !hookedPorts.Add(port);
+            }
+            if(!hooked)
+            {
+                // Renode's STM32 GPIO port re-derives an input's level from its
+                // own pull configuration when the firmware configures the pin
+                // (a GPIO_NOPULL input reads 0 after HAL_GPIO_Init), dropping
+                // the outside driver. The pin's level is the driver's, so IDR
+                // (offset 0x10, RM0468 §11.4.5) reads it whatever the port
+                // thinks.
+                machine.SystemBus.SetHookAfterPeripheralRead<uint>((IBusPeripheral)receiver, (value, offset) =>
+                    offset == IdrOffset ? ApplyDriven(port, value) : value);
+            }
+            receiver.OnGPIO(pin, level);
+        }
+
+        private uint ApplyDriven(string port, uint idr)
+        {
+            lock(sync)
+            {
+                foreach(var d in driven)
+                {
+                    if(d.Key.Item1 == port)
+                    {
+                        idr = d.Value ? idr | (1u << d.Key.Item2) : idr & ~(1u << d.Key.Item2);
+                    }
+                }
+            }
+            return idr;
         }
 
         public void Reset()
@@ -358,6 +445,28 @@ namespace Antmicro.Renode.Testing
             return sb.ToString();
         }
 
+        private IGPIOReceiver Input(string port)
+        {
+            if(!machine.TryGetByName<IPeripheral>(port, out var peripheral) || !(peripheral is IGPIOReceiver receiver))
+            {
+                throw new ArgumentException($"no GPIO port '{port}'");
+            }
+            return receiver;
+        }
+
+        private void Reapply()
+        {
+            List<KeyValuePair<Tuple<string, int>, bool>> levels;
+            lock(sync)
+            {
+                levels = driven.ToList();
+            }
+            foreach(var d in levels)
+            {
+                Input(d.Key.Item1).OnGPIO(d.Key.Item2, d.Value);
+            }
+        }
+
         public bool Level(string name)
         {
             lock(sync)
@@ -378,6 +487,9 @@ namespace Antmicro.Renode.Testing
         private readonly object sync = new object();
         private readonly List<string> channels = new List<string>();
         private readonly Dictionary<string, bool> levels = new Dictionary<string, bool>();
+        private readonly Dictionary<Tuple<string, int>, bool> driven = new Dictionary<Tuple<string, int>, bool>();
+        private readonly HashSet<string> hookedPorts = new HashSet<string>();
+        private const long IdrOffset = 0x10;
         private readonly List<Tuple<ulong, string, bool>> edges = new List<Tuple<ulong, string, bool>>();
     }
 }
