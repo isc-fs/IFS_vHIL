@@ -31,17 +31,18 @@ services:
       GIT_CONFIG_KEY_0: safe.directory
       GIT_CONFIG_VALUE_0: /work
     ports:
-      - "${VHIL_WEB_PORT:-8080}:8080"
+      # Loopback only: dev auth lets anyone who reaches it in.
+      - "127.0.0.1:${VHIL_WEB_PORT:-8080}:8080"
   worker:
     # Claims queued runs (vhil/worker.py); scale with --scale worker=N.
-    # Privileged + host network like the wrapper's runs (vcan); shares the
-    # run table and results with the api through the vhil-data volume, and
-    # reuses (or builds into) /vhil/fw like `scripts/vhil-docker.sh fw`.
+    # Shares the run table and results with the api through the vhil-data
+    # volume, and reuses (or builds into) /vhil/fw like
+    # `scripts/vhil-docker.sh fw`. Unprivileged, on the default network:
+    # run scenarios and tests/sim use Renode's in-process CAN hubs, not vcan
+    # (the IFS_HIL suites over vcan are `scripts/vhil-docker.sh ifs-hil`).
     image: ifs-vhil
     command: python -m vhil.worker
     working_dir: /work
-    privileged: true
-    network_mode: host
     volumes:
       - ..:/work
       - vhil-data:/vhil
@@ -60,8 +61,8 @@ services:
     environment:
       PM_HOST: 0.0.0.0
     ports:
-      # Not 5000 on the host: macOS's AirPlay Receiver holds it.
-      - "${VHIL_EDITOR_PORT:-5050}:5000"
+      # Not 5000 on the host: macOS's AirPlay Receiver holds it. Loopback only.
+      - "127.0.0.1:${VHIL_EDITOR_PORT:-5050}:5000"
 volumes:
   vhil-data:
     external: true
