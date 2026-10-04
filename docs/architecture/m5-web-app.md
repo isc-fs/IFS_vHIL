@@ -66,7 +66,10 @@ All JSON; times in microseconds of virtual time.
   A worker beats `heartbeat` while it holds a run; a run whose worker died
   is reclaimed by the next worker's poll: back to `queued`, or `error` after
   its second attempt (`vhil/server/runs.py`)
-- `GET /api/runs/{id}/trace?since_us=&kinds=` → trace records;
+- `GET /api/runs/{id}/trace?since_us=&kinds=&limit=&cursor=` → a page of
+  trace records; the `X-Trace-Cursor` response header is the next page's
+  `cursor` (opaque: a byte offset into the trace file), so a page costs
+  what it returns;
   `WS /api/runs/{id}/live` → the same records as they are written, then
   `{"kind": "end", "state": …}`
 - `GET /api/runs/{id}/artifacts/{name}` → JUnit, snapshots, coverage, logs

@@ -520,21 +520,20 @@ export async function renderRun(view, { api, esc }, id, tab) {
   }
 
   async function loadPages() {
-    // since_us is inclusive: the next page starts at the last page's last
-    // time and skips the records of that time already read (the file order
-    // within one time is fixed). A page all at one time grows the next limit.
-    let since = 0, skip = 0, limit = PAGE;
+    // Each page resumes where the last one ended: the server's cursor
+    // (X-Trace-Cursor) is a position in the trace file, so a page costs what
+    // it returns however far into a long trace it is.
+    let cursor = "";
     for (;;) {
-      const page = await api(`/api/runs/${id}/trace?since_us=${since}&limit=${limit}`);
+      const r = await api(`/api/runs/${id}/trace?limit=${PAGE}${cursor ? `&cursor=${cursor}` : ""}`,
+                          { as: "response" });
+      const page = await r.json();
       if (!mounted()) return;
-      ingest(page.slice(skip));
+      ingest(page);
       status(`loading… ${(S.rec.frame.length + S.rec.edge.length + S.rec.sample.length + S.rec.log.length).toLocaleString()} records`);
-      if (page.length < limit) break;
-      const last = page[page.length - 1].t_us;
-      let same = 0;
-      while (same < page.length && page[page.length - 1 - same].t_us === last) same++;
-      if (last === since) { skip = page.length; limit = Math.max(limit, skip) * 2; }
-      else { since = last; skip = same; }
+      const next = r.headers.get("X-Trace-Cursor");
+      if (page.length < PAGE || !next || next === cursor) break;
+      cursor = next;
     }
     finished();
   }

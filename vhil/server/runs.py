@@ -33,7 +33,7 @@ from pathlib import Path
 from typing import Annotated, Literal, Optional, Union
 
 from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from vhil.system import System, SystemError
@@ -427,22 +427,61 @@ def _row(row: sqlite3.Row) -> dict:
 
 # -- trace ---------------------------------------------------------------------
 
-def read_trace(path: Path, since_us: int = 0, kinds: Optional[set] = None,
-               limit: Optional[int] = None) -> list[dict]:
-    out = []
+# The next page's cursor, on every /trace response. A cursor is opaque to
+# clients; it is the byte offset in trace.jsonl just past the last line the
+# page consumed, so the next page seeks there instead of re-reading the file
+# from the start.
+CURSOR_HEADER = "X-Trace-Cursor"
+
+
+def trace_page(path: Path, cursor: int = 0, since_us: int = 0, kinds: Optional[set] = None,
+               limit: Optional[int] = None) -> tuple[list[bytes], int]:
+    """(the matching records as their JSON lines, the cursor after them),
+    reading from byte offset `cursor`. Records before since_us or of other
+    kinds are skipped (and consumed). A line the worker is still writing is
+    left for the next page, so a cursor also resumes a live trace."""
+    out: list[bytes] = []
     if not path.is_file():
-        return out
-    with open(path) as f:
+        return out, cursor
+    pos = cursor
+    with open(path, "rb") as f:
+        f.seek(cursor)
         for line in f:
-            if not line.endswith("\n"):
+            if not line.endswith(b"\n"):
                 break                     # a line the worker is still writing
+            pos += len(line)
             rec = json.loads(line)
             if rec.get("t_us", 0) < since_us or (kinds and rec.get("kind") not in kinds):
                 continue
-            out.append(rec)
+            out.append(line[:-1])
             if limit is not None and len(out) >= limit:
                 break
-    return out
+    return out, pos
+
+
+def read_trace(path: Path, since_us: int = 0, kinds: Optional[set] = None,
+               limit: Optional[int] = None) -> list[dict]:
+    return [json.loads(line) for line in trace_page(path, 0, since_us, kinds, limit)[0]]
+
+
+def parse_cursor(text: Optional[str], path: Path) -> int:
+    """A cursor from a previous page of this trace, checked: it must fall on
+    a line boundary of the file (a cursor of another file is refused, not
+    misread)."""
+    if not text:
+        return 0
+    if not text.isdigit():
+        raise HTTPException(422, f"bad trace cursor {text!r}")
+    offset = int(text)
+    size = path.stat().st_size if path.is_file() else 0
+    if offset > size:
+        raise HTTPException(422, f"trace cursor {offset} is past the end of the trace")
+    if offset:
+        with open(path, "rb") as f:
+            f.seek(offset - 1)
+            if f.read(1) != b"\n":
+                raise HTTPException(422, f"trace cursor {offset} is not at a record boundary")
+    return offset
 
 
 def _kinds(text: Optional[str]) -> Optional[set]:
@@ -510,9 +549,16 @@ def router(settings, workspace) -> APIRouter:
 
     @r.get("/{run_id}/trace")
     def trace(run_id: int, since_us: int = Query(0, ge=0), kinds: Optional[str] = None,
-              limit: int = Query(500_000, ge=1, le=5_000_000)):
+              limit: int = Query(500_000, ge=1, le=5_000_000), cursor: Optional[str] = None):
+        """A page of trace records (a JSON list); the X-Trace-Cursor header
+        is the cursor of the next page. Each page costs what it returns:
+        pass the cursor back instead of moving since_us."""
         run_or_404(run_id)
-        return read_trace(results / str(run_id) / TRACE, since_us, _kinds(kinds), limit)
+        path = results / str(run_id) / TRACE
+        lines, nxt = trace_page(path, parse_cursor(cursor, path), since_us, _kinds(kinds), limit)
+        # The lines are already JSON: no parse-and-re-encode of the page.
+        return Response(b"[" + b",".join(lines) + b"]", media_type="application/json",
+                        headers={CURSOR_HEADER: str(nxt)})
 
     @r.get("/{run_id}/artifacts")
     def artifacts(run_id: int):

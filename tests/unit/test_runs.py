@@ -218,6 +218,106 @@ def test_trace_filters_by_time_and_kind(client, settings):
     assert client.get(f"/api/runs/{run_id}/trace?kinds=frame,nope").status_code == 422
 
 
+def pages(client, run_id, limit, query=""):
+    """Every page of a run's trace, following the cursor: [(records, cursor)]."""
+    out, cursor = [], ""
+    while True:
+        r = client.get(f"/api/runs/{run_id}/trace?limit={limit}{query}"
+                       + (f"&cursor={cursor}" if cursor else ""))
+        assert r.status_code == 200, r.text
+        out.append((r.json(), r.headers["x-trace-cursor"]))
+        if len(out[-1][0]) < limit:
+            return out
+        cursor = out[-1][1]
+
+
+def test_trace_pages_follow_the_cursor(client, settings):
+    run_id = post(client).json()["run_id"]
+    write_trace(settings, run_id)
+    got = pages(client, run_id, 2)
+    assert [recs for recs, _ in got] == [TRACE_RECORDS[0:2], TRACE_RECORDS[2:4], TRACE_RECORDS[4:]]
+    size = (settings.results / str(run_id) / "trace.jsonl").stat().st_size
+    assert got[-1][1] == str(size)
+    # At the end: nothing more, and the same cursor back.
+    r = client.get(f"/api/runs/{run_id}/trace?cursor={size}")
+    assert r.json() == [] and r.headers["x-trace-cursor"] == str(size)
+    # since_us and kinds still filter, with or without a cursor.
+    got = pages(client, run_id, 1, "&since_us=10001&kinds=frame,edge")
+    assert [r for recs, _ in got for r in recs] == TRACE_RECORDS[3:]
+
+
+def test_trace_cursor_resumes_a_trace_still_being_written(client, settings):
+    run_id = post(client).json()["run_id"]
+    write_trace(settings, run_id, TRACE_RECORDS[:2])
+    path = settings.results / str(run_id) / "trace.jsonl"
+    half = json.dumps(TRACE_RECORDS[2])
+    with open(path, "a") as f:
+        f.write(half[:10])
+    r = client.get(f"/api/runs/{run_id}/trace")
+    assert r.json() == TRACE_RECORDS[:2]
+    cursor = r.headers["x-trace-cursor"]
+    with open(path, "a") as f:
+        f.write(half[10:] + "\n")
+    write_trace(settings, run_id, TRACE_RECORDS[3:])
+    assert client.get(f"/api/runs/{run_id}/trace?cursor={cursor}").json() == TRACE_RECORDS[2:]
+
+
+def test_a_bad_trace_cursor_is_422(client, settings):
+    run_id = post(client).json()["run_id"]
+    write_trace(settings, run_id)
+    size = (settings.results / str(run_id) / "trace.jsonl").stat().st_size
+    for bad, needle in (("abc", "bad trace cursor"), ("-1", "bad trace cursor"),
+                        (str(size + 1), "past the end"), ("5", "record boundary")):
+        r = client.get(f"/api/runs/{run_id}/trace?cursor={bad}")
+        assert r.status_code == 422 and needle in r.text, (bad, r.text)
+
+
+def big_trace(path, n):
+    """n frame records, 10 per virtual ms; returns the records."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    recs = [{"kind": "frame", "t_us": i * 100, "bus": "can_acu", "id": 0x100 + i % 7, "ext": False,
+             "data": f"{i % 65536:04x}0000"} for i in range(n)]
+    with open(path, "w") as f:
+        f.writelines(json.dumps(r, separators=(",", ":")) + "\n" for r in recs)
+    return recs
+
+
+def test_a_page_reads_from_its_cursor_not_from_the_start(tmp_path):
+    from vhil.server.runs import trace_page
+    path = tmp_path / "trace.jsonl"
+    recs = big_trace(path, 1000)
+    first, cursor = trace_page(path, 0, limit=500)
+    assert [json.loads(x) for x in first] == recs[:500]
+    # Spoil everything before the cursor: a page that re-read the start would choke.
+    with open(path, "r+b") as f:
+        f.write(b"x" * (cursor - 1))
+    rest, end = trace_page(path, cursor)
+    assert [json.loads(x) for x in rest] == recs[500:] and end == path.stat().st_size
+
+
+def test_paging_a_large_trace_is_exact_and_each_page_costs_its_size(client, settings):
+    """362k records took ~6 s to page through when every page re-read the
+    file from the start. With the cursor, the last page costs what the
+    first does (bound kept loose for slow CI), and the pages add up to
+    exactly the file."""
+    run_id = post(client).json()["run_id"]
+    n, limit = 300_000, 50_000
+    recs = big_trace(settings.results / str(run_id) / "trace.jsonl", n)
+    times, got, cursor = [], [], ""
+    while True:
+        t0 = time.perf_counter()
+        r = client.get(f"/api/runs/{run_id}/trace?limit={limit}" + (f"&cursor={cursor}" if cursor else ""))
+        page = r.json()
+        times.append(time.perf_counter() - t0)
+        got.extend(page)
+        if len(page) < limit:
+            break
+        cursor = r.headers["x-trace-cursor"]
+    assert got == recs
+    assert len(times) == n // limit + 1
+    assert times[-2] < 3 * times[0] + 0.2, times   # the last full page vs the first
+
+
 def test_trace_skips_a_half_written_line(settings):
     write_trace(settings, 1)
     with open(settings.results / "1" / "trace.jsonl", "a") as f:
