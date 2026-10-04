@@ -289,7 +289,7 @@ def test_a_card_that_comes_alive_keeps_the_ams_healthy(dead):
 
 
 @pytest.mark.xfail(strict=True, reason=(
-    "AMS firmware: a card that failed identification is never mounted until a "
+    "isc-fs/IFS08-CE-AMS#620: a card that failed identification is never mounted until a "
     "reboot. HAL_SD_InitCard ORs each failure into hsd1.ErrorCode "
     "(stm32h7xx_hal_sd.c:534/:543) and nothing clears it before the retry: "
     "BSP_SD_Init calls HAL_SD_Init again without HAL_SD_DeInit "
@@ -333,7 +333,7 @@ def test_a_card_that_dies_mid_run_is_torn_down(dies):
 
 
 @pytest.mark.xfail(strict=True, reason=(
-    "AMS firmware: a card that dies mid-run trips BmsStale. The failing write "
+    "isc-fs/IFS08-CE-AMS#619: a card that dies mid-run trips BmsStale. The failing write "
     "enters SD_CheckStatusWithTimeout (FATFS/Target/sd_diskio.c:138-156, from "
     "SD_write :431), which polls CMD13 without blocking for SD_TIMEOUT = 30 s "
     "(:57); the same wait follows on every remount, since FatFs keeps the "
