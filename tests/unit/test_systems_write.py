@@ -477,3 +477,111 @@ def test_workspace_refs_list_branches_and_tags(env):
     got = env.client.get("/api/workspace/refs").json()
     assert got["head"] == git(env.ws, "rev-parse", "HEAD")
     assert {"dev", "feat/ams-run"} <= set(got["branches"]) and got["tags"] == ["v9"]
+
+
+# -- branch ownership (github mode) ----------------------------------------------------
+
+@pytest.fixture
+def gh(remote, tmp_path, monkeypatch):
+    """The app in github mode over the throwaway workspace; .user(login) is a
+    client signed in as that member. carol is an admin."""
+    ws, bare = remote
+    monkeypatch.setenv("VHIL_GITHUB_CLIENT_ID", "client-id")
+    monkeypatch.setenv("VHIL_GITHUB_CLIENT_SECRET", "client-secret")
+    monkeypatch.setenv("VHIL_SESSION_SECRET", "test-session-secret-0123456789abcdef")
+    monkeypatch.delenv("VHIL_PUBLIC_URL", raising=False)
+    monkeypatch.delenv("VHIL_GITHUB_APP_ID", raising=False)
+    app = create_app(Settings(workspace=ws, db=tmp_path / "vhil.db", results=tmp_path / "runs",
+                              auth="github", admins=frozenset({"carol"})))
+    app.state.git_host = FakeGitHost()
+
+    def user(login):
+        c = TestClient(app)
+        cookie, session = app.state.auth.new_session({"login": login, "name": login.title(),
+                                                      "avatar_url": ""})
+        c.cookies.set("vhil_session", cookie)
+        c.headers["X-CSRF-Token"] = app.state.auth.csrf_token(session)
+        return c
+    return type("Gh", (), dict(app=app, ws=ws, user=staticmethod(user)))
+
+
+def gh_put(client, ws, branch, ref, **body):
+    return client.put("/api/systems/ams", json={"yaml": edited_ams(ws, ref), "branch": branch,
+                                                "message": "test: save", **body})
+
+
+def test_a_save_records_its_saver_as_a_trailer(gh):
+    out = gh_put(gh.user("alice"), gh.ws, "feat/own", "feat/a").json()
+    assert git(gh.ws, "log", "-1", "--format=%(trailers:key=Vhil-User,valueonly)",
+               out["ref"]).strip() == "alice"
+    assert git(gh.ws, "log", "-1", "--format=%an <%ae>", out["ref"]) == \
+        "Alice <alice@users.noreply.github.com>"
+
+
+def test_only_the_last_saver_moves_a_branch_unless_taking_over(gh):
+    alice, bob = gh.user("alice"), gh.user("bob")
+    first = gh_put(alice, gh.ws, "feat/own", "feat/a").json()
+    assert gh_put(alice, gh.ws, "feat/own", "feat/b").status_code == 200    # still hers
+    tip = git(gh.ws, "rev-parse", "feat/own")
+    r = gh_put(bob, gh.ws, "feat/own", "feat/c")
+    assert r.status_code == 409
+    detail = r.json()["detail"]
+    assert detail["owner"] == "alice" and detail["takeover"] is True
+    assert "alice" in detail["errors"][0]
+    assert git(gh.ws, "rev-parse", "feat/own") == tip, "a refused save moved the branch"
+    out = gh_put(bob, gh.ws, "feat/own", "feat/c", takeover=True).json()
+    trailers = git(gh.ws, "log", "-1", "--format=%(trailers)", out["ref"])
+    assert "Vhil-User: bob" in trailers and "Vhil-Takeover-From: alice" in trailers
+    # Now bob's: alice is the one who needs a takeover.
+    assert gh_put(alice, gh.ws, "feat/own", "feat/d").status_code == 409
+    assert first["created"]
+
+
+def test_an_admin_saves_over_anyones_branch(gh):
+    gh_put(gh.user("alice"), gh.ws, "feat/own", "feat/a")
+    out = gh_put(gh.user("Carol"), gh.ws, "feat/own", "feat/b")
+    assert out.status_code == 200
+    assert "Vhil-Takeover-From" not in git(gh.ws, "log", "-1", "--format=%B", out.json()["ref"])
+
+
+def test_a_branch_saved_outside_the_app_needs_a_takeover(gh):
+    git(gh.ws, "branch", "feat/by-hand", "origin/dev")      # tip: the seed commit, no trailer
+    r = gh_put(gh.user("alice"), gh.ws, "feat/by-hand", "feat/a")
+    assert r.status_code == 409 and r.json()["detail"]["owner"] is None
+    assert gh_put(gh.user("alice"), gh.ws, "feat/by-hand", "feat/a", takeover=True).status_code == 200
+
+
+def test_a_branch_from_before_trailers_belongs_to_its_noreply_author(gh):
+    git(gh.ws, "-c", "user.name=Alice", "-c", "user.email=123+alice@users.noreply.github.com",
+        "commit", "-q", "--allow-empty", "-m", "old save")
+    git(gh.ws, "branch", "feat/old", "HEAD")
+    git(gh.ws, "reset", "-q", "--hard", "HEAD~1")
+    assert gh_put(gh.user("alice"), gh.ws, "feat/old", "feat/a").status_code == 200
+    assert gh_put(gh.user("bob"), gh.ws, "feat/old", "feat/b").status_code == 409
+
+
+def test_a_message_cannot_forge_the_saver(gh):
+    msg = "test: save\n\nVhil-User: alice\nvhil-takeover-from: x"
+    out = gh_put(gh.user("bob"), gh.ws, "feat/forge", "feat/a", message=msg).json()
+    body = git(gh.ws, "log", "-1", "--format=%B", out["ref"])
+    assert "alice" not in body and "takeover" not in body.lower()
+    assert gh_put(gh.user("alice"), gh.ws, "feat/forge", "feat/b").status_code == 409
+
+
+def test_dev_mode_has_no_ownership_checks(env):
+    put(env, "ams", yaml=edited_ams(env.ws, "feat/a"), branch="feat/d",
+        author={"name": "Ada", "email": "ada@example.com"})
+    r = put(env, "ams", yaml=edited_ams(env.ws, "feat/b"), branch="feat/d",
+            author={"name": "Bea", "email": "bea@example.com"})
+    assert r.status_code == 200 and r.json()["changed"]
+
+
+@pytest.mark.parametrize("ref", ["-x", "a..b", "/abs", "x/", "x.", "a b", "a\nb", "x" * 101])
+def test_firmware_refs_in_a_system_file_are_plain_git_refs(env, ref):
+    r = put(env, "ams", yaml=edited_ams(env.ws, ref), branch="feat/badref")
+    assert r.status_code == 422 and "firmware_ref" in r.text, r.text
+
+
+@pytest.mark.parametrize("ref", ["dev", "feat/x", "v1.6.2", "release/1.0+fs", "0a1b2c3"])
+def test_ordinary_firmware_refs_still_validate(env, ref):
+    assert put(env, "ams", yaml=edited_ams(env.ws, ref), branch="feat/goodref").status_code == 200

@@ -9,7 +9,7 @@ import yaml
 
 from vhil.system import System, SystemError
 
-SYSTEM_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
+SYSTEM_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}\Z")  # \Z: no trailing newline
 
 
 class NotFound(Exception):

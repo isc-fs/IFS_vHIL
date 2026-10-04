@@ -167,7 +167,7 @@ limits.
 - **Workers share the run database with the API.** A worker needs to claim,
   heartbeat and finish runs, so it writes `vhil.db`; a compromised worker
   (a malicious firmware build or test, a Renode escape) can rewrite any run's
-  state, summary or `created_by`, or queue runs that bypass the API's
+  state, summary or `owner`, or queue runs that bypass the API's
   limits. It can't reach the API, the editor, the secrets or (but for GitHub)
   the outside. Narrowing this needs the workers to talk to an API endpoint
   instead of the file (a claim/heartbeat/finish RPC with a worker token);

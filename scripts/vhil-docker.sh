@@ -187,10 +187,17 @@ editor-check)
     image=$editor_image
     in_container 'exec python -m vhil.editor check "$@"' "$@" ;;
 server)
+    # A local checkout: dev mode (no login) unless VHIL_AUTH says otherwise.
+    # The server refuses dev mode off loopback, and in the container it
+    # listens on 0.0.0.0, so the port is published on the host's 127.0.0.1
+    # only and VHIL_ALLOW_DEV_ON_NETWORK=1 says so (vhil/server/config.py).
+    export VHIL_AUTH=${VHIL_AUTH:-dev}
     run_args=(-p "127.0.0.1:${VHIL_WEB_PORT:-8080}:8080")
+    [ "$VHIL_AUTH" = dev ] && run_args+=(-e VHIL_ALLOW_DEV_ON_NETWORK=1)
     # Auth settings pass through when set (docs/development/web-app.md).
     for v in VHIL_AUTH VHIL_GITHUB_ORG VHIL_GITHUB_CLIENT_ID VHIL_GITHUB_CLIENT_SECRET \
-             VHIL_SESSION_SECRET VHIL_PUBLIC_URL VHIL_GITHUB_APP_ID VHIL_GITHUB_APP_KEY; do
+             VHIL_SESSION_SECRET VHIL_PUBLIC_URL VHIL_GITHUB_APP_ID VHIL_GITHUB_APP_KEY \
+             VHIL_ADMINS; do
         run_args+=(-e "$v")
     done
     in_container 'export VHIL_DATA=/vhil/server; exec python -m vhil.server --host 0.0.0.0 --port 8080' ;;

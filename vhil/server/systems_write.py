@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import functools
 import json
+import logging
 import os
 import tempfile
 from pathlib import Path
@@ -33,11 +34,13 @@ from vhil import editor
 from vhil.server.config import env_secret
 from vhil.server.githost import (CachedRefs, GitHost, GitHubHost, HostError, HostUnavailable,
                                  LsRemote, RefLister, repo_slug)
-from vhil.server.gitstore import BadBranch, Conflict, GitError, GitStore
+from vhil.server.gitstore import (OWNER_TRAILER, TAKEOVER_TRAILER, BadBranch, Conflict, GitError,
+                                  GitStore)
 from vhil.server.workspace import SYSTEM_ID
 from vhil.system import SCHEMA, System, SystemError
 
 router = APIRouter()
+log = logging.getLogger("vhil.server.systems")
 
 
 # -- request bodies -------------------------------------------------------------------
@@ -53,6 +56,9 @@ class Save(BaseModel):
     message: str
     branch: str
     author: Author | None = None     # dev mode only; with login, the signed-in user
+    # Move a branch another member last saved (logged, and recorded in the
+    # commit as Vhil-Takeover-From). Admins (VHIL_ADMINS) need not.
+    takeover: bool = False
 
 
 class Create(Save):
@@ -115,6 +121,33 @@ def _author(request: Request, body: Save) -> tuple[str, str]:
         return body.author.name, body.author.email
     return (os.environ.get("VHIL_GIT_AUTHOR_NAME", "vHIL dev"),
             os.environ.get("VHIL_GIT_AUTHOR_EMAIL", "vhil-dev@localhost"))
+
+
+def _owner_trailers(request: Request, store: GitStore, body: Save, tip: str | None) -> dict:
+    """The trailers a save records (its saver; a takeover), after checking
+    the saver may move `branch`: a new branch, one they saved last, or with
+    `takeover` / as an admin. Dev mode has one user and no checks."""
+    settings = request.app.state.settings
+    if settings.auth == "dev":
+        return {}
+    me = (getattr(request.state, "user", None) or {}).get("login") or ""
+    trailers = {}
+    if tip is not None:
+        owner = store.owner(tip)
+        if owner is None or owner.lower() != me.lower():
+            who = owner or "someone outside the app"
+            if settings.is_admin(me):
+                log.warning("admin %s saves over branch %s (last saved by %s)", me, body.branch, who)
+            elif body.takeover:
+                log.warning("%s takes over branch %s from %s", me, body.branch, who)
+                trailers[TAKEOVER_TRAILER] = owner or "unknown"
+            else:
+                raise HTTPException(409, {
+                    "errors": [f"branch '{body.branch}' was last saved by {who}: save to your own "
+                               f"branch, or take it over (logged)"],
+                    "owner": owner, "takeover": True})
+    trailers[OWNER_TRAILER] = me
+    return trailers
 
 
 def _id(system_id: str) -> str:
@@ -214,13 +247,14 @@ def _save(request: Request, system_id: str, body: Save, create: bool) -> dict:
         raise HTTPException(422, {"errors": ["a commit message is needed"]})
     author = _author(request, body)
     parent = store.parent(body.branch)
+    trailers = _owner_trailers(request, store, body, store.branch_tip(body.branch))
     text = _text(body, system_id, store.read(parent, _path(system_id)))
     errors = check(store, parent, system_id, text)
     if errors:
         raise HTTPException(422, {"errors": errors, "yaml": text})
     try:
         out = store.commit_file(body.branch, _path(system_id), text, body.message, author,
-                                must_not_exist=create)
+                                must_not_exist=create, trailers=trailers, expect_parent=parent)
     except Conflict as e:
         raise HTTPException(409, str(e))
     except GitError as e:

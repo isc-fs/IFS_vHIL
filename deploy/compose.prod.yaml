@@ -184,6 +184,10 @@ services:
     environment:
       <<: *paths
       VHIL_AUTH: ${VHIL_AUTH:-github}
+      # Only for VHIL_AUTH=dev (deploy/smoke.sh): the server refuses dev mode
+      # off loopback without it (vhil/server/config.py). Never on a host.
+      VHIL_ALLOW_DEV_ON_NETWORK: ${VHIL_ALLOW_DEV_ON_NETWORK:-}
+      VHIL_ADMINS: ${VHIL_ADMINS:-}
       VHIL_PUBLIC_URL: ${VHIL_PUBLIC_URL:?set VHIL_PUBLIC_URL in deploy/.env}
       VHIL_EDITOR_URL: ${VHIL_EDITOR_URL:?set VHIL_EDITOR_URL in deploy/.env}
       VHIL_GITHUB_ORG: ${VHIL_GITHUB_ORG:-isc-fs}

@@ -61,7 +61,7 @@ form { display: flex; flex-wrap: wrap; gap: .5rem 1rem; align-items: center; mar
 .vt-head { color: var(--muted); border-bottom: 1px solid var(--line); height: 24px; }
 .vt-body { position: relative; overflow: auto; height: 60vh; min-height: 12rem; }
 .vt-rows { position: absolute; top: 0; left: 0; right: 0; }
-.vt-rows .vt-row { cursor: pointer; border-bottom: 1px solid var(--line); box-sizing: border-box; }
+.vt-rows .vt-row { cursor: pointer; border-bottom: 1px solid var(--line); box-sizing: border-box; height: var(--vt-row-h, 22px); }
 .vt-rows .vt-row:hover { background: var(--code); }
 .vt-rows .vt-row.sel { background: var(--sel); }
 .vt-frames .vt-row { grid-template-columns: 6.5rem 5rem 6rem 2rem 12.5rem minmax(0, 1fr); }

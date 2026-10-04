@@ -64,7 +64,7 @@ def test_a_user_with_too_many_active_runs_gets_429(settings, monkeypatch):
     # A finished (here: cancelled) run frees its slot.
     c.post(f"/api/runs/{ids[0]}/cancel")
     assert post(c).status_code == 201
-    assert RunStore(settings.db).get(ids[1])["created_by"] == "dev"
+    assert RunStore(settings.db).get(ids[1])["owner"] == "dev"
 
 
 def test_the_whole_queue_is_bounded(settings, monkeypatch):
@@ -76,13 +76,13 @@ def test_the_whole_queue_is_bounded(settings, monkeypatch):
 
 def test_the_store_counts_running_runs_and_other_users_separately(tmp_path):
     store = RunStore(tmp_path / "vhil.db")
-    store.create("ecu", "", {}, RUN, created_by="a", max_active_per_user=1)
+    store.create("ecu", "", {}, RUN, owner="a", max_active_per_user=1)
     store.claim("w")                                    # running still counts
     with pytest.raises(QueueFull):
-        store.create("ecu", "", {}, RUN, created_by="a", max_active_per_user=1)
-    store.create("ecu", "", {}, RUN, created_by="b", max_active_per_user=1)
+        store.create("ecu", "", {}, RUN, owner="a", max_active_per_user=1)
+    store.create("ecu", "", {}, RUN, owner="b", max_active_per_user=1)
     with pytest.raises(QueueFull):
-        store.create("ecu", "", {}, RUN, created_by="c", max_active=2)
+        store.create("ecu", "", {}, RUN, owner="c", max_active=2)
 
 
 def test_a_trace_stops_at_its_limit_and_still_takes_the_closing_log(tmp_path):
