@@ -8,7 +8,9 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from vhil.server import runs
+from vhil.server import auth
+from vhil.server import systems_write
+from vhil.server import decode, runs
 from vhil.server.config import Settings
 from vhil.server.workspace import NotFound, Workspace
 
@@ -27,6 +29,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ws = Workspace(settings.workspace)
     app = FastAPI(title="IFS vHIL", version=_version())
     app.state.settings, app.state.workspace = settings, ws
+    auth.install(app, settings)  # login + /api/* and WebSocket guard (vhil/server/auth.py)
 
     @app.get("/api/health")
     def health():
@@ -48,7 +51,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except NotFound:
             raise HTTPException(404, f"no system '{system_id}'")
 
+    app.include_router(systems_write.router)
     app.include_router(runs.router(settings, ws))
+    app.include_router(decode.router(settings, ws))
 
     @app.get("/")
     def index():

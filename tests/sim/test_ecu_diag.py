@@ -68,6 +68,7 @@ from functools import lru_cache
 
 import pytest
 
+from vhil import candef
 from vhil.sim import Sim, assert_period, intervals_us
 from vhil.system import REPO
 
@@ -85,83 +86,13 @@ FWINFO_ADDR = 0x08020400                              # firmware_info.cpp:15-16
 TICK_MS = 10
 BOOT_MS = 300
 
-CAN_MSG = re.compile(r'^\s*CAN_MSG\(\s*(\w+)\s*,\s*(0x[0-9A-Fa-f]+)\s*,\s*(\d+)\s*,'
-                     r'\s*"(\w+)"\s*,\s*(\d+)\s*\)', re.M)
-FIELD = re.compile(r'^\s*FIELD_(LE|BE)(_S|_BITS)?\s*\(\s*(\w+)\s*,\s*\w+\s*,\s*(\d+)\s*,'
-                   r'\s*(\d+)\s*,\s*([-\d.]+)\s*,\s*([-\d.]+)\s*,', re.M)
-CAN_VAL = re.compile(r'^\s*CAN_VAL\(\s*(\w+)\s*,\s*(\w+)\s*,\s*(0x[0-9A-Fa-f]+|\d+)\s*,', re.M)
-INCLUDE = re.compile(r'^\s*#include\s+"(\w+\.def)"', re.M)
-
 
 # -- the contract, from the built source ------------------------------------------
 
-def _get_le(data, start, length):
-    return sum(((data[(start + i) >> 3] >> ((start + i) & 7)) & 1) << i for i in range(length))
-
-
-def _be_bits(start, length):
-    bit = start
-    for _ in range(length):
-        yield bit
-        bit = bit + 15 if bit & 7 == 0 else bit - 1
-
-
-def _get_be(data, start, length):
-    v = 0
-    for bit in _be_bits(start, length):
-        v = (v << 1) | ((data[bit >> 3] >> (bit & 7)) & 1)
-    return v
-
-
-class Msg:
-    def __init__(self, name, can_id, dlc, sender, period_ms):
-        self.name, self.id, self.dlc, self.sender, self.period_ms = (
-            name, can_id, dlc, sender, period_ms)
-        self.fields = {}     # name -> (big_endian, signed, start, length, factor, offset)
-        self.values = {}     # field -> {raw values with a VAL_ name}
-
-    def bits(self, field):
-        be, _, start, length, _, _ = self.fields[field]
-        return set(_be_bits(start, length)) if be else set(range(start, start + length))
-
-    def raw(self, data, field):
-        be, signed, start, length, _, _ = self.fields[field]
-        v = (_get_be if be else _get_le)(data, start, length)
-        return v - (1 << length) if signed and v >> (length - 1) else v
-
-    def decode(self, data):
-        """{field: physical value}, raw * factor + offset as the DBC reads it."""
-        out = {}
-        for name, (_, _, _, _, factor, offset) in self.fields.items():
-            out[name] = self.raw(data, name) * factor + offset
-        return out
-
-    def spare_bits(self, data):
-        """Bits set in the frame that no field of the .def claims."""
-        claimed = set().union(*(self.bits(f) for f in self.fields))
-        return [b for b in range(8 * len(data)) if data[b >> 3] >> (b & 7) & 1 and b not in claimed]
-
-
-@lru_cache(maxsize=4)
 def _contract(src):
-    """{id: Msg} of every message all_messages.inc includes."""
-    msgs = src / "Core" / "Inc" / "can" / "messages"
-    out = {}
-    for name in INCLUDE.findall((msgs / "all_messages.inc").read_text()):
-        text = (msgs / name).read_text()
-        heads = list(CAN_MSG.finditer(text))
-        for m, nxt in zip(heads, heads[1:] + [None]):
-            block = text[m.end():nxt.start() if nxt else len(text)]
-            msg = Msg(m.group(1), int(m.group(2), 16), int(m.group(3)), m.group(4), int(m.group(5)))
-            for endian, kind, field, a, length, factor, offset in FIELD.findall(block):
-                start = int(a) if kind == "_BITS" else 8 * int(a) + (7 if endian == "BE" else 0)
-                msg.fields[field] = (endian == "BE", kind == "_S", start, int(length),
-                                     float(factor), float(offset))
-            for owner, field, value in CAN_VAL.findall(text):
-                if owner == msg.name:
-                    msg.values.setdefault(field, set()).add(int(value, 0))
-            out[msg.id] = msg
-    assert out, f"no messages declared under {msgs}"
+    """{id: Message} of every message all_messages.inc includes (vhil/candef.py)."""
+    out = candef.load(src)
+    assert out, f"no messages declared under {src / candef.MESSAGES}"
     return out
 
 

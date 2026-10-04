@@ -1,6 +1,10 @@
 // Runs page (M5.2, #114): start a `run` scenario, list runs, and count each
-// running run's frames per bus live over its WebSocket. Rich inspection of a
-// run (frame table, plots, JUnit) is #115.
+// running run's frames per bus live over its WebSocket. The history filters
+// by system and state; a run's own page (frames, plots, JUnit) is inspect.js
+// (#115).
+import { duration, wallSeconds } from "./inspect.js";
+
+const STATES = ["queued", "running", "passed", "failed", "error", "cancelled"];
 const TERMINAL = new Set(["passed", "failed", "error", "cancelled"]);
 const live = new Map();   // run id -> {ws, counts: {bus: n}}
 
@@ -14,8 +18,15 @@ export async function renderRuns(view, { api, esc }) {
       <button type="submit">Start run</button>
       <span id="run-msg" class="muted"></span>
     </form>
-    <table id="runs"><thead><tr><th>Run</th><th>State</th><th>System</th><th>Scenario</th>
-      <th>Virtual time</th><th>Frames per bus</th><th>Created</th><th></th></tr></thead><tbody></tbody></table>`;
+    <h3>History</h3>
+    <form id="run-filter" class="filters">
+      <label>System <select name="system"><option value="">all</option>${
+        systems.map((s) => `<option value="${esc(s.id)}">${esc(s.id)}</option>`).join("")}</select></label>
+      <label>State <select name="state"><option value="">all</option>${
+        STATES.map((s) => `<option>${s}</option>`).join("")}</select></label>
+    </form>
+    <div class="scroll-x"><table id="runs"><thead><tr><th>Run</th><th>State</th><th>System</th><th>Scenario</th>
+      <th>Virtual</th><th>Wall</th><th>Frames / tests</th><th>Created</th><th></th></tr></thead><tbody></tbody></table></div>`;
   const table = view.querySelector("#runs tbody");
   const msg = view.querySelector("#run-msg");
   const mounted = () => document.body.contains(table);
@@ -25,21 +36,31 @@ export async function renderRuns(view, { api, esc }) {
     const f = new FormData(ev.target);
     const body = { system: f.get("system"),
                    scenario: { kind: "run", virtual_ms: Number(f.get("virtual_ms")) } };
-    const r = await fetch("/api/runs", { method: "POST", headers: { "content-type": "application/json" },
-                                         body: JSON.stringify(body) });
-    const out = await r.json();
-    msg.textContent = r.ok ? `queued run ${out.run_id}` : `error: ${JSON.stringify(out.detail)}`;
-    msg.className = r.ok ? "muted" : "error";
+    try {
+      const out = await api("/api/runs", { method: "POST", headers: { "content-type": "application/json" },
+                                           body: JSON.stringify(body) });
+      msg.innerHTML = `queued <a href="#/runs/${out.run_id}">run ${out.run_id}</a>`;
+      msg.className = "muted";
+    } catch (e) {
+      msg.textContent = `error: ${e.message}`;
+      msg.className = "error";
+    }
     refresh();
   });
 
   table.addEventListener("click", async (ev) => {
     const id = ev.target.dataset.cancel;
-    if (id) { await fetch(`/api/runs/${id}/cancel`, { method: "POST" }); refresh(); }
+    if (id) { await api(`/api/runs/${id}/cancel`, { method: "POST" }); refresh(); }
   });
+  const filter = view.querySelector("#run-filter");
+  filter.addEventListener("change", () => refresh());
 
   const counts = (run) => {
-    const c = live.get(run.id)?.counts || run.summary?.frames || {};
+    const s = run.summary || {};
+    if (!live.has(run.id) && s.tests !== undefined) {
+      return `${s.tests} tests, ${s.failures + s.errors} failed`;
+    }
+    const c = live.get(run.id)?.counts || s.frames || {};
     return Object.entries(c).map(([bus, n]) => `${esc(bus)} ${n}`).join(" · ");
   };
 
@@ -63,12 +84,15 @@ export async function renderRuns(view, { api, esc }) {
   let timer = null;
   async function refresh() {
     if (!mounted()) return;
-    const runs = await api("/api/runs?limit=50");
+    const q = new URLSearchParams({ limit: 100 });
+    for (const [k, v] of new FormData(filter)) if (v) q.set(k, v);
+    const runs = await api(`/api/runs?${q}`);
+    if (!mounted()) return;
     table.innerHTML = runs.map((r) => `<tr>
-      <td>${r.id}</td><td class="${r.state === "error" || r.state === "failed" ? "error" : ""}">${esc(r.state)}</td>
+      <td><a href="#/runs/${r.id}">${r.id}</a></td><td><span class="badge state-${esc(r.state)}">${esc(r.state)}</span></td>
       <td>${esc(r.system)}</td>
       <td class="muted">${esc(r.scenario.kind === "run" ? `run ${r.scenario.virtual_ms} ms` : `pytest ${r.scenario.select}`)}</td>
-      <td>${(r.virtual_us / 1000).toFixed(0)} ms</td>
+      <td>${(r.virtual_us / 1000).toFixed(0)} ms</td><td>${duration(wallSeconds(r))}</td>
       <td data-frames="${r.id}">${counts(r)}</td>
       <td class="muted">${esc((r.created || "").replace("T", " ").slice(0, 19))}</td>
       <td>${TERMINAL.has(r.state) ? (r.summary?.error ? `<span class="error">${esc(r.summary.error)}</span>` : "")

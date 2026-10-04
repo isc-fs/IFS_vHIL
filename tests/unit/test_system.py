@@ -252,3 +252,50 @@ def test_write_protect_needs_a_platform_with_option_bytes(tmp_path):
     platform.write_text(yaml.safe_dump(doc))
     with pytest.raises(SystemError, match="no option bytes"):
         System(_wp_system(tmp_path, [0]), catalog=catalog)
+
+
+# -- per-system firmware refs (#116) ------------------------------------------
+def _clones(monkeypatch, system, refs=None):
+    """The refs build_firmware clones each image at, without cloning."""
+    import vhil.system as vs
+    cloned = {}
+
+    def run(cmd, **kw):
+        if cmd[:2] == ["git", "clone"]:
+            cloned[Path(cmd[-1]).name] = cmd[cmd.index("-b") + 1]
+    monkeypatch.setattr(vs.subprocess, "run", run)
+    system.build_firmware(Path("/nonexistent"), refs, log=lambda m: None)
+    return cloned
+
+
+def test_a_board_without_firmware_ref_builds_the_catalogue_ref(tmp_path, monkeypatch):
+    s = System(_system(tmp_path, ""))
+    assert s.boards["ecu"].ref() == "dev"
+    assert _clones(monkeypatch, s) == {"ecu@dev": "dev"}
+
+
+def test_firmware_ref_overrides_the_catalogue_and_build_ref_overrides_both(tmp_path, monkeypatch):
+    p = tmp_path / "r.yaml"
+    p.write_text("kind: system\nid: r\nboards:\n"
+                 "  ecu: {board: mlc-carrier, firmware: ecu, firmware_ref: feat/x,"
+                 " bootloader: can-bootloader, bootloader_ref: v1.6.2, node_id: 1}\n")
+    s = System(p)
+    assert s.boards["ecu"].ref() == "feat/x" and s.boards["ecu"].ref("bootloader") == "v1.6.2"
+    assert _clones(monkeypatch, s) == {"ecu@feat_x": "feat/x", "can-bootloader@v1.6.2": "v1.6.2"}
+    assert _clones(monkeypatch, s, {"ecu": "dev"})["ecu@dev"] == "dev"
+
+
+def test_a_bootloader_ref_needs_a_bootloader(tmp_path):
+    p = tmp_path / "r.yaml"
+    p.write_text("kind: system\nid: r\nboards:\n"
+                 "  ecu: {board: mlc-carrier, firmware: ecu, bootloader_ref: v1.6.2}\n")
+    with pytest.raises(SystemError, match="bootloader_ref needs a bootloader"):
+        System(p)
+
+
+def test_an_empty_firmware_ref_is_a_schema_error(tmp_path):
+    p = tmp_path / "r.yaml"
+    p.write_text("kind: system\nid: r\nboards:\n"
+                 "  ecu: {board: mlc-carrier, firmware: ecu, firmware_ref: ''}\n")
+    with pytest.raises(SystemError):
+        System(p)

@@ -66,7 +66,8 @@ Same model as IFS_HIL.
 ## Systems are data
 
 A system (`systems/*.yaml`) places boards from the catalogue (`catalog/`),
-gives each its firmware source, and wires them together. Renode scripts and
+gives each its firmware source (at the catalogue's ref, or the board's
+`firmware_ref` / `bootloader_ref`), and wires them together. Renode scripts and
 the virtual broker's wiring are **generated** from it by `vhil/system.py`.
 Never hand-edit a generated script, and never put a car-specific name in the
 catalogue (`ecu`, not `ifs08-ecu`). Devices (`catalog/models/`) attach to a

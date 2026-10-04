@@ -1,0 +1,23 @@
+/* SPDX-License-Identifier: proprietary */
+/*
+ * 0x508  VCU_gps_position -- TX on the ACU bus (FDCAN2). WGS-84 position from
+ * the MTK3339 GPS on USART10, decoded from NMEA RMC (gps_nmea.cpp).
+ *
+ * Sent UNGATED (not part of the 0x7E0 pit-diag stream) because the uDV
+ * consumes it live for localisation -- same treatment as the other uDV feeds
+ * (0x504/0x505/0x506). The pit tool and MingoCAN see it for free: it is on the
+ * same bus and in the generated DBC.
+ *
+ * Scaled integers, no float on the wire: degrees * 1e7 as int32 LITTLE-endian
+ * (matches the uDV STM32-side raw-LE convention used by 0x506/0x507). The DBC
+ * carries scale 1e-7 so cantools/MingoCAN display plain degrees.
+ * +lat = North, -lat = South; +lon = East, -lon = West.
+ *
+ * Both fields hold their LAST VALID value while the fix is lost -- read
+ * has_fix on 0x509 before trusting a position.
+ */
+
+CAN_MSG(VCU_gps_position, 0x508, 8, "VCU", 200)
+    FIELD_LE_S (latitude,  int32_t, 0, 32, 0.0000001, 0, "deg")
+    FIELD_LE_S (longitude, int32_t, 4, 32, 0.0000001, 0, "deg")
+CAN_MSG_END(VCU_gps_position)
