@@ -18,10 +18,9 @@ AMS facts (IFS08-CE-AMS Core/Inc/can/messages/*.def, app_init_task.cpp):
   PF9 held, one DASH_CHG PF10 press on a drained link locks Car and
   precharges; the link at the pack voltage completes it (state 3).
 """
-import re
-
 import pytest
 
+from vhil import candef
 from vhil.sim import Sim
 from vhil.system import REPO
 
@@ -31,7 +30,6 @@ PIT_CMD, PIT_ACK = 0x7F0, 0x7F1
 ENABLE, DISABLE = bytes.fromhex("DEADBEEF"), bytes(4)
 TEMPS, COMMS_HEALTH, VCU = 0x4A2, 0x6C9, 0x100
 BOOT_MS = 4000
-CAN_MSG = re.compile(r'^CAN_MSG\(\s*\w+\s*,\s*(0x[0-9A-Fa-f]+)\s*,\s*(\d+)\s*,\s*"AMS"\s*,\s*(\d+)\s*\)', re.M)
 
 
 @pytest.fixture(scope="module")
@@ -39,12 +37,9 @@ def contract(firmware):
     """{id: (dlc, period_ms)} of every frame the AMS sends, from the built
     source's .def files; period 0 = event-only. The pit-diag grid is not
     declared there (ams_config.hpp:655-662): 8-byte frames, 1 Hz."""
-    defs = firmware("ams").resolve().parent.parent / "Core" / "Inc" / "can" / "messages"
-    found = {}
-    for f in defs.glob("*.def"):
-        for can_id, dlc, period in CAN_MSG.findall(f.read_text()):
-            found[int(can_id, 16)] = (int(dlc), int(period))
-    assert found, f"no AMS messages declared under {defs}"
+    src = firmware("ams").resolve().parent.parent
+    found = {i: (m.dlc, m.period_ms) for i, m in candef.load(src).items() if m.sender == "AMS"}
+    assert found, f"no AMS messages declared under {src / candef.MESSAGES}"
     found.update({i: (8, 1000) for i in (*PIT_CELLS, *PIT_TEMPS)})
     return found
 
