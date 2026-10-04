@@ -95,16 +95,18 @@ def test_the_pacing_watch_flags_a_stalled_emulation(monkeypatch, caplog):
 
 
 def test_power_on_connects_the_buses_before_the_reset():
-    """#63: the firmware must never run unconnected after power-on. The CPU
-    is halted, the buses connected, then the board reset and released."""
+    """#63: the firmware must never run unconnected after power-on. The
+    board's machine is paused, the buses connected, the board reset, then
+    the machine started (#125: no CPU halt)."""
     backend, monitor = _backend("ecu.yaml")
     monitor.commands.clear()
     backend.tca_write_pin(0x20, 0, 3, True)          # K4 = MLC4 = ECU
     cmds = [c for _, c in monitor.commands]
     connects = [i for i, c in enumerate(cmds) if c.startswith("connector Connect")]
     assert len(connects) == 3
-    assert cmds.index("cpu IsHalted true") < min(connects)
-    assert max(connects) < cmds.index("machine Reset") < cmds.index("cpu IsHalted false")
+    assert cmds.index("machine Pause") < min(connects)
+    assert max(connects) < cmds.index("machine Reset") < cmds.index("machine Start")
+    assert not any("IsHalted" in c for c in cmds)
 
 
 def test_a_board_in_a_fault_handler_after_power_on_is_logged(caplog):

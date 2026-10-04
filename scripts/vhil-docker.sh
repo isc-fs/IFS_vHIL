@@ -20,6 +20,7 @@
 #   scripts/vhil-docker.sh editor                system editor on http://localhost:5050
 #   scripts/vhil-docker.sh server                web app API + shell on http://localhost:8080
 #                                                (M5; full stack: docker/compose.yaml)
+#   scripts/vhil-docker.sh worker [--once ...]   run worker for the server's queue (vhil.worker)
 #   scripts/vhil-docker.sh shell                 a shell in the container
 #   scripts/vhil-docker.sh run <cmd...>          any command in the container
 #
@@ -174,8 +175,15 @@ editor)
         exec scripts/editor.sh' ;;
 server)
     run_args=(-p "${VHIL_WEB_PORT:-8080}:8080")
+    # Auth settings pass through when set (docs/development/web-app.md).
+    for v in VHIL_AUTH VHIL_GITHUB_ORG VHIL_GITHUB_CLIENT_ID VHIL_GITHUB_CLIENT_SECRET \
+             VHIL_SESSION_SECRET VHIL_PUBLIC_URL VHIL_GITHUB_APP_ID VHIL_GITHUB_APP_KEY; do
+        run_args+=(-e "$v")
+    done
     in_container 'export VHIL_DATA=/vhil/server; exec python -m vhil.server --host 0.0.0.0 --port 8080' ;;
+worker)
+    in_container 'export VHIL_DATA=/vhil/server VHIL_FW_DIR=/vhil/fw; exec python -m vhil.worker "$@"' "$@" ;;
 shell) in_container 'exec bash' ;;
 run) in_container 'exec "$@"' "$@" ;;
-*) sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'; [ "$cmd" = help ] ;;
+*) sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'; [ "$cmd" = help ] ;;
 esac

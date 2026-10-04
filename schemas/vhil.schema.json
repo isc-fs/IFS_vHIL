@@ -303,9 +303,19 @@
               "firmware": {
                 "$ref": "#/$defs/id"
               },
+              "firmware_ref": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Branch or tag of the firmware's repo to build for this board, in place of the catalogue entry's ref. `vhil.system build --ref` still overrides it."
+              },
               "bootloader": {
                 "$ref": "#/$defs/id",
                 "description": "Firmware (catalog/firmware) in sector 0 ahead of the application, as the board is provisioned. The board then boots through it from a provisioned flash image."
+              },
+              "bootloader_ref": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Branch or tag of the bootloader's repo, in place of its catalogue ref. Only with a bootloader."
               },
               "node_id": {
                 "type": "integer",
