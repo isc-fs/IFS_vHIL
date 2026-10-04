@@ -1,0 +1,57 @@
+/* SPDX-License-Identifier: proprietary */
+/*
+ * 0x700  PitDiag_status -- FSM / inverter state / control flags / torque +
+ * min cell voltage. 100 ms while the stream is enabled.
+ *
+ * Byte 2's control flags are exposed as individual 1-bit DBC signals:
+ *   bit0 RESERVED (was ev_2_3 -- EV.2.3 deleted in FS-Rules 2024, and the cut
+ *        with it; the bit is left unused rather than reclaimed so every other
+ *        flag keeps its position and existing decoders stay correct)
+ *   bit1 t11_8_9   bit2 rtds_active
+ *   bit3 ok_precharge   bit4 start_button   bit5 dv_mode (DV drive latched, #109)
+ *   bit7 power_capped (EV 2.2.1 envelope limiting this tick, #177)
+ *   bit6 tx_dropped (sticky: >=1 CAN frame dropped by a full TX queue since boot;
+ *        g_can_tx_dropped != 0 -- a safety cyclic may have been lost, #127)
+ */
+
+CAN_MSG(PitDiag_status, 0x700, 8, "VCU", 100)
+    FIELD_LE   (fsm_state,     uint8_t,  0, 8,  1, 0, "enum")
+    FIELD_LE   (inv_state,     uint8_t,  1, 8,  1, 0, "enum")
+    /* byte 2's control flags, one 1-bit DBC signal each (cantools rejects an
+     * overlapping byte+bit view, so there is no composite `flags` signal) */
+    FIELD_LE_BITS (t11_8_9,      uint8_t, 17, 1, 1, 0, "bit")
+    FIELD_LE_BITS (rtds_active,  uint8_t, 18, 1, 1, 0, "bit")
+    FIELD_LE_BITS (ok_precharge, uint8_t, 19, 1, 1, 0, "bit")
+    FIELD_LE_BITS (start_button, uint8_t, 20, 1, 1, 0, "bit")
+    FIELD_LE_BITS (dv_mode,      uint8_t, 21, 1, 1, 0, "bit")
+    FIELD_LE_BITS (tx_dropped,   uint8_t, 22, 1, 1, 0, "bit")
+    /* bit7: the EV 2.2.1 power envelope is limiting torque this tick (#177) */
+    FIELD_LE_BITS (power_capped, uint8_t, 23, 1, 1, 0, "bit")
+    FIELD_LE   (torque_pct,    uint8_t,  3, 8,  1, 0, "%")
+    FIELD_BE   (v_cell_min_mV, uint16_t, 4, 16, 1, 0, "mV")
+    FIELD_BE_S (torque_cmd,    int16_t,  6, 16, 1, 0, "cmd")
+CAN_MSG_END(PitDiag_status)
+
+/* Enum value tables (DBC VAL_ -- so the pit tool shows names, not numbers).
+ * Seen only by the host dbc_dump build (ECU_DSL_VALUES_PASS). fsm_state mirrors
+ * ecu::CtrlState; inv_state the inverter App_State (config InvStandby/Ready). */
+#ifdef ECU_DSL_VALUES_PASS
+CAN_VAL(PitDiag_status, fsm_state, 0, "WaitInvVdcConfig")
+CAN_VAL(PitDiag_status, fsm_state, 1, "Precharge")
+CAN_VAL(PitDiag_status, fsm_state, 2, "WaitStartBrake")
+CAN_VAL(PitDiag_status, fsm_state, 3, "R2dDelay")
+CAN_VAL(PitDiag_status, fsm_state, 4, "WaitInvStandby")
+CAN_VAL(PitDiag_status, fsm_state, 5, "Active")
+CAN_VAL(PitDiag_status, fsm_state, 6, "AmsError")
+/* Inverter App_State_App (0x461). Only Standby/Ready were named, so the states
+ * that matter when the drive will NOT come up -- off, shutdown, the two faults --
+ * showed as bare numbers in the pit tool. Named here so a capture is readable
+ * on sight (#148: TS-off recovery). Mirrors ecu::config::Inv*State. */
+CAN_VAL(PitDiag_status, inv_state,  0, "Off")
+CAN_VAL(PitDiag_status, inv_state,  3, "Standby")
+CAN_VAL(PitDiag_status, inv_state,  4, "Ready")
+CAN_VAL(PitDiag_status, inv_state,  6, "TorqueEnable")
+CAN_VAL(PitDiag_status, inv_state, 10, "SoftFault")
+CAN_VAL(PitDiag_status, inv_state, 11, "HardFault")
+CAN_VAL(PitDiag_status, inv_state, 13, "Shutdown")
+#endif

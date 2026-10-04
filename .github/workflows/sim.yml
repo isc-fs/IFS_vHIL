@@ -44,7 +44,7 @@ jobs:
       - name: Build the ECU and AMS firmware their systems declare
         id: fw
         run: |
-          pip install -q pyyaml "jsonschema>=4" pytest
+          pip install -q pyyaml "jsonschema>=4" pytest "fastapi==0.115.*" "httpx==0.28.*"
           for s in ecu ams ecu-bl; do
             python -m vhil.system build "systems/$s.yaml" --workdir "$RUNNER_TEMP/fw" | tee -a built.txt
           done

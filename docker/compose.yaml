@@ -4,7 +4,8 @@
 #
 # Images come from `scripts/vhil-docker.sh image` (ifs-vhil, ifs-vhil-editor).
 # The repository checkout is the workspace: its systems/ and catalog/ are what
-# the app shows and edits. VHIL_AUTH=dev: no login (M5.5 adds GitHub OAuth).
+# the app shows and edits; `worker` executes the runs the api queues.
+# VHIL_AUTH=dev: no login (M5.5 adds GitHub OAuth).
 name: ifs-vhil
 services:
   api:
@@ -29,6 +30,24 @@ services:
       GIT_CONFIG_VALUE_0: /work
     ports:
       - "${VHIL_WEB_PORT:-8080}:8080"
+  worker:
+    # Claims queued runs (vhil/worker.py); scale with --scale worker=N.
+    # Privileged + host network like the wrapper's runs (vcan); shares the
+    # run table and results with the api through the vhil-data volume, and
+    # reuses (or builds into) /vhil/fw like `scripts/vhil-docker.sh fw`.
+    image: ifs-vhil
+    command: python -m vhil.worker
+    working_dir: /work
+    privileged: true
+    network_mode: host
+    volumes:
+      - ..:/work
+      - vhil-data:/vhil
+    environment:
+      VHIL_WORKSPACE: /work
+      VHIL_DATA: /vhil/server
+      VHIL_AUTH: dev
+      VHIL_FW_DIR: /vhil/fw
   editor:
     image: ifs-vhil-editor
     command: scripts/editor.sh

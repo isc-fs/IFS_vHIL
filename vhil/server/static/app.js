@@ -1,12 +1,17 @@
 // The app shell: hash routes over the JSON API (docs/architecture/m5-web-app.md).
 import { editorPage } from "./editor.js";
+import { renderRun } from "./inspect.js";
+import { renderRuns } from "./runs.js";
 
 const view = document.getElementById("view");
 
-async function api(path) {
-  const r = await fetch(path);
+// Every request goes through here (fetch options in `opts`; `as: "text"` for
+// a non-JSON body).
+async function api(path, opts = {}) {
+  const { as = "json", ...init } = opts;
+  const r = await fetch(path, init);
   if (!r.ok) throw new Error(`${path}: ${r.status} ${await r.text()}`);
-  return r.json();
+  return as === "text" ? r.text() : r.json();
 }
 
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
@@ -25,15 +30,16 @@ const routes = {
       ${s.errors.length ? `<p class="error">${esc(s.errors.join("; "))}</p>` : ""}
       <pre>${esc(s.yaml)}</pre>`;
   },
-  async runs() { view.innerHTML = `<h2>Runs</h2><p class="muted">Coming with #114.</p>`; },
+  async runs() { await renderRuns(view, { api, esc }); },
   async editor(id) { await editorPage(view, id); },
 };
 
 async function route() {
-  const [, page = "systems", arg] = location.hash.split("/");
+  const [, page = "systems", arg, sub] = location.hash.split("/");
   document.body.dataset.page = page;
   try {
     if (page === "systems" && arg) await routes.system(decodeURIComponent(arg));
+    else if (page === "runs" && /^\d+$/.test(arg || "")) await renderRun(view, { api, esc }, Number(arg), sub);
     else await (routes[page] || routes.systems)(arg && decodeURIComponent(arg));
   } catch (e) {
     view.innerHTML = `<p class="error">${esc(e.message)}</p>`;
