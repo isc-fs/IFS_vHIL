@@ -62,11 +62,3 @@
 - peripheral: flashController_h7
   offsets: [0xC]
   why: "CR1.PSIZE1, the programming parallelism (x8..x64). It sets how fast a flash word programs, not what is written, and the model programs instantly"
-
-- peripheral: flashController_h7
-  offsets: [0x14]
-  why: "CCR1 clears of WRPERR/STRBERR/RDPERR/RDSERR. The model never sets those errors, so clearing them changes nothing"
-
-- peripheral: flashController_h7
-  offsets: [0x28, 0x30, 0x40, 0x70]
-  why: "KNOWN GAP #67: option-byte status (PRAR_CUR1 write-protection area, SCAR_CUR1 secure area, BOOT_CURR) and the ECC fail address read 0: no protection, no ECC error. The bootloader's WRP latch can't be exercised until modelled"
