@@ -194,7 +194,10 @@ def _to_run(ams):
 
 
 @pytest.mark.soak
-@pytest.mark.parametrize("run", [False, True], ids=["idle", "run"])
+@pytest.mark.parametrize("run", [False, pytest.param(True, marks=pytest.mark.xfail(
+    strict=True, reason="isc-fs/IFS08-CE-AMS#599: CurrentSensorTask overflows its stack "
+                        "~17 min into Run (t = 1018 s); the hook latches Error and the "
+                        "IWDG resets the AMS into it"))], ids=["idle", "run"])
 def test_soak_30_minutes(ams, run):
     """E-050, E-051: 30 min of virtual time idle in Start, or in Run with a
     live VCU heartbeat: the state held throughout, zero cadence outliers,
