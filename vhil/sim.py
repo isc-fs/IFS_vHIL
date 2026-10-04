@@ -157,6 +157,10 @@ class CanBus:
         if items:
             self.sim.monitor(f'{self.probe} SendSequence "{items}" {int(gap_us)} {int(burst)}')
 
+    # Timing of everything the probe injects (send, send_at, send_periodic,
+    # send_sequence): Renode runs it at a sync point, every time.quantum_s of
+    # the system (500 us in systems/*.yaml), so a frame asked for at t goes
+    # out at the first sync point at or after t (#130).
     def send_at(self, at_us: int, can_id: int, data: bytes = b"", extended: bool = False) -> None:
         self.sim.monitor(f'{self.probe} SendAt {at_us} {can_id} "{data.hex()}" {_arg(extended)}')
 

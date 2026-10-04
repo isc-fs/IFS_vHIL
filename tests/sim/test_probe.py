@@ -70,3 +70,21 @@ def test_send_periodic_with_a_future_start(ecu):
     ecu.run_for(ms=1000)
     first = _first_active_after(ecu, t0)
     assert first is not None and start <= first <= start + 110_000, first
+
+
+QUANTUM_US = 500                                # systems/ecu.yaml time.quantum_s
+
+
+@pytest.mark.parametrize("lead_ms", [3, 250])
+def test_a_periodic_sender_starts_at_the_first_sync_point_after_start(ecu, lead_ms):
+    """#130: injections run at Renode's sync points (every time.quantum_s),
+    so the first frame goes out at the first sync point at or after
+    start_us, and the rest exactly a period apart."""
+    t0 = ecu.now_us()
+    start = t0 + lead_ms * 1000 + 137          # off any quantum boundary
+    ecu.can("can_acu").send_periodic("p", OK_PRECHARGE, b"\x01", period_ms=10, start_us=start)
+    ecu.run_for(ms=lead_ms + 60)
+    ecu.can("can_acu").stop_periodic("p")
+    sent = [f.t_us for f in ecu.can("can_acu").sent(OK_PRECHARGE, since_us=t0)]
+    first = -(-start // QUANTUM_US) * QUANTUM_US
+    assert sent[:3] == [first, first + 10_000, first + 20_000], sent[:5]
