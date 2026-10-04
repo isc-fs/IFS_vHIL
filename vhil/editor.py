@@ -50,6 +50,8 @@ GRAPH_ID = "system"
 # it. Pipeline Manager places a new stub at size / 2, so a tiny bus stacks
 # every connection on the node header.
 BUS_SIZE, BUS_PITCH = 120, 40
+# A bus node's height above its bus (header, host_netdev, margin), in pixels.
+BUS_NODE_HEIGHT = 200
 
 # Board catalogue section -> interface type and side.
 _BOARD_PORTS = (("can", "can", "right"), ("spi", "spi", "left"), ("sdmmc", "sdmmc", "left"),
@@ -174,11 +176,15 @@ def to_dataflow(doc: dict, spec: dict | None = None, source: str | None = None) 
                                 "node_id": b.get("node_id", 0),
                                 "write_protect": ",".join(str(s) for s in b.get("write_protect", []))},
              0, 420 * row)
-    for row, (name, bus) in enumerate(doc.get("buses", {}).items()):
-        n = node(BUS_NODE, name, {"host_netdev": bus.get("host_netdev", "")}, 520, 160 * row)
+    y = 0
+    for name, bus in doc.get("buses", {}).items():
         # One stub per connection, spread along the bus, facing the boards
         # (their CAN connectors are on the right; the bus is to their right).
         size = max(BUS_SIZE, BUS_PITCH * (len(bus["nodes"]) + 1))
+        n = node(BUS_NODE, name, {"host_netdev": bus.get("host_netdev", "")}, 520, y)
+        # A bus node is its header and property plus the bus: stack the next
+        # one below it, not on top.
+        y += size + BUS_NODE_HEIGHT
         stubs = [{"id": f"s:{name}:{k}", "offset": size * (k + 1) // (len(bus["nodes"]) + 1),
                   "side": "left"} for k in range(len(bus["nodes"]))]
         n["interfaces"][0]["bus"] = {"type": "twoSided", "size": size, "stubs": stubs}
