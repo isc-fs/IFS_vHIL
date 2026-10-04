@@ -1,0 +1,38 @@
+/* SPDX-License-Identifier: proprietary */
+/*
+ * 0x100  VCU_heartbeat -- the DC-bus voltage the ECU streams to the ACU bus
+ * (FDCAN2) every control cycle. The AMS arms a VcuStale watchdog on this frame
+ * in Car mode and opens the AIRs if it stops, so its presence and layout are a
+ * load-bearing ECU<->AMS contract. Matches the AMS-side rx_vcu_dc_bus.def
+ * (LE uint16 V). Must be emitted in EVERY state, not just precharge.
+ *
+ * Field macro args: (name, ctype, byte_idx, bit_len, factor, offset, unit)
+ */
+
+CAN_MSG(VCU_heartbeat, 0x100, 3, "VCU", 10)
+    FIELD_LE (dc_bus_voltage, uint16_t, 0, 16, 1, 0, "V")
+    /* byte 2, added for #198. TWO bits, not one -- the issue asked for
+     * discharge_engaged alone, but one bit is not enough to make either signal
+     * usable:
+     *
+     *   discharge_engaged  the ECU is holding the bleed connected. The AMS
+     *                      closes no AIR while this reads 1. COMMANDED state --
+     *                      no auxiliary-contact readback is wired, so this
+     *                      cannot catch a coil-interrupt relay stuck open, nor
+     *                      does it see a discharge the SDC started by itself.
+     *                      See discharge.hpp.
+     *
+     *   dc_bus_valid       dc_bus_voltage above is a CURRENT measurement rather
+     *                      than a held or substituted value. This frame is
+     *                      emitted every 10 ms in every state, so the FRAME is
+     *                      always fresh while the VALUE is a relayed 0x466
+     *                      reading that can be arbitrarily old -- frame
+     *                      freshness and data freshness are different things,
+     *                      and gating on 0x100 liveness cannot tell them apart.
+     *                      0 means "do not use the voltage in EITHER direction":
+     *                      frozen high satisfies a 95%-of-pack precharge
+     *                      criterion forever, frozen low releases a discharge
+     *                      gate early. */
+    FIELD_LE_BITS (discharge_engaged, uint8_t, 16, 1, 1, 0, "bit")
+    FIELD_LE_BITS (dc_bus_valid,      uint8_t, 17, 1, 1, 0, "bit")
+CAN_MSG_END(VCU_heartbeat)
