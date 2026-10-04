@@ -105,3 +105,35 @@ def test_power_on_connects_the_buses_before_the_reset():
     assert len(connects) == 3
     assert cmds.index("cpu IsHalted true") < min(connects)
     assert max(connects) < cmds.index("machine Reset") < cmds.index("cpu IsHalted false")
+
+
+def test_a_board_in_a_fault_handler_after_power_on_is_logged(caplog):
+    """#125: half a second after power-on, a CPU parked in a fault handler is
+    reported with its system-control fault registers."""
+    import vhil.broker as broker
+
+    class FaultMonitor(_Monitor):
+        def execute(self, command):
+            super().execute(command)
+            if command == "cpu PC":
+                return "0x80216BA"
+            if command.startswith("sysbus FindSymbolAt"):
+                return "HardFault_Handler"
+            return "0x0"
+
+    monitor = FaultMonitor()
+    backend = make_backend(_Fake, monitor, System(REPO / "systems" / "ecu-ams.yaml").bench_config())
+    backend._powered["ams"] = True
+    with caplog.at_level("WARNING", logger="vhil.broker"):
+        backend._check_boot("ams")
+    msgs = [r.getMessage() for r in caplog.records]
+    assert any("HardFault_Handler" in m and "CFSR=" in m and "ICSR=" in m for m in msgs), msgs
+
+
+def test_a_healthy_boot_logs_nothing(caplog):
+    monitor = _Monitor()                     # FindSymbolAt answers "0x0": no handler
+    backend = make_backend(_Fake, monitor, System(REPO / "systems" / "ecu-ams.yaml").bench_config())
+    backend._powered["ams"] = True
+    with caplog.at_level("WARNING", logger="vhil.broker"):
+        backend._check_boot("ams")
+    assert not caplog.records

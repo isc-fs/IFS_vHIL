@@ -89,7 +89,7 @@ class VirtualBench:
         from broker.fake_bus import FakeHardwareManager
         from broker.server import serve
 
-        backend = make_backend(FakeHardwareManager, m, config)
+        backend = make_backend(FakeHardwareManager, m, config, boot_check=True)
         threading.Thread(target=watch_pacing, args=(m, backend.monitor_lock),
                          daemon=True, name="vhil-pacing").start()
         # A socket left by an earlier run would satisfy _wait_for_socket before
