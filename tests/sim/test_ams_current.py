@@ -10,7 +10,8 @@ Firmware facts (IFS08-CE-AMS):
   constants                                         ams_config.hpp:733-740
   both sampled every 50 ms, IIR-filtered (shift 4), sent as BE i16
   deciamps [pack | dcdc] on 0x135                   acu_tx_encoders.hpp:165-170
-  CurrentStale = fault reason 9                     safety_predicates.hpp:53
+  CurrentStale = fault reason 9, once the last sample is older than
+    IStaleMs = 200 (safety_predicates.hpp:241, ams_config.hpp:149)
   CurrentOverLimit (10): |filtered| > CurrentMaxMa = 185 A, no debounce
     beyond the IIR itself (filtered -= f >> 4; += mA >> 4 every 50 ms;
     current_service.cpp:84-89, safety_predicates.hpp:244)
@@ -224,3 +225,20 @@ def test_a_leg_glitch_shorter_than_the_confirmation_is_ignored(fresh):
     io.set_voltage("PF7", COMMON_MODE_V)
     fresh.run_for(ms=1000)
     assert fresh.read_symbol("ams", "g_state_telemetry") == 0
+
+
+def test_a_dead_adc_faults_current_stale(fresh):
+    """J-000 / I-101: ADC3 stops converting (its kernel clock lost, the
+    model's ConversionFault): no pack-current sample lands, and once the
+    last good one is older than IStaleMs (200 ms) the AMS latches
+    CurrentStale (9). That sample is up to one 50 ms poll older than the
+    fault, and the safety tick adds up to 10 ms (plus the 10 ms polling
+    here): 150..270 ms after injection. The latch outlives the ADC
+    recovering."""
+    fresh.monitor("sysbus.adc3_h73x ConversionFault true", board="ams")
+    elapsed = _ms_to_error(fresh, 500)
+    assert elapsed is not None and 150 <= elapsed <= 270, f"Error after {elapsed} ms"
+    assert fresh.read_symbol("ams", "g_fault_reason_telemetry") == CURRENT_STALE
+    fresh.monitor("sysbus.adc3_h73x ConversionFault false", board="ams")
+    fresh.run_for(ms=1000)
+    assert fresh.read_symbol("ams", "g_state_telemetry") == ERROR
