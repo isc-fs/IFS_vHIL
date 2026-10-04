@@ -1,0 +1,32 @@
+# Keeps the SHA-pinned actions in .github/workflows current: Dependabot
+# rewrites the pin and its version comment together. One grouped PR a week.
+#
+# Docker base images: patch updates and digest refreshes only; minor and
+# major bumps (python 3.11 -> 3.12, bookworm -> trixie) move with Renode and
+# the toolchain, deliberately, in their own PR.
+# No pip entry: the repo has no requirements file to update.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    target-branch: dev
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: chore(ci)
+
+  - package-ecosystem: docker
+    directory: /docker
+    target-branch: dev
+    schedule:
+      interval: monthly
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor
+    commit-message:
+      prefix: chore(docker)
