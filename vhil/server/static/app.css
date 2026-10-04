@@ -9,6 +9,8 @@ body { margin: 0; background: var(--bg); color: var(--fg); }
 header { display: flex; gap: 1.5rem; align-items: center; padding: .75rem 1rem;
          border-bottom: 1px solid var(--line); flex-wrap: wrap; }
 header nav { display: flex; gap: 1rem; }
+#user { margin-left: auto; display: flex; gap: .5rem; align-items: center; font-size: .875rem; }
+#user img { width: 1.5rem; height: 1.5rem; border-radius: 50%; }
 a { color: var(--accent); text-decoration: none; }
 main { padding: 1rem; max-width: 72rem; margin: 0 auto; }
 .muted { color: var(--muted); font-size: .875rem; }
