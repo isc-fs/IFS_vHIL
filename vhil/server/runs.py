@@ -275,14 +275,14 @@ class RunStore:
     def get(self, run_id: int) -> Optional[dict]:
         return self._one("SELECT * FROM runs WHERE id = ?", (run_id,))
 
-    def list(self, limit: int = 100, state: Optional[str] = None) -> list[dict]:
+    def list(self, limit: int = 100, state: Optional[str] = None,
+             system: Optional[str] = None) -> list[dict]:
+        where = [(c, v) for c, v in (("state", state), ("system", system)) if v]
+        sql = "SELECT * FROM runs" + (" WHERE " + " AND ".join(f"{c} = ?" for c, _ in where)
+                                      if where else "") + " ORDER BY id DESC LIMIT ?"
         db = self._connect()
         try:
-            if state:
-                rows = db.execute("SELECT * FROM runs WHERE state = ? ORDER BY id DESC LIMIT ?",
-                                  (state, limit)).fetchall()
-            else:
-                rows = db.execute("SELECT * FROM runs ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+            rows = db.execute(sql, [v for _, v in where] + [limit]).fetchall()
         finally:
             db.close()
         return [_row(r) for r in rows]
@@ -404,10 +404,11 @@ def router(settings, workspace) -> APIRouter:
         return {"run_id": run_id}
 
     @r.get("")
-    def history(limit: int = Query(100, ge=1, le=1000), state: Optional[str] = None):
+    def history(limit: int = Query(100, ge=1, le=1000), state: Optional[str] = None,
+                system: Optional[str] = None):
         if state is not None and state not in STATES:
             raise HTTPException(422, f"unknown state '{state}'")
-        return store.list(limit, state)
+        return store.list(limit, state, system)
 
     @r.get("/{run_id}")
     def get(run_id: int):
