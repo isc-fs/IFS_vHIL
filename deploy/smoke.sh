@@ -43,7 +43,8 @@ for f in session_secret github_client_secret github-app.pem github_token; do
     : > "$secrets/$f"
 done
 chmod 0755 "$secrets"; chmod 0444 "$secrets"/*   # empty, and readable by uid 10001
-cleanup() { rm -rf "$env_file" "$secrets"; }
+# SMOKE_KEEP=1 leaves the stack up, and so the secret files it mounts.
+cleanup() { rm -f "$env_file"; [ "${SMOKE_KEEP:-0}" = 1 ] || rm -rf "$secrets"; }
 trap cleanup EXIT
 cat > "$env_file" <<EOF
 VHIL_IMAGE=${SMOKE_IMAGE:-ifs-vhil}
@@ -178,6 +179,9 @@ say "backup, another run, restore"
 dc exec -T backup python /deploy/backup.py once | tee /dev/stderr | grep -q " 1 branches" \
     || fail "backup once (with the saved branch)"
 snap=$(dc exec -T backup python /deploy/backup.py list | head -1)
+modes=$(dc exec -T backup stat -c %a "/backups/$snap" "/backups/$snap/vhil.db" | tr '\n' ' ')
+[ "$modes" = "700 600 " ] || fail "snapshot $snap is not private (modes $modes)"
+echo "  snapshot $snap: directory 700, files 600"
 before=$(count)
 second=$(run)
 [ "$(count)" -eq $((before + 1)) ] || fail "the second run is not in the history"

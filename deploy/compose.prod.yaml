@@ -84,7 +84,6 @@ services:
     network_mode: none
     restart: "no"
     logging: *logging
-    pids_limit: 64
     command:
       - bash
       - -c
@@ -103,6 +102,7 @@ services:
     deploy:
       resources:
         limits:
+          pids: 64
           cpus: "1"
           memory: 256m
 
@@ -125,10 +125,10 @@ services:
       start_period: 10s
       start_interval: 2s
       retries: 3
-    pids_limit: 64
     deploy:
       resources:
         limits:
+          pids: 64
           cpus: "0.5"
           memory: 128m
 
@@ -158,10 +158,10 @@ services:
       # A tag or a commit, not a branch: what runs changes only on purpose.
       VHIL_WORKSPACE_REF: ${VHIL_WORKSPACE_REF:?set VHIL_WORKSPACE_REF (a tag or commit) in deploy/.env}
       VHIL_GITHUB_TOKEN_FILE: /run/secrets/github_token
-    pids_limit: 256
     deploy:
       resources:
         limits:
+          pids: 256
           cpus: "1"
           memory: 1g
 
@@ -207,10 +207,10 @@ services:
       start_period: 30s
       start_interval: 5s
       retries: 3
-    pids_limit: 256
     deploy:
       resources:
         limits:
+          pids: 256
           cpus: "${VHIL_API_CPUS:-2}"
           memory: ${VHIL_API_MEMORY:-2g}
 
@@ -235,9 +235,10 @@ services:
         condition: service_healthy
     networks: [jobs]
     tmpfs:
-      # Renode compiles its C# models here; pytest's tmp_path; counts
-      # against the memory limit.
-      - /tmp:size=${VHIL_WORKER_TMP:-1g},mode=1777
+      # Renode compiles its C# models here and unpacks its CPU library
+      # (tlib) to dlopen it, hence exec; pytest's tmp_path. Counts against
+      # the memory limit.
+      - /tmp:exec,size=${VHIL_WORKER_TMP:-1g},mode=1777
     volumes:
       - workspace:/workspace:ro
       - db:/data/db                    # claims, heartbeats, results: see docs/deploy.md
@@ -250,11 +251,11 @@ services:
     # docker stop: SIGTERM ends the current run as error (vhil/worker.py).
     stop_grace_period: 30s
     # No healthcheck: it serves nothing. A crash exits and restarts it.
-    pids_limit: ${VHIL_WORKER_PIDS:-2048}
     deploy:
       replicas: ${VHIL_WORKERS:-2}
       resources:
         limits:
+          pids: ${VHIL_WORKER_PIDS:-2048}
           cpus: "${VHIL_WORKER_CPUS:-4}"
           memory: ${VHIL_WORKER_MEMORY:-4g}
 
@@ -266,7 +267,7 @@ services:
     # proxy's auth gate and nowhere else, and no way out.
     networks: [editor]
     tmpfs:
-      - /tmp:size=512m,mode=1777
+      - /tmp:exec,size=512m,mode=1777     # exec: a Run from the editor starts Renode
     volumes:
       - workspace:/workspace:ro
     environment:
@@ -282,10 +283,10 @@ services:
       start_period: 60s
       start_interval: 5s
       retries: 3
-    pids_limit: 512
     deploy:
       resources:
         limits:
+          pids: 512
           cpus: "${VHIL_EDITOR_CPUS:-1}"
           memory: ${VHIL_EDITOR_MEMORY:-2g}
 
@@ -331,10 +332,10 @@ services:
       start_period: 10s
       start_interval: 2s
       retries: 3
-    pids_limit: 256
     deploy:
       resources:
         limits:
+          pids: 256
           cpus: "1"
           memory: 256m
 
@@ -361,10 +362,10 @@ services:
       VHIL_BACKUP_DIR: /backups
       VHIL_BACKUP_KEEP: ${VHIL_BACKUP_KEEP:-14}
       VHIL_BACKUP_INTERVAL_H: ${VHIL_BACKUP_INTERVAL_H:-24}
-    pids_limit: 64
     deploy:
       resources:
         limits:
+          pids: 64
           cpus: "0.5"
           memory: 256m
 
