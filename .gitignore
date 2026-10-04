@@ -11,3 +11,4 @@ build/
 # deploy/compose.prod.yaml: the host's settings and secrets (deploy/.env.example)
 deploy/.env
 deploy/secrets/
+deploy/.smoke-secrets.*/

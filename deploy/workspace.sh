@@ -15,20 +15,30 @@
 # working tree belongs to the deployment: nothing edits it in place.
 #
 # Credentials: IFS_vHIL is public, so clone and fetch need none. For a private
-# remote set VHIL_GITHUB_TOKEN; it is sent as an HTTP header for this run
-# only, never written into the clone's config. Pushes of saved branches are
-# the API's (GitHub App token, vhil/server/githost.py), not this script's.
+# remote put a token in the file VHIL_GITHUB_TOKEN_FILE names (a compose
+# secret; or VHIL_GITHUB_TOKEN itself). It reaches git as an HTTP header
+# through git's environment (GIT_CONFIG_COUNT), for this run only: never on a
+# command line (readable by every process on the host) and never written into
+# the clone's config. Pushes of saved branches are the API's (GitHub App
+# token, vhil/server/githost.py), not this script's.
 set -euo pipefail
 
 dir=${VHIL_WORKSPACE:-/workspace}
 remote=${VHIL_WORKSPACE_REMOTE:-https://github.com/isc-fs/IFS_vHIL.git}
-ref=${VHIL_WORKSPACE_REF:-dev}
+ref=${VHIL_WORKSPACE_REF:?set VHIL_WORKSPACE_REF to the tag or commit to deploy}
 
-g=(git -c advice.detachedHead=false)
-if [ -n "${VHIL_GITHUB_TOKEN:-}" ]; then
-    basic=$(printf 'x-access-token:%s' "$VHIL_GITHUB_TOKEN" | base64 | tr -d '\n')
-    g+=(-c "http.https://github.com/.extraHeader=Authorization: Basic $basic")
+token=${VHIL_GITHUB_TOKEN:-}
+if [ -n "${VHIL_GITHUB_TOKEN_FILE:-}" ]; then
+    token=$(tr -d '[:space:]' < "$VHIL_GITHUB_TOKEN_FILE")
 fi
+g=(git -c advice.detachedHead=false)
+if [ -n "$token" ]; then
+    n=${GIT_CONFIG_COUNT:-0}
+    export "GIT_CONFIG_KEY_$n=http.https://github.com/.extraHeader"
+    export "GIT_CONFIG_VALUE_$n=Authorization: Basic $(printf 'x-access-token:%s' "$token" | base64 | tr -d '\n')"
+    export GIT_CONFIG_COUNT=$((n + 1))
+fi
+unset token VHIL_GITHUB_TOKEN
 export GIT_TERMINAL_PROMPT=0
 
 if [ ! -e "$dir/.git" ]; then
