@@ -226,6 +226,34 @@ def test_a_monitor_command_is_one_line():
             monitor.execute(bad)
 
 
+# -- the monitor binding -----------------------------------------------------------
+
+def test_renode_starts_with_its_own_monitor_port_off():
+    """Renode's -P <port> listens on every interface; ours (VhilMonitor.cs)
+    on 127.0.0.1. -P is always -1 and the loopback monitor gets the port."""
+    cmd = rn.monitor_command("renode", 40123)
+    assert cmd[cmd.index("-P") + 1] == "-1"
+    assert cmd.count("-P") == 1 and "--port" not in cmd
+    execute = cmd[cmd.index("-e") + 1]
+    assert execute == (f"include @{rn.MONITOR_SOURCE.as_posix()}; "
+                       f"emulation StartVhilMonitor 40123")
+    source = rn.MONITOR_SOURCE.read_text()
+    assert "new TcpListener(IPAddress.Loopback, port)" in source
+
+
+@pytest.mark.parametrize("module", ["vhil/sim.py", "vhil/bench.py"])
+def test_no_module_starts_renode_with_a_monitor_port(module):
+    text = (REPO / module).read_text()
+    assert '"-P"' not in text and "--port" not in text
+    assert "rn.launch(" in text
+
+
+@pytest.mark.parametrize("script", ["scripts/explore.sh", "scripts/probe.sh"])
+def test_console_scripts_turn_the_monitor_port_off(script):
+    text = (REPO / script).read_text()
+    assert "--console -P -1" in text
+
+
 # -- sd-card images ----------------------------------------------------------------
 
 def _ams_with(tmp_path, image, **kw) -> System:

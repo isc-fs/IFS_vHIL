@@ -4,6 +4,11 @@ The monitor is line-oriented: send a command, read until the next prompt
 (`(machine) ` or `(monitor) `). Renode echoes the command first; that echo
 is dropped from the returned text.
 
+Renode starts here with its own monitor port off and a loopback-only one of
+ours (`launch`, models/renode/VhilMonitor.cs): Renode 1.17's `-P <port>`
+listens on every interface with no authentication, and has no option to bind
+it to one address (SocketServerProvider.Start binds IPAddress.Any).
+
 Anything a system file or a run scenario supplies reaches Renode only through
 the encoders below (`ident`, `path`, `quote`, `file_arg`, `number`,
 `comment`). Each one either returns text that can't change the structure of
@@ -16,9 +21,13 @@ from __future__ import annotations
 import math
 import re
 import socket
+import subprocess
 import threading
 import time
 from pathlib import Path
+
+REPO = Path(__file__).resolve().parent.parent
+MONITOR_SOURCE = REPO / "models" / "renode" / "VhilMonitor.cs"
 
 _PROMPT = re.compile(rb"\((?:monitor|[\w.-]+)\) $")
 _ANSI = re.compile(rb"\x1b\[[0-9;?]*[A-Za-z]")
@@ -83,6 +92,22 @@ def number(value) -> str:
 def comment(value) -> str:
     """Text for a `#` comment or a script header: one line of printable ASCII."""
     return re.sub(r"[^\x20-\x7e]", "?", str(value))
+
+
+def monitor_command(renode: str, port: int) -> list[str]:
+    """The command line that starts Renode headless with its monitor on
+    127.0.0.1:<port> only (models/renode/VhilMonitor.cs). `-P -1` turns
+    Renode's own all-interfaces monitor port off; the -e commands run in its
+    hidden monitor before ours listens."""
+    return [renode, "--disable-gui", "--plain", "-P", "-1", "-e",
+            f"include {file_arg(MONITOR_SOURCE)}; emulation StartVhilMonitor {int(port)}"]
+
+
+def launch(renode: str, port: int, stdout=subprocess.DEVNULL) -> subprocess.Popen:
+    """Start Renode with a loopback-only monitor on `port`; connect with
+    RenodeMonitor(port), which waits for it to listen."""
+    return subprocess.Popen(monitor_command(renode, port), stdout=stdout,
+                            stderr=subprocess.STDOUT)
 
 
 class RenodeMonitor:

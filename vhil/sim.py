@@ -275,8 +275,8 @@ class Sim:
         script.write_text(self.system.render_renode(self.firmware))
         port = _free_port()
         log = open(self.log_path, "w") if self.log_path else subprocess.DEVNULL
-        self._proc = subprocess.Popen([self.renode, "--disable-gui", "--plain", "-P", str(port)],
-                                      stdout=log, stderr=subprocess.STDOUT)
+        # The monitor listens on 127.0.0.1 only (vhil/renode.py, launch).
+        self._proc = rn.launch(self.renode, port, stdout=log)
         self._monitor = RenodeMonitor(port, timeout_s=600)
         m = self._monitor
         m.execute(f"emulation SetSeed {_int(self.seed)}")

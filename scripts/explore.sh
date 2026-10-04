@@ -9,7 +9,9 @@ export PYTHONPATH="$here${PYTHONPATH:+:$PYTHONPATH}"
 board=$(python3 -c "from vhil.system import System; print(*System('$1').boards)")
 script=$(mktemp --suffix=.resc)
 python3 -m vhil.system render "$1" --firmware "$board=$(realpath "$2")" -o "$script"
-"$renode" --disable-gui --plain --console -e "
+# The monitor is this console: -P -1 keeps Renode from also opening its
+# monitor port, which listens on every interface (vhil/renode.py).
+"$renode" --disable-gui --plain --console -P -1 -e "
 include @$script
 logLevel 0 sysbus.fdcan1_h7
 logLevel 0 sysbus.fdcan2_h7
