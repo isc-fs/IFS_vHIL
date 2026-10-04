@@ -44,6 +44,7 @@ from fastapi import APIRouter, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from starlette.requests import HTTPConnection
 
+from vhil.server.config import env_secret
 from vhil.server.github_app import GitHubApp
 
 SESSION_COOKIE = "vhil_session"
@@ -88,16 +89,18 @@ class Auth:
         a = cls(mode=mode,
                 org=os.environ.get("VHIL_GITHUB_ORG", "isc-fs"),
                 client_id=os.environ.get("VHIL_GITHUB_CLIENT_ID", ""),
-                client_secret=os.environ.get("VHIL_GITHUB_CLIENT_SECRET", ""),
-                secret=os.environ.get("VHIL_SESSION_SECRET", "").encode(),
+                # Each also as <name>_FILE (a compose secret), config.env_secret.
+                client_secret=env_secret("VHIL_GITHUB_CLIENT_SECRET"),
+                secret=env_secret("VHIL_SESSION_SECRET").encode(),
                 public_url=os.environ.get("VHIL_PUBLIC_URL", "").rstrip("/"))
         if mode == "github":
             missing = [n for n, v in (("VHIL_GITHUB_CLIENT_ID", a.client_id),
                                       ("VHIL_GITHUB_CLIENT_SECRET", a.client_secret)) if not v]
             if missing:
-                raise ValueError(f"VHIL_AUTH=github needs {', '.join(missing)}")
+                raise ValueError(f"VHIL_AUTH=github needs {', '.join(missing)} (or <name>_FILE)")
             if len(a.secret) < 32:
-                raise ValueError("VHIL_AUTH=github needs VHIL_SESSION_SECRET (>= 32 chars)")
+                raise ValueError("VHIL_AUTH=github needs VHIL_SESSION_SECRET "
+                                 "(or VHIL_SESSION_SECRET_FILE), >= 32 chars")
         else:
             a.secret = a.secret or secrets.token_bytes(32)
         return a

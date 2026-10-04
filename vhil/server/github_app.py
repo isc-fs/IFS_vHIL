@@ -12,7 +12,8 @@ private key file GitHub generated), looks up its installation in the org, and
 exchanges the JWT for an installation token (1 h) narrowed to one repository
 and the access asked for. Tokens are cached per (repo, write) and refreshed
 shortly before they expire. Configuration: VHIL_GITHUB_APP_ID and
-VHIL_GITHUB_APP_KEY (path to the .pem); setup in docs/development/web-app.md.
+VHIL_GITHUB_APP_KEY_FILE (path to the .pem; VHIL_GITHUB_APP_KEY is the older
+name); setup in docs/development/web-app.md.
 """
 from __future__ import annotations
 
@@ -71,9 +72,11 @@ class GitHubApp:
         app_id = os.environ.get("VHIL_GITHUB_APP_ID")
         if not app_id:
             return None
-        key = os.environ.get("VHIL_GITHUB_APP_KEY")
+        # A path either way: VHIL_GITHUB_APP_KEY_FILE as for the other
+        # secrets (vhil.server.config.env_secret), or the older name.
+        key = os.environ.get("VHIL_GITHUB_APP_KEY_FILE") or os.environ.get("VHIL_GITHUB_APP_KEY")
         if not key or not Path(key).is_file():
-            raise GitHubAppError("VHIL_GITHUB_APP_ID is set but VHIL_GITHUB_APP_KEY "
+            raise GitHubAppError("VHIL_GITHUB_APP_ID is set but VHIL_GITHUB_APP_KEY_FILE "
                                  f"is not a readable private key file ({key!r})")
         return cls(app_id, Path(key).read_bytes(), org)
 
@@ -144,7 +147,8 @@ class GitHubApp:
         """A token for git over HTTPS / the REST API on `repo`.
 
         `repo` is "owner/name" (owner must be the org) or "name" in the org.
-        Use it as https://x-access-token:<token>@github.com/<org>/<name>.git.
+        Hand it to git through vhil.server.githost.git_auth_env (an HTTP
+        header in the environment), never in a URL or on the command line.
         """
         owner, _, name = repo.rpartition("/")
         if not name or (owner and owner.lower() != self.org.lower()):

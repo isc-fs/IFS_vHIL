@@ -51,8 +51,8 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from vhil.server.config import Settings
-from vhil.server.runs import (HEARTBEAT_S, MAX_ATTEMPTS, RECLAIM_AFTER_S, TRACE, RunStore,
-                              code_changes, materialise_system)
+from vhil.server.runs import (HEARTBEAT_S, MAX_ATTEMPTS, RECLAIM_AFTER_S, TRACE, Limits,
+                              RunStore, code_changes, materialise_system)
 from vhil.server.workspace import Workspace
 from vhil.system import System
 
@@ -100,19 +100,45 @@ class Heartbeat:
         self._thread.join()
 
 
-class TraceWriter:
-    """Appends JSON-lines trace records; each write() is one flushed batch."""
+class TraceLimit(Exception):
+    """The run's trace reached Limits.max_trace_bytes; the run ends as error."""
 
-    def __init__(self, path: Path):
+
+class TraceWriter:
+    """Appends JSON-lines trace records; each write() is one flushed batch.
+
+    With `max_bytes`, a batch that would take the file past it is dropped,
+    a log record says so, and TraceLimit is raised: a run can't fill the
+    shared results volume (a fast periodic sender or symbol watch over a long
+    run). After that only log records (the run's own end) are written."""
+
+    def __init__(self, path: Path, max_bytes: Optional[int] = None):
         path.parent.mkdir(parents=True, exist_ok=True)
         self.path = path
+        self.max_bytes = max_bytes
         self._f = open(path, "a")
+        self._size = self._f.tell()
+        self.full = False
 
     def write(self, records: list[dict]) -> None:
         records.sort(key=lambda r: r["t_us"])   # stable: same-time order kept
-        for rec in records:
-            self._f.write(json.dumps(rec, separators=(",", ":")) + "\n")
+        if self.full:
+            records = [r for r in records if r.get("kind") == "log"]
+        text = "".join(json.dumps(rec, separators=(",", ":")) + "\n" for rec in records)
+        if self.max_bytes is not None and not self.full and self._size + len(text) > self.max_bytes:
+            self.full = True
+            t_us = records[0]["t_us"] if records else 0
+            note = json.dumps({"kind": "log", "t_us": t_us,
+                               "text": f"trace limit reached ({self.max_bytes >> 20} MiB): "
+                                       "stopping the run"}, separators=(",", ":")) + "\n"
+            self._f.write(note)
+            self._f.flush()
+            self._size += len(note)
+            raise TraceLimit(f"the trace reached this server's limit of "
+                             f"{self.max_bytes >> 20} MiB (VHIL_MAX_TRACE_MB)")
+        self._f.write(text)
         self._f.flush()
+        self._size += len(text)
 
     def log(self, t_us: int, text: str) -> None:
         self.write([{"kind": "log", "t_us": t_us, "text": text}])
@@ -286,7 +312,8 @@ def image_env(system: System, firmware: dict[str, Path]) -> dict[str, str]:
 
 
 def execute_pytest(scenario: dict, run_dir: Path, workspace: Path, env: dict,
-                   trace: TraceWriter, cancelled: Callable[[], bool]) -> tuple[str, dict]:
+                   trace: TraceWriter, cancelled: Callable[[], bool],
+                   max_output_bytes: Optional[int] = None) -> tuple[str, dict]:
     junit = run_dir / "junit.xml"
     cmd = [sys.executable, "-m", "pytest", scenario["select"], "-v", "-p", "no:cacheprovider",
            "--sim-log-dir", str(run_dir / "sim-logs"), f"--junitxml={junit}"]
@@ -304,6 +331,9 @@ def execute_pytest(scenario: dict, run_dir: Path, workspace: Path, env: dict,
                 reason = "lost"     # stop pytest before letting the run go
             if not reason and time.monotonic() > deadline:
                 reason = "timeout"
+            if not reason and max_output_bytes is not None \
+                    and (run_dir / "pytest.txt").stat().st_size > max_output_bytes:
+                reason = "output"
             if reason:
                 os.killpg(proc.pid, signal.SIGTERM)
                 try:
@@ -322,6 +352,9 @@ def execute_pytest(scenario: dict, run_dir: Path, workspace: Path, env: dict,
         raise Cancelled(summary)
     if reason == "timeout":
         return "error", {**summary, "error": f"timed out after {scenario.get('timeout_s')} s"}
+    if reason == "output":
+        return "error", {**summary, "error": f"pytest output passed this server's limit of "
+                                             f"{max_output_bytes >> 20} MiB (VHIL_MAX_OUTPUT_MB)"}
     if rc == 0:
         if summary.get("tests") and summary["skipped"] == summary["tests"]:
             # e.g. no firmware image: nothing was tested, which isn't a pass.
@@ -405,7 +438,7 @@ class Worker:
                  sim_factory: Callable = _default_sim,
                  resolver: Optional[FirmwareResolver] = None,
                  heartbeat_s: float = HEARTBEAT_S, reclaim_after_s: float = RECLAIM_AFTER_S,
-                 max_attempts: int = MAX_ATTEMPTS):
+                 max_attempts: int = MAX_ATTEMPTS, limits: Optional[Limits] = None):
         if reclaim_after_s <= 2 * heartbeat_s:
             raise ValueError("reclaim_after_s must be more than two heartbeats")
         self.settings = settings
@@ -416,6 +449,7 @@ class Worker:
         self.resolver = resolver or FirmwareResolver()
         self.heartbeat_s, self.reclaim_after_s = heartbeat_s, reclaim_after_s
         self.max_attempts = max_attempts
+        self.limits = limits or Limits.from_env()
 
     def reclaim(self) -> list[dict]:
         moved = self.store.reclaim(self.reclaim_after_s, self.max_attempts)
@@ -433,7 +467,7 @@ class Worker:
         run_dir = Path(self.settings.results) / str(run["id"])
         if run["attempts"] > 1 and (run_dir / TRACE).is_file():
             (run_dir / TRACE).rename(run_dir / f"trace.attempt{run['attempts'] - 1}.jsonl")
-        trace = TraceWriter(run_dir / TRACE)
+        trace = TraceWriter(run_dir / TRACE, max_bytes=self.limits.max_trace_bytes)
         with Heartbeat(self.store, run["id"], self.id, self.heartbeat_s):
             return self._execute(run, run_dir, trace)
 
@@ -476,7 +510,8 @@ class Worker:
                 state, virtual_us = "passed", progress["us"]
             elif scenario["kind"] == "pytest":
                 state, summary = execute_pytest(scenario, run_dir, Path(self.settings.workspace),
-                                                image_env(system, firmware), trace, cancelled)
+                                                image_env(system, firmware), trace, cancelled,
+                                                max_output_bytes=self.limits.max_output_bytes)
             else:
                 raise ValueError(f"unknown scenario kind '{scenario['kind']}'")
             summary["firmware"] = {k: str(p) for k, p in firmware.items()}

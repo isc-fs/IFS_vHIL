@@ -31,6 +31,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from vhil import editor
+from vhil.server.config import env_secret
 from vhil.server.githost import (CachedRefs, GitHost, GitHubHost, HostError, HostUnavailable,
                                  LsRemote, RefLister, repo_slug)
 from vhil.server.gitstore import (OWNER_TRAILER, TAKEOVER_TRAILER, BadBranch, Conflict, GitError,
@@ -92,7 +93,7 @@ def _host(request: Request) -> GitHost:
         # The GitHub App when configured (auth.install sets it), else a token.
         app = getattr(st, "github_app", None)
         token = ((lambda: app.token_for(repo, write=True)) if app is not None
-                 else os.environ.get("VHIL_GITHUB_TOKEN"))
+                 else env_secret("VHIL_GITHUB_TOKEN") or None)
         st.git_host = GitHubHost(token, repo)
     return st.git_host
 
@@ -100,7 +101,7 @@ def _host(request: Request) -> GitHost:
 def _refs(request: Request) -> RefLister:
     st = request.app.state
     if getattr(st, "ref_lister", None) is None:
-        st.ref_lister = CachedRefs(LsRemote(os.environ.get("VHIL_GITHUB_TOKEN")),
+        st.ref_lister = CachedRefs(LsRemote(env_secret("VHIL_GITHUB_TOKEN") or None),
                                    float(os.environ.get("VHIL_REFS_TTL_S", "60")))
     return st.ref_lister
 

@@ -74,7 +74,9 @@ starts. Never set it on a host.
 ## Environment
 
 On a host these come from `deploy/.env` ([`docs/deploy.md`](../deploy.md),
-[`deploy/.env.example`](../../deploy/.env.example)).
+[`deploy/.env.example`](../../deploy/.env.example)), and the secrets from
+files ([docs/deploy.md, "Secrets"](../deploy.md#secrets)): each secret below
+is also read from the file named by `<NAME>_FILE`, which wins over `<NAME>`.
 
 | Variable | Mode | Meaning |
 |---|---|---|
@@ -83,15 +85,16 @@ On a host these come from `deploy/.env` ([`docs/deploy.md`](../deploy.md),
 | `VHIL_ADMINS` | github | comma-separated GitHub logins that may cancel any run and save over any branch |
 | `VHIL_GITHUB_ORG` | github | org whose members may log in, and where the App is installed (default `isc-fs`) |
 | `VHIL_GITHUB_CLIENT_ID` | github | OAuth client ID (from the GitHub App, or an OAuth App) |
-| `VHIL_GITHUB_CLIENT_SECRET` | github | its client secret |
-| `VHIL_SESSION_SECRET` | github | ≥ 32 random characters: `python -c "import secrets; print(secrets.token_urlsafe(48))"` |
+| `VHIL_GITHUB_CLIENT_SECRET` (`_FILE`) | github | its client secret |
+| `VHIL_SESSION_SECRET` (`_FILE`) | github | ≥ 32 random characters: `python -c "import secrets; print(secrets.token_urlsafe(48))"` |
 | `VHIL_PUBLIC_URL` | github | the URL users open, e.g. `https://vhil.example.org` (no trailing `/`): builds the callback URL, the allowed `Origin` and the cookies' Secure flag. Unset: taken from the request (fine on localhost) |
 | `VHIL_GITHUB_APP_ID` | either | the GitHub App's ID; unset = no App tokens |
-| `VHIL_GITHUB_APP_KEY` | either | path to the App's private key `.pem` |
+| `VHIL_GITHUB_APP_KEY_FILE` | either | path to the App's private key `.pem` (`VHIL_GITHUB_APP_KEY`, the older name, still works) |
+| `VHIL_GITHUB_TOKEN` (`_FILE`) | either | interim push token until the App exists |
 
 The server refuses to start in github mode without the client ID/secret or
-with a short session secret. Keep secrets and the `.pem` out of git: an env
-file or the host's secret store, mounted into the container.
+with a short session secret. Keep secrets and the `.pem` out of git: files
+mounted into the container (compose secrets), not environment values.
 
 ## Creating the GitHub App (needs an isc-fs org admin)
 

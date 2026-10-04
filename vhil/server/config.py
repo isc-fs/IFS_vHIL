@@ -12,6 +12,22 @@ from vhil.system import REPO
 log = logging.getLogger("vhil.server")
 
 
+def env_secret(name: str, default: str = "") -> str:
+    """A secret setting: the contents of the file named by `<name>_FILE`
+    when that is set (a compose secret under /run/secrets, docs/deploy.md),
+    else the variable `<name>` itself, else `default`. Surrounding whitespace
+    (the trailing newline of a file) is dropped. A `_FILE` that can't be read
+    is an error, not an empty secret: a typo must not quietly turn a setting
+    off."""
+    path = os.environ.get(f"{name}_FILE")
+    if path:
+        try:
+            return Path(path).read_text().strip()
+        except OSError as e:
+            raise ValueError(f"{name}_FILE={path!r} can't be read: {e.strerror or e}") from None
+    return os.environ.get(name, default)
+
+
 @dataclass(frozen=True)
 class Settings:
     # A git checkout of this repository: its systems/ and catalog/ are what
