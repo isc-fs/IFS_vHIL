@@ -27,6 +27,9 @@ import asyncio
 import json
 import re
 import sqlite3
+import subprocess
+import sys
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -492,6 +495,67 @@ def _kinds(text: Optional[str]) -> Optional[set]:
     if bad:
         raise HTTPException(422, f"unknown trace kinds {sorted(bad)} (have {sorted(TRACE_KINDS)})")
     return kinds
+
+
+# -- the tests a pytest scenario can select -------------------------------------
+
+class TestCatalog:
+    """The test files and node ids under `root` of the workspace, for the
+    start form's pytest picker: what `pytest --collect-only -q` lists, run
+    once and cached until a .py file under `root` (or the tree's conftest)
+    changes. If collection fails the files are still listed, with the error."""
+
+    def __init__(self, workspace: Path, root: str = "tests/sim", timeout_s: float = 120):
+        self.workspace, self.root, self.timeout_s = Path(workspace), root, timeout_s
+        self._lock = threading.Lock()
+        self._cached: Optional[tuple[tuple, dict]] = None
+
+    def _sources(self) -> list[Path]:
+        tree = self.workspace / self.root
+        extra = [self.workspace / n for n in ("tests/conftest.py", "pytest.ini")]
+        return sorted(tree.rglob("*.py")) + [p for p in extra if p.is_file()]
+
+    def _signature(self) -> tuple:
+        return tuple((str(p), st.st_mtime_ns, st.st_size)
+                     for p in self._sources() for st in (p.stat(),))
+
+    def files(self) -> list[str]:
+        return sorted(str(p.relative_to(self.workspace))
+                      for p in (self.workspace / self.root).rglob("test_*.py"))
+
+    def collect(self) -> dict:
+        with self._lock:
+            sig = self._signature()
+            if self._cached and self._cached[0] == sig:
+                return self._cached[1]
+            out: dict = {"root": self.root, "files": self.files(), "tests": []}
+            try:
+                proc = subprocess.run(
+                    [sys.executable, "-m", "pytest", "--collect-only", "-q", "-p", "no:cacheprovider",
+                     self.root], cwd=self.workspace, capture_output=True, text=True,
+                    timeout=self.timeout_s)
+                out["tests"] = [line.strip() for line in proc.stdout.splitlines()
+                                if _SELECT.match(line.strip()) and "::" in line]
+                # 5 = nothing collected: an empty tree, not an error.
+                if proc.returncode not in (0, 5):
+                    tail = (proc.stdout + proc.stderr).strip().splitlines()[-5:]
+                    out["error"] = f"pytest --collect-only exited {proc.returncode}: " + " / ".join(tail)
+            except (OSError, subprocess.TimeoutExpired) as e:
+                out["error"] = f"pytest --collect-only: {e}"
+            self._cached = (sig, out)
+            return out
+
+
+def tests_router(workspace) -> APIRouter:
+    """GET /api/tests: the start form's pytest picker (TestCatalog)."""
+    catalog = TestCatalog(workspace.root)
+    r = APIRouter(prefix="/api/tests", tags=["runs"])
+
+    @r.get("")
+    def tests():
+        return catalog.collect()
+
+    return r
 
 
 # -- the API -------------------------------------------------------------------

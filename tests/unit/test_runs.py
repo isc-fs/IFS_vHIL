@@ -653,6 +653,62 @@ def test_pytest_scenario_maps_the_outcome(tmp_path, body, state):
     assert (run_dir / "junit.xml").is_file() and (run_dir / "pytest.txt").is_file()
 
 
+# -- the pytest picker -----------------------------------------------------------------
+
+def test_workspace(tmp_path, body="def test_a():\n    pass\n"):
+    ws = tmp_path / "ws"
+    (ws / "tests" / "sim").mkdir(parents=True)
+    (ws / "tests" / "sim" / "test_one.py").write_text(
+        "import pytest\n\n@pytest.mark.parametrize('n', [1, 2])\ndef test_p(n):\n    pass\n\n"
+        "class TestK:\n    def test_m(self):\n        pass\n")
+    (ws / "tests" / "sim" / "test_two.py").write_text(body)
+    (ws / "tests" / "sim" / "helper.py").write_text("X = 1\n")
+    return ws
+
+
+test_workspace.__test__ = False   # a helper, not a test
+
+
+def test_the_catalog_lists_test_files_and_collected_ids(tmp_path):
+    from vhil.server.runs import TestCatalog
+    got = TestCatalog(test_workspace(tmp_path)).collect()
+    assert got["files"] == ["tests/sim/test_one.py", "tests/sim/test_two.py"]
+    assert got["tests"] == ["tests/sim/test_one.py::test_p[1]", "tests/sim/test_one.py::test_p[2]",
+                            "tests/sim/test_one.py::TestK::test_m", "tests/sim/test_two.py::test_a"]
+    assert "error" not in got
+
+
+def test_the_catalog_is_cached_until_a_test_file_changes(tmp_path, monkeypatch):
+    from vhil.server import runs
+    ws = test_workspace(tmp_path)
+    catalog = runs.TestCatalog(ws)
+    calls = []
+    real = runs.subprocess.run
+    monkeypatch.setattr(runs.subprocess, "run", lambda *a, **k: calls.append(a) or real(*a, **k))
+    first = catalog.collect()
+    assert catalog.collect() is first and len(calls) == 1
+    (ws / "tests" / "sim" / "test_two.py").write_text("def test_a():\n    pass\n\ndef test_b():\n    pass\n")
+    assert catalog.collect()["tests"][-1] == "tests/sim/test_two.py::test_b" and len(calls) == 2
+
+
+def test_a_tree_that_does_not_collect_still_lists_its_files(tmp_path):
+    from vhil.server.runs import TestCatalog
+    got = TestCatalog(test_workspace(tmp_path, body="def test_a(:\n")).collect()
+    assert got["files"] == ["tests/sim/test_one.py", "tests/sim/test_two.py"]
+    assert "exited 2" in got["error"]
+
+
+def test_api_tests_lists_the_repos_sim_tests_and_they_can_be_started(client):
+    got = client.get("/api/tests").json()
+    assert got["root"] == "tests/sim" and "error" not in got, got.get("error")
+    assert "tests/sim/test_probe.py" in got["files"]
+    node = "tests/sim/test_probe.py::test_send_periodic_with_a_future_start"
+    assert node in got["tests"]
+    r = post(client, {"kind": "pytest", "select": node, "timeout_s": 600})
+    assert r.status_code == 201, r.text
+    assert client.get(f"/api/runs/{r.json()['run_id']}").json()["scenario"]["timeout_s"] == 600
+
+
 # -- heartbeats and reclaim ------------------------------------------------------------
 
 def test_claim_beats_and_counts_attempts(store):

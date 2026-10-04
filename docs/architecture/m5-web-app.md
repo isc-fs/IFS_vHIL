@@ -60,6 +60,9 @@ All JSON; times in microseconds of virtual time.
   `{"kind": "run", "virtual_ms": N, "stimuli": [...]}` (stimuli: CAN
   send / periodic, GPIO set, analog set at virtual times) or
   `{"kind": "pytest", "select": "tests/sim/test_x.py::test_y"}`
+- `GET /api/tests` → `{root, files, tests, error?}`: the test files and
+  node ids under `tests/sim` a pytest scenario can select (`pytest
+  --collect-only -q`, cached until a file there changes)
 - `GET /api/runs` (history, newest first) · `GET /api/runs/{id}` →
   `{id, state: queued|running|passed|failed|error, system, ref, created,
   started, finished, virtual_us, summary, worker, heartbeat, attempts}`.

@@ -14,7 +14,12 @@ export async function renderRuns(view, { api, esc }) {
     <form id="run-form">
       <label>System <select name="system">${
         systems.map((s) => `<option value="${esc(s.id)}">${esc(s.id)}</option>`).join("")}</select></label>
-      <label>Virtual ms <input name="virtual_ms" type="number" value="1000" min="1" max="600000" required></label>
+      <label>Scenario <select name="kind"><option value="run">run</option><option value="pytest">pytest</option></select></label>
+      <label data-kind="run">Virtual ms <input name="virtual_ms" type="number" value="1000" min="1" max="600000" required></label>
+      <label data-kind="pytest" class="grow" hidden>Test <input name="select" list="run-tests" placeholder="tests/sim/test_x.py[::test_y]"
+        autocomplete="off" disabled required></label>
+      <label data-kind="pytest" hidden>Timeout s <input name="timeout_s" type="number" value="3600" min="10" max="21600" disabled required></label>
+      <datalist id="run-tests"></datalist>
       <button type="submit">Start run</button>
       <span id="run-msg" class="muted"></span>
     </form>
@@ -31,11 +36,41 @@ export async function renderRuns(view, { api, esc }) {
   const msg = view.querySelector("#run-msg");
   const mounted = () => document.body.contains(table);
 
-  view.querySelector("#run-form").addEventListener("submit", async (ev) => {
+  const form = view.querySelector("#run-form");
+  // The pytest picker: test files and node ids under tests/sim, as the
+  // server collects them (GET /api/tests, cached there), fetched once the
+  // kind is first switched to pytest. Free text works too.
+  let tests = null;
+  async function loadTests() {
+    if (tests) return;
+    tests = api("/api/tests");
+    try {
+      const t = await tests;
+      view.querySelector("#run-tests").innerHTML = [...t.files, ...t.tests]
+        .map((id) => `<option value="${esc(id)}"></option>`).join("");
+      if (t.error) { msg.textContent = `test list: ${t.error}`; msg.className = "error"; }
+    } catch (e) {
+      tests = null;
+      msg.textContent = `test list: ${e.message}`;
+      msg.className = "error";
+    }
+  }
+  form.kind.addEventListener("change", () => {
+    for (const el of form.querySelectorAll("[data-kind]")) {
+      const on = el.dataset.kind === form.kind.value;
+      el.hidden = !on;
+      el.querySelectorAll("input").forEach((i) => { i.disabled = !on; });
+    }
+    if (form.kind.value === "pytest") loadTests();
+  });
+
+  form.addEventListener("submit", async (ev) => {
     ev.preventDefault();
     const f = new FormData(ev.target);
-    const body = { system: f.get("system"),
-                   scenario: { kind: "run", virtual_ms: Number(f.get("virtual_ms")) } };
+    const scenario = f.get("kind") === "pytest"
+      ? { kind: "pytest", select: f.get("select").trim(), timeout_s: Number(f.get("timeout_s")) }
+      : { kind: "run", virtual_ms: Number(f.get("virtual_ms")) };
+    const body = { system: f.get("system"), scenario };
     try {
       const out = await api("/api/runs", { method: "POST", headers: { "content-type": "application/json" },
                                            body: JSON.stringify(body) });
