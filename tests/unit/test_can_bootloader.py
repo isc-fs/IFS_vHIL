@@ -132,13 +132,14 @@ class FakeBus:
 
     def __init__(self, sim, node):
         self.sim, self.node, self.sent, self.out = sim, node, [], []
+        self.reply = b"\xAA"                           # the ACK's data
 
     def send_sequence(self, frames, gap_us, burst):
         for i, (can_id, data) in enumerate(frames):
             self.sent.append((self.sim.t + (i // burst) * burst * gap_us, can_id, bytes(data)))
             if data[0] >> 4 in (0x0, 0x1):                 # SF / FF: the request's start
                 opcode = data[2] if data[0] >> 4 == 0 else data[3]
-                for f in cb.segment(bytes([cb.MSG_ACK, opcode, 0xAA])):
+                for f in cb.segment(bytes([cb.MSG_ACK, opcode]) + self.reply):
                     self.out.append(Frame(self.sim.t + 100, cb.rx_id(self.node), False, f))
 
     def frames(self, ids, since_us=0):
@@ -180,3 +181,44 @@ def test_a_silent_node_times_out_in_virtual_time():
     with pytest.raises(TimeoutError):
         bl.connect()
     assert 20_000 <= sim.t <= 22_000
+
+
+# -- health and option bytes ----------------------------------------------------
+
+def _sent_message(sim):
+    """The one message the host sent, reassembled from its frames."""
+    rx = cb.Reassembler()
+    for _, _, data in sim.bus.sent:
+        message = rx.feed(data)
+    return message
+
+
+def test_apply_wrp_sends_the_token_and_the_sector_0_mask():
+    """[CMD, OB_APPLY_WRP, token_le32, mask_le32] (bl_proto.c:1102-1121)."""
+    sim = FakeSim(1)
+    cb.CanBootloader(sim, "can_acu", 1).apply_wrp()
+    assert _sent_message(sim) == bytes([cb.MSG_CMD, cb.OB_APPLY_WRP]) + \
+        b"WRP\0" + struct.pack("<I", 0x01)
+
+
+def test_ob_read_parses_the_status_record():
+    """bl_ob_status_t: wrp mask, user config, rdp byte, bor byte, 2 + 4 reserved."""
+    sim = FakeSim(1)
+    sim.bus.reply = struct.pack("<IIBB2xI", 0x01, 0x179E00F0, 0xAA, 0x04, 0)
+    status = cb.CanBootloader(sim, "can_acu", 1).ob_read()
+    assert status == cb.ObStatus(0x01, 0x179E00F0, 0xAA, 0x04)
+    assert _sent_message(sim) == bytes([cb.MSG_CMD, cb.OB_READ])
+
+
+def test_health_parses_the_record_and_its_wrp_flag():
+    sim = FakeSim(1)
+    sim.bus.reply = struct.pack("<8I", 12, 1, cb.HEALTH_FLAG_WRP_PROTECTED | 0x2, 3, 1,
+                                cb.DTC_FLASH_HW, 0, 5)
+    health = cb.CanBootloader(sim, "can_acu", 1).health()
+    assert health.wrp_protected and health.flags == 0x12
+    assert (health.dtc_count, health.last_dtc_code, health.max_flash_op_ms) == (1, cb.DTC_FLASH_HW, 5)
+    with pytest.raises(ValueError):
+        cb.Health.parse(bytes(31))
+    with pytest.raises(ValueError):
+        cb.ObStatus.parse(bytes(15))
+
