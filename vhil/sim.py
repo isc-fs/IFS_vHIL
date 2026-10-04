@@ -203,11 +203,18 @@ class Sim:
                  renode: str = DEFAULT_RENODE, advance_immediately: bool = True,
                  seed: int = 1, log_path: Path | None = None,
                  params: dict[str, dict] | None = None,
+                 write_protect: dict[str, list[int]] | None = None,
                  trace: Optional[int] = None, coverage_dir: Optional[Path] = None):
         """params overrides device params for this run, e.g.
-        {"sd": {"image": "card.img"}}. trace and coverage_dir default to
-        INSTRUMENT's."""
+        {"sd": {"image": "card.img"}}; write_protect a board's write-protected
+        flash sectors at power-on, as the system file's write_protect, e.g.
+        {"ecu": [0]}. trace and coverage_dir default to INSTRUMENT's."""
         self.system = System(Path(system))
+        for name, sectors in (write_protect or {}).items():
+            if name not in self.system.boards:
+                raise ValueError(f"write_protect: no board '{name}' in {self.system.id}")
+            self.system.boards[name].write_protect = list(sectors)
+        self.system._check()
         for name, values in (params or {}).items():
             dev = self.system.devices[name]
             unknown = set(values) - set(dev["model_doc"].get("params", {}))

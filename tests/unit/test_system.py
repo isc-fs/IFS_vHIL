@@ -219,3 +219,36 @@ def test_an_i2c_model_must_place_its_targets(tmp_path):
         "renode: {type: Sensors.Nothing}\n")
     with pytest.raises(SystemError, match="an i2c model gives renode targets"):
         System(_ams(tmp_path, "  x: {model: no-targets, i2c: ams.I2C2}\n"), catalog=catalog)
+
+
+# -- option bytes ---------------------------------------------------------------
+
+def _wp_system(tmp_path, sectors):
+    p = tmp_path / "wp.yaml"
+    p.write_text("kind: system\nid: wp\nboards:\n"
+                 f"  ecu: {{board: mlc-carrier, firmware: ecu, write_protect: {sectors}}}\n")
+    return p
+
+
+def test_write_protect_burns_the_option_bytes_once_before_boot(tmp_path):
+    """A board's write_protect is option-byte state: set once after its
+    platform loads, not in the reset macro, so it outlives every reset."""
+    lines = System(_wp_system(tmp_path, [0, 2])).render_renode(
+        {"ecu": Path("/fw/ecu.elf")}).splitlines()
+    burn = "sysbus.flashController_h7 WriteProtectedSectors 0x05"
+    assert lines.count(burn) == 1
+    assert lines.index(burn) > next(i for i, line in enumerate(lines)
+                                    if "LoadPlatformDescription @" in line)
+    assert lines.index(burn) < lines.index("macro reset")
+    assert "WriteProtectedSectors" not in System(_system(tmp_path, "")).render_renode()
+
+
+def test_write_protect_needs_a_platform_with_option_bytes(tmp_path):
+    catalog = tmp_path / "catalog"
+    shutil.copytree(REPO / "catalog", catalog)
+    platform = catalog / "platforms" / "stm32h733.yaml"
+    doc = yaml.safe_load(platform.read_text())
+    del doc["renode"]["write_protect"]
+    platform.write_text(yaml.safe_dump(doc))
+    with pytest.raises(SystemError, match="no option bytes"):
+        System(_wp_system(tmp_path, [0]), catalog=catalog)

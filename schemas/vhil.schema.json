@@ -72,6 +72,10 @@
                 "type": "string"
               },
               "description": "C# model sources the platform description needs, relative to the repo root, compiled before any machine loads."
+            },
+            "write_protect": {
+              "type": "string",
+              "description": "Monitor command that burns a board's write-protected sectors into the option bytes; {mask} is the sector bitmask (bit N = sector N)."
             }
           }
         }
@@ -308,6 +312,16 @@
                 "minimum": 1,
                 "maximum": 14,
                 "description": "The bootloader's node ID, seeded as an SWD provisioning burn does (0x1..0xE)."
+              },
+              "write_protect": {
+                "type": "array",
+                "uniqueItems": true,
+                "items": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 7
+                },
+                "description": "Flash sectors write-protected in the option bytes (WRPSn) from the first power-on, as a board whose protection was latched before (e.g. the CAN bootloader's OB_APPLY_WRP on sector 0) holds them. Needs a platform with renode.write_protect."
               }
             }
           }
