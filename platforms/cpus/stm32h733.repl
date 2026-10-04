@@ -109,3 +109,18 @@ sdmmc1: SD.STM32H7_SDMMC @ sysbus 0x52007000
 
 // SPI1 — the AMS's LTC6820 isoSPI master. The base platform only tags it.
 spi1: SPI.STM32H7_SPI @ sysbus 0x40013000
+
+// I2C2 — the MLC's BMI088 IMU (PF0 SDA / PF1 SCL), read by the AMS's ImuTask
+// with RX on DMA1 Stream 0 through DMAMUX1. Our model,
+// models/renode/Stm32H7I2c.cs: Renode's STM32F7_I2C never NACKs an address
+// nobody answers, so a missing chip cost the HAL its whole timeout. Same
+// address; the event and error lines go straight to the NVIC, as on the
+// chip. I2C2_BASE = D2_APB1PERIPH_BASE + 0x5800 = 0x40005800, I2C2_EV_IRQn =
+// 33, I2C2_ER_IRQn = 34 (stm32h733xx.h:2325, 94-95); I2C2 RX is DMAMUX1
+// request 35 (DMA_REQUEST_I2C2_RX, stm32h7xx_hal_dma.h:260).
+i2c2: @ none
+
+i2c2_h7: I2C.STM32H7_I2C @ sysbus 0x40005800
+    EventInterrupt -> nvic@33
+    ErrorInterrupt -> nvic@34
+    DmaReceive -> dmamux1@35

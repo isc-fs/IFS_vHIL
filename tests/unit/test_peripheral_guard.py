@@ -35,3 +35,13 @@ def test_rules_apply_to_any_machine_unless_they_name_one():
     left = {k for k, _ in guard.unexplained(MANY, rules)}
     assert left == {("peripheral", "spi1", 0x8, "ams"), ("peripheral", "dma1", 0x8, "ams")}
     assert "ams: spi1 register offset 0x8" in guard.report(guard.unexplained(MANY, rules))
+
+
+def test_a_device_model_behind_a_bus_is_seen_too():
+    """Device models log a register they do not hold as Renode does
+    (models/renode/Bmi088.cs); their source is the bus path."""
+    found = guard.scan(
+        "[20:23:01.0358] [WARNING] i2c2_h7.imu_acc: Unhandled read from offset 0x22\n"
+        "[20:23:01.0359] [WARNING] ams/i2c2_h7.imu_gyr: Unhandled write to offset 0x15, value 0x01\n")
+    assert set(found) == {("peripheral", "i2c2_h7.imu_acc", 0x22, None),
+                          ("peripheral", "i2c2_h7.imu_gyr", 0x15, "ams")}

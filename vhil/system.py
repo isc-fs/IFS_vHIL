@@ -73,10 +73,10 @@ class Board:
     node_id: int | None = None       # the bootloader's node ID
 
     def endpoint(self, connector: str) -> tuple[str, object]:
-        """(kind, target) for a connector or pin: ('can'|'spi'|'sdmmc', peripheral),
-        ('analog', {adc, channel}) or ('gpio', {port, pin})."""
+        """(kind, target) for a connector or pin: ('can'|'spi'|'sdmmc'|'i2c',
+        peripheral), ('analog', {adc, channel}) or ('gpio', {port, pin})."""
         for kind, section in (("can", "can"), ("spi", "spi"), ("sdmmc", "sdmmc"),
-                              ("analog", "analog_in"), ("gpio", "gpio")):
+                              ("i2c", "i2c"), ("analog", "analog_in"), ("gpio", "gpio")):
             if connector in self.board.get(section, {}):
                 return kind, self.board[section][connector]
         raise SystemError(f"board '{self.name}' ({self.board['id']}) has no "
@@ -135,7 +135,8 @@ class System:
         for name, dev in self.devices.items():
             interface = dev["model_doc"].get("interface", {})
             boards = set()
-            for port, want in (("spi", "spi"), ("cs", "gpio"), ("sdmmc", "sdmmc")):
+            for port, want in (("spi", "spi"), ("cs", "gpio"), ("sdmmc", "sdmmc"),
+                               ("i2c", "i2c")):
                 if interface.get(port) and port not in dev:
                     raise SystemError(f"device '{name}' ({dev['model']}) needs '{port}'")
                 if port in dev:
@@ -154,6 +155,11 @@ class System:
                                       f"every analog_out and follow one of its params")
             elif "renode" not in doc:
                 raise SystemError(f"model '{doc['id']}': backend renode needs a renode section")
+            elif bool(interface.get("i2c")) != ("targets" in doc["renode"]):
+                # An I2C device is one or more targets, each at its address
+                # (a BMI088's two dies); anything else is one peripheral.
+                raise SystemError(f"model '{doc['id']}': an i2c model gives renode targets "
+                                  f"(a type and an address each), any other model a renode type")
             want_out = set(interface.get("analog_out", []))
             if set(dev.get("outputs", {})) != want_out:
                 raise SystemError(f"device '{name}' ({dev['model']}) drives outputs "
@@ -213,7 +219,7 @@ class System:
         if name in _seen:
             raise SystemError(f"devices attach in a cycle: {' -> '.join(_seen + (name,))}")
         dev = self.devices[name]
-        for port in ("spi", "cs", "sdmmc"):
+        for port in ("spi", "cs", "sdmmc", "i2c"):
             if port in dev:
                 return self.resolve(dev[port])[0].name
         for endpoint in dev.get("outputs", {}).values():
@@ -272,6 +278,11 @@ class System:
         if "attach" in dev:
             for i in range(dev.get("count", 1)):
                 lines += [f"{name}{i}: {rn['type']} @ {dev['attach']} {i}"] + body
+        elif "targets" in rn:
+            # One peripheral per I2C target, named <device>_<target>.
+            bus = local(self.resolve(dev["i2c"])[2])
+            for part, t in rn["targets"].items():
+                lines += [f"{name}_{part}: {t['type']} @ {bus} 0x{t['address']:02X}"] + body
         else:
             port = dev.get("spi") or dev.get("sdmmc")
             parent = local(self.resolve(port)[2]) if port else "sysbus"
@@ -297,12 +308,14 @@ class System:
         for bus in self.buses:
             out.append(f'emulation CreateCANHub "{bus}"')
         out.append("")
-        sources = {(REPO / d["model_doc"]["renode"]["source"]).as_posix()
-                   for d in self.devices.values()
-                   if "source" in d["model_doc"].get("renode", {})}
-        sources |= {(REPO / src).as_posix()
-                    for b in self.boards.values() for src in b.platform["renode"].get("sources", [])}
-        sources = sorted(sources)
+        # Platform models first, in catalogue order: a device model may build
+        # on one (an I2C target on the I2C controller's interface).
+        sources = list(dict.fromkeys(
+            (REPO / src).as_posix()
+            for b in self.boards.values() for src in b.platform["renode"].get("sources", [])))
+        sources += sorted({(REPO / d["model_doc"]["renode"]["source"]).as_posix()
+                           for d in self.devices.values()
+                           if "source" in d["model_doc"].get("renode", {})} - set(sources))
         if sources:
             out += [f"include @{src}" for src in sources] + [""]
         for b in self.boards.values():

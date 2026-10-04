@@ -1,5 +1,6 @@
 """Host-only checks of the catalogue, the systems and the generator."""
 import json
+import shutil
 from pathlib import Path
 
 import pytest
@@ -118,6 +119,19 @@ def test_ams_renders_the_isospi_chain_in_order():
     assert "sd: SD.SDCard @ sdmmc" in s
 
 
+AMS_SYSTEMS = [p for p in SYSTEMS if "ams" in System(p).boards]
+
+
+@pytest.mark.parametrize("path", AMS_SYSTEMS, ids=lambda p: p.name)
+def test_every_ams_has_its_imu_on_i2c2(path):
+    """The MLC's BMI088: accelerometer 0x18, gyroscope 0x68 on I2C2 (#59),
+    after the I2C model its dies build on."""
+    s = System(path).render_renode()
+    assert "imu_acc: Sensors.Bmi088Accelerometer @ i2c2_h7 0x18" in s
+    assert "imu_gyr: Sensors.Bmi088Gyroscope @ i2c2_h7 0x68" in s
+    assert s.index("models/renode/Stm32H7I2c.cs") < s.index("models/renode/Bmi088.cs")
+
+
 def test_ams_current_sensors_hold_their_zero_from_load():
     """The car's sensors at 0 A: SSA-2 legs at the 1.44 V common mode, the
     ACS758 at Vcc/2 (ams_config.hpp, current sensor calibration)."""
@@ -172,6 +186,9 @@ def _ams(tmp_path, devices):
     ("  b: {model: ltc6820, spi: ams.SPI1, cs: ams.PB9}\n"
      "  c: {model: ltc6811, attach: b, params: {bogus: 1}}\n", "unknown params"),    ("  i: {model: ssa-2-250a, outputs: {out_p: ams.PF7}}\n", "drives outputs"),
     ("  i: {model: acs758lcb-050b, outputs: {out: ams.FDCAN1}}\n", "not an analog input"),
+    ("  imu: {model: bmi088}\n", "needs 'i2c'"),
+    ("  imu: {model: bmi088, i2c: ams.SDMMC1}\n", "is sdmmc, not i2c"),
+    ("  sd: {model: sd-card, sdmmc: ams.SDMMC1, i2c: ams.I2C2}\n", "takes no 'i2c'"),
 ])
 def test_bad_devices_are_rejected_with_a_reason(tmp_path, devices, message):
     with pytest.raises(SystemError, match=message):
@@ -189,3 +206,15 @@ def test_each_board_sets_its_image_inside_its_own_machine(tmp_path):
     lines = System(p).render_renode({"ecu": Path("/fw/ecu.elf"), "ams": Path("/fw/ams.elf")}).splitlines()
     for board in ("ecu", "ams"):
         assert lines.index(f"$elf_{board}=@/fw/{board}.elf") == lines.index(f'mach create "{board}"') + 1
+
+
+def test_an_i2c_model_must_place_its_targets(tmp_path):
+    """An I2C device is one or more targets at addresses: a model claiming
+    the interface without them is refused."""
+    catalog = tmp_path / "catalog"
+    shutil.copytree(REPO / "catalog", catalog)
+    (catalog / "models" / "no-targets.yaml").write_text(
+        "kind: model\nid: no-targets\ninterface: {i2c: true}\nbackend: renode\n"
+        "renode: {type: Sensors.Nothing}\n")
+    with pytest.raises(SystemError, match="an i2c model gives renode targets"):
+        System(_ams(tmp_path, "  x: {model: no-targets, i2c: ams.I2C2}\n"), catalog=catalog)

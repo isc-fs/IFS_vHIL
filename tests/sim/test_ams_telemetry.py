@@ -17,8 +17,8 @@ AMS facts (IFS08-CE-AMS):
   0x6C5 (pit-diag): stack-overflow seen / watermark / task, malloc-failed
     count (pit_post_mortem.def).
   A dead IMU costs one short I2C attempt per second, nothing more
-    (ams_config.hpp ImuRetryPeriodMs); the carrier's BMI088 is not modelled
-    yet (#59), so the AMS here is a car with a dead IMU.
+    (ams_config.hpp ImuRetryPeriodMs); the BMI088 model's dies are made to
+    NACK ("Respond false") for that case.
 """
 import pytest
 
@@ -107,6 +107,8 @@ def test_post_mortem_is_clean(ams):
 def test_a_dead_imu_costs_nothing(ams):
     """No IMU answers on I2C2: the AMS stays in Start, healthy, its
     telemetry on time."""
+    for die in ("imu_acc", "imu_gyr"):
+        ams.monitor(f"sysbus.i2c2_h7.{die} Respond false", board="ams")
     t0 = ams.now_us()
     ams.run_for(ms=10_000)
     assert ams.read_symbol("ams", "g_state_telemetry") == 0
