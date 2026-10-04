@@ -1,20 +1,24 @@
 kind: model
 id: sd-card
 description: >-
-  SD card on an SD/MMC controller (Renode's built-in SD.SDCard), in memory
-  or backed by a card image (param image). The firmware does not format
-  cards: give it a FAT32 image to see it log.
-  Fitting one matters even when nothing is read: with no card, Renode's
-  STM32 SDMMC never sets CMDSENT, and the HAL's no-response command wait
-  then spins for seconds.
+  SD card on an SD/MMC controller (Renode's SD.SDCard, as VhilSDCard in
+  models/renode/Stm32H7Sdmmc.cs), in memory or backed by a card image
+  (param image). The firmware does not format cards: give it a FAT32 image
+  to see it log. Param dead: the card sits in the slot (card detect low)
+  but never answers, so the controller times its commands out (CMDSENT /
+  CTIMEOUT / DTIMEOUT, as with no card attached). Test API (monitor, on
+  the device): Respond (false: dead from now on, true: answers again).
 interface: {sdmmc: true}
 params:
   capacity: 0x8000000      # 128 MiB
   # A card image file to back the card with ("" = in memory). Writes go to
   # the file, so a test can read the card after a run.
   image: ""
+  # In the slot but not answering from power-on (a dead or unpowered card).
+  dead: false
 backend: renode
 renode:
-  type: SD.SDCard
+  source: models/renode/Stm32H7Sdmmc.cs
+  type: SD.VhilSDCard
   params: {image: imageFile}
   set_also: {image: {persistent: true}}

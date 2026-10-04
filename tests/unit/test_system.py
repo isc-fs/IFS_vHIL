@@ -116,7 +116,8 @@ def test_ams_renders_the_isospi_chain_in_order():
     assert "9 -> isospi@0" in s
     positions = [s.index(f"cells{i}: SPI.Ltc6811 @ isospi {i}") for i in range(10)]
     assert bridge < positions[0] and positions == sorted(positions)
-    assert "sd: SD.SDCard @ sdmmc" in s
+    assert "sd: SD.VhilSDCard @ sdmmc" in s
+    assert s.count("models/renode/Stm32H7Sdmmc.cs") == 1     # platform and card, once
 
 
 AMS_SYSTEMS = [p for p in SYSTEMS if "ams" in System(p).boards]
