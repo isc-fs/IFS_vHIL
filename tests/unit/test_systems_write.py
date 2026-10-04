@@ -285,6 +285,32 @@ def test_without_credentials_a_pr_is_409_and_nothing_is_pushed(env, monkeypatch)
     assert env.client.get("/api/config").json()["can_open_pr"] is False
 
 
+def test_the_github_app_token_is_used_when_configured(env):
+    from types import SimpleNamespace
+
+    from vhil.server import systems_write
+    from vhil.server.githost import HostError
+
+    asked = []
+
+    class App:
+        def token_for(self, repo, *, write=False):
+            asked.append((repo, write))
+            return "ghs_app"
+
+    st = env.app.state
+    st.git_host, st.github_app = None, App()
+    host = systems_write._host(SimpleNamespace(app=env.app))
+    assert isinstance(host, GitHubHost)
+    assert host._need_token() == "ghs_app" and asked == [(host.repo, True)]
+    assert env.client.get("/api/config").json()["can_open_pr"] is True
+
+    def broken():
+        raise RuntimeError("not installed")
+    with pytest.raises(HostError, match="not installed"):
+        GitHubHost(token=broken, repo="isc-fs/IFS_vHIL")._need_token()
+
+
 # -- firmware picker -----------------------------------------------------------------
 
 def test_firmware_lists_the_catalogue_sources(env):

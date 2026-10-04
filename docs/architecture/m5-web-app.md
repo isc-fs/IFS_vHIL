@@ -30,7 +30,7 @@ browser, and the system file they produced runs identically in CI.
 | Live views | WebSocket per run; the worker appends frames/samples to the run's trace file, the API tails it | Live and history are the same data: a finished run replays from the file it streamed |
 | Traces | One JSON-lines file per run (frames, GPIO edges, signals, FSM/state samples), plus pytest JUnit, failure snapshots (#104) and coverage | Already what the sim produces; no new format |
 | Auth | **GitHub OAuth** login restricted to the isc-fs org; a **GitHub App** installation token for firmware clones and for pushing system-file branches / opening PRs | Vision §4: no personal tokens. A dev mode with auth off for local use |
-| Deployment | `docker compose`: `api`, `worker` (×N, privileged for vcan), `editor` | Runs on any Linux host or a Mac with Colima, like the rest of the repo |
+| Deployment | `docker compose`: `api`, `worker` (×N), `editor`; on a host, behind Caddy with its own git clone and SQLite backups ([`docs/deploy.md`](../deploy.md)) | Runs on any Linux host or a Mac with Colima, like the rest of the repo. Workers need no privileges: runs use Renode's in-process CAN hubs, not vcan |
 
 ## Components
 

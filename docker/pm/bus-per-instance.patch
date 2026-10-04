@@ -1,0 +1,17 @@
+diff --git a/pipeline_manager/frontend/src/core/NodeFactory.js b/pipeline_manager/frontend/src/core/NodeFactory.js
+index 6c69913..174a7a6 100644
+--- a/pipeline_manager/frontend/src/core/NodeFactory.js
++++ b/pipeline_manager/frontend/src/core/NodeFactory.js
+@@ -1227,6 +1227,12 @@ export const createBaklavaInterfaces = (parsedInterfaces) => {
+         return () => {
+             const baklavaIntf = new NodeInterface(intf.name);
+             Object.assign(baklavaIntf, intf);
++            // Each instance owns its bus: Object.assign shares the type's
++            // object, so every node of the type would hold the stubs of the
++            // last one loaded (and connections to the others would dangle).
++            if (intf.bus) {
++                baklavaIntf.bus = { ...intf.bus, stubs: intf.bus.stubs?.map((s) => ({ ...s })) };
++            }
+             return baklavaIntf;
+         };
+     }

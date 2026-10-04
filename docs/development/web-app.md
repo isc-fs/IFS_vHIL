@@ -47,6 +47,9 @@ expose it on a network.
 
 ## Environment
 
+On a host these come from `deploy/.env` ([`docs/deploy.md`](../deploy.md),
+[`deploy/.env.example`](../../deploy/.env.example)).
+
 | Variable | Mode | Meaning |
 |---|---|---|
 | `VHIL_AUTH` | both | `dev` or `github` |

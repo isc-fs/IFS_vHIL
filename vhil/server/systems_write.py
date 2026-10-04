@@ -82,8 +82,12 @@ def _store(request: Request) -> GitStore:
 def _host(request: Request) -> GitHost:
     st = request.app.state
     if getattr(st, "git_host", None) is None:
-        st.git_host = GitHubHost(os.environ.get("VHIL_GITHUB_TOKEN"),
-                                 repo_slug(st.settings.workspace))
+        repo = repo_slug(st.settings.workspace)
+        # The GitHub App when configured (auth.install sets it), else a token.
+        app = getattr(st, "github_app", None)
+        token = ((lambda: app.token_for(repo, write=True)) if app is not None
+                 else os.environ.get("VHIL_GITHUB_TOKEN"))
+        st.git_host = GitHubHost(token, repo)
     return st.git_host
 
 

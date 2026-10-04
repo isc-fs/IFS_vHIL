@@ -2,12 +2,15 @@
 files <-> Pipeline Manager graphs."""
 import base64
 import copy
+import os
+from pathlib import Path
 
 import pytest
 import yaml
 
 from vhil.editor import (BUS_NODE, ERROR, OK, EditorMethods, dump_system, from_dataflow,
                          specification, to_dataflow, validate, write_system)
+from vhil.editor import main as editor_main
 from vhil.system import REPO
 
 SYSTEMS = sorted((REPO / "systems").glob("*.yaml"))
@@ -66,13 +69,49 @@ def test_firmware_refs_survive_the_round_trip(spec, path):
     assert validate(doc) == []
 
 
-def test_connections_reference_interfaces_that_exist(spec):
-    graph = to_dataflow(yaml.safe_load((REPO / "systems" / "ams.yaml").read_text()), spec)["graphs"][0]
+@pytest.mark.parametrize("path", SYSTEMS, ids=lambda p: p.name)
+def test_connections_reference_interfaces_that_exist(spec, path):
+    graph = to_dataflow(yaml.safe_load(path.read_text()), spec)["graphs"][0]
     ifaces = {i["id"] for n in graph["nodes"] for i in n["interfaces"]}
     stubs = {s["id"] for n in graph["nodes"] for i in n["interfaces"]
              for s in (i.get("bus") or {}).get("stubs", [])}
     for c in graph["connections"]:
         assert c["from"] in ifaces and c["to"] in ifaces | stubs
+
+
+@pytest.mark.parametrize("path", SYSTEMS, ids=lambda p: p.name)
+def test_every_bus_carries_its_own_stubs(spec, path):
+    """Each bus node holds exactly the stubs its connections end on, under
+    IDs no other bus uses, and the node type holds none: stubs belong to an
+    instance. (Pipeline Manager v0.5.2 shared the type's `bus` object between
+    instances, so a second bus wiped the first's stubs on load: docker/pm/.)"""
+    doc = yaml.safe_load(path.read_text())
+    g = to_dataflow(doc, spec)["graphs"][0]
+    assert "stubs" not in _types(spec)[BUS_NODE]["interfaces"][0]["bus"]
+    buses = {n["instanceName"]: n for n in g["nodes"] if n["name"] == BUS_NODE}
+    assert set(buses) == set(doc.get("buses", {}))
+    seen = set()
+    for name, n in buses.items():
+        (iface,) = n["interfaces"]
+        bus = iface["bus"]
+        ids = [s["id"] for s in bus["stubs"]]
+        assert len(ids) == len(doc["buses"][name]["nodes"]) == len(set(ids))
+        assert not seen & set(ids), f"{name} reuses another bus's stub IDs"
+        seen |= set(ids)
+        assert bus["type"] == "twoSided" and all(s["side"] in ("left", "right")
+                                                 for s in bus["stubs"])
+        ends = sorted(c["to"] for c in g["connections"] if c["to"] in ids)
+        assert ends == sorted(ids), f"{name}: a stub with no connection, or two on one"
+        assert sorted(c["from"] for c in g["connections"] if c["to"] in ids) == sorted(
+            "i:{}:{}".format(*e.split(".", 1)) for e in doc["buses"][name]["nodes"])
+
+
+@pytest.mark.skipif(not (Path(os.environ.get("PM_DIR", "/nonexistent")) / "validate").exists(),
+                    reason="needs a Pipeline Manager checkout in $PM_DIR (the editor image)")
+def test_pipeline_manager_loads_every_system():
+    """Pipeline Manager's own ./validate, which loads each dataflow through
+    the frontend: the check that caught the shared-bus-stub bug."""
+    assert editor_main(["check", *map(str, SYSTEMS)]) == 0
 
 
 def test_bus_connections_land_on_spread_stubs(spec):

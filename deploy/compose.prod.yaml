@@ -1,0 +1,208 @@
+# The shared web app on a host (M5.6, #118; docs/deploy.md).
+#
+#   cp deploy/.env.example deploy/.env      # then fill it in
+#   docker compose -f deploy/compose.prod.yaml up -d
+#
+# Services:
+#   workspace  one-shot: clone/fetch the app's own IFS_vHIL clone, check out
+#              VHIL_WORKSPACE_REF (deploy/workspace.sh); the rest wait for it
+#   api        FastAPI (vhil.server): shell, systems, runs, auth
+#   worker     vhil.worker x VHIL_WORKERS: claims queued runs, runs Renode
+#   editor     Pipeline Manager + vhil.editor (the shell embeds it)
+#   proxy      Caddy: TLS for VHIL_SITE (the app) and VHIL_EDITOR_SITE (the editor)
+#   backup     SQLite + saved-branch snapshots (deploy/backup.py)
+#
+# The code, catalogue and systems every service runs come from the workspace
+# clone (the images carry only the toolchain, like CI's runners), so the
+# deployed version is VHIL_WORKSPACE_REF; this checkout only supplies this
+# file, the Caddyfile and the scripts below.
+name: ifs-vhil-prod
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+x-vhil: &vhil
+  image: ${VHIL_IMAGE:-ghcr.io/isc-fs/ifs-vhil}:${VHIL_TAG:-latest}
+  restart: unless-stopped
+  logging: *logging
+  working_dir: /workspace
+  depends_on:
+    workspace:
+      condition: service_completed_successfully
+
+x-paths: &paths
+  VHIL_WORKSPACE: /workspace
+  VHIL_DB: /data/db/vhil.db
+  VHIL_RESULTS: /data/runs
+  VHIL_FW_DIR: /vhil/fw
+
+services:
+  workspace:
+    image: ${VHIL_IMAGE:-ghcr.io/isc-fs/ifs-vhil}:${VHIL_TAG:-latest}
+    command: bash /deploy/workspace.sh
+    restart: "no"
+    logging: *logging
+    volumes:
+      - workspace:/workspace
+      - ./workspace.sh:/deploy/workspace.sh:ro
+    environment:
+      VHIL_WORKSPACE: /workspace
+      VHIL_WORKSPACE_REMOTE: ${VHIL_WORKSPACE_REMOTE:-https://github.com/isc-fs/IFS_vHIL.git}
+      VHIL_WORKSPACE_REF: ${VHIL_WORKSPACE_REF:-dev}
+      VHIL_GITHUB_TOKEN: ${VHIL_GITHUB_TOKEN:-}
+
+  api:
+    <<: *vhil
+    command: python -m vhil.server --host 0.0.0.0 --port 8080
+    volumes:
+      - workspace:/workspace
+      - db:/data/db
+      - runs:/data/runs
+      - ${VHIL_SECRETS_DIR:-./secrets}:/run/vhil-secrets:ro
+    environment:
+      <<: *paths
+      VHIL_AUTH: ${VHIL_AUTH:-github}
+      VHIL_PUBLIC_URL: ${VHIL_PUBLIC_URL:?set VHIL_PUBLIC_URL in deploy/.env}
+      VHIL_EDITOR_URL: ${VHIL_EDITOR_URL:?set VHIL_EDITOR_URL in deploy/.env}
+      VHIL_GITHUB_ORG: ${VHIL_GITHUB_ORG:-isc-fs}
+      VHIL_GITHUB_CLIENT_ID: ${VHIL_GITHUB_CLIENT_ID:-}
+      VHIL_GITHUB_CLIENT_SECRET: ${VHIL_GITHUB_CLIENT_SECRET:-}
+      VHIL_SESSION_SECRET: ${VHIL_SESSION_SECRET:-}
+      VHIL_GITHUB_APP_ID: ${VHIL_GITHUB_APP_ID:-}
+      VHIL_GITHUB_APP_KEY: /run/vhil-secrets/${VHIL_GITHUB_APP_KEY_FILE:-github-app.pem}
+      VHIL_GITHUB_TOKEN: ${VHIL_GITHUB_TOKEN:-}
+      VHIL_GITHUB_REPO: ${VHIL_GITHUB_REPO:-isc-fs/IFS_vHIL}
+      VHIL_BASE_BRANCH: ${VHIL_BASE_BRANCH:-dev}
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request as u; u.urlopen('http://127.0.0.1:8080/api/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      start_interval: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: "${VHIL_API_CPUS:-2}"
+          memory: ${VHIL_API_MEMORY:-2g}
+
+  worker:
+    <<: *vhil
+    # A run's Renode needs no privileges and no host network: the run
+    # scenarios and tests/sim use Renode's in-process CAN hubs, not vcan.
+    # Each replica has its own network namespace, so concurrent runs can't
+    # collide on monitor ports or CAN links. If a scenario ever bridges to
+    # SocketCAN (--vhil-socketcan, IFS_HIL suites), add `cap_add: [NET_ADMIN]`
+    # (create vcan links inside the replica's own namespace; the host must
+    # have the vcan module loaded, docs/deploy.md) rather than privileged.
+    command: python -m vhil.worker
+    volumes:
+      - workspace:/workspace:ro
+      - db:/data/db
+      - runs:/data/runs
+      - fw:/vhil/fw
+    environment:
+      <<: *paths
+    # docker stop: SIGTERM ends the current run as error (vhil/worker.py).
+    stop_grace_period: 30s
+    # No healthcheck: it serves nothing. A crash exits and restarts it.
+    deploy:
+      replicas: ${VHIL_WORKERS:-2}
+      resources:
+        limits:
+          cpus: "${VHIL_WORKER_CPUS:-4}"
+          memory: ${VHIL_WORKER_MEMORY:-4g}
+
+  editor:
+    <<: *vhil
+    image: ${VHIL_IMAGE:-ghcr.io/isc-fs/ifs-vhil}-editor:${VHIL_TAG:-latest}
+    command: scripts/editor.sh
+    volumes:
+      - workspace:/workspace:ro
+    environment:
+      PM_HOST: 0.0.0.0
+      LOG_DIR: /tmp/editor
+      EDITOR_URL: ${VHIL_EDITOR_URL}
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request as u; u.urlopen('http://127.0.0.1:5000/', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      start_interval: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: "${VHIL_EDITOR_CPUS:-1}"
+          memory: ${VHIL_EDITOR_MEMORY:-2g}
+
+  proxy:
+    image: caddy:2.11.6-alpine
+    restart: unless-stopped
+    logging: *logging
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "${VHIL_HTTP_PORT:-80}:80"
+      - "${VHIL_HTTPS_PORT:-443}:443"
+      - "${VHIL_HTTPS_PORT:-443}:443/udp"
+      - "${VHIL_EDITOR_PORT:-5443}:5443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    environment:
+      VHIL_SITE: ${VHIL_SITE:?set VHIL_SITE in deploy/.env}
+      VHIL_EDITOR_SITE: ${VHIL_EDITOR_SITE:?set VHIL_EDITOR_SITE in deploy/.env}
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:2019/config/"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      start_interval: 2s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 256m
+
+  backup:
+    image: ${VHIL_IMAGE:-ghcr.io/isc-fs/ifs-vhil}:${VHIL_TAG:-latest}
+    command: python /deploy/backup.py loop
+    restart: unless-stopped
+    logging: *logging
+    depends_on:
+      workspace:
+        condition: service_completed_successfully
+    volumes:
+      - ./backup.py:/deploy/backup.py:ro
+      - db:/data/db
+      - workspace:/workspace:ro
+      - ${VHIL_BACKUP_DIR:-backups}:/backups
+    environment:
+      VHIL_DB: /data/db/vhil.db
+      VHIL_WORKSPACE: /workspace
+      VHIL_BACKUP_DIR: /backups
+      VHIL_BACKUP_KEEP: ${VHIL_BACKUP_KEEP:-14}
+      VHIL_BACKUP_INTERVAL_H: ${VHIL_BACKUP_INTERVAL_H:-24}
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256m
+
+volumes:
+  workspace:   # the app's IFS_vHIL clone; local branches = saved systems
+  db:          # vhil.db (WAL): run queue + history
+  runs:        # per-run traces and artifacts
+  fw:          # firmware sources and builds (vhil.system build), built.txt
+  backups:     # snapshots, unless VHIL_BACKUP_DIR names a host directory
+  caddy-data:  # TLS certificates and the ACME account: keep across upgrades
+  caddy-config:
