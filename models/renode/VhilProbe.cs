@@ -244,13 +244,14 @@ namespace Antmicro.Renode.Testing
             SendFrame(frame);
         }
 
-        private void Tick(Periodic job, ulong atUs)
+        private void Tick(Periodic job, ulong atUs, bool synced = false)
         {
-            if(atUs > NowMicros())
+            if(!synced && atUs > NowMicros())
             {
                 // A future start from the monitor thread: hop into the synced
-                // context first, as SendAt does.
-                Schedule(0, () => Tick(job, atUs));
+                // context once, as SendAt does, then schedule the start (#130:
+                // re-checking there hopped again and cost a sync quantum).
+                Schedule(0, () => Tick(job, atUs, synced: true));
                 return;
             }
             Schedule(atUs, () =>
