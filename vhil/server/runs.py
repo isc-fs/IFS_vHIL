@@ -8,20 +8,37 @@ final state. The live WebSocket tails that file, so a finished run replays
 from exactly what it streamed.
 
     queued ─claim─▶ running ─▶ passed | failed | error
+       │  ▲              │
+       │  └───reclaim────┤     (heartbeat stale; attempts left)
+       │                 └─reclaim─▶ error   (heartbeat stale; no attempts left)
        └──────cancel──┴──────▶ cancelled   (the worker stops at its next slice)
+
+A worker that holds a run beats its `heartbeat` (unix seconds) every few
+seconds and at every slice. A worker that dies (OOM, a host reboot, docker
+kill) leaves its run `running` with a heartbeat that no longer moves: any
+worker's next poll reclaims it (RunStore.reclaim) back to `queued`, or to
+`error` once it has been attempted MAX_ATTEMPTS times. The heartbeat says
+the worker process is alive, not that the run makes progress: a run that
+hangs is bounded by its own limits (virtual_ms, a pytest timeout_s).
 """
 from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import sqlite3
+import subprocess
+import tempfile
+import sys
+import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Literal, Optional, Union
 
 from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from vhil.system import System, SystemError
@@ -30,6 +47,12 @@ STATES = ("queued", "running", "passed", "failed", "error", "cancelled")
 TERMINAL = frozenset({"passed", "failed", "error", "cancelled"})
 TRACE_KINDS = frozenset({"frame", "edge", "sample", "log"})
 TRACE = "trace.jsonl"
+# A held run's heartbeat period, how stale it may get before another worker
+# reclaims the run, and how many times a run is started before a lost worker
+# ends it as error instead.
+HEARTBEAT_S = 10.0
+RECLAIM_AFTER_S = 60.0
+MAX_ATTEMPTS = 2
 
 # A git ref we pass to `git clone -b` and use in a directory name: no option
 # look-alikes, no path climbing.
@@ -216,10 +239,17 @@ CREATE TABLE IF NOT EXISTS runs (
     finished   TEXT,
     virtual_us INTEGER NOT NULL DEFAULT 0,
     summary    TEXT NOT NULL DEFAULT '{}',
-    worker     TEXT
+    worker     TEXT,
+    heartbeat  REAL,
+    attempts   INTEGER NOT NULL DEFAULT 0,
+    ref_name   TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS runs_state ON runs (state, id);
 """
+# Columns added after the first release: a database created before them
+# gets them on open.
+_ADDED = {"heartbeat": "REAL", "attempts": "INTEGER NOT NULL DEFAULT 0",
+          "ref_name": "TEXT NOT NULL DEFAULT ''"}
 
 
 class RunStore:
@@ -233,6 +263,10 @@ class RunStore:
         with self._connect() as db:
             db.execute("PRAGMA journal_mode=WAL")
             db.executescript(_SCHEMA)
+            have = {r["name"] for r in db.execute("PRAGMA table_info(runs)")}
+            for name, decl in _ADDED.items():
+                if name not in have:
+                    db.execute(f"ALTER TABLE runs ADD COLUMN {name} {decl}")
 
     def _connect(self) -> sqlite3.Connection:
         db = sqlite3.connect(self.path, timeout=30, isolation_level=None)
@@ -265,11 +299,14 @@ class RunStore:
             db.close()
         return _row(rows[0]) if rows else None
 
-    def create(self, system: str, ref: str, firmware: dict, scenario: dict) -> int:
+    def create(self, system: str, ref: str, firmware: dict, scenario: dict,
+               ref_name: str = "") -> int:
+        """A queued run. `ref`: the workspace commit its system file is read
+        at ("" outside git); `ref_name`: the branch/tag/commit it was asked as."""
         row = self._write(
-            "INSERT INTO runs (state, system, ref, firmware, scenario, created) "
-            "VALUES ('queued', ?, ?, ?, ?, ?) RETURNING id",
-            (system, ref, json.dumps(firmware), json.dumps(scenario), now_iso()))
+            "INSERT INTO runs (state, system, ref, firmware, scenario, created, ref_name) "
+            "VALUES ('queued', ?, ?, ?, ?, ?, ?) RETURNING id",
+            (system, ref, json.dumps(firmware), json.dumps(scenario), now_iso(), ref_name))
         return row["id"]
 
     def get(self, run_id: int) -> Optional[dict]:
@@ -287,38 +324,96 @@ class RunStore:
             db.close()
         return [_row(r) for r in rows]
 
-    def claim(self, worker: str) -> Optional[dict]:
+    def claim(self, worker: str, now: Optional[float] = None) -> Optional[dict]:
         """The oldest queued run, now running for `worker`; None when the
         queue is empty. One statement under the write lock, so two workers
         never get the same row: the second one finds it no longer queued."""
         return self._write(
-            "UPDATE runs SET state = 'running', started = ?, worker = ? "
+            "UPDATE runs SET state = 'running', started = ?, worker = ?, heartbeat = ?, "
+            "attempts = attempts + 1 "
             "WHERE id = (SELECT id FROM runs WHERE state = 'queued' ORDER BY id LIMIT 1) "
-            "AND state = 'queued' RETURNING *", (now_iso(), worker))
+            "AND state = 'queued' RETURNING *", (now_iso(), worker, _now(now)))
 
-    def progress(self, run_id: int, virtual_us: int) -> None:
-        self._write("UPDATE runs SET virtual_us = ? WHERE id = ? AND state = 'running' RETURNING id",
-                  (virtual_us, run_id))
+    def heartbeat(self, run_id: int, worker: str, now: Optional[float] = None) -> bool:
+        """`worker` still holds the run; False once it was reclaimed (or
+        finished or cancelled), and the worker should let it go."""
+        return self._write("UPDATE runs SET heartbeat = ? WHERE id = ? AND worker = ? "
+                           "AND state = 'running' RETURNING id",
+                           (_now(now), run_id, worker)) is not None
+
+    def progress(self, run_id: int, virtual_us: int, worker: Optional[str] = None,
+                 now: Optional[float] = None) -> bool:
+        """Virtual time reached (and, with `worker`, a heartbeat); False when
+        the run is no longer running (for that worker)."""
+        sql = "UPDATE runs SET virtual_us = ?, heartbeat = ? WHERE id = ? AND state = 'running'"
+        args: tuple = (virtual_us, _now(now), run_id)
+        if worker is not None:
+            sql, args = sql + " AND worker = ?", args + (worker,)
+        return self._write(sql + " RETURNING id", args) is not None
 
     def state(self, run_id: int) -> Optional[str]:
         row = self._one("SELECT state FROM runs WHERE id = ?", (run_id,))
         return row["state"] if row else None
 
-    def finish(self, run_id: int, state: str, virtual_us: int, summary: dict) -> str:
+    def holder(self, run_id: int) -> tuple[Optional[str], Optional[str]]:
+        """(state, worker) of a run; (None, None) if there is none."""
+        row = self._one("SELECT state, worker FROM runs WHERE id = ?", (run_id,))
+        return (row["state"], row["worker"]) if row else (None, None)
+
+    def finish(self, run_id: int, state: str, virtual_us: int, summary: dict,
+               worker: Optional[str] = None) -> str:
         """Set a running run's final state; returns the state it ended in. A
-        run cancelled meanwhile stays cancelled (its results are kept)."""
+        run cancelled meanwhile stays cancelled (its results are kept). With
+        `worker`, only that worker's run is touched: one reclaimed from it
+        (and maybe running elsewhere now) is left to its new holder."""
         if state not in TERMINAL:
             raise ValueError(f"not a final state: {state}")
+        mine, args = ("", ()) if worker is None else (" AND worker = ?", (worker,))
         row = self._write(
             "UPDATE runs SET state = ?, finished = ?, virtual_us = ?, summary = ? "
-            "WHERE id = ? AND state = 'running' RETURNING state",
-            (state, now_iso(), virtual_us, json.dumps(summary), run_id))
+            "WHERE id = ? AND state = 'running'" + mine + " RETURNING state",
+            (state, now_iso(), virtual_us, json.dumps(summary), run_id) + args)
         if row:
             return row["state"]
         row = self._write("UPDATE runs SET virtual_us = ?, summary = ? "
-                        "WHERE id = ? AND state = 'cancelled' RETURNING state",
-                        (virtual_us, json.dumps(summary), run_id))
+                        "WHERE id = ? AND state = 'cancelled'" + mine + " RETURNING state",
+                        (virtual_us, json.dumps(summary), run_id) + args)
         return row["state"] if row else (self.state(run_id) or "")
+
+    def reclaim(self, stale_after_s: float = RECLAIM_AFTER_S, max_attempts: int = MAX_ATTEMPTS,
+                now: Optional[float] = None) -> list[dict]:
+        """Runs whose worker stopped beating for `stale_after_s`: back to
+        queued, or to error once attempted `max_attempts` times. Returns
+        [{id, state, worker, attempts}] of the runs it moved. A run with no
+        heartbeat at all (left by a worker from before heartbeats) counts as
+        stale. Both updates run under one write lock, so two workers polling
+        at once move each run once."""
+        cutoff = _now(now) - stale_after_s
+        stale = "state = 'running' AND COALESCE(heartbeat, 0) < ?"
+        db = self._connect()
+        try:
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                dead = db.execute(
+                    "UPDATE runs SET state = 'error', finished = ?, summary = json_object("
+                    "'error', 'worker ' || COALESCE(worker, '?') || ' stopped heartbeating; "
+                    "attempt ' || attempts || ' of ' || ? || ', not retried') "
+                    f"WHERE {stale} AND attempts >= ? RETURNING id, state, worker, attempts",
+                    (now_iso(), max_attempts, cutoff, max_attempts)).fetchall()
+                back = db.execute(
+                    "UPDATE runs SET state = 'queued', started = NULL, heartbeat = NULL, "
+                    "summary = json_object('reclaimed_from', worker, 'attempt', attempts), "
+                    "worker = NULL, virtual_us = 0 "
+                    f"WHERE {stale} RETURNING id, state, "
+                    "json_extract(summary, '$.reclaimed_from') AS worker, attempts",
+                    (cutoff,)).fetchall()
+                db.execute("COMMIT")
+            except BaseException:
+                db.execute("ROLLBACK")
+                raise
+        finally:
+            db.close()
+        return sorted((dict(r) for r in dead + back), key=lambda r: r["id"])
 
     def cancel(self, run_id: int) -> Optional[dict]:
         """Queued or running -> cancelled; a finished run is left as it is."""
@@ -326,6 +421,10 @@ class RunStore:
                   "WHERE id = ? AND state IN ('queued', 'running') RETURNING id",
                   (now_iso(), run_id))
         return self.get(run_id)
+
+
+def _now(now: Optional[float]) -> float:
+    return time.time() if now is None else now
 
 
 def _row(row: sqlite3.Row) -> dict:
@@ -338,22 +437,61 @@ def _row(row: sqlite3.Row) -> dict:
 
 # -- trace ---------------------------------------------------------------------
 
-def read_trace(path: Path, since_us: int = 0, kinds: Optional[set] = None,
-               limit: Optional[int] = None) -> list[dict]:
-    out = []
+# The next page's cursor, on every /trace response. A cursor is opaque to
+# clients; it is the byte offset in trace.jsonl just past the last line the
+# page consumed, so the next page seeks there instead of re-reading the file
+# from the start.
+CURSOR_HEADER = "X-Trace-Cursor"
+
+
+def trace_page(path: Path, cursor: int = 0, since_us: int = 0, kinds: Optional[set] = None,
+               limit: Optional[int] = None) -> tuple[list[bytes], int]:
+    """(the matching records as their JSON lines, the cursor after them),
+    reading from byte offset `cursor`. Records before since_us or of other
+    kinds are skipped (and consumed). A line the worker is still writing is
+    left for the next page, so a cursor also resumes a live trace."""
+    out: list[bytes] = []
     if not path.is_file():
-        return out
-    with open(path) as f:
+        return out, cursor
+    pos = cursor
+    with open(path, "rb") as f:
+        f.seek(cursor)
         for line in f:
-            if not line.endswith("\n"):
+            if not line.endswith(b"\n"):
                 break                     # a line the worker is still writing
+            pos += len(line)
             rec = json.loads(line)
             if rec.get("t_us", 0) < since_us or (kinds and rec.get("kind") not in kinds):
                 continue
-            out.append(rec)
+            out.append(line[:-1])
             if limit is not None and len(out) >= limit:
                 break
-    return out
+    return out, pos
+
+
+def read_trace(path: Path, since_us: int = 0, kinds: Optional[set] = None,
+               limit: Optional[int] = None) -> list[dict]:
+    return [json.loads(line) for line in trace_page(path, 0, since_us, kinds, limit)[0]]
+
+
+def parse_cursor(text: Optional[str], path: Path) -> int:
+    """A cursor from a previous page of this trace, checked: it must fall on
+    a line boundary of the file (a cursor of another file is refused, not
+    misread)."""
+    if not text:
+        return 0
+    if not text.isdigit():
+        raise HTTPException(422, f"bad trace cursor {text!r}")
+    offset = int(text)
+    size = path.stat().st_size if path.is_file() else 0
+    if offset > size:
+        raise HTTPException(422, f"trace cursor {offset} is past the end of the trace")
+    if offset:
+        with open(path, "rb") as f:
+            f.seek(offset - 1)
+            if f.read(1) != b"\n":
+                raise HTTPException(422, f"trace cursor {offset} is not at a record boundary")
+    return offset
 
 
 def _kinds(text: Optional[str]) -> Optional[set]:
@@ -364,6 +502,145 @@ def _kinds(text: Optional[str]) -> Optional[set]:
     if bad:
         raise HTTPException(422, f"unknown trace kinds {sorted(bad)} (have {sorted(TRACE_KINDS)})")
     return kinds
+
+
+# -- runs at a saved ref -------------------------------------------------------------
+#
+# The editor saves a system as a one-file commit on a branch of the workspace
+# (vhil/server/gitstore.py) and never checks it out. A run at such a ref
+# reads systems/<id>.yaml as it is at the ref's commit (`git cat-file`, into
+# the run's directory) and runs it with the worker's own catalogue, models,
+# platforms and code. That is the run CI would make of the branch only if
+# the two trees agree on everything but system files, so a ref that changes
+# anything else a run reads (CODE_PATHS: catalog/, vhil/, models/, ...) is
+# refused instead of run differently. A pytest scenario reads the tests and
+# systems of the checked-out tree, so it runs only at the workspace's HEAD.
+
+# What a `run` scenario reads besides its system file. A ref may differ from
+# the workspace's HEAD only outside these.
+CODE_PATHS = ("catalog/", "vhil/", "models/", "platforms/", "schemas/", "scripts/", "docker/",
+              "configs/")
+
+
+def _git(root: Path, *args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True,
+                          env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
+
+
+def resolve_ref(root: Path, ref: str) -> Optional[str]:
+    """The commit a branch (local, or only on origin), tag or commit names in
+    the workspace; None if none."""
+    for cand in (ref, f"refs/remotes/origin/{ref}"):
+        out = _git(root, "rev-parse", "--verify", "--quiet", f"{cand}^{{commit}}")
+        if out.returncode == 0:
+            return out.stdout.strip()
+    return None
+
+
+def code_changes(root: Path, a: str, b: str) -> list[str]:
+    """Files under CODE_PATHS that differ between commits a and b."""
+    out = _git(root, "diff", "--name-only", a, b, "--", *CODE_PATHS)
+    if out.returncode != 0:
+        raise RuntimeError(f"git diff {a} {b}: {out.stderr.strip()}")
+    return [line for line in out.stdout.splitlines() if line]
+
+
+def system_at(root: Path, commit: str, system_id: str) -> Optional[str]:
+    out = _git(root, "cat-file", "blob", f"{commit}:systems/{system_id}.yaml")
+    return out.stdout if out.returncode == 0 else None
+
+
+def materialise_system(root: Path, commit: str, system_id: str, dest: Path) -> Path:
+    """systems/<id>.yaml as of `commit`, written to dest/<id>.yaml (the file
+    name is its id, as System requires)."""
+    text = system_at(root, commit, system_id)
+    if text is None:
+        raise RuntimeError(f"no systems/{system_id}.yaml at {commit[:12]}")
+    dest.mkdir(parents=True, exist_ok=True)
+    path = dest / f"{system_id}.yaml"
+    path.write_text(text)
+    return path
+
+
+def workspace_refs(root: Path) -> dict:
+    """{head, branches, tags}: what a run can be started at."""
+    out = _git(root, "for-each-ref", "--format=%(refname)",
+               "refs/heads", "refs/remotes/origin", "refs/tags")
+    branches, tags = set(), []
+    for ref in out.stdout.splitlines() if out.returncode == 0 else []:
+        if ref.startswith("refs/tags/"):
+            tags.append(ref.removeprefix("refs/tags/"))
+        elif ref != "refs/remotes/origin/HEAD":
+            branches.add(ref.removeprefix("refs/heads/").removeprefix("refs/remotes/origin/"))
+    head = _git(root, "rev-parse", "HEAD")
+    return {"head": head.stdout.strip() if head.returncode == 0 else "",
+            "branches": sorted(branches), "tags": sorted(tags, reverse=True)}
+
+
+# -- the tests a pytest scenario can select -------------------------------------
+
+class TestCatalog:
+    """The test files and node ids under `root` of the workspace, for the
+    start form's pytest picker: what `pytest --collect-only -q` lists, run
+    once and cached until a .py file under `root` (or the tree's conftest)
+    changes. If collection fails the files are still listed, with the error."""
+
+    def __init__(self, workspace: Path, root: str = "tests/sim", timeout_s: float = 120):
+        self.workspace, self.root, self.timeout_s = Path(workspace), root, timeout_s
+        self._lock = threading.Lock()
+        self._cached: Optional[tuple[tuple, dict]] = None
+
+    def _sources(self) -> list[Path]:
+        tree = self.workspace / self.root
+        extra = [self.workspace / n for n in ("tests/conftest.py", "pytest.ini")]
+        return sorted(tree.rglob("*.py")) + [p for p in extra if p.is_file()]
+
+    def _signature(self) -> tuple:
+        return tuple((str(p), st.st_mtime_ns, st.st_size)
+                     for p in self._sources() for st in (p.stat(),))
+
+    def files(self) -> list[str]:
+        return sorted(str(p.relative_to(self.workspace))
+                      for p in (self.workspace / self.root).rglob("test_*.py"))
+
+    def collect(self) -> dict:
+        with self._lock:
+            sig = self._signature()
+            if self._cached and self._cached[0] == sig:
+                return self._cached[1]
+            out: dict = {"root": self.root, "files": self.files(), "tests": []}
+            try:
+                proc = subprocess.run(
+                    [sys.executable, "-m", "pytest", "--collect-only", "-q", "-p", "no:cacheprovider",
+                     self.root], cwd=self.workspace, capture_output=True, text=True,
+                    timeout=self.timeout_s)
+                out["tests"] = [line.strip() for line in proc.stdout.splitlines()
+                                if _SELECT.match(line.strip()) and "::" in line]
+                # 5 = nothing collected: an empty tree, not an error.
+                if proc.returncode not in (0, 5):
+                    tail = (proc.stdout + proc.stderr).strip().splitlines()[-5:]
+                    out["error"] = f"pytest --collect-only exited {proc.returncode}: " + " / ".join(tail)
+            except (OSError, subprocess.TimeoutExpired) as e:
+                out["error"] = f"pytest --collect-only: {e}"
+            self._cached = (sig, out)
+            return out
+
+
+def pickers_router(workspace) -> APIRouter:
+    """The start form's pickers: GET /api/tests (TestCatalog) and
+    GET /api/workspace/refs (workspace_refs)."""
+    catalog = TestCatalog(workspace.root)
+    r = APIRouter(tags=["runs"])
+
+    @r.get("/api/tests")
+    def tests():
+        return catalog.collect()
+
+    @r.get("/api/workspace/refs")
+    def refs():
+        return workspace_refs(workspace.root)
+
+    return r
 
 
 # -- the API -------------------------------------------------------------------
@@ -384,23 +661,44 @@ def router(settings, workspace) -> APIRouter:
 
     @r.post("", status_code=201)
     def create(req: RunRequest):
-        try:
-            path = workspace.system_path(req.system)
-        except NotFound:
-            raise HTTPException(422, f"no system '{req.system}' in the workspace")
-        try:
-            system = System(path)
-        except SystemError as e:
-            raise HTTPException(422, f"system '{req.system}' does not validate: {e}")
+        head = workspace.ref()
+        commit = head
+        if req.ref:
+            if not _REF.match(req.ref):
+                raise HTTPException(422, f"ref {req.ref!r} is not a plain git ref")
+            commit = resolve_ref(workspace.root, req.ref) if head else None
+            if not commit:
+                raise HTTPException(422, f"no ref '{req.ref}' in the workspace "
+                                         f"({'no git' if not head else 'not a branch, tag or commit'})")
+        with tempfile.TemporaryDirectory(prefix="vhil-run-") as tmp:
+            if commit and commit != head:
+                # Runs at a saved ref (above): the ref's system file, this tree's code.
+                if isinstance(req.scenario, PytestScenario):
+                    raise HTTPException(422, f"a pytest scenario runs the workspace's tests and "
+                                             f"systems as checked out: ref {req.ref} is not HEAD")
+                changed = code_changes(workspace.root, head, commit)
+                if changed:
+                    raise HTTPException(422, f"ref {req.ref} changes what a run reads besides its "
+                                             f"system file, so it would not run as in CI: "
+                                             f"{', '.join(changed[:10])}")
+                try:
+                    path = materialise_system(workspace.root, commit, req.system, Path(tmp))
+                except RuntimeError:
+                    raise HTTPException(422, f"no system '{req.system}' at {req.ref}")
+            else:
+                try:
+                    path = workspace.system_path(req.system)
+                except NotFound:
+                    raise HTTPException(422, f"no system '{req.system}' in the workspace")
+            try:
+                system = System(path)
+            except SystemError as e:
+                raise HTTPException(422, f"system '{req.system}' does not validate: {e}")
         errors = check_against_system(req, system, workspace.root)
         if errors:
             raise HTTPException(422, errors)
-        # Workers run the workspace as checked out; a run at another ref of
-        # the system file arrives with the git-backed editor (M5.4, #116).
-        head = workspace.ref()
-        if req.ref and not (head and head.startswith(req.ref)):
-            raise HTTPException(422, f"ref {req.ref} is not the workspace's ({head or 'no git'})")
-        run_id = store.create(req.system, head, req.firmware, req.scenario.model_dump())
+        run_id = store.create(req.system, commit, req.firmware, req.scenario.model_dump(),
+                              ref_name=req.ref or "")
         return {"run_id": run_id}
 
     @r.get("")
@@ -421,9 +719,16 @@ def router(settings, workspace) -> APIRouter:
 
     @r.get("/{run_id}/trace")
     def trace(run_id: int, since_us: int = Query(0, ge=0), kinds: Optional[str] = None,
-              limit: int = Query(500_000, ge=1, le=5_000_000)):
+              limit: int = Query(500_000, ge=1, le=5_000_000), cursor: Optional[str] = None):
+        """A page of trace records (a JSON list); the X-Trace-Cursor header
+        is the cursor of the next page. Each page costs what it returns:
+        pass the cursor back instead of moving since_us."""
         run_or_404(run_id)
-        return read_trace(results / str(run_id) / TRACE, since_us, _kinds(kinds), limit)
+        path = results / str(run_id) / TRACE
+        lines, nxt = trace_page(path, parse_cursor(cursor, path), since_us, _kinds(kinds), limit)
+        # The lines are already JSON: no parse-and-re-encode of the page.
+        return Response(b"[" + b",".join(lines) + b"]", media_type="application/json",
+                        headers={CURSOR_HEADER: str(nxt)})
 
     @r.get("/{run_id}/artifacts")
     def artifacts(run_id: int):
@@ -462,6 +767,10 @@ def router(settings, workspace) -> APIRouter:
                 # worker has written everything, so one more read drains it.
                 state = await asyncio.to_thread(store.state, run_id)
                 if path.is_file():
+                    if path.stat().st_size < offset:
+                        # A reclaimed run's next attempt starts a new file
+                        # (the last one is kept as trace.attempt<N>.jsonl).
+                        offset, pending = 0, ""
                     with open(path) as f:
                         f.seek(offset)
                         chunk = f.read()

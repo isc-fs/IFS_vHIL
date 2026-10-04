@@ -171,7 +171,7 @@ def test_a_pytest_scenario_is_accepted(client):
     ({"system": "ecu", "firmware": {"ecu": "a/../../b"}, "scenario": RUN}, "plain git ref"),
     ({"system": "ecu", "scenario": {"kind": "pytest", "select": "tests/../etc/x.py"}}, "select"),
     ({"system": "ecu", "scenario": {"kind": "pytest", "select": "tests/sim/test_nope.py"}}, "no file"),
-    ({"system": "ecu", "ref": "0000000", "scenario": RUN}, "not the workspace"),
+    ({"system": "ecu", "ref": "0000000", "scenario": RUN}, "no ref"),
 ])
 def test_bad_requests_are_422_and_say_why(client, body, needle):
     r = client.post("/api/runs", json=body)
@@ -216,6 +216,106 @@ def test_trace_filters_by_time_and_kind(client, settings):
     got = client.get(f"/api/runs/{run_id}/trace?since_us=10001&kinds=frame,edge").json()
     assert got == TRACE_RECORDS[3:]
     assert client.get(f"/api/runs/{run_id}/trace?kinds=frame,nope").status_code == 422
+
+
+def pages(client, run_id, limit, query=""):
+    """Every page of a run's trace, following the cursor: [(records, cursor)]."""
+    out, cursor = [], ""
+    while True:
+        r = client.get(f"/api/runs/{run_id}/trace?limit={limit}{query}"
+                       + (f"&cursor={cursor}" if cursor else ""))
+        assert r.status_code == 200, r.text
+        out.append((r.json(), r.headers["x-trace-cursor"]))
+        if len(out[-1][0]) < limit:
+            return out
+        cursor = out[-1][1]
+
+
+def test_trace_pages_follow_the_cursor(client, settings):
+    run_id = post(client).json()["run_id"]
+    write_trace(settings, run_id)
+    got = pages(client, run_id, 2)
+    assert [recs for recs, _ in got] == [TRACE_RECORDS[0:2], TRACE_RECORDS[2:4], TRACE_RECORDS[4:]]
+    size = (settings.results / str(run_id) / "trace.jsonl").stat().st_size
+    assert got[-1][1] == str(size)
+    # At the end: nothing more, and the same cursor back.
+    r = client.get(f"/api/runs/{run_id}/trace?cursor={size}")
+    assert r.json() == [] and r.headers["x-trace-cursor"] == str(size)
+    # since_us and kinds still filter, with or without a cursor.
+    got = pages(client, run_id, 1, "&since_us=10001&kinds=frame,edge")
+    assert [r for recs, _ in got for r in recs] == TRACE_RECORDS[3:]
+
+
+def test_trace_cursor_resumes_a_trace_still_being_written(client, settings):
+    run_id = post(client).json()["run_id"]
+    write_trace(settings, run_id, TRACE_RECORDS[:2])
+    path = settings.results / str(run_id) / "trace.jsonl"
+    half = json.dumps(TRACE_RECORDS[2])
+    with open(path, "a") as f:
+        f.write(half[:10])
+    r = client.get(f"/api/runs/{run_id}/trace")
+    assert r.json() == TRACE_RECORDS[:2]
+    cursor = r.headers["x-trace-cursor"]
+    with open(path, "a") as f:
+        f.write(half[10:] + "\n")
+    write_trace(settings, run_id, TRACE_RECORDS[3:])
+    assert client.get(f"/api/runs/{run_id}/trace?cursor={cursor}").json() == TRACE_RECORDS[2:]
+
+
+def test_a_bad_trace_cursor_is_422(client, settings):
+    run_id = post(client).json()["run_id"]
+    write_trace(settings, run_id)
+    size = (settings.results / str(run_id) / "trace.jsonl").stat().st_size
+    for bad, needle in (("abc", "bad trace cursor"), ("-1", "bad trace cursor"),
+                        (str(size + 1), "past the end"), ("5", "record boundary")):
+        r = client.get(f"/api/runs/{run_id}/trace?cursor={bad}")
+        assert r.status_code == 422 and needle in r.text, (bad, r.text)
+
+
+def big_trace(path, n):
+    """n frame records, 10 per virtual ms; returns the records."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    recs = [{"kind": "frame", "t_us": i * 100, "bus": "can_acu", "id": 0x100 + i % 7, "ext": False,
+             "data": f"{i % 65536:04x}0000"} for i in range(n)]
+    with open(path, "w") as f:
+        f.writelines(json.dumps(r, separators=(",", ":")) + "\n" for r in recs)
+    return recs
+
+
+def test_a_page_reads_from_its_cursor_not_from_the_start(tmp_path):
+    from vhil.server.runs import trace_page
+    path = tmp_path / "trace.jsonl"
+    recs = big_trace(path, 1000)
+    first, cursor = trace_page(path, 0, limit=500)
+    assert [json.loads(x) for x in first] == recs[:500]
+    # Spoil everything before the cursor: a page that re-read the start would choke.
+    with open(path, "r+b") as f:
+        f.write(b"x" * (cursor - 1))
+    rest, end = trace_page(path, cursor)
+    assert [json.loads(x) for x in rest] == recs[500:] and end == path.stat().st_size
+
+
+def test_paging_a_large_trace_is_exact_and_each_page_costs_its_size(client, settings):
+    """362k records took ~6 s to page through when every page re-read the
+    file from the start. With the cursor, the last page costs what the
+    first does (bound kept loose for slow CI), and the pages add up to
+    exactly the file."""
+    run_id = post(client).json()["run_id"]
+    n, limit = 300_000, 50_000
+    recs = big_trace(settings.results / str(run_id) / "trace.jsonl", n)
+    times, got, cursor = [], [], ""
+    while True:
+        t0 = time.perf_counter()
+        r = client.get(f"/api/runs/{run_id}/trace?limit={limit}" + (f"&cursor={cursor}" if cursor else ""))
+        page = r.json()
+        times.append(time.perf_counter() - t0)
+        got.extend(page)
+        if len(page) < limit:
+            break
+        cursor = r.headers["x-trace-cursor"]
+    assert got == recs
+    assert len(times) == n // limit + 1
+    assert times[-2] < 3 * times[0] + 0.2, times   # the last full page vs the first
 
 
 def test_trace_skips_a_half_written_line(settings):
@@ -287,9 +387,19 @@ class FakeBus:
         self.sim, self.name = sim, name
 
     def frames(self, ids=None, since_us=0):
-        out = [f for t, b, f in self.sim.scheduled if b == self.name and t <= self.sim.now]
+        """What the bus delivered: as the probe, never its own sends."""
+        out = []
         if self.name == "can_acu":   # a 0x100 heartbeat every 10 ms
             out += [Frame(t, 0x100, False, b"\x01") for t in range(10_000, self.sim.now + 1, 10_000)]
+        return sorted((f for f in out if f.t_us >= since_us), key=lambda f: f.t_us)
+
+    def sent(self, ids=None, since_us=0):
+        out = [f for t, b, f in self.sim.scheduled if b == self.name and t <= self.sim.now]
+        for (bus, _), job in self.sim.periodic.items():
+            if bus == self.name:
+                end = min(self.sim.now + 1, job["stop"])
+                out += [Frame(t, job["id"], job["ext"], job["data"])
+                        for t in range(job["start"], end, job["period"])]
         return sorted((f for f in out if f.t_us >= since_us), key=lambda f: f.t_us)
 
     def send_at(self, at_us, can_id, data=b"", extended=False):
@@ -298,9 +408,13 @@ class FakeBus:
 
     def send_periodic(self, key, can_id, data, period_ms, start_us=0, extended=False):
         self.sim.calls.append(("send_periodic", self.sim.now, self.name, key, can_id, period_ms, start_us))
+        self.sim.periodic[(self.name, key)] = {
+            "id": can_id, "data": data, "ext": extended, "period": int(period_ms * 1000),
+            "start": start_us or self.sim.now, "stop": 1 << 62}
 
     def stop_periodic(self, key):
         self.sim.calls.append(("stop_periodic", self.sim.now, self.name, key))
+        self.sim.periodic[(self.name, key)]["stop"] = self.sim.now
 
 
 class FakeIO:
@@ -329,6 +443,7 @@ class FakeSim:
         self.system = System(system)
         self.now, self.quantum = 0, quantum_us
         self.calls, self.scheduled, self.edge_log, self.watched = [], [], [], set()
+        self.periodic = {}
         self.started = self.stopped = False
 
     def __enter__(self):
@@ -378,7 +493,8 @@ def test_executor_streams_frames_samples_and_edges_in_time_order(tmp_path):
     progress = []
     sim, summary, trace = run_fake(tmp_path, scenario, progress=progress.append)
     assert sim.now == 300_000 and progress == [100_000, 200_000, 300_000]
-    assert summary["frames"] == {"can_inv": 1, "can_dash": 0, "can_acu": 30}
+    assert summary["frames"] == {"can_inv": 0, "can_dash": 0, "can_acu": 30}
+    assert summary["sent"] == {"can_inv": 1, "can_dash": 8, "can_acu": 0}
     assert summary["samples"] == 31 and summary["edges"] == 1
     assert [r["t_us"] for r in trace] == sorted(r["t_us"] for r in trace)
     hb = [r for r in trace if r["kind"] == "frame" and r["id"] == 0x100]
@@ -389,9 +505,13 @@ def test_executor_streams_frames_samples_and_edges_in_time_order(tmp_path):
     assert samples[5] == {"kind": "sample", "t_us": 50_000, "board": "ecu", "name": "g_x", "value": 50}
     assert [r for r in trace if r["kind"] == "edge"] == [
         {"kind": "edge", "t_us": 120_000, "board": "ecu", "pin": "PB5", "level": 1}]
+    # The scenario's own frames, as the probe sent them, marked as stimulus.
+    assert [r for r in trace if r.get("src")] == [
+        {"kind": "frame", "t_us": t, "bus": bus, "id": i, "ext": False, "data": d, "src": "stimulus"}
+        for t, bus, i, d in sorted([(5_000, "can_inv", 0x360, "aa")]
+                                   + [(t, "can_dash", 0x10, "") for t in range(0, 150_000, 20_000)])]
     assert [(r["t_us"], r["text"]) for r in trace if r["kind"] == "log"] == [
         (0, "stimulus can_periodic can_dash 0x10 [] every 20 ms"),
-        (5_000, "stimulus can_send can_inv 0x360 [aa]"),
         (50_000, "stimulus analog ecu.PF7 = 1.5 V"),
         (120_000, "stimulus gpio ecu.PB5 = 1"),
         (150_000, "stimulus can_periodic can_dash 0x10 [] stopped")]
@@ -531,3 +651,299 @@ def test_pytest_scenario_maps_the_outcome(tmp_path, body, state):
     trace.close()
     assert got == state and summary["tests"] == 1
     assert (run_dir / "junit.xml").is_file() and (run_dir / "pytest.txt").is_file()
+
+
+# -- the pytest picker -----------------------------------------------------------------
+
+def test_workspace(tmp_path, body="def test_a():\n    pass\n"):
+    ws = tmp_path / "ws"
+    (ws / "tests" / "sim").mkdir(parents=True)
+    (ws / "tests" / "sim" / "test_one.py").write_text(
+        "import pytest\n\n@pytest.mark.parametrize('n', [1, 2])\ndef test_p(n):\n    pass\n\n"
+        "class TestK:\n    def test_m(self):\n        pass\n")
+    (ws / "tests" / "sim" / "test_two.py").write_text(body)
+    (ws / "tests" / "sim" / "helper.py").write_text("X = 1\n")
+    return ws
+
+
+test_workspace.__test__ = False   # a helper, not a test
+
+
+def test_the_catalog_lists_test_files_and_collected_ids(tmp_path):
+    from vhil.server.runs import TestCatalog
+    got = TestCatalog(test_workspace(tmp_path)).collect()
+    assert got["files"] == ["tests/sim/test_one.py", "tests/sim/test_two.py"]
+    assert got["tests"] == ["tests/sim/test_one.py::test_p[1]", "tests/sim/test_one.py::test_p[2]",
+                            "tests/sim/test_one.py::TestK::test_m", "tests/sim/test_two.py::test_a"]
+    assert "error" not in got
+
+
+def test_the_catalog_is_cached_until_a_test_file_changes(tmp_path, monkeypatch):
+    from vhil.server import runs
+    ws = test_workspace(tmp_path)
+    catalog = runs.TestCatalog(ws)
+    calls = []
+    real = runs.subprocess.run
+    monkeypatch.setattr(runs.subprocess, "run", lambda *a, **k: calls.append(a) or real(*a, **k))
+    first = catalog.collect()
+    assert catalog.collect() is first and len(calls) == 1
+    (ws / "tests" / "sim" / "test_two.py").write_text("def test_a():\n    pass\n\ndef test_b():\n    pass\n")
+    assert catalog.collect()["tests"][-1] == "tests/sim/test_two.py::test_b" and len(calls) == 2
+
+
+def test_a_tree_that_does_not_collect_still_lists_its_files(tmp_path):
+    from vhil.server.runs import TestCatalog
+    got = TestCatalog(test_workspace(tmp_path, body="def test_a(:\n")).collect()
+    assert got["files"] == ["tests/sim/test_one.py", "tests/sim/test_two.py"]
+    assert "exited 2" in got["error"]
+
+
+def test_api_tests_lists_the_repos_sim_tests_and_they_can_be_started(client):
+    got = client.get("/api/tests").json()
+    assert got["root"] == "tests/sim" and "error" not in got, got.get("error")
+    assert "tests/sim/test_probe.py" in got["files"]
+    node = "tests/sim/test_probe.py::test_send_periodic_with_a_future_start"
+    assert node in got["tests"]
+    r = post(client, {"kind": "pytest", "select": node, "timeout_s": 600})
+    assert r.status_code == 201, r.text
+    assert client.get(f"/api/runs/{r.json()['run_id']}").json()["scenario"]["timeout_s"] == 600
+
+
+# -- heartbeats and reclaim ------------------------------------------------------------
+
+def test_claim_beats_and_counts_attempts(store):
+    run_id = store.create("ecu", "", {}, RUN)
+    run = store.claim("w1", now=1000.0)
+    assert run["heartbeat"] == 1000.0 and run["attempts"] == 1
+    assert store.heartbeat(run_id, "w1", now=1010.0)
+    assert store.get(run_id)["heartbeat"] == 1010.0
+    assert store.progress(run_id, 5_000, worker="w1", now=1020.0)
+    assert store.get(run_id)["heartbeat"] == 1020.0
+    # Another worker's beat or progress doesn't count, nor does a finished run's.
+    assert not store.heartbeat(run_id, "w2") and not store.progress(run_id, 1, worker="w2")
+    store.finish(run_id, "passed", 5_000, {}, worker="w1")
+    assert not store.heartbeat(run_id, "w1")
+
+
+def test_a_live_heartbeat_is_never_reclaimed(store):
+    run_id = store.create("ecu", "", {}, RUN)
+    store.claim("w1", now=1000.0)
+    store.heartbeat(run_id, "w1", now=1050.0)
+    assert store.reclaim(60, now=1100.0) == []
+    assert store.get(run_id)["state"] == "running"
+
+
+def test_a_dead_workers_run_is_requeued_then_errors_after_its_attempts(store):
+    run_id = store.create("ecu", "", {}, RUN)
+    store.claim("dead1", now=1000.0)
+    store.progress(run_id, 300_000, worker="dead1", now=1000.0)
+    assert store.reclaim(60, max_attempts=2, now=1061.0) == [
+        {"id": run_id, "state": "queued", "worker": "dead1", "attempts": 1}]
+    run = store.get(run_id)
+    assert run["state"] == "queued" and run["worker"] is None and run["heartbeat"] is None
+    assert run["virtual_us"] == 0 and run["summary"] == {"reclaimed_from": "dead1", "attempt": 1}
+    # The dead worker coming back finds it is not its run any more.
+    assert store.finish(run_id, "passed", 1, {}, worker="dead1") == "queued"
+    run = store.claim("dead2", now=2000.0)
+    assert run["id"] == run_id and run["attempts"] == 2
+    assert store.reclaim(60, max_attempts=2, now=2061.0) == [
+        {"id": run_id, "state": "error", "worker": "dead2", "attempts": 2}]
+    run = store.get(run_id)
+    assert run["state"] == "error" and run["finished"]
+    assert run["summary"]["error"] == "worker dead2 stopped heartbeating; attempt 2 of 2, not retried"
+    assert store.claim("w3") is None
+
+
+def test_reclaim_leaves_queued_and_finished_runs_alone(store):
+    first = store.create("ecu", "", {}, RUN)
+    second = store.create("ecu", "", {}, RUN)
+    store.create("ecu", "", {}, RUN)   # stays queued
+    store.claim("w", now=0.0)          # first (oldest first)
+    store.finish(first, "failed", 0, {})
+    store.claim("w", now=0.0)
+    store.cancel(second)
+    assert store.reclaim(1, now=1e9) == []
+
+
+def test_a_running_row_from_before_heartbeats_counts_as_stale(settings):
+    import sqlite3
+    db = sqlite3.connect(settings.db)
+    db.executescript("""CREATE TABLE runs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, state TEXT NOT NULL, system TEXT NOT NULL,
+        ref TEXT NOT NULL DEFAULT '', firmware TEXT NOT NULL DEFAULT '{}', scenario TEXT NOT NULL,
+        created TEXT NOT NULL, started TEXT, finished TEXT, virtual_us INTEGER NOT NULL DEFAULT 0,
+        summary TEXT NOT NULL DEFAULT '{}', worker TEXT);
+        INSERT INTO runs (state, system, scenario, created, worker)
+        VALUES ('running', 'ecu', '{"kind": "run", "virtual_ms": 100}', 'x', 'old');""")
+    db.commit()
+    db.close()
+    store = RunStore(settings.db)        # adds the columns
+    run = store.get(1)
+    assert run["heartbeat"] is None and run["attempts"] == 0
+    assert [r["state"] for r in store.reclaim(60)] == ["queued"]
+
+
+def test_two_workers_reclaiming_at_once_move_each_run_once(settings):
+    seed = RunStore(settings.db)
+    ids = [seed.create("ecu", "", {}, RUN) for _ in range(20)]
+    for _ in ids:
+        seed.claim("dead", now=0.0)
+    moved: list[dict] = []
+    start = threading.Barrier(2)
+
+    def poll():
+        own = RunStore(settings.db)
+        start.wait()
+        moved.extend(own.reclaim(60))
+
+    threads = [threading.Thread(target=poll) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert sorted(r["id"] for r in moved) == ids
+    assert {r["state"] for r in seed.list(100)} == {"queued"}
+
+
+class SlowSim(FakeSim):
+    """Virtual time advances, but every step takes wall time."""
+
+    def __init__(self, step_s=0.01, hook=None):
+        super().__init__()
+        self.step_s, self.hook = step_s, hook
+
+    def run_for(self, ms=0, us=0):
+        time.sleep(self.step_s)
+        if self.hook:
+            self.hook(self)
+        return super().run_for(ms, us)
+
+
+def test_a_worker_reclaims_and_reruns_a_dead_workers_run(settings, store):
+    run_id = store.create("ecu", "", {}, {"kind": "run", "virtual_ms": 200, "slice_ms": 100})
+    store.claim("dead", now=time.time() - 3600)
+    d = settings.results / str(run_id)
+    d.mkdir(parents=True)
+    (d / "trace.jsonl").write_text('{"kind": "log", "t_us": 0, "text": "first attempt"}\n')
+    worker = Worker(settings, worker_id="w2", sim_factory=lambda *a: FakeSim(),
+                    resolver=FixedResolver())
+    assert worker.run_once() == run_id
+    run = store.get(run_id)
+    assert run["state"] == "passed" and run["worker"] == "w2" and run["attempts"] == 2
+    assert run["summary"]["frames"]["can_acu"] == 20
+    # The first attempt's trace is kept aside; the new one starts afresh.
+    assert read_trace(d / "trace.attempt1.jsonl")[0]["text"] == "first attempt"
+    trace = read_trace(d / "trace.jsonl")
+    assert trace[0]["text"] == "attempt 2 of 2: reclaimed from dead, whose heartbeat stopped"
+    assert not any(r.get("text") == "first attempt" for r in trace)
+
+
+def test_a_live_worker_keeps_its_run_while_another_polls(settings, store):
+    """Worker A runs a slow run, beating every 20 ms; worker B polls with a
+    0.3 s reclaim timeout the whole time and never takes it."""
+    run_id = store.create("ecu", "", {}, {"kind": "run", "virtual_ms": 400, "slice_ms": 10})
+    a = Worker(settings, worker_id="a", sim_factory=lambda *x: SlowSim(0.02),
+               resolver=FixedResolver(), heartbeat_s=0.02, reclaim_after_s=0.3)
+    b = Worker(settings, worker_id="b", sim_factory=lambda *x: FakeSim(),
+               resolver=FixedResolver(), heartbeat_s=0.02, reclaim_after_s=0.3)
+    t = threading.Thread(target=a.run_once)
+    t.start()
+    while store.get(run_id)["state"] == "queued":
+        time.sleep(0.001)
+    polls = 0
+    while t.is_alive():
+        assert b.run_once() is None
+        polls += 1
+        time.sleep(0.02)
+    t.join()
+    run = store.get(run_id)
+    assert polls > 10, "the run was too quick to show anything"
+    assert run["state"] == "passed" and run["worker"] == "a" and run["attempts"] == 1
+
+
+def test_the_heartbeat_thread_keeps_a_run_with_no_slices_claimed(settings, store):
+    """A firmware build (no slices) longer than the reclaim timeout."""
+    run_id = store.create("ecu", "", {}, RUN)
+
+    class SlowBuild(FixedResolver):
+        def resolve(self, system, refs):
+            time.sleep(0.5)
+            return super().resolve(system, refs)
+
+    a = Worker(settings, worker_id="a", sim_factory=lambda *x: FakeSim(), resolver=SlowBuild(),
+               heartbeat_s=0.02, reclaim_after_s=0.2)
+    t = threading.Thread(target=a.run_once)
+    t.start()
+    while t.is_alive():
+        assert store.reclaim(0.2) == []
+        time.sleep(0.02)
+    t.join()
+    assert store.get(run_id)["state"] == "passed"
+
+
+def test_a_worker_whose_run_was_reclaimed_lets_it_go(settings, store):
+    """A worker that stalled past the timeout (its run reclaimed and taken by
+    another) stops at its next slice and writes no final state."""
+    run_id = store.create("ecu", "", {}, {"kind": "run", "virtual_ms": 10_000, "slice_ms": 100})
+
+    def steal(sim):
+        if sim.now >= 300_000 and store.get(run_id)["worker"] == "a":
+            assert store.reclaim(60, now=time.time() + 3600)[0]["state"] == "queued"
+            store.claim("b")
+
+    a = Worker(settings, worker_id="a", sim_factory=lambda *x: SlowSim(0, steal),
+               resolver=FixedResolver())
+    assert a.run_once() == run_id
+    run = store.get(run_id)
+    assert run["state"] == "running" and run["worker"] == "b" and run["attempts"] == 2
+    texts = [r.get("text") for r in read_trace(settings.results / str(run_id) / "trace.jsonl")]
+    assert texts[-1] == "worker a lost the run: it was reclaimed"
+
+
+def test_a_pytest_run_reclaimed_from_its_worker_is_stopped(tmp_path):
+    from vhil.worker import Lost
+    ws = tmp_path / "ws"
+    (ws / "tests").mkdir(parents=True)
+    (ws / "tests" / "conftest.py").write_text(
+        "def pytest_addoption(parser):\n    parser.addoption('--sim-log-dir')\n")
+    (ws / "tests" / "test_x.py").write_text("import time\ndef test_x():\n    time.sleep(60)\n")
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    trace = TraceWriter(run_dir / "trace.jsonl")
+
+    def lost():
+        raise Lost()
+
+    t0 = time.monotonic()
+    with pytest.raises(Lost):
+        execute_pytest({"select": "tests/test_x.py::test_x"}, run_dir, ws, {}, trace, cancelled=lost)
+    trace.close()
+    assert time.monotonic() - t0 < 30
+
+
+def test_worker_rejects_a_reclaim_timeout_within_two_heartbeats(settings):
+    with pytest.raises(ValueError):
+        Worker(settings, heartbeat_s=10, reclaim_after_s=15)
+
+
+def test_live_restarts_when_a_new_attempt_replaces_the_trace(client, settings, store):
+    run_id = post(client).json()["run_id"]
+    store.claim("w")
+    path = settings.results / str(run_id) / "trace.jsonl"
+
+    def worker():
+        write_trace(settings, run_id, TRACE_RECORDS)
+        time.sleep(0.5)
+        path.rename(path.with_name("trace.attempt1.jsonl"))
+        write_trace(settings, run_id, TRACE_RECORDS[:1])
+        time.sleep(0.5)
+        store.finish(run_id, "passed", 0, {})
+
+    t = threading.Thread(target=worker)
+    t.start()
+    with client.websocket_connect(f"/api/runs/{run_id}/live") as ws:
+        got = []
+        while (rec := ws.receive_json())["kind"] != "end":
+            got.append(rec)
+    t.join()
+    assert got == TRACE_RECORDS + TRACE_RECORDS[:1]

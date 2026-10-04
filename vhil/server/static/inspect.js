@@ -85,7 +85,7 @@ export async function renderRun(view, { api, esc }, id, tab) {
         ${TERMINAL.has(r.state) ? "" : `<button data-cancel>Cancel</button>`}</h2>
       <dl class="meta">
         <div><dt>System</dt><dd><a href="#/systems/${esc(r.system)}">${esc(r.system)}</a></dd></div>
-        <div><dt>Ref</dt><dd><code>${esc((r.ref || "working tree").slice(0, 12))}</code></dd></div>
+        <div><dt>Ref</dt><dd>${r.ref_name ? `${esc(r.ref_name)} ` : ""}<code>${esc((r.ref || "working tree").slice(0, 12))}</code></dd></div>
         <div><dt>Scenario</dt><dd>${esc(sc.kind === "run" ? `run ${sc.virtual_ms} ms` : `pytest ${sc.select || ""}`)}</dd></div>
         <div><dt>Virtual</dt><dd>${ms(r.virtual_us)} ms</dd></div>
         <div><dt>Wall</dt><dd>${duration(wallSeconds(r))}</dd></div>
@@ -173,7 +173,7 @@ export async function renderRun(view, { api, esc }, id, tab) {
         const f = S.rec.frame[F.idx[i]];
         const d = decoded(f);
         const text = d ? `${d.msg.name}  ${d.fields.slice(0, 6).map((x) => `${x.name}=${dec.formatValue(x)}`).join("  ")}` : "";
-        return `<span>${ms(f.t_us)}</span><span>${esc(f.bus)}</span><span>${dec.hexId(f.id, f.ext)}${f.ext ? "x" : ""}</span>` +
+        return `<span>${ms(f.t_us)}</span><span>${f.src ? `<i class="muted" title="${esc(f.src)}: sent by the run's scenario">⇢</i> ` : ""}${esc(f.bus)}</span><span>${dec.hexId(f.id, f.ext)}${f.ext ? "x" : ""}</span>` +
           `<span>${f.data.length / 2}</span><span class="mono">${f.data.replace(/(..)(?!$)/g, "$1 ")}</span>` +
           `<span class="dec" title="${esc(text)}">${d ? `<b>${esc(d.msg.name)}</b> ${esc(text.slice(d.msg.name.length))}` : ""}</span>`;
       },
@@ -209,7 +209,7 @@ export async function renderRun(view, { api, esc }, id, tab) {
     function detail(f, d) {
       const aside = el.querySelector(".frame-detail");
       aside.classList.remove("muted");
-      const head = `<p><b>${ms(f.t_us)} ms</b> · ${esc(f.bus)} · ${dec.hexId(f.id, f.ext)}${f.ext ? " (ext)" : ""} · ${f.data.length / 2} bytes</p>
+      const head = `<p><b>${ms(f.t_us)} ms</b> · ${esc(f.bus)} · ${dec.hexId(f.id, f.ext)}${f.ext ? " (ext)" : ""} · ${f.data.length / 2} bytes${f.src ? ` · ${esc(f.src)} (sent by the scenario)` : ""}</p>
         <p class="mono">${f.data.replace(/(..)(?!$)/g, "$1 ") || "(no data)"}</p>`;
       if (!d) {
         aside.innerHTML = head + `<p class="muted">No declaration of this id on ${esc(f.bus)} in the run's contract.</p>`;
@@ -520,21 +520,20 @@ export async function renderRun(view, { api, esc }, id, tab) {
   }
 
   async function loadPages() {
-    // since_us is inclusive: the next page starts at the last page's last
-    // time and skips the records of that time already read (the file order
-    // within one time is fixed). A page all at one time grows the next limit.
-    let since = 0, skip = 0, limit = PAGE;
+    // Each page resumes where the last one ended: the server's cursor
+    // (X-Trace-Cursor) is a position in the trace file, so a page costs what
+    // it returns however far into a long trace it is.
+    let cursor = "";
     for (;;) {
-      const page = await api(`/api/runs/${id}/trace?since_us=${since}&limit=${limit}`);
+      const r = await api(`/api/runs/${id}/trace?limit=${PAGE}${cursor ? `&cursor=${cursor}` : ""}`,
+                          { as: "response" });
+      const page = await r.json();
       if (!mounted()) return;
-      ingest(page.slice(skip));
+      ingest(page);
       status(`loading… ${(S.rec.frame.length + S.rec.edge.length + S.rec.sample.length + S.rec.log.length).toLocaleString()} records`);
-      if (page.length < limit) break;
-      const last = page[page.length - 1].t_us;
-      let same = 0;
-      while (same < page.length && page[page.length - 1 - same].t_us === last) same++;
-      if (last === since) { skip = page.length; limit = Math.max(limit, skip) * 2; }
-      else { since = last; skip = same; }
+      const next = r.headers.get("X-Trace-Cursor");
+      if (page.length < PAGE || !next || next === cursor) break;
+      cursor = next;
     }
     finished();
   }
@@ -567,9 +566,9 @@ export async function renderRun(view, { api, esc }, id, tab) {
     S.contract = c;
     const boards = Object.entries(c.boards || {});
     const bad = boards.filter(([, b]) => b.error).map(([n, b]) => `${n}: ${b.error}`);
-    const ok = boards.filter(([, b]) => !b.error).map(([n, b]) => `${n} ${b.messages} messages`);
+    const ok = boards.filter(([, b]) => !b.error).map(([n, b]) => `${n} ${b.messages} messages on ${(b.buses || []).join(", ") || "no bus"}`);
     S.contractNote = (c.error ? `No decoding: ${c.error}. ` : "") +
-      (ok.length ? `Decoded against the firmware's .def contract (${ok.join(", ")}); a .def names no bus, so a board's messages apply on every bus it is on.` : "") +
+      (ok.length ? `Decoded against the firmware's .def contract (${ok.join("; ")}), on the buses its catalogue entry says it rides.` : "") +
       (bad.length ? ` Not decoded: ${bad.join("; ")}.` : "") +
       (c.conflicts?.length ? ` ${c.conflicts.length} id(s) declared differently by two boards: ${c.conflicts.map((x) => `${x.bus} ${dec.hexId(x.id)} (${x.kept} kept)`).join(", ")}.` : "");
     for (const f of S.rec.frame) f._d = undefined;

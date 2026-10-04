@@ -34,8 +34,9 @@ button { cursor: pointer; }
 button:disabled { opacity: .5; cursor: default; }
 button.small { padding: 0 .35rem; font-size: .75rem; }
 form { display: flex; flex-wrap: wrap; gap: .5rem 1rem; align-items: center; margin: .5rem 0; }
-.filters label.grow { flex: 1 1 14rem; display: flex; gap: .4rem; align-items: center; }
-.filters label.grow input { flex: 1; min-width: 0; }
+.filters label.grow, #run-form label.grow { flex: 1 1 14rem; display: flex; gap: .4rem; align-items: center; }
+.filters label.grow input, #run-form label.grow input { flex: 1; min-width: 0; }
+#run-form label[hidden] { display: none; }
 .filters input[type=number] { width: 6.5rem; }
 .scroll-x { overflow-x: auto; }
 .mono, code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .8125rem; }

@@ -137,6 +137,10 @@ class System:
             if b.write_protect and "write_protect" not in b.platform.get("renode", {}):
                 raise SystemError(f"board '{b.name}': platform {b.platform['id']} has no "
                                   f"option bytes to write-protect sectors in")
+            for connector in b.firmware.get("can", {}).get("contract", []):
+                if connector not in b.board.get("can", {}):
+                    raise SystemError(f"board '{b.name}': firmware {b.firmware['id']}'s CAN "
+                                      f"contract rides {connector}, which {b.board['id']} lacks")
         seen: dict[str, str] = {}
         for bus, spec in self.buses.items():
             for node in spec["nodes"]:
@@ -227,6 +231,21 @@ class System:
                 b, _, controller = self.resolve(node)
                 if b.name == board:
                     out[controller] = bus
+        return out
+
+    def contract_buses(self, board: str) -> list[str]:
+        """The buses a board's firmware CAN contract rides: the buses of the
+        connectors its catalogue firmware names (`can.contract`), or every
+        bus the board is on if it names none."""
+        wanted = self.boards[board].firmware.get("can", {}).get("contract")
+        out = []
+        for bus, spec in self.buses.items():
+            if spec["kind"] != "can":
+                continue
+            for node in spec["nodes"]:
+                name, connector = node.split(".", 1)
+                if name == board and (wanted is None or connector in wanted):
+                    out.append(bus)
         return out
 
     def board_of_device(self, name: str, _seen: tuple = ()) -> str:

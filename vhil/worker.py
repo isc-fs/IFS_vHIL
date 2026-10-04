@@ -21,6 +21,15 @@ for the system, as CI does, and appends to built.txt. Reuse matches the ref
 by name, not commit: a branch that moved since its last build runs the old
 image until someone rebuilds it (`scripts/vhil-docker.sh fw`). --no-build
 makes a missing image an error instead.
+
+Liveness: while it holds a run the worker beats the run's heartbeat from a
+background thread (every --heartbeat S) and at every slice, and before each
+claim it reclaims runs whose heartbeat went stale (--reclaim-after S): a
+worker that died mid-run leaves a run another worker picks up again, at most
+MAX_ATTEMPTS times in all (vhil/server/runs.py). A worker that finds its run
+reclaimed from under it (it stalled past the timeout) drops it without
+writing a final state. A run's next attempt starts a fresh trace; the last
+one is kept as trace.attempt<N>.jsonl.
 """
 from __future__ import annotations
 
@@ -33,6 +42,7 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 import traceback
 import uuid
@@ -41,7 +51,9 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from vhil.server.config import Settings
-from vhil.server.runs import TRACE, RunStore
+from vhil.server.runs import (HEARTBEAT_S, MAX_ATTEMPTS, RECLAIM_AFTER_S, TRACE, RunStore,
+                              code_changes, materialise_system)
+from vhil.server.workspace import Workspace
 from vhil.system import System
 
 DEFAULT_FW_DIR = Path(os.environ.get("VHIL_FW_DIR", "/vhil/fw"))
@@ -53,6 +65,39 @@ class Cancelled(Exception):
     def __init__(self, summary: Optional[dict] = None):
         super().__init__("cancelled")
         self.summary = summary or {}
+
+
+class Lost(Exception):
+    """The run was reclaimed from this worker; its new holder finishes it."""
+
+
+class Heartbeat:
+    """Beats a held run's heartbeat every `period_s` from a daemon thread,
+    so phases with no slices (a firmware build, a pytest subprocess, Renode
+    starting) keep the run claimed. It stops beating once the store says the
+    run is no longer this worker's running run; the executor finds that out
+    itself at its next check (Worker._execute, cancelled)."""
+
+    def __init__(self, store: RunStore, run_id: int, worker: str, period_s: float):
+        self.store, self.run_id, self.worker, self.period_s = store, run_id, worker, period_s
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._loop, name=f"heartbeat-{run_id}", daemon=True)
+
+    def _loop(self) -> None:
+        while not self._stop.wait(self.period_s):
+            try:
+                if not self.store.heartbeat(self.run_id, self.worker):
+                    return
+            except Exception as e:  # noqa: BLE001 - a busy DB is retried next beat
+                print(f"heartbeat run {self.run_id}: {e}", file=sys.stderr, flush=True)
+
+    def __enter__(self) -> "Heartbeat":
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self._stop.set()
+        self._thread.join()
 
 
 class TraceWriter:
@@ -88,7 +133,8 @@ def execute_run(sim, scenario: dict, trace: TraceWriter, *,
     end_us = int(scenario["virtual_ms"]) * 1000
     slice_us = int(scenario.get("slice_ms", 100)) * 1000
     system = sim.system
-    frames = {bus: 0 for bus in system.buses}
+    frames = {bus: 0 for bus in system.buses}     # received from the bus
+    sent = {bus: 0 for bus in system.buses}       # the scenario's own CAN stimuli
     counts = {"edges": 0, "samples": 0}
 
     # Timed actions: (t_us, seq, fn). CAN frames are scheduled in the probe
@@ -102,8 +148,9 @@ def execute_run(sim, scenario: dict, trace: TraceWriter, *,
         heapq.heappush(events, (t_us, seq, fn))
         seq += 1
 
-    # The probe records the frames it receives, not the ones it sends, so a
-    # stimulus shows in the trace as a log record at its virtual time.
+    # A CAN stimulus is in the trace as the frames the probe sent, stamped
+    # when they went out (`src: "stimulus"`, CanBus.sent); a periodic
+    # sender's start and stop and every other stimulus as log records.
     notes: list = []
 
     def note(t_us: int, text: str) -> None:
@@ -126,7 +173,6 @@ def execute_run(sim, scenario: dict, trace: TraceWriter, *,
         if kind == "can_send":
             sim.can(s["bus"]).send_at(t_us, s["id"], bytes.fromhex(s.get("data", "")),
                                       s.get("ext", False))
-            note(t_us, what)
         elif kind == "can_periodic":
             key = f"stim{i}"
             bus = sim.can(s["bus"])
@@ -182,6 +228,10 @@ def execute_run(sim, scenario: dict, trace: TraceWriter, *,
                     batch.append({"kind": "frame", "t_us": f.t_us, "bus": bus, "id": f.id,
                                   "ext": f.extended, "data": f.data.hex()})
                     frames[bus] += 1
+                for f in sim.can(bus).sent(since_us=since):
+                    batch.append({"kind": "frame", "t_us": f.t_us, "bus": bus, "id": f.id,
+                                  "ext": f.extended, "data": f.data.hex(), "src": "stimulus"})
+                    sent[bus] += 1
             for board in edge_boards:
                 for e in sim.io(board).edges(since_us=since):
                     batch.append({"kind": "edge", "t_us": e.t_us, "board": board,
@@ -200,14 +250,14 @@ def execute_run(sim, scenario: dict, trace: TraceWriter, *,
             if now >= end_us:
                 break
             if cancelled():
-                raise Cancelled({"frames": frames, **counts})
+                raise Cancelled({"frames": frames, "sent": sent, **counts})
         target = min([end_us, slice_end] + ([events[0][0]] if events else [])
                      + [s[0] for s in samplers])
         new = sim.run_for(us=max(target - now, 1))
         if new <= now:
             raise RuntimeError(f"virtual time stuck at {now} us")
         now = new
-    return {"virtual_ms": scenario["virtual_ms"], "frames": frames, **counts}
+    return {"virtual_ms": scenario["virtual_ms"], "frames": frames, "sent": sent, **counts}
 
 
 # -- the `pytest` scenario -----------------------------------------------------------
@@ -247,9 +297,12 @@ def execute_pytest(scenario: dict, run_dir: Path, workspace: Path, env: dict,
                                 stdout=out, stderr=subprocess.STDOUT, start_new_session=True)
         reason = None
         while proc.poll() is None:
-            if cancelled():
-                reason = "cancelled"
-            elif time.monotonic() > deadline:
+            try:
+                if cancelled():
+                    reason = "cancelled"
+            except Lost:
+                reason = "lost"     # stop pytest before letting the run go
+            if not reason and time.monotonic() > deadline:
                 reason = "timeout"
             if reason:
                 os.killpg(proc.pid, signal.SIGTERM)
@@ -263,6 +316,8 @@ def execute_pytest(scenario: dict, run_dir: Path, workspace: Path, env: dict,
     rc = proc.returncode
     summary = {"returncode": rc, **junit_summary(junit)}
     trace.log(0, f"pytest exited {rc}" + (f" ({reason})" if reason else ""))
+    if reason == "lost":
+        raise Lost()
     if reason == "cancelled":
         raise Cancelled(summary)
     if reason == "timeout":
@@ -302,7 +357,9 @@ class FirmwareResolver:
         for key in system.images():
             board, _, part = key.partition(".")
             fw = system.boards[board].bootloader if part else system.boards[board].firmware
-            ref = refs.get(key) or fw["ref"]
+            # The run's ref, else the system's (firmware_ref / bootloader_ref),
+            # else the catalogue's.
+            ref = refs.get(key) or system.boards[board].ref("bootloader" if part else "firmware")
             out[key] = (ref, (self.fw_dir / f"{fw['id']}@{ref.replace('/', '_')}"
                               / fw["build"]["elf"]).resolve())
         return out
@@ -346,34 +403,66 @@ def _default_sim(system_path: Path, firmware: dict, log_path: Path):
 class Worker:
     def __init__(self, settings: Settings, *, worker_id: Optional[str] = None,
                  sim_factory: Callable = _default_sim,
-                 resolver: Optional[FirmwareResolver] = None):
+                 resolver: Optional[FirmwareResolver] = None,
+                 heartbeat_s: float = HEARTBEAT_S, reclaim_after_s: float = RECLAIM_AFTER_S,
+                 max_attempts: int = MAX_ATTEMPTS):
+        if reclaim_after_s <= 2 * heartbeat_s:
+            raise ValueError("reclaim_after_s must be more than two heartbeats")
         self.settings = settings
         self.store = RunStore(settings.db)
         # Host-network containers share a hostname and are all pid 1.
         self.id = worker_id or f"{socket.gethostname()}-{os.getpid()}-{uuid.uuid4().hex[:6]}"
         self.sim_factory = sim_factory
         self.resolver = resolver or FirmwareResolver()
+        self.heartbeat_s, self.reclaim_after_s = heartbeat_s, reclaim_after_s
+        self.max_attempts = max_attempts
+
+    def reclaim(self) -> list[dict]:
+        moved = self.store.reclaim(self.reclaim_after_s, self.max_attempts)
+        for r in moved:
+            print(f"run {r['id']}: reclaimed from {r['worker']} after attempt {r['attempts']} "
+                  f"-> {r['state']}", flush=True)
+        return moved
 
     def run_once(self) -> Optional[int]:
         """Claim and execute one queued run; its id, or None if none was queued."""
+        self.reclaim()
         run = self.store.claim(self.id)
         if run is None:
             return None
-        run_id = run["id"]
-        run_dir = Path(self.settings.results) / str(run_id)
+        run_dir = Path(self.settings.results) / str(run["id"])
+        if run["attempts"] > 1 and (run_dir / TRACE).is_file():
+            (run_dir / TRACE).rename(run_dir / f"trace.attempt{run['attempts'] - 1}.jsonl")
         trace = TraceWriter(run_dir / TRACE)
+        with Heartbeat(self.store, run["id"], self.id, self.heartbeat_s):
+            return self._execute(run, run_dir, trace)
+
+    def _execute(self, run: dict, run_dir: Path, trace: TraceWriter) -> int:
+        run_id = run["id"]
         state, virtual_us, summary = "error", 0, {}
         progress = {"us": 0}
 
         def cancelled() -> bool:
-            return self.store.state(run_id) == "cancelled"
+            """True once cancelled; raises Lost once the run is someone else's."""
+            st, holder = self.store.holder(run_id)
+            if holder != self.id:
+                raise Lost()
+            if st == "cancelled":
+                return True
+            if st != "running":
+                raise Lost()
+            return False
 
         def on_progress(us: int) -> None:
             progress["us"] = us
-            self.store.progress(run_id, us)
+            self.store.progress(run_id, us, worker=self.id)
 
         try:
-            system_path = Path(self.settings.workspace) / "systems" / f"{run['system']}.yaml"
+            if run["attempts"] > 1:
+                prev = (run.get("summary") or {}).get("reclaimed_from") or "a worker"
+                trace.log(0, f"attempt {run['attempts']} of {self.max_attempts}: reclaimed from "
+                             f"{prev}, whose heartbeat stopped")
+            system_path = self._system_file(run, run_dir, trace)
             system = System(system_path)
             firmware = self.resolver.resolve(system, run["firmware"])
             trace.log(0, f"worker {self.id}; firmware " +
@@ -391,6 +480,13 @@ class Worker:
             else:
                 raise ValueError(f"unknown scenario kind '{scenario['kind']}'")
             summary["firmware"] = {k: str(p) for k, p in firmware.items()}
+            if run.get("ref"):
+                summary["system_ref"] = run["ref"]
+        except Lost:
+            trace.log(progress["us"], f"worker {self.id} lost the run: it was reclaimed")
+            trace.close()
+            print(f"run {run_id}: lost (reclaimed by another worker)", flush=True)
+            return run_id
         except Cancelled as e:
             state, virtual_us = "cancelled", progress["us"]
             summary = {**e.summary, "cancelled_at_us": virtual_us}
@@ -401,13 +497,38 @@ class Worker:
             (run_dir / "worker-error.txt").write_text(traceback.format_exc())
             trace.log(virtual_us, f"error: {summary['error']}")
             if not isinstance(e, Exception):
-                self.store.finish(run_id, state, virtual_us, summary)
+                self.store.finish(run_id, state, virtual_us, summary, worker=self.id)
                 trace.close()
                 raise
-        final = self.store.finish(run_id, state, virtual_us, summary)
+        final = self.store.finish(run_id, state, virtual_us, summary, worker=self.id)
         trace.close()
         print(f"run {run_id}: {final} ({virtual_us} us)", flush=True)
         return run_id
+
+    def _system_file(self, run: dict, run_dir: Path, trace: TraceWriter) -> Path:
+        """The system file the run executes: systems/<id>.yaml as of the
+        run's commit, written into its directory, so the shared workspace's
+        HEAD and working tree never move (vhil/server/runs.py, runs at a
+        saved ref). A run queued outside git uses the working tree's file."""
+        ws = Path(self.settings.workspace)
+        commit = run.get("ref") or ""
+        if not commit:
+            return ws / "systems" / f"{run['system']}.yaml"
+        head = Workspace(ws).ref()
+        name = run.get("ref_name") or "HEAD"
+        if run["scenario"]["kind"] == "pytest":
+            if commit != head:
+                raise RuntimeError(f"the workspace is at {head[:12] or 'no commit'}, not "
+                                   f"{commit[:12]} ({name}): a pytest run needs its ref checked out")
+            path = ws / "systems" / f"{run['system']}.yaml"
+        else:
+            changed = code_changes(ws, head, commit) if commit != head else []
+            if changed:
+                raise RuntimeError(f"{name} ({commit[:12]}) and the workspace ({head[:12]}) differ "
+                                   f"in what a run reads: {', '.join(changed[:10])}")
+            path = materialise_system(ws, commit, run["system"], run_dir / "system")
+        trace.log(0, f"system systems/{run['system']}.yaml at {name} ({commit[:12]})")
+        return path
 
     def loop(self, poll_s: float = 1.0) -> None:
         print(f"worker {self.id}: {self.settings.db}", flush=True)
@@ -423,11 +544,17 @@ def main(argv=None) -> int:
     p.add_argument("--fw-dir", type=Path, default=DEFAULT_FW_DIR,
                    help="firmware build directory with built.txt (default $VHIL_FW_DIR or /vhil/fw)")
     p.add_argument("--no-build", action="store_true", help="never build firmware; reuse only")
+    p.add_argument("--heartbeat", type=float, default=HEARTBEAT_S,
+                   help=f"seconds between a held run's heartbeats (default {HEARTBEAT_S:g})")
+    p.add_argument("--reclaim-after", type=float, default=RECLAIM_AFTER_S,
+                   help="seconds without a heartbeat before a running run is reclaimed "
+                        f"(default {RECLAIM_AFTER_S:g}; the same on every worker)")
     a = p.parse_args(argv)
     # docker stop sends SIGTERM: end the current run as error, not silently.
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
     worker = Worker(Settings.from_env(), resolver=FirmwareResolver(
-        a.fw_dir, build=not a.no_build, log=lambda m: print(m, file=sys.stderr, flush=True)))
+        a.fw_dir, build=not a.no_build, log=lambda m: print(m, file=sys.stderr, flush=True)),
+        heartbeat_s=a.heartbeat, reclaim_after_s=a.reclaim_after)
     if a.once:
         worker.run_once()
     else:

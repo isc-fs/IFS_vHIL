@@ -100,6 +100,18 @@ def test_bad_systems_are_rejected_with_a_reason(tmp_path, body, message):
         System(_system(tmp_path, body))
 
 
+def test_a_firmware_can_contract_must_name_a_can_connector_of_its_board(tmp_path):
+    catalog = tmp_path / "catalog"
+    shutil.copytree(REPO / "catalog", catalog)
+    fw = catalog / "firmware" / "ecu.yaml"
+    fw.write_text(fw.read_text().replace("contract: [FDCAN2]", "contract: [FDCAN9]"))
+    with pytest.raises(SystemError, match="CAN contract rides FDCAN9, which mlc-carrier lacks"):
+        System(REPO / "systems" / "ecu.yaml", catalog)
+    fw.write_text(fw.read_text().replace("contract: [FDCAN9]", "contract: []"))
+    with pytest.raises(SystemError, match="'contract': \\[\\]"):   # schema: minItems 1
+        System(REPO / "systems" / "ecu.yaml", catalog)
+
+
 def test_unknown_catalogue_entries_are_rejected(tmp_path):
     p = tmp_path / "s.yaml"
     p.write_text("kind: system\nid: t\nboards:\n  x: {board: no-such-board, firmware: ecu}\n")

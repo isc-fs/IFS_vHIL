@@ -56,20 +56,39 @@ All JSON; times in microseconds of virtual time.
   (`vhil.system validate`), commits on `branch`, returns `{ref}`
 - `POST /api/systems/{id}/pr` `{branch, title}` → PR URL (GitHub App)
 - `POST /api/runs` `{system, ref?, firmware: {board: ref?}, scenario}` →
-  `{run_id}`. A scenario is either
+  `{run_id}`. `ref` is any branch, tag or commit of the workspace (the
+  editor's saved branches; `GET /api/workspace/refs` lists them); the run
+  records its commit and runs `systems/<id>.yaml` as it is there, copied
+  into the run's directory, so the shared checkout never moves. The rest
+  (catalogue, models, platforms, code) is the worker's tree, so a ref that
+  differs from the workspace's HEAD in any of those is refused rather than
+  run differently from CI; a saved branch only ever changes a system file.
+  A pytest scenario reads the checked-out tests and systems: HEAD only.
+  Board `firmware_ref`s of the system as saved pick the images. A scenario is either
   `{"kind": "run", "virtual_ms": N, "stimuli": [...]}` (stimuli: CAN
   send / periodic, GPIO set, analog set at virtual times) or
   `{"kind": "pytest", "select": "tests/sim/test_x.py::test_y"}`
+- `GET /api/tests` → `{root, files, tests, error?}`: the test files and
+  node ids under `tests/sim` a pytest scenario can select (`pytest
+  --collect-only -q`, cached until a file there changes)
 - `GET /api/runs` (history, newest first) · `GET /api/runs/{id}` →
   `{id, state: queued|running|passed|failed|error, system, ref, created,
-  started, finished, virtual_us, summary}`
-- `GET /api/runs/{id}/trace?since_us=&kinds=` → trace records;
+  started, finished, virtual_us, summary, worker, heartbeat, attempts}`.
+  A worker beats `heartbeat` while it holds a run; a run whose worker died
+  is reclaimed by the next worker's poll: back to `queued`, or `error` after
+  its second attempt (`vhil/server/runs.py`)
+- `GET /api/runs/{id}/trace?since_us=&kinds=&limit=&cursor=` → a page of
+  trace records; the `X-Trace-Cursor` response header is the next page's
+  `cursor` (opaque: a byte offset into the trace file), so a page costs
+  what it returns;
   `WS /api/runs/{id}/live` → the same records as they are written, then
   `{"kind": "end", "state": …}`
 - `GET /api/runs/{id}/artifacts/{name}` → JUnit, snapshots, coverage, logs
 - `POST /api/runs/{id}/cancel`
 
-Trace record kinds: `frame {t_us, bus, id, ext, data}`,
+Trace record kinds: `frame {t_us, bus, id, ext, data, src?}` (`src:
+"stimulus"` on the frames the scenario itself sent, stamped when the probe
+sent them; counted in the summary's `sent`, not `frames`),
 `edge {t_us, board, pin, level}`, `sample {t_us, board, name, value}`
 (read_symbol / analog values the scenario asks to watch), `log {t_us, text}`.
 

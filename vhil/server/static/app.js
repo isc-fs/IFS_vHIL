@@ -9,7 +9,8 @@ const cookie = (name) => document.cookie.split("; ").find((c) => c.startsWith(`$
 const loggedOut = new URLSearchParams(location.search).has("logged_out");
 
 // Every request goes through here (fetch options in `opts`; `as: "text"` for
-// a non-JSON body). Mutating requests carry the session's CSRF token
+// a non-JSON body, `as: "response"` for the Response itself, e.g. to read a
+// header). Mutating requests carry the session's CSRF token
 // (vhil/server/auth.py); a 401 in github mode goes to the GitHub login and
 // comes back to the same page (not right after a logout).
 async function api(path, opts = {}) {
@@ -24,7 +25,7 @@ async function api(path, opts = {}) {
     throw new Error("login required");
   }
   if (!r.ok) throw new Error(`${path}: ${r.status} ${await r.text()}`);
-  return as === "text" ? r.text() : r.json();
+  return as === "text" ? r.text() : as === "response" ? r : r.json();
 }
 
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
