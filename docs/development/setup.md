@@ -25,6 +25,29 @@ Colima's Ubuntu image lacks `linux-modules-extra` for its shipped kernel, so
 `vm` moves it to the current generic kernel once and restarts. On a Linux
 host, load vcan and set `VHIL_DOCKER_CONTEXT=default`.
 
+### Renode's monitor, card images and what a system file may say
+
+Renode 1.17's `-P <port>` monitor listens on every interface with no
+authentication, and has no option to bind one address. `vhil.sim` and
+`vhil.bench` start Renode with `-P -1` instead and serve the monitor
+themselves on `127.0.0.1` only ([`models/renode/VhilMonitor.cs`](../../models/renode/VhilMonitor.cs),
+`vhil.renode.launch`). `scripts/explore.sh` and `probe.sh` use the console
+monitor (`--console -P -1`). `renode-test`'s Robot server listens on every
+interface too, so `vhil-docker.sh smoke` runs it in a loopback-only network
+namespace (`unshare --net`).
+
+An `sd-card` `image` is opened read-write, so it must lie inside a card-image
+directory: `$VHIL_CARD_DIR` (`:`-separated; default `build/cards`). A relative
+image is looked up in the first; `..`, absolute paths elsewhere and symlinks
+out are refused. A test passes its own temp directory with
+`Sim(..., card_dirs=[tmp])`.
+
+Everything a system file or a run scenario names reaches Renode only through
+`vhil.renode`'s encoders, behind the schema and `System`'s checks: names are
+identifiers, device params have their model's type (a string param its
+`param_formats` format, else a plain word), and a value that could end a
+string, a line or a command is refused.
+
 ### When a native test fails
 
 A failing test in `tests/sim` gets a **snapshot** of every Sim it touched,
