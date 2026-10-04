@@ -11,8 +11,14 @@ on:
     branches: [dev]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 env:
   RENODE_VERSION: 1.17.0
+  # GitHub's sha256 digest for the release asset (gh release view v1.17.0 -R
+  # renode/renode --json assets), checked against a download.
+  RENODE_SHA256: 4ba7c68b59e2447f188ef4b4b112fcccd2802582c460beedceb63b84e5605a5f
 
 jobs:
   shard:
@@ -30,14 +36,16 @@ jobs:
         # and bootloader (the rest).
         shard: [ams-1, ams-2, ams-3, ecu-1, ecu-2, ams-bootloader, bootloader, other]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: '3.11'
 
       - name: Arm GNU toolchain (pinned like IFS_HIL's recipe)
-        uses: carlosperate/arm-none-eabi-gcc-action@v1
+        uses: carlosperate/arm-none-eabi-gcc-action@98c40e51546516419841748d3210c290df0d2c6c # v1.13.0
         with:
           release: '14.2.Rel1'
 
@@ -54,8 +62,9 @@ jobs:
 
       - name: Install Renode ${{ env.RENODE_VERSION }}
         run: |
-          curl -sSL -o renode.tar.gz \
+          curl -fsSL -o renode.tar.gz \
             "https://github.com/renode/renode/releases/download/v${RENODE_VERSION}/renode-${RENODE_VERSION}.linux-portable.tar.gz"
+          echo "${RENODE_SHA256}  renode.tar.gz" | sha256sum -c -
           mkdir -p "$RUNNER_TEMP/renode"
           tar xzf renode.tar.gz -C "$RUNNER_TEMP/renode" --strip-components=1
 
@@ -88,14 +97,15 @@ jobs:
         if: always() && matrix.shard == 'ecu-1'
         env:
           RENODE: ${{ runner.temp }}/renode/renode
+          ECU_ELF: ${{ steps.fw.outputs.ecu }}
         run: |
           nproc
-          python scripts/speed.py systems/ecu.yaml "ecu=${{ steps.fw.outputs.ecu }}" --mips 100 528 \
+          python scripts/speed.py systems/ecu.yaml "ecu=$ECU_ELF" --mips 100 528 \
             | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Upload Renode logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: sim-logs-${{ matrix.shard }}
           path: sim-logs/
@@ -107,4 +117,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Every shard passed
-        run: test "${{ needs.shard.result }}" = success
+        env:
+          RESULT: ${{ needs.shard.result }}
+        run: test "$RESULT" = success
