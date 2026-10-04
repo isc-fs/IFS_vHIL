@@ -140,6 +140,7 @@ RENODE=<renode> scripts/probe.sh systems/ecu.yaml <elf> 1 "nvic Frequency"
 python -m pytest tests/unit                                       # host-only, no Renode
 python -m pytest tests/sim --ecu-elf <elf>                        # native tests in virtual time (vhil/sim.py)
 python -m vhil.editor spec|to-graph|to-system|serve              # system editor backend (Pipeline Manager)
+python -m vhil.editor check                                       # Pipeline Manager loads every system (editor image)
 ```
 
 In Docker (any host, including macOS): `scripts/vhil-docker.sh

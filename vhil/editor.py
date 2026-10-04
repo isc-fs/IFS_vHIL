@@ -4,6 +4,7 @@
     python -m vhil.editor to-graph systems/ams.yaml -o build/ams.json
     python -m vhil.editor to-system build/ams.json -o build/ams.yaml
     python -m vhil.editor serve [--port 9000]               # JSON-RPC backend
+    python -m vhil.editor check [systems/*.yaml]            # Pipeline Manager's ./validate
 
 The system file stays the source of truth (vision principle 1): the editor's
 graph is a view of it, translated both ways here. Catalogue entries become
@@ -37,7 +38,7 @@ from pathlib import Path
 
 import yaml
 
-from vhil.system import CATALOG, System, SystemError
+from vhil.system import CATALOG, REPO, System, SystemError
 
 # Pipeline Manager's specification/dataflow format version these were written
 # against (the docs' examples).
@@ -553,6 +554,30 @@ async def _serve(host: str, port: int) -> None:
 
 # -- CLI ------------------------------------------------------------------------------
 
+def check(systems: list[Path], pm_dir: Path, pm_python: str = "python",
+          node_dir: Path | None = None) -> int:
+    """Pipeline Manager's own validator (`./validate <spec> <dataflow>...` in
+    its checkout) on the specification and each system's dataflow. It loads
+    them through the frontend's code, so it catches what a schema check
+    can't: a connection that ends on a stub the loaded graph lost. Returns
+    its exit status (0: all valid)."""
+    import subprocess
+    with tempfile.TemporaryDirectory() as tmp:
+        spec = specification()
+        spec_path = Path(tmp) / "spec.json"
+        spec_path.write_text(json.dumps(spec))
+        flows = []
+        for system in systems:
+            source = system.read_text()
+            flows.append(Path(tmp) / f"{system.stem}.json")
+            flows[-1].write_text(json.dumps(to_dataflow(yaml.safe_load(source), spec, source)))
+        env = dict(os.environ)
+        if node_dir:
+            env["PATH"] = f"{node_dir / 'bin'}{os.pathsep}{env.get('PATH', '')}"
+        return subprocess.run([pm_python, "./validate", str(spec_path), *map(str, flows)],
+                              cwd=pm_dir, env=env).returncode
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="python -m vhil.editor")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -567,8 +592,20 @@ def main(argv=None) -> int:
     p = sub.add_parser("serve", help="JSON-RPC backend for Pipeline Manager")
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=9000)
+    p = sub.add_parser("check", help="Pipeline Manager's ./validate on every system's dataflow")
+    p.add_argument("systems", nargs="*", type=Path,
+                   help="system files (default: systems/*.yaml)")
     args = ap.parse_args(argv)
 
+    if args.cmd == "check":
+        # The editor image sets these (docker/editor.Dockerfile); natively,
+        # the defaults scripts/editor.sh uses.
+        home = Path.home() / "vhil-tools"
+        pm_dir = Path(os.environ.get("PM_DIR", home / "kenning-pipeline-manager"))
+        pm_venv = Path(os.environ.get("PM_VENV", home / "pm-venv"))
+        node_dir = Path(os.environ.get("NODE_DIR", home / "node"))
+        systems = args.systems or sorted((REPO / "systems").glob("*.yaml"))
+        return check(systems, pm_dir, str(pm_venv / "bin" / "python"), node_dir)
     if args.cmd == "serve":
         import asyncio
         asyncio.run(_serve(args.host, args.port))
