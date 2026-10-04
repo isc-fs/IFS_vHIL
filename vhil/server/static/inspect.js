@@ -173,7 +173,7 @@ export async function renderRun(view, { api, esc }, id, tab) {
         const f = S.rec.frame[F.idx[i]];
         const d = decoded(f);
         const text = d ? `${d.msg.name}  ${d.fields.slice(0, 6).map((x) => `${x.name}=${dec.formatValue(x)}`).join("  ")}` : "";
-        return `<span>${ms(f.t_us)}</span><span>${esc(f.bus)}</span><span>${dec.hexId(f.id, f.ext)}${f.ext ? "x" : ""}</span>` +
+        return `<span>${ms(f.t_us)}</span><span>${f.src ? `<i class="muted" title="${esc(f.src)}: sent by the run's scenario">⇢</i> ` : ""}${esc(f.bus)}</span><span>${dec.hexId(f.id, f.ext)}${f.ext ? "x" : ""}</span>` +
           `<span>${f.data.length / 2}</span><span class="mono">${f.data.replace(/(..)(?!$)/g, "$1 ")}</span>` +
           `<span class="dec" title="${esc(text)}">${d ? `<b>${esc(d.msg.name)}</b> ${esc(text.slice(d.msg.name.length))}` : ""}</span>`;
       },
@@ -209,7 +209,7 @@ export async function renderRun(view, { api, esc }, id, tab) {
     function detail(f, d) {
       const aside = el.querySelector(".frame-detail");
       aside.classList.remove("muted");
-      const head = `<p><b>${ms(f.t_us)} ms</b> · ${esc(f.bus)} · ${dec.hexId(f.id, f.ext)}${f.ext ? " (ext)" : ""} · ${f.data.length / 2} bytes</p>
+      const head = `<p><b>${ms(f.t_us)} ms</b> · ${esc(f.bus)} · ${dec.hexId(f.id, f.ext)}${f.ext ? " (ext)" : ""} · ${f.data.length / 2} bytes${f.src ? ` · ${esc(f.src)} (sent by the scenario)` : ""}</p>
         <p class="mono">${f.data.replace(/(..)(?!$)/g, "$1 ") || "(no data)"}</p>`;
       if (!d) {
         aside.innerHTML = head + `<p class="muted">No declaration of this id on ${esc(f.bus)} in the run's contract.</p>`;

@@ -36,6 +36,9 @@ def test_a_queued_run_streams_its_trace_and_passes(tmp_path, firmware):
     client = TestClient(create_app(settings))
     r = client.post("/api/runs", json={"system": "ecu", "scenario": {
         "kind": "run", "virtual_ms": 1000,
+        "stimuli": [{"kind": "can_send", "at_ms": 300, "bus": "can_acu", "id": 0x020, "data": "01"},
+                    {"kind": "can_periodic", "at_ms": 500, "bus": "can_inv", "id": 0x461,
+                     "data": "00", "period_ms": 10, "until_ms": 595}],
         "watch": [{"kind": "symbol", "board": "ecu", "name": "g_last_ctrl_state", "period_ms": 10}]}})
     assert r.status_code == 201, r.text
     run_id = r.json()["run_id"]
@@ -55,6 +58,18 @@ def test_a_queued_run_streams_its_trace_and_passes(tmp_path, firmware):
     # trace doesn't depend on how the run was cut into slices.
     assert_period(hb[1:], period_us=CONTROL_PERIOD_US, tolerance_us=0, min_count=90)
     assert run["summary"]["frames"]["can_acu"] >= len(hb)
+
+    # The scenario's own frames are frame records too, at the virtual time
+    # the probe sent them, marked as stimulus and counted apart.
+    # (A periodic start goes out up to one 500 us quantum late, as
+    # tests/sim/test_probe.py shows; the trace has when it really went.)
+    stim = [(f["t_us"], f["bus"], f["id"], f["data"]) for f in frames if f.get("src") == "stimulus"]
+    start = stim[1][0]
+    assert 500_000 <= start <= 500_500, start
+    assert stim == [(300_000, "can_acu", 0x020, "01")] + [
+        (t, "can_inv", 0x461, "00") for t in range(start, 595_000, 10_000)]
+    assert run["summary"]["sent"] == {"can_acu": 1, "can_inv": 10, "can_dash": 0}
+    assert all(f["id"] != 0x461 for f in frames if not f.get("src")), "a send seen as received"
 
     samples = client.get(f"/api/runs/{run_id}/trace?kinds=sample").json()
     assert len(samples) >= 100

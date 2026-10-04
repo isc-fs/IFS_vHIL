@@ -131,7 +131,8 @@ def execute_run(sim, scenario: dict, trace: TraceWriter, *,
     end_us = int(scenario["virtual_ms"]) * 1000
     slice_us = int(scenario.get("slice_ms", 100)) * 1000
     system = sim.system
-    frames = {bus: 0 for bus in system.buses}
+    frames = {bus: 0 for bus in system.buses}     # received from the bus
+    sent = {bus: 0 for bus in system.buses}       # the scenario's own CAN stimuli
     counts = {"edges": 0, "samples": 0}
 
     # Timed actions: (t_us, seq, fn). CAN frames are scheduled in the probe
@@ -145,8 +146,9 @@ def execute_run(sim, scenario: dict, trace: TraceWriter, *,
         heapq.heappush(events, (t_us, seq, fn))
         seq += 1
 
-    # The probe records the frames it receives, not the ones it sends, so a
-    # stimulus shows in the trace as a log record at its virtual time.
+    # A CAN stimulus is in the trace as the frames the probe sent, stamped
+    # when they went out (`src: "stimulus"`, CanBus.sent); a periodic
+    # sender's start and stop and every other stimulus as log records.
     notes: list = []
 
     def note(t_us: int, text: str) -> None:
@@ -169,7 +171,6 @@ def execute_run(sim, scenario: dict, trace: TraceWriter, *,
         if kind == "can_send":
             sim.can(s["bus"]).send_at(t_us, s["id"], bytes.fromhex(s.get("data", "")),
                                       s.get("ext", False))
-            note(t_us, what)
         elif kind == "can_periodic":
             key = f"stim{i}"
             bus = sim.can(s["bus"])
@@ -225,6 +226,10 @@ def execute_run(sim, scenario: dict, trace: TraceWriter, *,
                     batch.append({"kind": "frame", "t_us": f.t_us, "bus": bus, "id": f.id,
                                   "ext": f.extended, "data": f.data.hex()})
                     frames[bus] += 1
+                for f in sim.can(bus).sent(since_us=since):
+                    batch.append({"kind": "frame", "t_us": f.t_us, "bus": bus, "id": f.id,
+                                  "ext": f.extended, "data": f.data.hex(), "src": "stimulus"})
+                    sent[bus] += 1
             for board in edge_boards:
                 for e in sim.io(board).edges(since_us=since):
                     batch.append({"kind": "edge", "t_us": e.t_us, "board": board,
@@ -243,14 +248,14 @@ def execute_run(sim, scenario: dict, trace: TraceWriter, *,
             if now >= end_us:
                 break
             if cancelled():
-                raise Cancelled({"frames": frames, **counts})
+                raise Cancelled({"frames": frames, "sent": sent, **counts})
         target = min([end_us, slice_end] + ([events[0][0]] if events else [])
                      + [s[0] for s in samplers])
         new = sim.run_for(us=max(target - now, 1))
         if new <= now:
             raise RuntimeError(f"virtual time stuck at {now} us")
         now = new
-    return {"virtual_ms": scenario["virtual_ms"], "frames": frames, **counts}
+    return {"virtual_ms": scenario["virtual_ms"], "frames": frames, "sent": sent, **counts}
 
 
 # -- the `pytest` scenario -----------------------------------------------------------

@@ -4,7 +4,8 @@
 //
 //   VhilCanProbe   one per CAN bus, attached to its hub as a tester. Records
 //                  every frame with its virtual timestamp and sends frames now,
-//                  at an exact virtual time, or periodically.
+//                  at an exact virtual time, or periodically (and records
+//                  those too, apart: Sent, not Frames).
 //                      emulation CreateVhilCanProbe "probe_can_acu"
 //                      connector Connect probe_can_acu can_acu
 //   VhilGpioProbe  one per board. Watches any GPIO output by name and keeps
@@ -74,11 +75,25 @@ namespace Antmicro.Renode.Testing
         // ids: "" for all, or a comma list ("0x100,0x704").
         public string Frames(string ids = "", ulong sinceUs = 0)
         {
+            return Format(received, ids, sinceUs);
+        }
+
+        // The frames this probe itself put on the bus (Send, SendAt,
+        // SendPeriodic, SendBatch, SendSequence), stamped when they went out,
+        // in the same format. Kept apart from Frames/Count, which stay what
+        // the probe received from the bus.
+        public string Sent(string ids = "", ulong sinceUs = 0)
+        {
+            return Format(sent, ids, sinceUs);
+        }
+
+        private string Format(List<Record> records, string ids, ulong sinceUs)
+        {
             var wanted = ParseIds(ids);
             var sb = new StringBuilder();
             lock(sync)
             {
-                foreach(var r in received)
+                foreach(var r in records)
                 {
                     if(r.TimeUs >= sinceUs && (wanted == null || wanted.Contains(r.Frame.Id)))
                     {
@@ -162,10 +177,10 @@ namespace Antmicro.Renode.Testing
             var frame = new CANMessageFrame(id, Bytes(hex), extended);
             if(atUs <= NowMicros())
             {
-                Schedule(0, () => SendFrame(frame));
+                Schedule(0, () => Emit(frame));
                 return;
             }
-            Schedule(0, () => Schedule(atUs, () => SendFrame(frame)));
+            Schedule(0, () => Schedule(atUs, () => Emit(frame)));
         }
 
         // Send every periodUs from startUs (0 = now) until StopPeriodic(key).
@@ -219,6 +234,16 @@ namespace Antmicro.Renode.Testing
 
         // -- helpers --------------------------------------------------------
 
+        // Every send goes through here, in the synced context that sends it.
+        private void Emit(CANMessageFrame frame)
+        {
+            lock(sync)
+            {
+                sent.Add(new Record(NowMicros(), frame));
+            }
+            SendFrame(frame);
+        }
+
         private void Tick(Periodic job, ulong atUs)
         {
             if(atUs > NowMicros())
@@ -234,7 +259,7 @@ namespace Antmicro.Renode.Testing
                 {
                     return;
                 }
-                SendFrame(new CANMessageFrame(job.Id, job.Data, job.Extended));
+                Emit(new CANMessageFrame(job.Id, job.Data, job.Extended));
                 Tick(job, atUs + job.PeriodUs);
             });
         }
@@ -246,7 +271,7 @@ namespace Antmicro.Renode.Testing
                 var end = Math.Min(index + burst, list.Count);
                 for(var i = index; i < end; i++)
                 {
-                    SendFrame(list[i]);
+                    Emit(list[i]);
                 }
                 if(end < list.Count)
                 {
@@ -318,6 +343,7 @@ namespace Antmicro.Renode.Testing
 
         private readonly object sync = new object();
         private readonly List<Record> received = new List<Record>();
+        private readonly List<Record> sent = new List<Record>();
         private readonly Dictionary<string, Periodic> periodic = new Dictionary<string, Periodic>();
     }
 

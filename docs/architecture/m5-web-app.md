@@ -75,7 +75,9 @@ All JSON; times in microseconds of virtual time.
 - `GET /api/runs/{id}/artifacts/{name}` → JUnit, snapshots, coverage, logs
 - `POST /api/runs/{id}/cancel`
 
-Trace record kinds: `frame {t_us, bus, id, ext, data}`,
+Trace record kinds: `frame {t_us, bus, id, ext, data, src?}` (`src:
+"stimulus"` on the frames the scenario itself sent, stamped when the probe
+sent them; counted in the summary's `sent`, not `frames`),
 `edge {t_us, board, pin, level}`, `sample {t_us, board, name, value}`
 (read_symbol / analog values the scenario asks to watch), `log {t_us, text}`.
 

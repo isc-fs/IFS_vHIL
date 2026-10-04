@@ -387,9 +387,19 @@ class FakeBus:
         self.sim, self.name = sim, name
 
     def frames(self, ids=None, since_us=0):
-        out = [f for t, b, f in self.sim.scheduled if b == self.name and t <= self.sim.now]
+        """What the bus delivered: as the probe, never its own sends."""
+        out = []
         if self.name == "can_acu":   # a 0x100 heartbeat every 10 ms
             out += [Frame(t, 0x100, False, b"\x01") for t in range(10_000, self.sim.now + 1, 10_000)]
+        return sorted((f for f in out if f.t_us >= since_us), key=lambda f: f.t_us)
+
+    def sent(self, ids=None, since_us=0):
+        out = [f for t, b, f in self.sim.scheduled if b == self.name and t <= self.sim.now]
+        for (bus, _), job in self.sim.periodic.items():
+            if bus == self.name:
+                end = min(self.sim.now + 1, job["stop"])
+                out += [Frame(t, job["id"], job["ext"], job["data"])
+                        for t in range(job["start"], end, job["period"])]
         return sorted((f for f in out if f.t_us >= since_us), key=lambda f: f.t_us)
 
     def send_at(self, at_us, can_id, data=b"", extended=False):
@@ -398,9 +408,13 @@ class FakeBus:
 
     def send_periodic(self, key, can_id, data, period_ms, start_us=0, extended=False):
         self.sim.calls.append(("send_periodic", self.sim.now, self.name, key, can_id, period_ms, start_us))
+        self.sim.periodic[(self.name, key)] = {
+            "id": can_id, "data": data, "ext": extended, "period": int(period_ms * 1000),
+            "start": start_us or self.sim.now, "stop": 1 << 62}
 
     def stop_periodic(self, key):
         self.sim.calls.append(("stop_periodic", self.sim.now, self.name, key))
+        self.sim.periodic[(self.name, key)]["stop"] = self.sim.now
 
 
 class FakeIO:
@@ -429,6 +443,7 @@ class FakeSim:
         self.system = System(system)
         self.now, self.quantum = 0, quantum_us
         self.calls, self.scheduled, self.edge_log, self.watched = [], [], [], set()
+        self.periodic = {}
         self.started = self.stopped = False
 
     def __enter__(self):
@@ -478,7 +493,8 @@ def test_executor_streams_frames_samples_and_edges_in_time_order(tmp_path):
     progress = []
     sim, summary, trace = run_fake(tmp_path, scenario, progress=progress.append)
     assert sim.now == 300_000 and progress == [100_000, 200_000, 300_000]
-    assert summary["frames"] == {"can_inv": 1, "can_dash": 0, "can_acu": 30}
+    assert summary["frames"] == {"can_inv": 0, "can_dash": 0, "can_acu": 30}
+    assert summary["sent"] == {"can_inv": 1, "can_dash": 8, "can_acu": 0}
     assert summary["samples"] == 31 and summary["edges"] == 1
     assert [r["t_us"] for r in trace] == sorted(r["t_us"] for r in trace)
     hb = [r for r in trace if r["kind"] == "frame" and r["id"] == 0x100]
@@ -489,9 +505,13 @@ def test_executor_streams_frames_samples_and_edges_in_time_order(tmp_path):
     assert samples[5] == {"kind": "sample", "t_us": 50_000, "board": "ecu", "name": "g_x", "value": 50}
     assert [r for r in trace if r["kind"] == "edge"] == [
         {"kind": "edge", "t_us": 120_000, "board": "ecu", "pin": "PB5", "level": 1}]
+    # The scenario's own frames, as the probe sent them, marked as stimulus.
+    assert [r for r in trace if r.get("src")] == [
+        {"kind": "frame", "t_us": t, "bus": bus, "id": i, "ext": False, "data": d, "src": "stimulus"}
+        for t, bus, i, d in sorted([(5_000, "can_inv", 0x360, "aa")]
+                                   + [(t, "can_dash", 0x10, "") for t in range(0, 150_000, 20_000)])]
     assert [(r["t_us"], r["text"]) for r in trace if r["kind"] == "log"] == [
         (0, "stimulus can_periodic can_dash 0x10 [] every 20 ms"),
-        (5_000, "stimulus can_send can_inv 0x360 [aa]"),
         (50_000, "stimulus analog ecu.PF7 = 1.5 V"),
         (120_000, "stimulus gpio ecu.PB5 = 1"),
         (150_000, "stimulus can_periodic can_dash 0x10 [] stopped")]

@@ -74,6 +74,7 @@ export async function renderRuns(view, { api, esc }) {
       if (!mounted()) { ws.close(); return; }
       const rec = JSON.parse(ev.data);
       if (rec.kind === "end") { live.delete(run.id); refresh(); return; }
+      if (rec.src) return;   // the scenario's own frames: summary.sent, not frames
       entry.counts[rec.bus] = (entry.counts[rec.bus] || 0) + 1;
       const cell = table.querySelector(`[data-frames="${run.id}"]`);
       if (cell) cell.textContent = counts(run);

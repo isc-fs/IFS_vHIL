@@ -127,6 +127,12 @@ class CanBus:
     def frames(self, ids=None, since_us: int = 0) -> list[Frame]:
         return parse_frames(self.sim.monitor(f'{self.probe} Frames "{_ids(ids)}" {since_us}'))
 
+    def sent(self, ids=None, since_us: int = 0) -> list[Frame]:
+        """The frames this probe sent (send, send_at, send_periodic, ...),
+        stamped when they went out. frames() and count() never include them:
+        they are what the bus delivered to the probe."""
+        return parse_frames(self.sim.monitor(f'{self.probe} Sent "{_ids(ids)}" {since_us}'))
+
     def last(self, can_id: int, since_us: int = 0) -> Optional[Frame]:
         frames = self.frames(can_id, since_us)
         return frames[-1] if frames else None
