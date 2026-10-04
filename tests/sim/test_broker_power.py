@@ -55,3 +55,18 @@ def test_a_slow_power_on_still_boots_onto_every_bus(firmware, lag_ms):
         sim.run_for(ms=1000)
         assert sim.can("can_acu").count(0x100, since_us=t) >= 90, "ACU bus silent after power-on"
         assert sim.can("can_inv").count(0x360, since_us=t) >= 90, "inverter bus silent after power-on"
+
+
+def test_backup_sram_survives_a_warm_reset_but_not_a_power_cut(firmware):
+    """The MLC carrier has no VBAT: the 4 KB backup SRAM (the CAN
+    bootloader's DTC log) keeps its contents across a warm reset and loses
+    them when power goes (vhil.broker.power_on_commands)."""
+    with Sim(REPO / "systems" / "ecu.yaml", {"ecu": firmware("ecu")}) as sim:
+        sim.run_for(ms=200)
+        sim.monitor("sysbus WriteDoubleWord 0x38800010 0x12345678", board="ecu")
+        sim.monitor("machine Reset", board="ecu")
+        sim.run_for(ms=100)
+        assert int(sim.monitor("sysbus ReadDoubleWord 0x38800010", board="ecu"), 16) == 0x12345678
+        sim.power_cycle("ecu")
+        sim.run_for(ms=100)
+        assert int(sim.monitor("sysbus ReadDoubleWord 0x38800010", board="ecu"), 16) == 0

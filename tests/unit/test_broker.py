@@ -64,6 +64,7 @@ def test_power_on_wipes_the_backup_domain_without_vbat():
     wipes = [c for c in cmds if c.startswith("sysbus WriteDoubleWord 0x580040")]
     assert len(wipes) == 20 and "sysbus WriteDoubleWord 0x58004054 0x0" in wipes
     assert cmds.index(wipes[-1]) < cmds.index("machine Reset")
+    assert cmds.index("sysbus.backupSram ZeroAll") < cmds.index("machine Reset")
 
 
 def test_virtual_seconds_parses_the_time_source_info():
