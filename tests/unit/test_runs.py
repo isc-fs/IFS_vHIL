@@ -531,3 +531,243 @@ def test_pytest_scenario_maps_the_outcome(tmp_path, body, state):
     trace.close()
     assert got == state and summary["tests"] == 1
     assert (run_dir / "junit.xml").is_file() and (run_dir / "pytest.txt").is_file()
+
+
+# -- heartbeats and reclaim ------------------------------------------------------------
+
+def test_claim_beats_and_counts_attempts(store):
+    run_id = store.create("ecu", "", {}, RUN)
+    run = store.claim("w1", now=1000.0)
+    assert run["heartbeat"] == 1000.0 and run["attempts"] == 1
+    assert store.heartbeat(run_id, "w1", now=1010.0)
+    assert store.get(run_id)["heartbeat"] == 1010.0
+    assert store.progress(run_id, 5_000, worker="w1", now=1020.0)
+    assert store.get(run_id)["heartbeat"] == 1020.0
+    # Another worker's beat or progress doesn't count, nor does a finished run's.
+    assert not store.heartbeat(run_id, "w2") and not store.progress(run_id, 1, worker="w2")
+    store.finish(run_id, "passed", 5_000, {}, worker="w1")
+    assert not store.heartbeat(run_id, "w1")
+
+
+def test_a_live_heartbeat_is_never_reclaimed(store):
+    run_id = store.create("ecu", "", {}, RUN)
+    store.claim("w1", now=1000.0)
+    store.heartbeat(run_id, "w1", now=1050.0)
+    assert store.reclaim(60, now=1100.0) == []
+    assert store.get(run_id)["state"] == "running"
+
+
+def test_a_dead_workers_run_is_requeued_then_errors_after_its_attempts(store):
+    run_id = store.create("ecu", "", {}, RUN)
+    store.claim("dead1", now=1000.0)
+    store.progress(run_id, 300_000, worker="dead1", now=1000.0)
+    assert store.reclaim(60, max_attempts=2, now=1061.0) == [
+        {"id": run_id, "state": "queued", "worker": "dead1", "attempts": 1}]
+    run = store.get(run_id)
+    assert run["state"] == "queued" and run["worker"] is None and run["heartbeat"] is None
+    assert run["virtual_us"] == 0 and run["summary"] == {"reclaimed_from": "dead1", "attempt": 1}
+    # The dead worker coming back finds it is not its run any more.
+    assert store.finish(run_id, "passed", 1, {}, worker="dead1") == "queued"
+    run = store.claim("dead2", now=2000.0)
+    assert run["id"] == run_id and run["attempts"] == 2
+    assert store.reclaim(60, max_attempts=2, now=2061.0) == [
+        {"id": run_id, "state": "error", "worker": "dead2", "attempts": 2}]
+    run = store.get(run_id)
+    assert run["state"] == "error" and run["finished"]
+    assert run["summary"]["error"] == "worker dead2 stopped heartbeating; attempt 2 of 2, not retried"
+    assert store.claim("w3") is None
+
+
+def test_reclaim_leaves_queued_and_finished_runs_alone(store):
+    first = store.create("ecu", "", {}, RUN)
+    second = store.create("ecu", "", {}, RUN)
+    store.create("ecu", "", {}, RUN)   # stays queued
+    store.claim("w", now=0.0)          # first (oldest first)
+    store.finish(first, "failed", 0, {})
+    store.claim("w", now=0.0)
+    store.cancel(second)
+    assert store.reclaim(1, now=1e9) == []
+
+
+def test_a_running_row_from_before_heartbeats_counts_as_stale(settings):
+    import sqlite3
+    db = sqlite3.connect(settings.db)
+    db.executescript("""CREATE TABLE runs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, state TEXT NOT NULL, system TEXT NOT NULL,
+        ref TEXT NOT NULL DEFAULT '', firmware TEXT NOT NULL DEFAULT '{}', scenario TEXT NOT NULL,
+        created TEXT NOT NULL, started TEXT, finished TEXT, virtual_us INTEGER NOT NULL DEFAULT 0,
+        summary TEXT NOT NULL DEFAULT '{}', worker TEXT);
+        INSERT INTO runs (state, system, scenario, created, worker)
+        VALUES ('running', 'ecu', '{"kind": "run", "virtual_ms": 100}', 'x', 'old');""")
+    db.commit()
+    db.close()
+    store = RunStore(settings.db)        # adds the columns
+    run = store.get(1)
+    assert run["heartbeat"] is None and run["attempts"] == 0
+    assert [r["state"] for r in store.reclaim(60)] == ["queued"]
+
+
+def test_two_workers_reclaiming_at_once_move_each_run_once(settings):
+    seed = RunStore(settings.db)
+    ids = [seed.create("ecu", "", {}, RUN) for _ in range(20)]
+    for _ in ids:
+        seed.claim("dead", now=0.0)
+    moved: list[dict] = []
+    start = threading.Barrier(2)
+
+    def poll():
+        own = RunStore(settings.db)
+        start.wait()
+        moved.extend(own.reclaim(60))
+
+    threads = [threading.Thread(target=poll) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert sorted(r["id"] for r in moved) == ids
+    assert {r["state"] for r in seed.list(100)} == {"queued"}
+
+
+class SlowSim(FakeSim):
+    """Virtual time advances, but every step takes wall time."""
+
+    def __init__(self, step_s=0.01, hook=None):
+        super().__init__()
+        self.step_s, self.hook = step_s, hook
+
+    def run_for(self, ms=0, us=0):
+        time.sleep(self.step_s)
+        if self.hook:
+            self.hook(self)
+        return super().run_for(ms, us)
+
+
+def test_a_worker_reclaims_and_reruns_a_dead_workers_run(settings, store):
+    run_id = store.create("ecu", "", {}, {"kind": "run", "virtual_ms": 200, "slice_ms": 100})
+    store.claim("dead", now=time.time() - 3600)
+    d = settings.results / str(run_id)
+    d.mkdir(parents=True)
+    (d / "trace.jsonl").write_text('{"kind": "log", "t_us": 0, "text": "first attempt"}\n')
+    worker = Worker(settings, worker_id="w2", sim_factory=lambda *a: FakeSim(),
+                    resolver=FixedResolver())
+    assert worker.run_once() == run_id
+    run = store.get(run_id)
+    assert run["state"] == "passed" and run["worker"] == "w2" and run["attempts"] == 2
+    assert run["summary"]["frames"]["can_acu"] == 20
+    # The first attempt's trace is kept aside; the new one starts afresh.
+    assert read_trace(d / "trace.attempt1.jsonl")[0]["text"] == "first attempt"
+    trace = read_trace(d / "trace.jsonl")
+    assert trace[0]["text"] == "attempt 2 of 2: reclaimed from dead, whose heartbeat stopped"
+    assert not any(r.get("text") == "first attempt" for r in trace)
+
+
+def test_a_live_worker_keeps_its_run_while_another_polls(settings, store):
+    """Worker A runs a slow run, beating every 20 ms; worker B polls with a
+    0.3 s reclaim timeout the whole time and never takes it."""
+    run_id = store.create("ecu", "", {}, {"kind": "run", "virtual_ms": 400, "slice_ms": 10})
+    a = Worker(settings, worker_id="a", sim_factory=lambda *x: SlowSim(0.02),
+               resolver=FixedResolver(), heartbeat_s=0.02, reclaim_after_s=0.3)
+    b = Worker(settings, worker_id="b", sim_factory=lambda *x: FakeSim(),
+               resolver=FixedResolver(), heartbeat_s=0.02, reclaim_after_s=0.3)
+    t = threading.Thread(target=a.run_once)
+    t.start()
+    while store.get(run_id)["state"] == "queued":
+        time.sleep(0.001)
+    polls = 0
+    while t.is_alive():
+        assert b.run_once() is None
+        polls += 1
+        time.sleep(0.02)
+    t.join()
+    run = store.get(run_id)
+    assert polls > 10, "the run was too quick to show anything"
+    assert run["state"] == "passed" and run["worker"] == "a" and run["attempts"] == 1
+
+
+def test_the_heartbeat_thread_keeps_a_run_with_no_slices_claimed(settings, store):
+    """A firmware build (no slices) longer than the reclaim timeout."""
+    run_id = store.create("ecu", "", {}, RUN)
+
+    class SlowBuild(FixedResolver):
+        def resolve(self, system, refs):
+            time.sleep(0.5)
+            return super().resolve(system, refs)
+
+    a = Worker(settings, worker_id="a", sim_factory=lambda *x: FakeSim(), resolver=SlowBuild(),
+               heartbeat_s=0.02, reclaim_after_s=0.2)
+    t = threading.Thread(target=a.run_once)
+    t.start()
+    while t.is_alive():
+        assert store.reclaim(0.2) == []
+        time.sleep(0.02)
+    t.join()
+    assert store.get(run_id)["state"] == "passed"
+
+
+def test_a_worker_whose_run_was_reclaimed_lets_it_go(settings, store):
+    """A worker that stalled past the timeout (its run reclaimed and taken by
+    another) stops at its next slice and writes no final state."""
+    run_id = store.create("ecu", "", {}, {"kind": "run", "virtual_ms": 10_000, "slice_ms": 100})
+
+    def steal(sim):
+        if sim.now >= 300_000 and store.get(run_id)["worker"] == "a":
+            assert store.reclaim(60, now=time.time() + 3600)[0]["state"] == "queued"
+            store.claim("b")
+
+    a = Worker(settings, worker_id="a", sim_factory=lambda *x: SlowSim(0, steal),
+               resolver=FixedResolver())
+    assert a.run_once() == run_id
+    run = store.get(run_id)
+    assert run["state"] == "running" and run["worker"] == "b" and run["attempts"] == 2
+    texts = [r.get("text") for r in read_trace(settings.results / str(run_id) / "trace.jsonl")]
+    assert texts[-1] == "worker a lost the run: it was reclaimed"
+
+
+def test_a_pytest_run_reclaimed_from_its_worker_is_stopped(tmp_path):
+    from vhil.worker import Lost
+    ws = tmp_path / "ws"
+    (ws / "tests").mkdir(parents=True)
+    (ws / "tests" / "conftest.py").write_text(
+        "def pytest_addoption(parser):\n    parser.addoption('--sim-log-dir')\n")
+    (ws / "tests" / "test_x.py").write_text("import time\ndef test_x():\n    time.sleep(60)\n")
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    trace = TraceWriter(run_dir / "trace.jsonl")
+
+    def lost():
+        raise Lost()
+
+    t0 = time.monotonic()
+    with pytest.raises(Lost):
+        execute_pytest({"select": "tests/test_x.py::test_x"}, run_dir, ws, {}, trace, cancelled=lost)
+    trace.close()
+    assert time.monotonic() - t0 < 30
+
+
+def test_worker_rejects_a_reclaim_timeout_within_two_heartbeats(settings):
+    with pytest.raises(ValueError):
+        Worker(settings, heartbeat_s=10, reclaim_after_s=15)
+
+
+def test_live_restarts_when_a_new_attempt_replaces_the_trace(client, settings, store):
+    run_id = post(client).json()["run_id"]
+    store.claim("w")
+    path = settings.results / str(run_id) / "trace.jsonl"
+
+    def worker():
+        write_trace(settings, run_id, TRACE_RECORDS)
+        time.sleep(0.5)
+        path.rename(path.with_name("trace.attempt1.jsonl"))
+        write_trace(settings, run_id, TRACE_RECORDS[:1])
+        time.sleep(0.5)
+        store.finish(run_id, "passed", 0, {})
+
+    t = threading.Thread(target=worker)
+    t.start()
+    with client.websocket_connect(f"/api/runs/{run_id}/live") as ws:
+        got = []
+        while (rec := ws.receive_json())["kind"] != "end":
+            got.append(rec)
+    t.join()
+    assert got == TRACE_RECORDS + TRACE_RECORDS[:1]

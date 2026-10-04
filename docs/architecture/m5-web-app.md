@@ -62,7 +62,10 @@ All JSON; times in microseconds of virtual time.
   `{"kind": "pytest", "select": "tests/sim/test_x.py::test_y"}`
 - `GET /api/runs` (history, newest first) · `GET /api/runs/{id}` →
   `{id, state: queued|running|passed|failed|error, system, ref, created,
-  started, finished, virtual_us, summary}`
+  started, finished, virtual_us, summary, worker, heartbeat, attempts}`.
+  A worker beats `heartbeat` while it holds a run; a run whose worker died
+  is reclaimed by the next worker's poll: back to `queued`, or `error` after
+  its second attempt (`vhil/server/runs.py`)
 - `GET /api/runs/{id}/trace?since_us=&kinds=` → trace records;
   `WS /api/runs/{id}/live` → the same records as they are written, then
   `{"kind": "end", "state": …}`

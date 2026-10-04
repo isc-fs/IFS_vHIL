@@ -8,7 +8,18 @@ final state. The live WebSocket tails that file, so a finished run replays
 from exactly what it streamed.
 
     queued ─claim─▶ running ─▶ passed | failed | error
+       │  ▲              │
+       │  └───reclaim────┤     (heartbeat stale; attempts left)
+       │                 └─reclaim─▶ error   (heartbeat stale; no attempts left)
        └──────cancel──┴──────▶ cancelled   (the worker stops at its next slice)
+
+A worker that holds a run beats its `heartbeat` (unix seconds) every few
+seconds and at every slice. A worker that dies (OOM, a host reboot, docker
+kill) leaves its run `running` with a heartbeat that no longer moves: any
+worker's next poll reclaims it (RunStore.reclaim) back to `queued`, or to
+`error` once it has been attempted MAX_ATTEMPTS times. The heartbeat says
+the worker process is alive, not that the run makes progress: a run that
+hangs is bounded by its own limits (virtual_ms, a pytest timeout_s).
 """
 from __future__ import annotations
 
@@ -16,6 +27,7 @@ import asyncio
 import json
 import re
 import sqlite3
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Literal, Optional, Union
@@ -30,6 +42,12 @@ STATES = ("queued", "running", "passed", "failed", "error", "cancelled")
 TERMINAL = frozenset({"passed", "failed", "error", "cancelled"})
 TRACE_KINDS = frozenset({"frame", "edge", "sample", "log"})
 TRACE = "trace.jsonl"
+# A held run's heartbeat period, how stale it may get before another worker
+# reclaims the run, and how many times a run is started before a lost worker
+# ends it as error instead.
+HEARTBEAT_S = 10.0
+RECLAIM_AFTER_S = 60.0
+MAX_ATTEMPTS = 2
 
 # A git ref we pass to `git clone -b` and use in a directory name: no option
 # look-alikes, no path climbing.
@@ -216,10 +234,15 @@ CREATE TABLE IF NOT EXISTS runs (
     finished   TEXT,
     virtual_us INTEGER NOT NULL DEFAULT 0,
     summary    TEXT NOT NULL DEFAULT '{}',
-    worker     TEXT
+    worker     TEXT,
+    heartbeat  REAL,
+    attempts   INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS runs_state ON runs (state, id);
 """
+# Columns added after the first release: a database created before them
+# gets them on open.
+_ADDED = {"heartbeat": "REAL", "attempts": "INTEGER NOT NULL DEFAULT 0"}
 
 
 class RunStore:
@@ -233,6 +256,10 @@ class RunStore:
         with self._connect() as db:
             db.execute("PRAGMA journal_mode=WAL")
             db.executescript(_SCHEMA)
+            have = {r["name"] for r in db.execute("PRAGMA table_info(runs)")}
+            for name, decl in _ADDED.items():
+                if name not in have:
+                    db.execute(f"ALTER TABLE runs ADD COLUMN {name} {decl}")
 
     def _connect(self) -> sqlite3.Connection:
         db = sqlite3.connect(self.path, timeout=30, isolation_level=None)
@@ -287,38 +314,96 @@ class RunStore:
             db.close()
         return [_row(r) for r in rows]
 
-    def claim(self, worker: str) -> Optional[dict]:
+    def claim(self, worker: str, now: Optional[float] = None) -> Optional[dict]:
         """The oldest queued run, now running for `worker`; None when the
         queue is empty. One statement under the write lock, so two workers
         never get the same row: the second one finds it no longer queued."""
         return self._write(
-            "UPDATE runs SET state = 'running', started = ?, worker = ? "
+            "UPDATE runs SET state = 'running', started = ?, worker = ?, heartbeat = ?, "
+            "attempts = attempts + 1 "
             "WHERE id = (SELECT id FROM runs WHERE state = 'queued' ORDER BY id LIMIT 1) "
-            "AND state = 'queued' RETURNING *", (now_iso(), worker))
+            "AND state = 'queued' RETURNING *", (now_iso(), worker, _now(now)))
 
-    def progress(self, run_id: int, virtual_us: int) -> None:
-        self._write("UPDATE runs SET virtual_us = ? WHERE id = ? AND state = 'running' RETURNING id",
-                  (virtual_us, run_id))
+    def heartbeat(self, run_id: int, worker: str, now: Optional[float] = None) -> bool:
+        """`worker` still holds the run; False once it was reclaimed (or
+        finished or cancelled), and the worker should let it go."""
+        return self._write("UPDATE runs SET heartbeat = ? WHERE id = ? AND worker = ? "
+                           "AND state = 'running' RETURNING id",
+                           (_now(now), run_id, worker)) is not None
+
+    def progress(self, run_id: int, virtual_us: int, worker: Optional[str] = None,
+                 now: Optional[float] = None) -> bool:
+        """Virtual time reached (and, with `worker`, a heartbeat); False when
+        the run is no longer running (for that worker)."""
+        sql = "UPDATE runs SET virtual_us = ?, heartbeat = ? WHERE id = ? AND state = 'running'"
+        args: tuple = (virtual_us, _now(now), run_id)
+        if worker is not None:
+            sql, args = sql + " AND worker = ?", args + (worker,)
+        return self._write(sql + " RETURNING id", args) is not None
 
     def state(self, run_id: int) -> Optional[str]:
         row = self._one("SELECT state FROM runs WHERE id = ?", (run_id,))
         return row["state"] if row else None
 
-    def finish(self, run_id: int, state: str, virtual_us: int, summary: dict) -> str:
+    def holder(self, run_id: int) -> tuple[Optional[str], Optional[str]]:
+        """(state, worker) of a run; (None, None) if there is none."""
+        row = self._one("SELECT state, worker FROM runs WHERE id = ?", (run_id,))
+        return (row["state"], row["worker"]) if row else (None, None)
+
+    def finish(self, run_id: int, state: str, virtual_us: int, summary: dict,
+               worker: Optional[str] = None) -> str:
         """Set a running run's final state; returns the state it ended in. A
-        run cancelled meanwhile stays cancelled (its results are kept)."""
+        run cancelled meanwhile stays cancelled (its results are kept). With
+        `worker`, only that worker's run is touched: one reclaimed from it
+        (and maybe running elsewhere now) is left to its new holder."""
         if state not in TERMINAL:
             raise ValueError(f"not a final state: {state}")
+        mine, args = ("", ()) if worker is None else (" AND worker = ?", (worker,))
         row = self._write(
             "UPDATE runs SET state = ?, finished = ?, virtual_us = ?, summary = ? "
-            "WHERE id = ? AND state = 'running' RETURNING state",
-            (state, now_iso(), virtual_us, json.dumps(summary), run_id))
+            "WHERE id = ? AND state = 'running'" + mine + " RETURNING state",
+            (state, now_iso(), virtual_us, json.dumps(summary), run_id) + args)
         if row:
             return row["state"]
         row = self._write("UPDATE runs SET virtual_us = ?, summary = ? "
-                        "WHERE id = ? AND state = 'cancelled' RETURNING state",
-                        (virtual_us, json.dumps(summary), run_id))
+                        "WHERE id = ? AND state = 'cancelled'" + mine + " RETURNING state",
+                        (virtual_us, json.dumps(summary), run_id) + args)
         return row["state"] if row else (self.state(run_id) or "")
+
+    def reclaim(self, stale_after_s: float = RECLAIM_AFTER_S, max_attempts: int = MAX_ATTEMPTS,
+                now: Optional[float] = None) -> list[dict]:
+        """Runs whose worker stopped beating for `stale_after_s`: back to
+        queued, or to error once attempted `max_attempts` times. Returns
+        [{id, state, worker, attempts}] of the runs it moved. A run with no
+        heartbeat at all (left by a worker from before heartbeats) counts as
+        stale. Both updates run under one write lock, so two workers polling
+        at once move each run once."""
+        cutoff = _now(now) - stale_after_s
+        stale = "state = 'running' AND COALESCE(heartbeat, 0) < ?"
+        db = self._connect()
+        try:
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                dead = db.execute(
+                    "UPDATE runs SET state = 'error', finished = ?, summary = json_object("
+                    "'error', 'worker ' || COALESCE(worker, '?') || ' stopped heartbeating; "
+                    "attempt ' || attempts || ' of ' || ? || ', not retried') "
+                    f"WHERE {stale} AND attempts >= ? RETURNING id, state, worker, attempts",
+                    (now_iso(), max_attempts, cutoff, max_attempts)).fetchall()
+                back = db.execute(
+                    "UPDATE runs SET state = 'queued', started = NULL, heartbeat = NULL, "
+                    "summary = json_object('reclaimed_from', worker, 'attempt', attempts), "
+                    "worker = NULL, virtual_us = 0 "
+                    f"WHERE {stale} RETURNING id, state, "
+                    "json_extract(summary, '$.reclaimed_from') AS worker, attempts",
+                    (cutoff,)).fetchall()
+                db.execute("COMMIT")
+            except BaseException:
+                db.execute("ROLLBACK")
+                raise
+        finally:
+            db.close()
+        return sorted((dict(r) for r in dead + back), key=lambda r: r["id"])
 
     def cancel(self, run_id: int) -> Optional[dict]:
         """Queued or running -> cancelled; a finished run is left as it is."""
@@ -326,6 +411,10 @@ class RunStore:
                   "WHERE id = ? AND state IN ('queued', 'running') RETURNING id",
                   (now_iso(), run_id))
         return self.get(run_id)
+
+
+def _now(now: Optional[float]) -> float:
+    return time.time() if now is None else now
 
 
 def _row(row: sqlite3.Row) -> dict:
@@ -462,6 +551,10 @@ def router(settings, workspace) -> APIRouter:
                 # worker has written everything, so one more read drains it.
                 state = await asyncio.to_thread(store.state, run_id)
                 if path.is_file():
+                    if path.stat().st_size < offset:
+                        # A reclaimed run's next attempt starts a new file
+                        # (the last one is kept as trace.attempt<N>.jsonl).
+                        offset, pending = 0, ""
                     with open(path) as f:
                         f.seek(offset)
                         chunk = f.read()
