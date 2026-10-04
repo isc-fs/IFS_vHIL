@@ -175,6 +175,11 @@ editor)
         exec scripts/editor.sh' ;;
 server)
     run_args=(-p "${VHIL_WEB_PORT:-8080}:8080")
+    # Auth settings pass through when set (docs/development/web-app.md).
+    for v in VHIL_AUTH VHIL_GITHUB_ORG VHIL_GITHUB_CLIENT_ID VHIL_GITHUB_CLIENT_SECRET \
+             VHIL_SESSION_SECRET VHIL_PUBLIC_URL VHIL_GITHUB_APP_ID VHIL_GITHUB_APP_KEY; do
+        run_args+=(-e "$v")
+    done
     in_container 'export VHIL_DATA=/vhil/server; exec python -m vhil.server --host 0.0.0.0 --port 8080' ;;
 worker)
     in_container 'export VHIL_DATA=/vhil/server VHIL_FW_DIR=/vhil/fw; exec python -m vhil.worker "$@"' "$@" ;;

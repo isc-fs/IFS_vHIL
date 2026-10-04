@@ -137,6 +137,12 @@ systems with more than one CAN bus ("Missing dst s:can_inv:0": the earlier
 buses' stubs are not found), so the ECU systems don't load in the editor yet;
 single-bus systems such as `ams` do.
 
+### Web app (M5)
+
+`scripts/vhil-docker.sh server` serves the shared web app on
+http://localhost:8080 with no login (`VHIL_AUTH=dev`). GitHub login, the
+GitHub App and their environment: [`web-app.md`](web-app.md).
+
 ## Branching
 
 `main` is the release branch. Feature work lands on `dev` first, and `dev`

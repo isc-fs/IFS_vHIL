@@ -96,10 +96,11 @@ def _refs(request: Request) -> RefLister:
 
 
 def _author(request: Request, body: Save) -> tuple[str, str]:
-    """The commit author: the signed-in user (M5.5 sets request.state.user),
-    else in dev mode the body's author or the configured default."""
+    """The commit author: the signed-in user in github mode (vhil/server/auth.py
+    sets request.state.user), else in dev mode the body's author or the
+    configured default (dev mode's fixed local user is not an author)."""
     user = getattr(request.state, "user", None)
-    if user:
+    if user and request.app.state.settings.auth != "dev":
         login = user.get("login", "vhil")
         return (user.get("name") or login,
                 user.get("email") or f"{login}@users.noreply.github.com")

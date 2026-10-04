@@ -53,13 +53,15 @@ RUN case "$TARGETARCH" in \
 
 # vHIL + renode-test (Renode 1.17's tests/requirements.txt) + IFS_HIL's core
 # dependencies (its pyproject; the Pi-only [bench] extras stay out) + the web
-# app's API service (vhil.server, M5).
+# app's API service (vhil.server, M5; cryptography signs the GitHub App's
+# RS256 JWT, vhil/server/github_app.py).
 RUN pip install --no-cache-dir \
         "pyyaml==6.0.*" "ruamel.yaml==0.18.*" "jsonschema>=4" pytest \
         "robotframework==6.1" "robotframework-retryfailed==0.2.0" \
         "psutil==5.9.4" "telnetlib3==2.0.*" \
         "typer>=0.9" "pytest-html>=4.0" "python-can>=4.0" "pyserial>=3.5" \
-        "fastapi==0.115.*" "uvicorn[standard]==0.32.*" "httpx==0.28.*"
+        "fastapi==0.115.*" "uvicorn[standard]==0.32.*" "httpx==0.28.*" \
+        "cryptography==50.0.*"
 
 ENV PATH=/opt/arm-gnu/bin:/opt/renode:$PATH \
     RENODE=/opt/renode/renode \

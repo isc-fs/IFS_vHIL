@@ -6,12 +6,18 @@
 
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 
+const cookie = (name) => document.cookie.split("; ").find((c) => c.startsWith(`${name}=`))?.slice(name.length + 1);
+
 async function call(method, path, body) {
-  const r = await fetch(path, {
-    method,
-    headers: body ? { "Content-Type": "application/json" } : {},
-    body: body ? JSON.stringify(body) : undefined,
-  });
+  const headers = body ? { "Content-Type": "application/json" } : {};
+  // The session's CSRF token on writes, as app.js's api() (vhil/server/auth.py).
+  const csrf = cookie("vhil_csrf");
+  if (method !== "GET" && csrf) headers["X-CSRF-Token"] = decodeURIComponent(csrf);
+  const r = await fetch(path, { method, headers, body: body ? JSON.stringify(body) : undefined });
+  if (r.status === 401) {
+    location.href = `/auth/login?next=${encodeURIComponent(location.pathname + location.hash)}`;
+    throw new Error("login required");
+  }
   const data = await r.json().catch(() => ({}));
   if (!r.ok) {
     const d = data.detail;

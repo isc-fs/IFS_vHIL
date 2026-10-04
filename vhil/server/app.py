@@ -8,6 +8,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from vhil.server import auth
 from vhil.server import systems_write
 from vhil.server import decode, runs
 from vhil.server.config import Settings
@@ -28,6 +29,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ws = Workspace(settings.workspace)
     app = FastAPI(title="IFS vHIL", version=_version())
     app.state.settings, app.state.workspace = settings, ws
+    auth.install(app, settings)  # login + /api/* and WebSocket guard (vhil/server/auth.py)
 
     @app.get("/api/health")
     def health():
