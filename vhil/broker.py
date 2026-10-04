@@ -99,12 +99,25 @@ def make_backend(fake_cls, monitor: RenodeMonitor, config: dict):
             # afterwards (3x seen in CI), which breaks IFS_HIL's wall-clock
             # checks. Unpowered, the firmware keeps running unheard; power-on
             # is a full reset, so it boots cold.
+            #
+            # On power-on the buses connect BEFORE the reset releases the
+            # firmware, as a real transceiver is on the bus from the first
+            # instant (#63). Renode's MCAN, unconnected, keeps each TX request
+            # pending; a booted firmware that fills its TX FIFO before the
+            # Connect lands (FDCAN2's 16 slots: ~80 ms of 0x100 + 0x506) is
+            # refused from then on and never writes TXBAR again, so that bus
+            # stays silent until the next power cycle. The CPU is halted
+            # first so the old firmware can't queue frames between the
+            # Connect and the reset; `machine Reset` releases the halt.
             if value:
                 with lock:
                     monitor.execute(f'mach set "{machine}"')
+                    monitor.execute("cpu IsHalted true")
+                    for controller, hub in can_of[machine].items():
+                        monitor.execute(f"connector Connect {controller} {hub}")
                     for command in power_on_commands(machine, vbat[machine]):
                         monitor.execute(command)
-                set_buses(machine, connect=True)
+                    monitor.execute("cpu IsHalted false")
             else:
                 set_buses(machine, connect=False)
                 # Where the CPU was when power went: the first clue when a
