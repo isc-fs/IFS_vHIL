@@ -4,7 +4,9 @@
 #
 # Images come from `scripts/vhil-docker.sh image` (ifs-vhil, ifs-vhil-editor).
 # The repository checkout is the workspace: its systems/ and catalog/ are what
-# the app shows and edits. VHIL_AUTH=dev: no login (M5.5 adds GitHub OAuth).
+# the app shows and edits. VHIL_AUTH=dev: no login. For GitHub login set
+# VHIL_AUTH=github and the VHIL_GITHUB_* / VHIL_SESSION_SECRET variables
+# (docs/development/web-app.md), e.g. from an env file kept out of git.
 name: ifs-vhil
 services:
   api:

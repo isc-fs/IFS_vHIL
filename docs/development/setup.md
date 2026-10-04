@@ -121,6 +121,12 @@ it back onto the original text, comments kept. Natively:
 Pipeline Manager's `./validate <spec> <dataflow>` checks generated files
 against its own schema: `python -m vhil.editor spec -o spec.json`.
 
+### Web app (M5)
+
+`scripts/vhil-docker.sh server` serves the shared web app on
+http://localhost:8080 with no login (`VHIL_AUTH=dev`). GitHub login, the
+GitHub App and their environment: [`web-app.md`](web-app.md).
+
 ## Branching
 
 `main` is the release branch. Feature work lands on `dev` first, and `dev`
