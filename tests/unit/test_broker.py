@@ -66,6 +66,33 @@ def test_power_on_wipes_the_backup_domain_without_vbat():
     assert cmds.index(wipes[-1]) < cmds.index("machine Reset")
 
 
+def test_virtual_seconds_parses_the_time_source_info():
+    from vhil.broker import virtual_seconds
+    info = ("Elapsed Virtual Time: 00:01:02.503125\nElapsed Host Time: 00:01:03.0\n"
+            "Current load: 1.0")
+    assert abs(virtual_seconds(info) - 62.503125) < 1e-9
+
+
+def test_the_pacing_watch_flags_a_stalled_emulation(monkeypatch, caplog):
+    """Virtual time standing still while the host clock runs is logged; a
+    paced interval is not."""
+    import threading
+    import vhil.broker as broker
+    wall = iter([0.0, 0.25, 0.50, 0.75])
+    virt = iter([10.0, 10.25, 10.25, 10.50])        # stalls in the 2nd interval
+
+    class Monitor:
+        def execute(self, command):
+            return f"Elapsed Virtual Time: 00:00:{next(virt):09.6f}\n"
+
+    monkeypatch.setattr(broker.time, "sleep", lambda s: None)
+    monkeypatch.setattr(broker.time, "monotonic", lambda: next(wall))
+    with caplog.at_level("WARNING", logger="vhil.broker"):
+        broker.watch_pacing(Monitor(), threading.Lock(), iterations=4)
+    stalls = [r for r in caplog.records if "behind host time" in r.getMessage()]
+    assert len(stalls) == 1 and "250 ms behind" in stalls[0].getMessage()
+
+
 def test_power_on_connects_the_buses_before_the_reset():
     """#63: the firmware must never run unconnected after power-on. The CPU
     is halted, the buses connected, then the board reset and released."""

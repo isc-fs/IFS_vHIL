@@ -17,6 +17,10 @@ devices:
   isospi: {model: ltc6820, spi: ams.SPI1, cs: ams.PB9}
   cells: {model: ltc6811, attach: isospi, count: 10}
   sd: {model: sd-card, sdmmc: ams.SDMMC1}
+  # The carrier's BMI088 on I2C2 (accelerometer 0x18, gyroscope 0x68:
+  # SDO1/SDO2 to GND, ams_config.hpp ImuAccAddr7b/ImuGyrAddr7b), which
+  # the AMS's ImuTask samples at 100 Hz into IMUnnnn.CSV on the card.
+  imu: {model: bmi088, i2c: ams.I2C2}
   # The car's current sensors, at 0 A: the pack's SSA-2 differential pair on
   # ADC3 INP3/INN3 and the DC-DC's ACS758 on INP11 (ams_config.hpp, current
   # sensor calibration). Undriven, the legs would read 0 V, which the

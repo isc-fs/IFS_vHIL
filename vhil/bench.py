@@ -11,7 +11,7 @@ import tempfile
 import threading
 from pathlib import Path
 
-from vhil.broker import make_backend
+from vhil.broker import make_backend, watch_pacing
 from vhil.renode import RenodeMonitor
 from vhil.system import System
 
@@ -90,6 +90,8 @@ class VirtualBench:
         from broker.server import serve
 
         backend = make_backend(FakeHardwareManager, m, config)
+        threading.Thread(target=watch_pacing, args=(m, backend.monitor_lock),
+                         daemon=True, name="vhil-pacing").start()
         # A socket left by an earlier run would satisfy _wait_for_socket before
         # this broker has bound it.
         Path(self.socket_path).unlink(missing_ok=True)

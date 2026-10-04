@@ -167,11 +167,14 @@ def runs(tmp_path_factory, firmware):
 
 
 def test_one_sealed_log_per_run(runs):
-    """U-161, U-162: LOG0000..LOG0002 sealed with a matching .CRC each, the
-    next one open, no stray files (AMS#495 fragmentation)."""
+    """U-161, U-162: per run, the 4 Hz LOG and the 100 Hz IMU log (the
+    carrier's BMI088, imu_task.cpp -> sd_logger_task.cpp) sealed with a
+    matching .CRC each, the next ones open, no stray files (AMS#495
+    fragmentation)."""
     files = _ls(runs)
-    sealed = [f"LOG{i:04d}" for i in range(RUNS)]
-    expected = sorted([f"{n}.CSV" for n in sealed] + [f"{n}.CRC" for n in sealed] + [f"LOG{RUNS:04d}.TMP"])
+    sealed = [f"{kind}{i:04d}" for kind in ("LOG", "IMU") for i in range(RUNS)]
+    expected = sorted([f"{n}.CSV" for n in sealed] + [f"{n}.CRC" for n in sealed]
+                      + [f"LOG{RUNS:04d}.TMP", f"IMU{RUNS:04d}.TMP"])
     assert files == expected, f"card holds {files}"
     for n in sealed:
         crc = int(_read(runs, f"{n}.CRC").decode().strip(), 16)
