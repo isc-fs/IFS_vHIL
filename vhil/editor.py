@@ -70,6 +70,16 @@ def _catalog(kind: str, catalog: Path = CATALOG) -> dict[str, dict]:
     return {d["id"]: d for d in docs}
 
 
+def role_label(board_id: str, role: str | None, catalog: Path = CATALOG) -> str:
+    """A role as the editor's select shows it, with the node ID it gives the
+    bootloader: "ecu (node 0x1)". Saving keeps the first word."""
+    if not role:
+        return ""
+    node_id = ((_catalog("board", catalog).get(board_id) or {}).get("roles") or {}) \
+        .get(role, {}).get("node_id")
+    return role if node_id is None else f"{role} (node 0x{node_id:X})"
+
+
 # -- specification -------------------------------------------------------------
 
 def _property(name: str, value) -> dict:
@@ -87,6 +97,7 @@ def specification(catalog: Path = CATALOG) -> dict:
     firmware = sorted(_catalog("firmware", catalog))
     nodes = []
     for board_id, board in _catalog("board", catalog).items():
+        roles = board.get("roles") or {}
         interfaces = [{"name": pin, "type": itype, "direction": "inout", "side": side,
                        "maxConnectionsCount": 1}
                       for section, itype, side in _BOARD_PORTS
@@ -95,19 +106,32 @@ def specification(catalog: Path = CATALOG) -> dict:
             "name": board_id, "category": "Boards", "layer": "board",
             "description": board.get("description", ""),
             "interfaces": interfaces,
-            "properties": [{"name": "firmware", "type": "select", "values": firmware,
+            "properties": [
+                           # A board with roles (the MainLite) is placed in one:
+                           # it sets the bootloader's node ID (and flash bus),
+                           # shown with each choice.
+                           *([{"name": "role", "type": "select",
+                               "values": [role_label(board_id, r, catalog) for r in roles],
+                               "default": role_label(board_id, next(iter(roles)), catalog),
+                               "description": "The role this unit is provisioned for: its "
+                                              "bootloader's node ID and flash bus."}]
+                             if roles else []),
+                           {"name": "firmware", "type": "select", "values": firmware,
                             "default": firmware[0]},
                            {"name": "firmware_ref", "type": "text", "default": "",
                             "description": "Branch or tag of the firmware to build "
                                            "(empty: the catalogue's)."},
-                           {"name": "bootloader", "type": "select", "values": [""] + firmware,
-                            "default": "",
-                            "description": "Firmware in sector 0, as provisioned (empty: none)."},
-                           {"name": "bootloader_ref", "type": "text", "default": "",
-                            "description": "Branch or tag of the bootloader to build "
-                                           "(empty: the catalogue's)."},
-                           {"name": "node_id", "type": "integer", "default": 0, "min": 0, "max": 14,
-                            "description": "The bootloader's node ID (0: no bootloader)."},
+                           # The bootloader comes with the board; only its ref
+                           # is the system's.
+                           *([{"name": "bootloader", "type": "constant",
+                               "default": board["bootloader"],
+                               "description": "Firmware in sector 0: every unit of this "
+                                              "board carries it."},
+                              {"name": "bootloader_ref", "type": "text", "default": "",
+                               "description": "Branch or tag of the bootloader to build "
+                                              "(empty: the catalogue's)."},
+]
+                             if "bootloader" in board else []),
                            {"name": "write_protect", "type": "text", "default": "",
                             "description": "Flash sectors write-protected in the option bytes "
                                            "at power-on, comma-separated (e.g. 0; empty: none)."}],
@@ -178,10 +202,10 @@ def to_dataflow(doc: dict, spec: dict | None = None, source: str | None = None) 
         connections.append({"id": f"c:{len(connections)}", "from": a, "to": b})
 
     for row, (name, b) in enumerate(doc["boards"].items()):
-        node(b["board"], name, {"firmware": b["firmware"], "bootloader": b.get("bootloader", ""),
+        node(b["board"], name, {"firmware": b["firmware"],
+                                "role": role_label(b["board"], b.get("role")),
                                 "firmware_ref": b.get("firmware_ref", ""),
                                 "bootloader_ref": b.get("bootloader_ref", ""),
-                                "node_id": b.get("node_id", 0),
                                 "write_protect": ",".join(str(s) for s in b.get("write_protect", []))},
              0, 420 * row)
     y = 0
@@ -261,15 +285,15 @@ def from_dataflow(dataflow: dict, spec: dict | None = None) -> dict:
         name, props = names[n["id"]], {p["name"]: p["value"] for p in n.get("properties", [])}
         kind = kinds[n["name"]]
         if kind == "board":
-            boards[name] = {"board": n["name"], "firmware": props["firmware"]}
+            boards[name] = {"board": n["name"]}
+            if props.get("role"):
+                # "ecu (node 0x1)" -> ecu: the label shows the derived node ID.
+                boards[name]["role"] = str(props["role"]).split()[0]
+            boards[name]["firmware"] = props["firmware"]
             if str(props.get("firmware_ref") or "").strip():
                 boards[name]["firmware_ref"] = str(props["firmware_ref"]).strip()
-            if props.get("bootloader"):
-                boards[name]["bootloader"] = props["bootloader"]
             if str(props.get("bootloader_ref") or "").strip():
                 boards[name]["bootloader_ref"] = str(props["bootloader_ref"]).strip()
-            if props.get("node_id"):
-                boards[name]["node_id"] = props["node_id"]
             if str(props.get("write_protect", "")).strip():
                 boards[name]["write_protect"] = [int(s) for s in str(props["write_protect"]).split(",")]
         elif kind == "bus":

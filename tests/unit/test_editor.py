@@ -41,6 +41,29 @@ def test_board_connectors_are_typed(spec):
     assert bus["type"] == "can" and "bus" in bus
 
 
+def test_the_mainlite_role_is_a_select_that_shows_its_node_id(spec):
+    """One MainLite node type: its role is chosen on the node, and each choice
+    shows the node id it gives the bootloader; the bootloader is read-only."""
+    props = {p["name"]: p for p in _types(spec)["mainlite"]["properties"]}
+    assert props["role"]["type"] == "select"
+    assert props["role"]["values"] == ["ecu (node 0x1)", "ams (node 0x2)", "udv (node 0x3)"]
+    assert props["bootloader"] == {**props["bootloader"], "type": "constant",
+                                   "default": "can-bootloader"}
+    assert "node_id" not in props
+
+
+@pytest.mark.parametrize("role", ["ecu", "ams", "udv"])
+def test_a_role_chosen_in_the_graph_is_saved(spec, role):
+    doc = yaml.safe_load((REPO / "systems" / "ams.yaml").read_text())
+    graph = to_dataflow(doc, spec)
+    node = next(n for n in graph["graphs"][0]["nodes"] if n.get("instanceName") == "ams")
+    prop = next(p for p in node["properties"] if p["name"] == "role")
+    assert prop["value"] == "ams (node 0x2)"
+    prop["value"] = next(v for v in _types(spec)["mainlite"]["properties"][0]["values"]
+                         if v.startswith(role))
+    assert from_dataflow(graph, spec)["boards"]["ams"]["role"] == role
+
+
 def test_isospi_chain_is_typed_end_to_end(spec):
     bridge = {i["name"]: i for i in _types(spec)["ltc6820"]["interfaces"]}
     chip = {i["name"]: i for i in _types(spec)["ltc6811"]["interfaces"]}
@@ -63,8 +86,7 @@ def test_firmware_refs_survive_the_round_trip(spec, path):
     doc = yaml.safe_load(path.read_text())
     for b in doc["boards"].values():
         b["firmware_ref"] = "feat/x"
-        if "bootloader" in b:
-            b["bootloader_ref"] = "v1.6.2"
+        b["bootloader_ref"] = "v1.6.2"     # every MainLite carries the bootloader
     assert from_dataflow(to_dataflow(doc, spec), spec) == doc
     assert validate(doc) == []
 
@@ -118,7 +140,7 @@ def test_bus_connections_land_on_spread_stubs(spec):
     """Pipeline Manager draws a bus connection to its stub: one per
     connection, along the bus, not at the bus node's header."""
     doc = yaml.safe_load((REPO / "systems" / "ams.yaml").read_text())
-    doc["boards"]["ecu"] = {"board": "mainlite", "firmware": "ecu"}
+    doc["boards"]["ecu"] = {"board": "mainlite", "role": "ecu", "firmware": "ecu"}
     doc["buses"]["can_acu"]["nodes"].append("ecu.FDCAN2")
     g = to_dataflow(doc, spec)["graphs"][0]
     bus = next(n for n in g["nodes"] if n["instanceName"] == "can_acu")["interfaces"][0]["bus"]
@@ -139,6 +161,8 @@ def test_an_edit_in_the_graph_is_a_valid_system(spec):
         p["id"] = p["id"].replace(":ams:", ":ecu:")
         if p["name"] == "firmware":
             p["value"] = "ecu"
+        if p["name"] == "role":
+            p["value"] = "ecu (node 0x1)"
     for i in ecu["interfaces"]:
         i["id"] = i["id"].replace(":ams:", ":ecu:")
     g["nodes"].append(ecu)
@@ -148,7 +172,7 @@ def test_an_edit_in_the_graph_is_a_valid_system(spec):
     g["connections"].append({"id": "c:new", "from": "i:ecu:FDCAN2", "to": "3f6c-stub"})
     doc = from_dataflow(graph, spec)
     assert doc["buses"]["can_acu"]["nodes"] == ["ams.FDCAN1", "ecu.FDCAN2"]
-    assert doc["boards"]["ecu"] == {"board": "mainlite", "firmware": "ecu"}
+    assert doc["boards"]["ecu"] == {"board": "mainlite", "role": "ecu", "firmware": "ecu"}
     assert validate(doc) == []
 
 
@@ -193,12 +217,12 @@ def test_an_edit_keeps_the_files_comments():
     stay; the new board and bus member appear in the file's style."""
     text = (REPO / "systems" / "ams.yaml").read_text()
     doc = yaml.safe_load(text)
-    doc["boards"]["ecu"] = {"board": "mainlite", "firmware": "ecu"}
+    doc["boards"]["ecu"] = {"board": "mainlite", "role": "ecu", "firmware": "ecu"}
     doc["buses"]["can_acu"]["nodes"].append("ecu.FDCAN2")
     del doc["devices"]["sd"]
     out = write_system(doc, text)
     assert yaml.safe_load(out) == doc
-    assert "  ecu: {board: mainlite, firmware: ecu}\n" in out
+    assert "  ecu: {board: mainlite, role: ecu, firmware: ecu}\n" in out
     assert "nodes: [ams.FDCAN1, ecu.FDCAN2]" in out
     assert "sd-card" not in out
     for line in text.splitlines():
