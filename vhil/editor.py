@@ -11,7 +11,9 @@ graph is a view of it, translated both ways here. Catalogue entries become
 node types:
 
   board     a node with one typed connector per CAN/SPI/SDMMC/I2C/GPIO/analog pin;
-            its firmware is a select property
+            its firmware is a select property. A board on a backplane is a node
+            type of its own ("mainlite on ams"), its pins named by the
+            backplane's signals where it routes them (LTC6820_CS, not PB9)
   CAN bus   a node with a BUS interface: connect any number of CAN connectors
   model     a node per chip model: its host-side ports (spi, cs, sdmmc, i2c), the
             port it provides (an LTC6820 provides `isospi`) and the port it
@@ -65,7 +67,8 @@ _SYSTEM_FIELDS = ("kind", "id", "description", "time", "boards", "buses", "devic
 
 
 def _catalog(kind: str, catalog: Path = CATALOG) -> dict[str, dict]:
-    folder = {"board": "boards", "firmware": "firmware", "model": "models"}[kind]
+    folder = {"board": "boards", "firmware": "firmware", "model": "models",
+              "backplane": "backplanes"}[kind]
     docs = (yaml.safe_load(p.read_text()) for p in sorted((catalog / folder).glob("*.yaml")))
     return {d["id"]: d for d in docs}
 
@@ -82,18 +85,39 @@ def _property(name: str, value) -> dict:
     return {"name": name, "type": "text", "default": str(value)}
 
 
+def board_node(board: str, backplane: str | None = None) -> str:
+    """The node type of a board, alone or on a backplane."""
+    return board if backplane is None else f"{board} on {backplane}"
+
+
+def _signals(backplane: str | None, catalog: Path = CATALOG) -> dict[str, str]:
+    """A backplane's pin -> signal name ({} for none)."""
+    if backplane is None:
+        return {}
+    doc = _catalog("backplane", catalog).get(backplane) or {}
+    return {pin: signal for signal, pin in (doc.get("signals") or {}).items()}
+
+
 def specification(catalog: Path = CATALOG) -> dict:
     """Pipeline Manager node types for everything in the catalogue."""
     firmware = sorted(_catalog("firmware", catalog))
+    boards = _catalog("board", catalog)
     nodes = []
-    for board_id, board in _catalog("board", catalog).items():
-        interfaces = [{"name": pin, "type": itype, "direction": "inout", "side": side,
-                       "maxConnectionsCount": 1}
+    placements = [(board_id, None, board) for board_id, board in boards.items()]
+    placements += [(bp["mounts"], bp_id, boards[bp["mounts"]])
+                   for bp_id, bp in _catalog("backplane", catalog).items() if bp["mounts"] in boards]
+    for board_id, bp_id, board in placements:
+        named = _signals(bp_id, catalog)
+        interfaces = [{"name": named.get(pin, pin), "type": itype, "direction": "inout",
+                       "side": side, "maxConnectionsCount": 1}
                       for section, itype, side in _BOARD_PORTS
                       for pin in board.get(section, {})]
+        description = board.get("description", "")
+        if bp_id is not None:
+            description = _catalog("backplane", catalog)[bp_id].get("description", description)
         nodes.append({
-            "name": board_id, "category": "Boards", "layer": "board",
-            "description": board.get("description", ""),
+            "name": board_node(board_id, bp_id), "category": "Boards", "layer": "board",
+            "description": description,
             "interfaces": interfaces,
             "properties": [{"name": "firmware", "type": "select", "values": firmware,
                             "default": firmware[0]},
@@ -111,7 +135,8 @@ def specification(catalog: Path = CATALOG) -> dict:
                            {"name": "write_protect", "type": "text", "default": "",
                             "description": "Flash sectors write-protected in the option bytes "
                                            "at power-on, comma-separated (e.g. 0; empty: none)."}],
-            "additionalData": {"vhil": {"kind": "board"}},
+            "additionalData": {"vhil": {"kind": "board", "board": board_id,
+                                        **({"backplane": bp_id} if bp_id else {})}},
         })
     nodes.append({
         "name": BUS_NODE, "category": "Buses", "layer": "bus",
@@ -177,8 +202,15 @@ def to_dataflow(doc: dict, spec: dict | None = None, source: str | None = None) 
     def connect(a: str, b: str) -> None:
         connections.append({"id": f"c:{len(connections)}", "from": a, "to": b})
 
+    # A pin a backplane routes is its signal's interface (ams.PB9 is LTC6820_CS).
+    named = {name: _signals(b.get("backplane")) for name, b in doc["boards"].items()}
+
+    def pin_of(endpoint: str) -> tuple[str, str]:
+        board, pin = endpoint.split(".", 1)
+        return board, named.get(board, {}).get(pin, pin)
+
     for row, (name, b) in enumerate(doc["boards"].items()):
-        node(b["board"], name, {"firmware": b["firmware"], "bootloader": b.get("bootloader", ""),
+        node(board_node(b["board"], b.get("backplane")), name, {"firmware": b["firmware"], "bootloader": b.get("bootloader", ""),
                                 "firmware_ref": b.get("firmware_ref", ""),
                                 "bootloader_ref": b.get("bootloader_ref", ""),
                                 "node_id": b.get("node_id", 0),
@@ -197,7 +229,7 @@ def to_dataflow(doc: dict, spec: dict | None = None, source: str | None = None) 
                   "side": "left"} for k in range(len(bus["nodes"]))]
         n["interfaces"][0]["bus"] = {"type": "twoSided", "size": size, "stubs": stubs}
         for endpoint, stub in zip(bus["nodes"], stubs):
-            board, pin = endpoint.split(".", 1)
+            board, pin = pin_of(endpoint)
             connect(f"i:{board}:{pin}", stub["id"])
     devices = doc.get("devices", {})
     for row, (name, dev) in enumerate(devices.items()):
@@ -207,10 +239,10 @@ def to_dataflow(doc: dict, spec: dict | None = None, source: str | None = None) 
         node(dev["model"], name, values, -560, 200 * row)
         for field, _ in _MODEL_HOST_PORTS:
             if field in dev:
-                board, pin = dev[field].split(".", 1)
+                board, pin = pin_of(dev[field])
                 connect(f"i:{board}:{pin}", f"i:{name}:{field}")
         for out, endpoint in dev.get("outputs", {}).items():
-            board, pin = endpoint.split(".", 1)
+            board, pin = pin_of(endpoint)
             connect(f"i:{name}:{out}", f"i:{board}:{pin}")
     models = _catalog("model")
     for name, dev in devices.items():
@@ -234,6 +266,8 @@ def from_dataflow(dataflow: dict, spec: dict | None = None) -> dict:
     meaning for). Schema and catalogue checks are validate()'s job."""
     spec = spec or specification()
     kinds = {n["name"]: n["additionalData"]["vhil"]["kind"] for n in spec["nodes"]}
+    placed = {n["name"]: n["additionalData"]["vhil"] for n in spec["nodes"]
+              if n["additionalData"]["vhil"]["kind"] == "board"}
     graphs = {g["id"]: g for g in dataflow["graphs"]}
     graph = graphs[dataflow.get("entryGraph") or dataflow["graphs"][0]["id"]]
 
@@ -261,7 +295,10 @@ def from_dataflow(dataflow: dict, spec: dict | None = None) -> dict:
         name, props = names[n["id"]], {p["name"]: p["value"] for p in n.get("properties", [])}
         kind = kinds[n["name"]]
         if kind == "board":
-            boards[name] = {"board": n["name"], "firmware": props["firmware"]}
+            boards[name] = {"board": placed[n["name"]].get("board", n["name"])}
+            if placed[n["name"]].get("backplane"):
+                boards[name]["backplane"] = placed[n["name"]]["backplane"]
+            boards[name]["firmware"] = props["firmware"]
             if str(props.get("firmware_ref") or "").strip():
                 boards[name]["firmware_ref"] = str(props["firmware_ref"]).strip()
             if props.get("bootloader"):
