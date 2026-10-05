@@ -200,8 +200,8 @@ class System:
                     need(NAME, value["bus"], f"port signal '{name}': bus")
                 else:
                     need(ENDPOINT, value, f"port signal '{name}'")
-        for c in self.bench.get("carriers", []):
-            need(NAME, c["board"], "bench carrier board")
+        for c in self.bench.get("power", []):
+            need(NAME, c["board"], "bench power board")
         for r in self.bench.get("dac_routes", []):
             need(ENDPOINT, r["to"], "DAC route")
 
@@ -358,9 +358,9 @@ class System:
             want = "analog" if kind == "analog" else "gpio"
             if got != want:
                 raise SystemError(f"port signal '{name}': '{value}' is {got}, not {want}")
-        for c in self.bench.get("carriers", []):
+        for c in self.bench.get("power", []):
             if c["board"] not in self.boards:
-                raise SystemError(f"bench carrier '{c['board']}' is not a board in this system")
+                raise SystemError(f"bench power entry '{c['board']}' is not a board in this system")
         for r in self.bench.get("dac_routes", []):
             _, kind, _ = self.resolve(r["to"])
             if kind != "analog":
@@ -605,17 +605,17 @@ class System:
 
     def bench_config(self) -> dict:
         """The virtual broker's wiring (see vhil/broker.py)."""
-        carriers = [{"machine": c["board"], "slot": c.get("slot"), "relay": c["relay"],
+        power = [{"machine": c["board"], "slot": c.get("slot"), "relay": c["relay"],
                      "ina_addr": c["ina_addr"], "current_A": c["current_A"],
                      "can": self.can_of(c["board"]),
                      "vbat": self.boards[c["board"]].board.get("vbat", True)}
-                    for c in self.bench.get("carriers", [])]
+                    for c in self.bench.get("power", [])]
         routes = []
         for r in self.bench.get("dac_routes", []):
             board, _, target = self.resolve(r["to"])
             routes.append({"dac": r["dac"], "channel": r["channel"], "machine": board.name,
                            "adc": target["adc"], "adc_channel": target["channel"]})
-        return {"carriers": carriers, "dac_routes": routes}
+        return {"power": power, "dac_routes": routes}
 
     def build_firmware(self, workdir: Path, refs: dict[str, str] | None = None,
                        log=print) -> dict[str, Path]:

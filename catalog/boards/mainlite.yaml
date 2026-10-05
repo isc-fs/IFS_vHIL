@@ -2,8 +2,7 @@ kind: board
 id: mainlite
 description: >-
   MainLite: the minimal STM32H733ZG unit. Mounted on a backplane it becomes
-  the AMS, the ECU or the uDV (on the physical HIL bench it sits on an MLC
-  carrier, an adapter to the bench board, which vHIL does not model).
+  the AMS, the ECU or the uDV.
   Connector and pin names follow the MCU (FDCANn, port pins); what a
   backplane and its firmware use them for belongs to the system, not the board.
 platform: stm32h733

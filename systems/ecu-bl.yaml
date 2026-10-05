@@ -18,8 +18,8 @@ buses:
   can_dash: {kind: can, nodes: [ecu.FDCAN3], host_netdev: can1}
   can_acu:  {kind: can, nodes: [ecu.FDCAN2], host_netdev: can2}
 bench:
-  carriers:
-    # MLC4: relay K4 = TCA 0x20 port 0 pin 3, current monitor INA 0x45.
+  power:
+    # Slot 4: relay = TCA 0x20 port 0 pin 3, current monitor INA 0x45.
     - {board: ecu, slot: 4, relay: {addr: 0x20, port: 0, pin: 3}, ina_addr: 0x45, current_A: 0.13}
   dac_routes:
     # bench DAC1 -> pedal inputs (vcu_profile: brake, APPS1, APPS2)

@@ -34,9 +34,9 @@ def test_spec_has_a_node_type_per_catalogue_entry(spec):
 
 
 def test_board_connectors_are_typed(spec):
-    carrier = {i["name"]: i["type"] for i in _types(spec)["mainlite"]["interfaces"]}
-    assert carrier["FDCAN1"] == "can" and carrier["SPI1"] == "spi"
-    assert carrier["PB9"] == "gpio" and carrier["PF7"] == "analog"
+    board = {i["name"]: i["type"] for i in _types(spec)["mainlite"]["interfaces"]}
+    assert board["FDCAN1"] == "can" and board["SPI1"] == "spi"
+    assert board["PB9"] == "gpio" and board["PF7"] == "analog"
     bus = _types(spec)[BUS_NODE]["interfaces"][0]
     assert bus["type"] == "can" and "bus" in bus
 

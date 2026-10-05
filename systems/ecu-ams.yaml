@@ -28,10 +28,10 @@ devices:
   pack_current: {model: ssa-2-250a, outputs: {out_p: ams.PF7, out_n: ams.PF8}}
   dcdc_current: {model: acs758lcb-050b, outputs: {out: ams.PC1}}
 bench:
-  carriers:
-    # MLC4 (ECU): relay K4 = TCA 0x20 port 0 pin 3, current monitor INA 0x45.
+  power:
+    # Slot 4 (ECU): relay = TCA 0x20 port 0 pin 3, current monitor INA 0x45.
     - {board: ecu, slot: 4, relay: {addr: 0x20, port: 0, pin: 3}, ina_addr: 0x45, current_A: 0.13}
-    # MLC2 (AMS): relay K2 = TCA 0x20 port 0 pin 1, current monitor INA 0x41.
+    # Slot 2 (AMS): relay = TCA 0x20 port 0 pin 1, current monitor INA 0x41.
     - {board: ams, slot: 2, relay: {addr: 0x20, port: 0, pin: 1}, ina_addr: 0x41, current_A: 0.12}
   dac_routes:
     # bench DAC1 -> ECU pedal inputs (vcu_profile: brake, APPS1, APPS2)

@@ -48,7 +48,7 @@ def _backend(system):
 def test_each_relay_powers_only_its_own_board():
     backend, monitor = _backend("ecu-ams.yaml")
     monitor.commands.clear()
-    backend.tca_write_pin(0x20, 0, 1, True)          # K2 = MLC2 = AMS
+    backend.tca_write_pin(0x20, 0, 1, True)          # slot 2 = AMS
     assert {m for m, _ in monitor.commands} == {"ams"}
     assert ("ams", "connector Connect sysbus.fdcan1_h7 can_acu") in monitor.commands
     assert backend.ina_current(0x41) == 0.12 and backend.ina_current(0x45) == 0.0
@@ -100,7 +100,7 @@ def test_power_on_connects_the_buses_before_the_reset():
     the machine started (#125: no CPU halt)."""
     backend, monitor = _backend("ecu.yaml")
     monitor.commands.clear()
-    backend.tca_write_pin(0x20, 0, 3, True)          # K4 = MLC4 = ECU
+    backend.tca_write_pin(0x20, 0, 3, True)          # slot 4 = ECU
     cmds = [c for _, c in monitor.commands]
     connects = [i for i, c in enumerate(cmds) if c.startswith("connector Connect")]
     assert len(connects) == 3

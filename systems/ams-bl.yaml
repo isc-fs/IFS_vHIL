@@ -28,8 +28,8 @@ devices:
   pack_current: {model: ssa-2-250a, outputs: {out_p: ams.PF7, out_n: ams.PF8}}
   dcdc_current: {model: acs758lcb-050b, outputs: {out: ams.PC1}}
 bench:
-  carriers:
-    # MLC2: relay K2 = TCA 0x20 port 0 pin 1, current monitor INA 0x41
+  power:
+    # Slot 2: relay = TCA 0x20 port 0 pin 1, current monitor INA 0x41
     # (bench-01: 118-128 mA alive).
     - {board: ams, slot: 2, relay: {addr: 0x20, port: 0, pin: 1}, ina_addr: 0x41, current_A: 0.12}
   # Not yet mapped: the bench's DAC4 pack-current pair and the TSMS /

@@ -13,7 +13,7 @@ from vhil.broker import make_backend
 from vhil.sim import Sim
 from vhil.system import REPO
 
-K4 = (0x20, 0, 3)                       # MLC4 relay = the ECU (systems/ecu.yaml)
+K4 = (0x20, 0, 3)                       # slot 4 relay = the ECU (systems/ecu.yaml)
 
 
 class _Base:
@@ -43,7 +43,7 @@ def test_a_slow_power_on_still_boots_onto_every_bus(firmware, lag_ms):
     with Sim(REPO / "systems" / "ecu.yaml", {"ecu": firmware("ecu")}) as sim:
         config = sim.system.bench_config()
         sim.monitor('mach set "ecu"')
-        for controller, hub in config["carriers"][0]["can"].items():   # as vhil/bench.py starts
+        for controller, hub in config["power"][0]["can"].items():   # as vhil/bench.py starts
             sim.monitor(f"connector Disconnect {controller} {hub}")
         backend = make_backend(_Base, _SlowMonitor(sim, lag_ms), config)
         backend.tca_write_pin(*K4, True)

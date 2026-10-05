@@ -8,7 +8,7 @@ The Phase 0/1 design and findings stay in [`proposal.md`](proposal.md).
 ## 1. From a bench to a workbench
 
 [IFS_HIL](https://github.com/isc-fs/IFS_HIL) is bounded by its hardware:
-one backplane PCB, four MLC carrier slots, the stimulus that happens to be
+one backplane PCB, four board slots, the stimulus that happens to be
 wired, and one bench that someone has to keep alive. The set of hardware and
 software combinations it can test is small and fixed.
 
