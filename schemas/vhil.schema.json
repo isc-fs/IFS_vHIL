@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/isc-fs/IFS_vHIL/schemas/vhil.schema.json",
   "title": "IFS_vHIL catalogue and system documents",
-  "description": "Platforms, boards, backplanes, firmware sources and device models form the catalogue (catalog/); a system (systems/) places boards, each on its backplane, gives each its firmware, attaches devices, and wires them together. Nothing above `platform` and `model` names an architecture or a backend.",
+  "description": "Platforms, boards, firmware sources and device models form the catalogue (catalog/); a system (systems/) places boards, gives each its firmware, attaches devices, and wires them together. Nothing above `platform` and `model` names an architecture or a backend.",
   "$defs": {
     "id": {
       "type": "string",
@@ -178,41 +178,6 @@
         }
       }
     },
-    "backplane": {
-      "type": "object",
-      "description": "The PCB a board is mounted on, which gives it its role (the AMS, the ECU, the uDV): which of the board's connectors and pins it routes to what. Naming only: it adds no emulated hardware.",
-      "required": [
-        "kind",
-        "id",
-        "mounts"
-      ],
-      "additionalProperties": false,
-      "properties": {
-        "kind": {
-          "const": "backplane"
-        },
-        "id": {
-          "$ref": "#/$defs/id"
-        },
-        "description": {
-          "type": "string"
-        },
-        "mounts": {
-          "$ref": "#/$defs/id",
-          "description": "The board (catalog/boards) this backplane takes."
-        },
-        "signals": {
-          "type": "object",
-          "description": "Backplane signal name -> the board connector or pin it is routed to. A system may name the signal in place of the pin (ams.LTC6820_CS for ams.PB9).",
-          "propertyNames": {
-            "$ref": "#/$defs/name"
-          },
-          "additionalProperties": {
-            "$ref": "#/$defs/name"
-          }
-        }
-      }
-    },
     "firmware": {
       "type": "object",
       "required": [
@@ -353,10 +318,6 @@
             "properties": {
               "board": {
                 "$ref": "#/$defs/id"
-              },
-              "backplane": {
-                "$ref": "#/$defs/id",
-                "description": "Backplane (catalog/backplanes) the board is mounted on. Its signals name the board's pins in endpoints."
               },
               "firmware": {
                 "$ref": "#/$defs/id"
@@ -863,9 +824,6 @@
     },
     {
       "$ref": "#/$defs/board"
-    },
-    {
-      "$ref": "#/$defs/backplane"
     },
     {
       "$ref": "#/$defs/firmware"

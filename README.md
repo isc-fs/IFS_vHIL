@@ -29,7 +29,6 @@ See [`docs/development/setup.md`](docs/development/setup.md), and
 systems/                        Systems as data: boards, their firmware, the buses between them
 catalog/platforms/              Emulatable MCUs (stm32h733)
 catalog/boards/                 Boards: a platform plus named connectors and pins (mainlite)
-catalog/backplanes/             Backplanes a board mounts on, naming the pins they route (ams, ecu, udv)
 catalog/firmware/               Firmware sources: repo, ref, build recipe, load address (ecu, ams)
 catalog/models/                 Device models: ltc6820 isoSPI bridge, ltc6811 battery monitor, sd-card
 models/renode/IsoSpi.cs         The LTC6820 + LTC6811 isoSPI models (C#, compiled by Renode at load)
@@ -47,6 +46,7 @@ tests/unit/                     Host-only checks of the catalogue, systems and g
 CLAUDE.md                       Operating model: branch/commit/PR policy, invariants
 docs/proposal.md                Design, spike results, coverage, phases, risks
 docs/development/setup.md       Toolchain, branching, issues, PRs, releases
+docs/backplanes/                Reference: what each car backplane routes to its MainLite (ams, ecu, udv)
 .github/workflows/              CI: unit, smoke per system (Robot), IFS_HIL ECU suite
 ```
 

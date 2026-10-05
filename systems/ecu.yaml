@@ -8,13 +8,13 @@ time:
   # time on a desktop; still 20x finer than the firmware's 10 ms period.
   quantum_s: 0.0005
 boards:
-  ecu: {board: mainlite, backplane: ecu, firmware: ecu}
+  ecu: {board: mainlite, firmware: ecu}
 buses:
   # Bus names are what tests attach to. host_netdev follows bench-01's
   # netdev names, so IFS_HIL's suites open the same interfaces.
-  can_inv:  {kind: can, nodes: [ecu.CAN_INV], host_netdev: can0}
-  can_dash: {kind: can, nodes: [ecu.CAN_DASH], host_netdev: can1}
-  can_acu:  {kind: can, nodes: [ecu.CAN_ACU], host_netdev: can2}
+  can_inv:  {kind: can, nodes: [ecu.FDCAN1], host_netdev: can0}  # CAN_H/L_INV, J1.9/J1.10 (docs/backplanes/ecu.md)
+  can_dash: {kind: can, nodes: [ecu.FDCAN3], host_netdev: can1}  # net CAN_H/L_SENS (stale name), J1.13/J1.14 (docs/backplanes/ecu.md)
+  can_acu:  {kind: can, nodes: [ecu.FDCAN2], host_netdev: can2}  # net CAN_H/L_TEL (stale name), J1.11/J1.12 (docs/backplanes/ecu.md)
 port:
   # The co-simulation port (vhil/cosim.py): what the ECU's plants exchange
   # with it. Pedal sensors and START are the driver; FDCAN1 is the inverter.
@@ -22,11 +22,11 @@ port:
   # system lacks (ecu-ams.yaml has the real one).
   step_ms: 10
   signals:
-    apps1:      {analog: ecu.APPS_1}
-    apps2:      {analog: ecu.APPS_2}
-    brake:      {analog: ecu.S_BRAKE}
-    start:      {gpio_in: ecu.START}
-    rtds:       {gpio_out: ecu.RTDS}
+    apps1:      {analog: ecu.PF8}  # APPS_1, J1.3 (docs/backplanes/ecu.md)
+    apps2:      {analog: ecu.PF9}  # APPS_2, J1.6 (docs/backplanes/ecu.md)
+    brake:      {analog: ecu.PF7}  # S_BRAKE_FIL <- J1.18 (docs/backplanes/ecu.md)
+    start:      {gpio_in: ecu.PB5}  # START_FIL <- J1.19 (docs/backplanes/ecu.md)
+    rtds:       {gpio_out: ecu.PB4}  # RTDS -> J1.20 (docs/backplanes/ecu.md)
     inv_cmd:    {can_rx: {bus: can_inv, id: 0x360}}
     inv_torque: {can_rx: {bus: can_inv, id: 0x362}}
     inv_state:  {can_tx: {bus: can_inv, id: 0x461}}
@@ -40,6 +40,6 @@ bench:
     - {board: ecu, slot: 4, relay: {addr: 0x20, port: 0, pin: 3}, ina_addr: 0x45, current_A: 0.13}
   dac_routes:
     # bench DAC1 -> pedal inputs (vcu_profile: brake, APPS1, APPS2)
-    - {dac: 0, channel: 0, to: ecu.S_BRAKE}
-    - {dac: 0, channel: 1, to: ecu.APPS_1}
-    - {dac: 0, channel: 2, to: ecu.APPS_2}
+    - {dac: 0, channel: 0, to: ecu.PF7}  # S_BRAKE_FIL (docs/backplanes/ecu.md)
+    - {dac: 0, channel: 1, to: ecu.PF8}  # APPS_1 (docs/backplanes/ecu.md)
+    - {dac: 0, channel: 2, to: ecu.PF9}  # APPS_2 (docs/backplanes/ecu.md)

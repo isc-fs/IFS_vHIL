@@ -49,7 +49,7 @@ browser ── app shell (/)  ─┬─ /editor  → Pipeline Manager (iframe) �
 All JSON; times in microseconds of virtual time.
 
 - `GET /api/health` → `{status, version}`
-- `GET /api/catalog` → boards, backplanes, models, platforms, firmware (from `catalog/`)
+- `GET /api/catalog` → boards, models, platforms, firmware (from `catalog/`)
 - `GET /api/systems` → `[{id, path, ref}]` in the workspace
 - `GET /api/systems/{id}` → `{id, yaml, doc, ref}`;
   `PUT /api/systems/{id}` `{yaml, message, branch}` → validates

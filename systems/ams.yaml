@@ -7,13 +7,13 @@ description: >-
 time:
   quantum_s: 0.0005
 boards:
-  ams: {board: mainlite, backplane: ams, firmware: ams}
+  ams: {board: mainlite, firmware: ams}
 buses:
-  can_acu: {kind: can, nodes: [ams.CAN_ACU], host_netdev: can2}
+  can_acu: {kind: can, nodes: [ams.FDCAN1], host_netdev: can2}  # CAN_H/L_ACU, J1.9/J1.10, H/L swapped (docs/backplanes/ams.md)
 devices:
   # LTC6820 on SPI1 (chip select PB9), then 5 modules x (upper + lower
   # LTC6811) = 10 ICs on its isoSPI chain: cells0 (module 0 upper) nearest.
-  isospi: {model: ltc6820, spi: ams.SPI1, cs: ams.LTC6820_CS}
+  isospi: {model: ltc6820, spi: ams.SPI1, cs: ams.PB9}  # SPI1 + LTC6820_CS -> U4 LTC6820 (docs/backplanes/ams.md)
   cells: {model: ltc6811, attach: isospi, count: 10}
   sd: {model: sd-card, sdmmc: ams.SDMMC1}
   # The MainLite's BMI088 on I2C2 (accelerometer 0x18, gyroscope 0x68:
@@ -24,8 +24,8 @@ devices:
   # ADC3 INP3/INN3 and the DC-DC's ACS758 on INP11 (ams_config.hpp, current
   # sensor calibration). Undriven, the legs would read 0 V, which the
   # firmware takes for a disconnected sensor.
-  pack_current: {model: ssa-2-250a, outputs: {out_p: ams.S_CURRENT_P, out_n: ams.S_CURRENT_N}}
-  dcdc_current: {model: acs758lcb-050b, outputs: {out: ams.S_CURRENT_DCDC}}
+  pack_current: {model: ssa-2-250a, outputs: {out_p: ams.PF7, out_n: ams.PF8}}  # S_CURRENT_P/N -> J4.3/J4.2 (docs/backplanes/ams.md)
+  dcdc_current: {model: acs758lcb-050b, outputs: {out: ams.PC1}}  # S_CURRENT_DCDC -> J3.5, not sampled on AMS dev (docs/backplanes/ams.md)
 bench:
   power:
     # Slot 2: relay = TCA 0x20 port 0 pin 1, current monitor INA 0x41

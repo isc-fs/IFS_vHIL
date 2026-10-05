@@ -7,26 +7,26 @@ description: >-
 time:
   quantum_s: 0.0005
 boards:
-  ecu: {board: mainlite, backplane: ecu, firmware: ecu}
-  ams: {board: mainlite, backplane: ams, firmware: ams}
+  ecu: {board: mainlite, firmware: ecu}
+  ams: {board: mainlite, firmware: ams}
 buses:
   # As in ecu.yaml. The ACU bus is the one the two share in the car: the
   # ECU's FDCAN2 (its 0x100 heartbeat, tests/sim/test_ecu_boot.py) and the
   # AMS's FDCAN1, its accumulator bus (IFS08-CE-AMS app_init_task.cpp).
-  can_inv:  {kind: can, nodes: [ecu.CAN_INV], host_netdev: can0}
-  can_dash: {kind: can, nodes: [ecu.CAN_DASH], host_netdev: can1}
-  can_acu:  {kind: can, nodes: [ecu.CAN_ACU, ams.CAN_ACU], host_netdev: can2}
+  can_inv:  {kind: can, nodes: [ecu.FDCAN1], host_netdev: can0}  # CAN_H/L_INV, J1.9/J1.10 (docs/backplanes/ecu.md)
+  can_dash: {kind: can, nodes: [ecu.FDCAN3], host_netdev: can1}  # net CAN_H/L_SENS (stale name), J1.13/J1.14 (docs/backplanes/ecu.md)
+  can_acu:  {kind: can, nodes: [ecu.FDCAN2, ams.FDCAN1], host_netdev: can2}  # ECU J1.11/J1.12 (net CAN_H/L_TEL), AMS J1.9/J1.10 (CAN_H/L_ACU, H/L swapped) (docs/backplanes/ecu.md, ams.md)
 devices:
   # The AMS's, as in ams.yaml.
-  isospi: {model: ltc6820, spi: ams.SPI1, cs: ams.LTC6820_CS}
+  isospi: {model: ltc6820, spi: ams.SPI1, cs: ams.PB9}  # SPI1 + LTC6820_CS -> U4 LTC6820 (docs/backplanes/ams.md)
   cells: {model: ltc6811, attach: isospi, count: 10}
   sd: {model: sd-card, sdmmc: ams.SDMMC1}
   # The MainLite's BMI088 on I2C2 (accelerometer 0x18, gyroscope 0x68:
   # SDO1/SDO2 to GND, ams_config.hpp ImuAccAddr7b/ImuGyrAddr7b), which
   # the AMS's ImuTask samples at 100 Hz into IMUnnnn.CSV on the card.
   imu: {model: bmi088, i2c: ams.I2C2}
-  pack_current: {model: ssa-2-250a, outputs: {out_p: ams.S_CURRENT_P, out_n: ams.S_CURRENT_N}}
-  dcdc_current: {model: acs758lcb-050b, outputs: {out: ams.S_CURRENT_DCDC}}
+  pack_current: {model: ssa-2-250a, outputs: {out_p: ams.PF7, out_n: ams.PF8}}  # S_CURRENT_P/N -> J4.3/J4.2 (docs/backplanes/ams.md)
+  dcdc_current: {model: acs758lcb-050b, outputs: {out: ams.PC1}}  # S_CURRENT_DCDC -> J3.5, not sampled on AMS dev (docs/backplanes/ams.md)
 bench:
   power:
     # Slot 4 (ECU): relay = TCA 0x20 port 0 pin 3, current monitor INA 0x45.
@@ -35,11 +35,11 @@ bench:
     - {board: ams, slot: 2, relay: {addr: 0x20, port: 0, pin: 1}, ina_addr: 0x41, current_A: 0.12}
   dac_routes:
     # bench DAC1 -> ECU pedal inputs (vcu_profile: brake, APPS1, APPS2)
-    - {dac: 0, channel: 0, to: ecu.S_BRAKE}
-    - {dac: 0, channel: 1, to: ecu.APPS_1}
-    - {dac: 0, channel: 2, to: ecu.APPS_2}
+    - {dac: 0, channel: 0, to: ecu.PF7}  # S_BRAKE_FIL (docs/backplanes/ecu.md)
+    - {dac: 0, channel: 1, to: ecu.PF8}  # APPS_1 (docs/backplanes/ecu.md)
+    - {dac: 0, channel: 2, to: ecu.PF9}  # APPS_2 (docs/backplanes/ecu.md)
     # bench DAC4 -> the AMS pack-current pair (IFS_HIL bench-01.yaml
     # routing.pack_current). When a test drives it, it overrides the
     # pack_current sensor's output.
-    - {dac: 3, channel: 0, to: ams.S_CURRENT_P}
-    - {dac: 3, channel: 1, to: ams.S_CURRENT_N}
+    - {dac: 3, channel: 0, to: ams.PF7}  # S_CURRENT_P (docs/backplanes/ams.md)
+    - {dac: 3, channel: 1, to: ams.PF8}  # S_CURRENT_N (docs/backplanes/ams.md)

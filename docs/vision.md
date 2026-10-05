@@ -29,14 +29,13 @@ reaches it.
 |---|---|---|
 | **Platform** | An emulatable MCU or SoC: its memory map and peripheral models. The only layer that knows about a CPU architecture. | `stm32h733` ([`platforms/cpus/stm32h733.repl`](../platforms/cpus/stm32h733.repl)) |
 | **Chip model** | An external component on a board, behind a bus the platform exposes. | LTC6820 + LTC6811 chain on SPI1; BMI088 on I²C2 |
-| **Board** | A platform plus its chip models plus named pins and connectors. User-definable. | MainLite (STM32H733, 3× FDCAN, ADC3 inputs; AMS, ECU or uDV by backplane) |
-| **Backplane** | The PCB a board is mounted on, which gives it its role: names for the board pins it routes to the car. Naming and validation only, no emulated hardware. | `ams` (LTC6820_CS = PB9, CAN_ACU = FDCAN1), `ecu`, `udv` |
+| **Board** | A platform plus its chip models plus named pins and connectors. User-definable. | MainLite (STM32H733, 3× FDCAN, ADC3 inputs; AMS, ECU or uDV by backplane, whose routing is reference documentation in [`backplanes/`](backplanes/)) |
 | **Firmware source** | Repository + ref + build recipe for one board's image. Never an emulator-only build. | `isc-fs/IFS08-CE-ECU@dev`, IFS_HIL's `configs/firmware/ecu.yaml` |
 | **System** | Boards placed, each with its firmware, plus the nets between them: CAN buses, wires, analog lines. Stored in a git-versionable file. | ECU + AMS + uDV on a shared ACU bus |
 | **Plant** | Something outside the electronics that the system senses and drives, connected through a co-simulation port. | Scripted inverter, cell voltages; later MingoCIL |
 | **Scenario / suite** | Stimulus and assertions against a system, in virtual time. IFS_HIL's pytest suites run unmodified in a compatibility mode. | ECU `smoke`; "precharge with a cell open" |
 
-The catalogue of platforms, chip models, boards and backplanes is what bounds the vHIL
+The catalogue of platforms, chip models and boards is what bounds the vHIL
 now. Every new MCU or chip needs a model, so models have to be cheap to write,
 testable on their own, and shared.
 
@@ -82,7 +81,7 @@ testable on their own, and shared.
         │ workers (Linux): Renode, one machine per board, CAN hubs, vcan,   │
         │ co-simulation port ◀──▶ plants (scripted now; MingoCIL later)     │
         └───────────────────────────────────────────────────────────────────┘
-        catalogue: platforms · chip models · boards · backplanes  (versioned, tested)
+        catalogue: platforms · chip models · boards  (versioned, tested)
 ```
 
 - **Workers** are Linux, so SocketCAN, `vcan` and pacing behave as they do in
