@@ -57,7 +57,7 @@ class Workspace:
     def catalog(self) -> dict:
         cat = self.root / "catalog"
         out = {}
-        for kind in ("boards", "backplanes", "models", "platforms", "firmware"):
+        for kind in ("boards", "models", "platforms", "firmware"):
             entries = []
             for path in sorted((cat / kind).glob("*.yaml")):
                 doc = yaml.safe_load(path.read_text()) or {}

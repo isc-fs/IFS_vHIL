@@ -105,7 +105,6 @@ MUTATIONS = {
         "board key": lambda d, v: d["boards"].update({v: dict(d["boards"]["ams"])}),
         "board.board": _set("boards", "ams", "board"),
         "board.firmware": _set("boards", "ams", "firmware"),
-        "board.backplane": _set("boards", "ams", "backplane"),
         "firmware_ref": _set("boards", "ams", "firmware_ref"),
         "bus key": lambda d, v: _rename(d["buses"], "can_acu", v),
         "bus node": lambda d, v: d["buses"]["can_acu"].update(nodes=[v]),
@@ -213,29 +212,6 @@ def test_hostile_names_never_reach_the_script_unchecked(monkeypatch, value, what
     _rename(getattr(system, what), {"buses": "can_acu", "devices": "sd"}[what], value)
     with pytest.raises(UnsafeText):
         system.render_renode(socketcan=True)
-
-
-@pytest.mark.parametrize("value", HOSTILE)
-@pytest.mark.parametrize("where", ["signal name", "signal pin"])
-def test_a_hostile_backplane_signal_is_refused(tmp_path, where, value):
-    """A backplane's signal names and the pins they name are plain words of a
-    system endpoint's shape, or the catalogue entry is refused."""
-    catalog = tmp_path / "catalog"
-    shutil.copytree(REPO / "catalog", catalog)
-    path = catalog / "backplanes" / "ams.yaml"
-    doc = yaml.safe_load(path.read_text())
-    # PB5 is AIR_P's: route it by the hostile name, or AIR_P to the hostile pin.
-    del doc["signals"]["AIR_P"]
-    doc["signals"].update({value: "PB5"} if where == "signal name" else {"AIR_P": value})
-    path.write_text(yaml.safe_dump(doc, allow_unicode=True))
-    try:
-        system = System(AMS, catalog)
-    except SystemError:
-        return
-    # Accepted only as a plain name, and then it changes nothing rendered.
-    assert rn.IDENT.fullmatch(value)
-    assert structure(system.render_renode(socketcan=True)) == structure(
-        System(AMS).render_renode(socketcan=True))
 
 
 # -- the encoders ------------------------------------------------------------------

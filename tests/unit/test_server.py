@@ -28,7 +28,6 @@ def test_catalog_lists_boards_and_models(client):
     cat = client.get("/api/catalog").json()
     assert "mainlite" in {b["id"] for b in cat["boards"]}
     assert {"ltc6811", "sd-card"} <= {m["id"] for m in cat["models"]}
-    assert {"ams", "ecu", "udv"} <= {b["id"] for b in cat["backplanes"]}
 
 
 def test_systems_lists_the_checkout(client):
