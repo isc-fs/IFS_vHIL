@@ -61,7 +61,9 @@ def power_on_commands(machine: str, vbat: bool) -> list[str]:
     board's power), so it is cleared first, before the booting firmware can
     read the old value: the RTC backup registers, and the 4 KB backup SRAM
     at 0x38800000 that the CAN bootloader keeps its DTC log in (RM0468:
-    retained only from the backup domain supply). The reset macro reloads the image and sets VTOR.
+    retained only from the backup domain supply). The reset macro points VTOR
+    at the bootloader in sector 0, which boots the app; flash keeps what it
+    held, as on the chip.
     Renode 1.17: Reset zeroes BASEPRI as read, but not the masking it applies
     (renode/renode#1021); a cut inside a FreeRTOS critical section left the
     next boot unable to take the TIM23 HAL tick, hanging in HAL_Delay.

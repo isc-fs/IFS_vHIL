@@ -301,10 +301,18 @@ def firmware_refs(firmware_id: str, request: Request):
 def _template(system_id: str, request: Request) -> str:
     cat = request.app.state.settings.workspace / "catalog"
     board = sorted(p.stem for p in (cat / "boards").glob("*.yaml"))[0]
-    fw = sorted(p.stem for p in (cat / "firmware").glob("*.yaml"))[0]
+    firmware = sorted(p.stem for p in (cat / "firmware").glob("*.yaml"))
+    entry = {"board": board, "firmware": firmware[0]}
+    # A board with roles (the MainLite) needs one: its first, running the
+    # firmware of the same name when the catalogue has it.
+    roles = list((yaml.safe_load((cat / "boards" / f"{board}.yaml").read_text())
+                  .get("roles") or {}))
+    if roles:
+        entry = {"board": board, "role": roles[0],
+                 "firmware": roles[0] if roles[0] in firmware else firmware[0]}
     return editor.dump_system({"kind": "system", "id": system_id,
                                "description": "A new system: place boards, wire their buses.",
-                               "boards": {"board0": {"board": board, "firmware": fw}}})
+                               "boards": {"board0": entry}})
 
 
 @router.get("/api/systems/{system_id}/dataflow")

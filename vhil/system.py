@@ -40,6 +40,7 @@ CATALOG = REPO / "catalog"
 # checked again here so that a schema that loosens can't let a value reach a
 # generated script, a catalogue path or a git command line.
 ID = re.compile(r"[a-z0-9][a-z0-9-]*")                       # $defs/id
+ROLES = ("ecu", "ams", "udv")                                # $defs/role
 NAME = rn.IDENT                                              # $defs/name
 ENDPOINT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z0-9_]+")   # $defs/endpoint
 NETDEV = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,14}")           # a Linux interface name
@@ -98,11 +99,13 @@ class Board:
     board: dict         # catalogue board
     platform: dict      # catalogue platform
     firmware: dict      # catalogue firmware source
-    bootloader: dict | None = None   # catalogue firmware in sector 0, if provisioned
-    node_id: int | None = None       # the bootloader's node ID
+    bootloader: dict | None = None   # catalogue firmware in sector 0: the board's
+    node_id: int | None = None       # the bootloader's node ID, for the board's role
     write_protect: list[int] = field(default_factory=list)   # WRP'd flash sectors at power-on
     firmware_ref: str | None = None     # this system's ref for the firmware, over the catalogue's
     bootloader_ref: str | None = None   # likewise for the bootloader
+    role: str | None = None             # the board's role (catalogue board roles)
+    flash_bus: str | None = None        # CAN connector the app is flashed over: the role's
 
     def ref(self, image: str = "firmware") -> str:
         """The branch or tag to build: the system's, else the catalogue's."""
@@ -131,13 +134,19 @@ class System:
         self.id = self.doc["id"]
         self.boards: dict[str, Board] = {}
         for name, spec in self.doc["boards"].items():
+            # The bootloader comes with the board (every MainLite carries
+            # one); its node ID and flash bus with the role the system gives
+            # it, from the catalogue board's roles.
             board = _entry("board", spec["board"], catalog)
+            role = spec.get("role")
             self.boards[name] = Board(
                 name, board, _entry("platform", board["platform"], catalog),
                 _entry("firmware", spec["firmware"], catalog),
-                _entry("firmware", spec["bootloader"], catalog) if "bootloader" in spec else None,
-                spec.get("node_id"), list(spec.get("write_protect", [])),
-                spec.get("firmware_ref"), spec.get("bootloader_ref"))
+                _entry("firmware", board["bootloader"], catalog) if "bootloader" in board else None,
+                (board.get("roles") or {}).get(role, {}).get("node_id"),
+                list(spec.get("write_protect", [])),
+                spec.get("firmware_ref"), spec.get("bootloader_ref"),
+                role, (board.get("roles") or {}).get(role, {}).get("flash_bus"))
         self.buses = self.doc.get("buses", {})
         self.bench = self.doc.get("bench", {})
         self.devices = {name: dict(spec, model_doc=_entry("model", spec["model"], catalog))
@@ -170,10 +179,13 @@ class System:
         need(ID, self.id, "system id")
         for name, spec in self.doc["boards"].items():
             need(NAME, name, "board name")
-            for key, pattern in (("board", ID), ("firmware", ID), ("bootloader", ID),
+            for key, pattern in (("board", ID), ("firmware", ID),
                                  ("firmware_ref", REF), ("bootloader_ref", REF)):
                 if key in spec:
                     need(pattern, spec[key], f"board '{name}': {key}")
+            if "role" in spec and spec["role"] not in ROLES:
+                raise SystemError(f"board '{name}': role {spec['role']!r} is not allowed here "
+                                  f"({', '.join(ROLES)})")
         for bus, spec in self.buses.items():
             need(NAME, bus, "bus name")
             for node in spec["nodes"]:
@@ -272,13 +284,38 @@ class System:
         self._check_params(name, dev, values)
         dev["params"] = {**dev.get("params", {}), **values}
 
+    def _check_role(self, b: Board) -> None:
+        """A board with roles (the MainLite: ECU, AMS, uDV) is placed in one of
+        them, which gives its bootloader's node ID and flash bus; each role's
+        flash bus is a CAN connector of the board. A board without roles
+        takes none."""
+        roles = b.board.get("roles") or {}
+        for name, role in roles.items():
+            if name not in ROLES:
+                raise SystemError(f"board {b.board['id']}: role {name!r} is not one of "
+                                  f"{', '.join(ROLES)}")
+            if role.get("flash_bus") not in b.board.get("can", {}):
+                raise SystemError(f"board {b.board['id']}: role {name}'s flash_bus "
+                                  f"{role.get('flash_bus')!r} is not one of its CAN connectors")
+        if not roles:
+            if b.role is not None:
+                raise SystemError(f"board '{b.name}': {b.board['id']} has no roles, "
+                                  f"so no role {b.role!r}")
+            return
+        if b.role is None:
+            raise SystemError(f"board '{b.name}': a {b.board['id']} needs a role "
+                              f"({', '.join(roles)})")
+        if b.role not in roles:
+            raise SystemError(f"board '{b.name}': role {b.role!r} is not one of "
+                              f"{b.board['id']}'s ({', '.join(roles)})")
+
     def _check(self) -> None:
         self._check_names()
         for b in self.boards.values():
-            if (b.bootloader is None) != (b.node_id is None):
-                raise SystemError(f"board '{b.name}': a bootloader needs a node_id, and only it")
+            self._check_role(b)
             if b.bootloader_ref is not None and b.bootloader is None:
-                raise SystemError(f"board '{b.name}': a bootloader_ref needs a bootloader")
+                raise SystemError(f"board '{b.name}': a bootloader_ref needs a bootloader, "
+                                  f"and {b.board['id']} carries none")
             if b.write_protect and "write_protect" not in b.platform.get("renode", {}):
                 raise SystemError(f"board '{b.name}': platform {b.platform['id']} has no "
                                   f"option bytes to write-protect sectors in")
@@ -375,6 +412,14 @@ class System:
                 if b.name == board:
                     out[controller] = bus
         return out
+
+    def flash_bus(self, board: str) -> str | None:
+        """The bus a board is flashed over (its flash_bus connector's), or None
+        if it names none or that connector is on no bus of this system."""
+        b = self.boards[board]
+        if b.flash_bus is None:
+            return None
+        return self.can_of(board).get(b.board["can"][b.flash_bus])
 
     def contract_buses(self, board: str) -> list[str]:
         """The buses a board's firmware CAN contract rides: the buses of the
@@ -550,7 +595,8 @@ class System:
             if b.bootloader is not None:
                 # Flash as a provisioned board holds it, loaded once: flash
                 # survives a reset (and a power cut), so what the bootloader
-                # programs stays. A reset starts the bootloader, as on the chip.
+                # programs stays. A reset starts the bootloader, as on the chip,
+                # and the bootloader sets VTOR to the app when it jumps.
                 # Without the images, the script expects $flash_<board> and
                 # $elf_<board>_bootloader, as it expects $elf_<board>.
                 if b.name in firmware and f"{b.name}.bootloader" in firmware:
@@ -564,6 +610,8 @@ class System:
                         "macro reset", '"""']
                 vtor = b.bootloader.get("load", {}).get("vector_table")
             else:
+                # A board that carries no bootloader boots its image from where
+                # the image's vector table is linked.
                 out += ["macro reset", '"""', f"    sysbus LoadELF ${var}"]
                 vtor = b.firmware.get("load", {}).get("vector_table")
             if vtor is not None:

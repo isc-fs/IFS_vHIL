@@ -37,20 +37,35 @@ def firmware(request):
 
 
 @pytest.fixture(scope="session")
-def make_sim(request, firmware):
+def images(firmware):
+    """images("ecu-ams") -> every image a system's boards run, as Sim takes
+    them: each board's application, and the CAN bootloader every MainLite
+    carries in sector 0 ("<board>.bootloader")."""
+    def get(system: str) -> dict[str, Path]:
+        fw = {}
+        for b in System(REPO / "systems" / f"{system}.yaml").boards.values():
+            fw[b.name] = firmware(b.firmware["id"])
+            if b.bootloader is not None:
+                fw[f"{b.name}.bootloader"] = firmware(b.bootloader["id"])
+        return fw
+    return get
+
+
+@pytest.fixture(scope="session")
+def make_sim(request, images):
     """Factory: make_sim("ecu", advance_immediately=False) -> a started Sim,
-    stopped at the end of the session."""
+    stopped at the end of the session, its boards past their bootloader's
+    auto-jump window and running their apps (Sim.wait_for_app). With
+    wait_for_app=False it is left at power-on, for a test that sets something
+    up before the boards boot."""
     sims = []
     log_dir = request.config.getoption("--sim-log-dir")
 
-    def make(system: str, **kwargs) -> Sim:
+    def make(system: str, wait_for_app: bool = True, **kwargs) -> Sim:
         sys_file = REPO / "systems" / f"{system}.yaml"
-        fw = {}
-        for b in System(sys_file).boards.values():
-            fw[b.name] = firmware(b.name)
-            if b.bootloader is not None:
-                fw[f"{b.name}.bootloader"] = firmware(b.bootloader["id"])
-        sim = Sim(sys_file, fw, **_with_log(kwargs, log_dir, system, len(sims))).start()
+        sim = Sim(sys_file, images(system), **_with_log(kwargs, log_dir, system, len(sims))).start()
+        if wait_for_app:
+            sim.wait_for_app()
         sims.append(sim)
         return sim
 

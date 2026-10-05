@@ -46,6 +46,7 @@ jobs:
           python -m vhil.system build "systems/$SYSTEM.yaml" \
             --workdir "$RUNNER_TEMP/fw" | tee built.txt
           echo "elf=$(sed -n "s/^$SYSTEM=//p" built.txt)" >> "$GITHUB_OUTPUT"
+          echo "bootloader=$(sed -n "s/^$SYSTEM.bootloader=//p" built.txt)" >> "$GITHUB_OUTPUT"
 
       - name: Install Renode ${{ env.RENODE_VERSION }}
         run: |
@@ -61,8 +62,12 @@ jobs:
         env:
           SYSTEM: ${{ matrix.system }}
           ELF: ${{ steps.fw.outputs.elf }}
+          BL_ELF: ${{ steps.fw.outputs.bootloader }}
         run: |
-          python -m vhil.system render "systems/$SYSTEM.yaml" -o "$RUNNER_TEMP/system.resc"
+          # With the images: the script loads the provisioned flash (the
+          # bootloader in sector 0, the app behind it) that it builds.
+          python -m vhil.system render "systems/$SYSTEM.yaml" --firmware "$SYSTEM=$ELF" \
+            --firmware "$SYSTEM.bootloader=$BL_ELF" -o "$RUNNER_TEMP/system.resc"
           "$RUNNER_TEMP/renode/renode-test" "tests/${SYSTEM}_smoke.robot" \
             --variable ELF:"$ELF" \
             --variable RESC:"$RUNNER_TEMP/system.resc" -r results

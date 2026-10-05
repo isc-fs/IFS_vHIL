@@ -26,11 +26,12 @@ BOOT_MS = 3000
 
 
 @pytest.fixture
-def car(firmware):
-    with Sim(REPO / "systems" / "ams.yaml", {"ams": firmware("ams")}) as sim:
+def car(images):
+    with Sim(REPO / "systems" / "ams.yaml", images("ams")) as sim:
         car = Car(sim)
         car.pins = {n: car.io.watch(GPIOB, p) for n, p in
                     {"air_n": AIR_N, "air_p": AIR_P, "pre": PRECHARGE_RELAY}.items()}
+        sim.wait_for_app()
         sim.run_for(ms=BOOT_MS)
         yield car
 

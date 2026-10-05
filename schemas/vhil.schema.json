@@ -12,6 +12,14 @@
       "type": "string",
       "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
     },
+    "role": {
+      "enum": [
+        "ecu",
+        "ams",
+        "udv"
+      ],
+      "description": "A role a board unit is provisioned for: the car's MainLite roles (catalog/boards/mainlite.yaml roles), and only these."
+    },
     "peripheral": {
       "type": "string",
       "description": "A backend path to a peripheral, e.g. Renode's sysbus.fdcan1_h7.",
@@ -101,6 +109,38 @@
         },
         "platform": {
           "$ref": "#/$defs/id"
+        },
+        "bootloader": {
+          "$ref": "#/$defs/id",
+          "description": "Firmware (catalog/firmware) every unit of this board carries in sector 0, burned at provisioning. The board boots through it from a provisioned flash image: it validates the application and jumps to it, or stays to be flashed over CAN. A system may build another ref of it (bootloader_ref), not leave it out."
+        },
+        "roles": {
+          "type": "object",
+          "description": "The roles a unit of this board is provisioned for, by name (the MainLite: ecu, ams, udv). A system places the board in one (its board entry's `role`), which gives the bootloader its node ID and the bus the app is flashed over.",
+          "propertyNames": {
+            "$ref": "#/$defs/role"
+          },
+          "minProperties": 1,
+          "additionalProperties": {
+            "type": "object",
+            "required": [
+              "node_id",
+              "flash_bus"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "node_id": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 14,
+                "description": "The node ID the bootloader answers to in this role, seeded at provisioning (0x1..0xE)."
+              },
+              "flash_bus": {
+                "$ref": "#/$defs/name",
+                "description": "The board CAN connector (its `can`) the app is flashed over in this role."
+              }
+            }
+          }
         },
         "vbat": {
           "type": "boolean",
@@ -244,7 +284,7 @@
           "properties": {
             "vector_table": {
               "$ref": "#/$defs/address",
-              "description": "VTOR to set at reset, as a bootloader would."
+              "description": "Where the image's vector table is linked. The image at the reset address (a board's bootloader, 0x08000000) gets VTOR set to it at reset, as the boot address does; an application behind a bootloader gets it from the bootloader when it jumps."
             }
           }
         },
@@ -319,6 +359,10 @@
               "board": {
                 "$ref": "#/$defs/id"
               },
+              "role": {
+                "$ref": "#/$defs/role",
+                "description": "The board's role, one of its catalogue entry's roles (a MainLite: ecu, ams or udv): it gives the bootloader's node ID and flash bus. Required for a board that has roles."
+              },
               "firmware": {
                 "$ref": "#/$defs/id"
               },
@@ -328,21 +372,11 @@
                 "pattern": "^(?![-/])(?!.*\\.\\.)(?!.*//)[A-Za-z0-9._/+-]{1,100}(?<![./])$(?![\\s\\S])",
                 "description": "Branch or tag of the firmware's repo to build for this board, in place of the catalogue entry's ref. `vhil.system build --ref` still overrides it."
               },
-              "bootloader": {
-                "$ref": "#/$defs/id",
-                "description": "Firmware (catalog/firmware) in sector 0 ahead of the application, as the board is provisioned. The board then boots through it from a provisioned flash image."
-              },
               "bootloader_ref": {
                 "type": "string",
                 "minLength": 1,
                 "pattern": "^(?![-/])(?!.*\\.\\.)(?!.*//)[A-Za-z0-9._/+-]{1,100}(?<![./])$(?![\\s\\S])",
-                "description": "Branch or tag of the bootloader's repo, in place of its catalogue ref. Only with a bootloader."
-              },
-              "node_id": {
-                "type": "integer",
-                "minimum": 1,
-                "maximum": 14,
-                "description": "The bootloader's node ID, seeded as an SWD provisioning burn does (0x1..0xE)."
+                "description": "Branch or tag of the bootloader the board carries (its catalogue board's bootloader), in place of the bootloader's catalogue ref."
               },
               "write_protect": {
                 "type": "array",

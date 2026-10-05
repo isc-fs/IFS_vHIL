@@ -31,9 +31,10 @@ BOOT_MS = 3500
 @pytest.fixture(scope="module")
 def booted(make_sim):
     """One ECU, outputs watched from reset, run for BOOT_MS of virtual time."""
-    sim = make_sim("ecu")
+    sim = make_sim("ecu", wait_for_app=False)     # watched from power-on
     io = sim.io("ecu")
     pins = {"ok": io.watch(*OK_STATUS), "err": io.watch(*ERR_STATUS)}
+    sim.wait_for_app()
     sim.run_for(ms=BOOT_MS)
     return sim, pins
 
@@ -46,10 +47,13 @@ def test_heartbeat_every_control_tick(booted):
     assert_period(hb[1:], period_us=CONTROL_PERIOD_US, tolerance_us=0, min_count=100)
 
 
-def test_heartbeat_starts_within_two_ticks_of_reset(booted):
+def test_heartbeat_starts_within_two_ticks_of_the_app(booted):
+    """Within two ticks of the app's start, which follows the bootloader's
+    2 s auto-jump window; nothing from the ECU before it."""
     sim, _ = booted
     first = sim.can("can_acu").frames(HEARTBEAT)[0]
-    assert first.t_us <= 2 * CONTROL_PERIOD_US, f"first 0x100 at {first.t_ms} ms"
+    t_us = first.t_us - sim.app_started["ecu"]
+    assert 0 <= t_us <= 2 * CONTROL_PERIOD_US, f"first 0x100 {t_us / 1000} ms into the app"
 
 
 def test_heartbeat_only_on_acu_bus(booted):
@@ -65,14 +69,18 @@ def test_health_every_diag_period(booted):
 
 
 def test_status_leds_ok_from_first_tick(booted):
+    """The bootloader lights OK_STATUS (PD14) for its window (stm32-can-bootloader
+    main.c:481 LED_OK_ON); its handoff resets GPIOD (HAL_DeInit), so the pin
+    drops; the app lights it again from its first tick."""
     sim, pins = booted
     io = sim.io("ecu")
     ok = io.edges(pins["ok"])
     first_hb = sim.can("can_acu").frames(HEARTBEAT)[0]
-    assert [e.level for e in ok] == [True], f"OK_STATUS edges: {ok}"
+    assert [e.level for e in ok] == [True, False, True], f"OK_STATUS edges: {ok}"
+    assert ok[1].t_us <= first_hb.t_us, "OK_STATUS dropped after the app started"
     # The LED write follows the 0x100 post in the same tick, so it is set
     # no later than one tick after the first heartbeat.
-    assert ok[0].t_us <= first_hb.t_us + CONTROL_PERIOD_US
+    assert ok[2].t_us <= first_hb.t_us + CONTROL_PERIOD_US
     assert io.edges(pins["err"]) == [], "ERR_STATUS lit without AmsError"
 
 
@@ -123,11 +131,12 @@ def test_uptime_counts_seconds(running):
     assert all(b - a == 1 for a, b in zip(up, up[1:])), f"uptime {up}"
 
 
-def test_traffic_on_the_other_buses_does_not_disturb_the_acu_bus(firmware):
+def test_traffic_on_the_other_buses_does_not_disturb_the_acu_bus(images):
     """Bus independence: 1000 frames/s on each of the inverter and dash buses
     (IDs nothing listens to) for 5 s: 0x100 keeps its exact 10 ms, every task
     keeps stepping."""
-    with Sim(REPO / "systems" / "ecu.yaml", {"ecu": firmware("ecu")}) as sim:
+    with Sim(REPO / "systems" / "ecu.yaml", images("ecu")) as sim:
+        sim.wait_for_app()
         sim.run_for(ms=1000)
         for bus in ("can_inv", "can_dash"):
             for k in range(10):

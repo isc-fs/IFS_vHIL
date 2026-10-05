@@ -1,8 +1,10 @@
 """Drive a system in virtual time: the API native tests are written against.
 
-    with Sim("systems/ecu.yaml", firmware={"ecu": "ECU08.elf"}) as sim:
+    with Sim("systems/ecu.yaml", firmware={"ecu": "ECU08.elf",
+                                           "ecu.bootloader": "CAN_BL.elf"}) as sim:
+        t = sim.wait_for_app()          # the bootloader's 2 s window, then the app
         sim.run_for(ms=2000)
-        hb = sim.can("can_acu").frames(0x100)
+        hb = sim.can("can_acu").frames(0x100, since_us=t)
         assert_period(hb, period_us=10_000, tolerance_us=100)
 
 Time only moves when a test says so (`run_for`, `run_until`). Between calls
@@ -31,6 +33,7 @@ from typing import Callable, Iterable, Optional
 
 from vhil import elf
 from vhil.bench import DEFAULT_RENODE, REPO, _free_port
+from vhil.flash_image import APP_BASE
 from vhil import renode as rn
 from vhil.renode import RenodeMonitor
 from vhil.system import System
@@ -184,8 +187,15 @@ class CanBus:
                          f'{_arg(bool(extended))}')
 
     def send_periodic(self, key: str, can_id: int, data: bytes, period_ms: float,
-                      start_us: int = 0, extended: bool = False) -> None:
-        self.sim.monitor(f'{self.probe} SendPeriodic {rn.quote(key)} {_int(can_id)} '
+                      start_us: Optional[int] = None, extended: bool = False) -> None:
+        """Send every period_ms from start_us (default: now). The probe's own
+        "start 0 = now" reads its clock from the monitor thread, where it is
+        0, so it would replay every period since power-on, one per sync
+        quantum: now is passed explicitly."""
+        key = rn.quote(key)                     # refused before anything is asked of Renode
+        if start_us is None:
+            start_us = self.sim.now_us()
+        self.sim.monitor(f'{self.probe} SendPeriodic {key} {_int(can_id)} '
                          f'{_hex(data)} {int(period_ms * 1000)} {_int(start_us)} '
                          f'{_arg(bool(extended))}')
 
@@ -265,6 +275,7 @@ class Sim:
         self.coverage_dir = INSTRUMENT.coverage_dir if coverage_dir is None else coverage_dir
         self.coverage_logs: dict[str, Path] = {}
         self.last_activity = 0
+        self.app_started: dict[str, int] = {}   # board -> us its app started (wait_for_app)
         self._mach: Optional[str] = None
         self._proc = self._monitor = None
 
@@ -378,6 +389,38 @@ class Sim:
             if self.now_us() >= deadline:
                 raise TimeoutError(f"condition not met within {timeout_ms} ms of virtual time")
             self.run_for(ms=step_ms)
+
+    def in_app(self, board: str) -> bool:
+        """Whether a board runs its application: its PC at or past where the
+        app's vector table is linked (0x08020000 behind the CAN bootloader,
+        which owns sector 0)."""
+        b = self.system.boards[board]
+        if b.bootloader is None:
+            return True
+        base = b.firmware.get("load", {}).get("vector_table", APP_BASE)
+        return int(self.monitor(f"{rn.ident(b.platform['renode'].get('cpu', 'cpu'))} PC",
+                                board=board).strip(), 16) >= base
+
+    def wait_for_app(self, board: Optional[str] = None, timeout_ms: float = 4000,
+                     step_ms: float = 10) -> int:
+        """Run until `board` (default: every board) runs its application, as
+        after a power-on its bootloader jumps to it at the end of its 2 s
+        auto-jump window (stm32-can-bootloader ARCHITECTURE.md "Boot flow").
+        Polls the PC every step_ms; TimeoutError if a bootloader stays, e.g.
+        on a bad image or a boot request.
+
+        Returns when the (last) application started, in us, and records each
+        board's in `app_started`: to the ms from the app's HAL tick (uwTick,
+        ms since its HAL_Init; stm32h7xx_hal.c), else the poll time."""
+        boards = [board] if board is not None else list(self.system.boards)
+        self.run_until(lambda: all(self.in_app(b) for b in boards), timeout_ms, step_ms)
+        now = self.now_us()
+        for b in boards:
+            try:
+                self.app_started[b] = now - 1000 * self.read_symbol(b, "uwTick", 4)
+            except KeyError:
+                self.app_started[b] = now
+        return max(self.app_started[b] for b in boards)
 
     # -- access ------------------------------------------------------------
 

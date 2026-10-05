@@ -33,8 +33,9 @@ COLLAPSE_V = 175        # < 50 % of 351.5 V
 
 
 @pytest.fixture
-def car(firmware):
-    with Sim(REPO / "systems" / "ams.yaml", {"ams": firmware("ams")}) as sim:
+def car(images):
+    with Sim(REPO / "systems" / "ams.yaml", images("ams")) as sim:
+        sim.wait_for_app()
         sim.run_for(ms=BOOT_MS)
         yield Car(sim)
 
@@ -70,10 +71,11 @@ def test_tsms_and_a_press_lock_car_and_precharge(car):
     assert car.mode() == 1
 
 
-def test_a_button_held_from_reset_is_not_a_press(firmware):
+def test_a_button_held_from_reset_is_not_a_press(images):
     """C-032b."""
-    with Sim(REPO / "systems" / "ams.yaml", {"ams": firmware("ams")}) as sim:
+    with Sim(REPO / "systems" / "ams.yaml", images("ams")) as sim:
         sim.io("ams").set_input(GPIOF, DASH_CHG, True)
+        sim.wait_for_app()
         sim.run_for(ms=BOOT_MS)
         car = Car(sim)
         car.vcu(0)

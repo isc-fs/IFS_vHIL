@@ -33,6 +33,10 @@ including the pins the vHIL does not model.
 - Bootloader node id: **ECU 0x1, AMS 0x2, uDV 0x3**.
 - Flash bus: **FDCAN2** for the ECU and the uDV, **FDCAN1** for the AMS
   (owner, 2026-10-05).
+- Both are data on the board, not here: the MainLite's `roles` table
+  (`catalog/boards/mainlite.yaml`) maps each role to its node id and flash
+  bus, and a system places each MainLite in one (`role: ecu`). The vHIL
+  boots every MainLite through its bootloader, seeded with its role's node id.
 - The MainLite's CAN_1 header pins are L-then-H (J4.3 `CANL1`, J4.4
   `CANH1`). CAN_2 and CAN_3 are H-then-L. This ordering is the likely cause of
   the AMS swap (IFS08-CE-AMS#621).

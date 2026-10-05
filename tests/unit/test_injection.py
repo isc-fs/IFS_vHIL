@@ -105,6 +105,7 @@ MUTATIONS = {
         "board key": lambda d, v: d["boards"].update({v: dict(d["boards"]["ams"])}),
         "board.board": _set("boards", "ams", "board"),
         "board.firmware": _set("boards", "ams", "firmware"),
+        "board.role": _set("boards", "ams", "role"),
         "firmware_ref": _set("boards", "ams", "firmware_ref"),
         "bus key": lambda d, v: _rename(d["buses"], "can_acu", v),
         "bus node": lambda d, v: d["buses"]["can_acu"].update(nodes=[v]),
@@ -130,8 +131,7 @@ MUTATIONS = {
     },
     ECU_AMS: {
         "dac route": lambda d, v: d["bench"]["dac_routes"][0].update(to=v),
-        "bootloader_ref": lambda d, v: d["boards"]["ecu"].update(bootloader="can-bootloader",
-                                                                node_id=1, bootloader_ref=v),
+        "bootloader_ref": lambda d, v: d["boards"]["ecu"].update(bootloader_ref=v),
     },
     ECU: {
         "signal name": lambda d, v: _rename(d["port"]["signals"], "start", v),
@@ -350,12 +350,12 @@ def test_sim_params_are_checked_as_the_system_files_are(tmp_path):
     from vhil.sim import Sim
     (tmp_path / "c.img").write_bytes(b"")
     with pytest.raises(SystemError, match="not inside"):
-        Sim(AMS, {"ams": "/fw/ams.elf"}, params={"sd": {"image": "/etc/passwd"}})
+        Sim(AMS, {"ams": "/fw/ams.elf", "ams.bootloader": "/fw/bl.elf"}, params={"sd": {"image": "/etc/passwd"}})
     with pytest.raises(SystemError, match="must be true or false"):
-        Sim(AMS, {"ams": "/fw/ams.elf"}, params={"sd": {"dead": "true\nquit"}})
+        Sim(AMS, {"ams": "/fw/ams.elf", "ams.bootloader": "/fw/bl.elf"}, params={"sd": {"dead": "true\nquit"}})
     with pytest.raises(SystemError, match="unknown params"):
-        Sim(AMS, {"ams": "/fw/ams.elf"}, params={"sd": {"imageFile": "x"}})
-    sim = Sim(AMS, {"ams": "/fw/ams.elf"}, params={"sd": {"image": str(tmp_path / "c.img")}},
+        Sim(AMS, {"ams": "/fw/ams.elf", "ams.bootloader": "/fw/bl.elf"}, params={"sd": {"imageFile": "x"}})
+    sim = Sim(AMS, {"ams": "/fw/ams.elf", "ams.bootloader": "/fw/bl.elf"}, params={"sd": {"image": str(tmp_path / "c.img")}},
               card_dirs=[tmp_path])
     assert sim.system.devices["sd"]["params"]["image"] == str(tmp_path / "c.img")
 
@@ -441,7 +441,7 @@ class _Recorder:
 @pytest.fixture
 def sim():
     from vhil.sim import Sim
-    s = Sim(ECU, {"ecu": "/fw/ecu.elf"})
+    s = Sim(ECU, {"ecu": "/fw/ecu.elf", "ecu.bootloader": "/fw/bl.elf"})
     s._monitor = _Recorder()
     return s
 

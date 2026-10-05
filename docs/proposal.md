@@ -73,7 +73,8 @@ IFS_HIL recipe ─▶ ECU08.elf / AMS.elf  (identical to what the bench flashes)
 - **Boot.** The app images are linked at `0x08020000` behind the CAN
   bootloader. The ECU never sets VTOR itself, so the boot script does what
   the bootloader would: load the ELF, set VTOR, start. (Emulating the
-  bootloader too is Phase 4.)
+  bootloader too is Phase 4.) *Since #4, every system boots through the real
+  CAN bootloader instead (CLAUDE.md invariant 5).*
 - **CAN.** One Renode CAN hub per physical bus. On Linux, `SocketCANBridge`
   exposes each hub as a `vcan` interface, which is exactly what the physical
   bench's tests already talk to — the main reason the suites can be reused.

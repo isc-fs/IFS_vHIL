@@ -55,14 +55,16 @@ def armed(make_sim):
 
 
 @pytest.fixture
-def ams(firmware):
-    with Sim(REPO / "systems" / "ams.yaml", {"ams": firmware("ams")}) as sim:
+def ams(images):
+    with Sim(REPO / "systems" / "ams.yaml", images("ams")) as sim:
+        sim.wait_for_app()
         sim.run_for(ms=BOOT_MS)
         yield sim
 
 
 def _since_boot(sim):
-    return [f for f in sim.can("can_acu").frames(since_us=BOOT_MS * 1000) if f.id != PIT_CMD]
+    return [f for f in sim.can("can_acu").frames(since_us=sim.app_started["ams"] + BOOT_MS * 1000)
+            if f.id != PIT_CMD]
 
 
 def test_every_frame_has_its_contract_dlc(armed, contract):
@@ -88,7 +90,8 @@ def test_every_cyclic_frame_keeps_its_period(armed, contract):
         if not period_ms:
             continue
         period_us = period_ms * 1000
-        t = [f.t_us for f in armed.can("can_acu").frames(can_id, since_us=BOOT_MS * 1000 + 1_100_000)]
+        since = armed.app_started["ams"] + BOOT_MS * 1000 + 1_100_000
+        t = [f.t_us for f in armed.can("can_acu").frames(can_id, since_us=since)]
         deltas = [b - a for a, b in zip(t, t[1:])]
         bad = [d for d in deltas if abs(d - period_us) > period_us // 20]
         if len(deltas) < 2 or bad:

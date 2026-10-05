@@ -103,7 +103,7 @@ case "$cmd" in
 vm) vm ;;
 image) build_images ;;
 fw)
-    [ $# -gt 0 ] || set -- ecu ams ecu-bl
+    [ $# -gt 0 ] || set -- ecu ams
     in_container "$prelude"'
         refs=(); for r in $FW_REFS; do refs+=(--ref "$r"); done
         mkdir -p /vhil/fw
@@ -118,8 +118,9 @@ unit)
 smoke)
     sys=${1:?usage: smoke <ecu|ams>}
     in_container "$prelude"'
-        need_elf "$1"
-        python -m vhil.system render "systems/$1.yaml" -o /tmp/system.resc
+        need_elf "$1"; need_elf "$1.bootloader"
+        python -m vhil.system render "systems/$1.yaml" --firmware "$1=$(elf "$1")" \
+            --firmware "$1.bootloader=$(elf "$1.bootloader")" -o /tmp/system.resc
         # renode-test drives Renode through its Robot server, which listens on
         # every interface (HttpListener http://*:port/, no bind option in
         # Renode 1.17). This job runs on the default Docker network, in its own
@@ -142,8 +143,9 @@ coverage)
 speed)
     [ $# -gt 0 ] || set -- 100 528
     in_container "$prelude"'
-        need_elf ecu; nproc
-        python scripts/speed.py systems/ecu.yaml "ecu=$(elf ecu)" --mips "$@"' "$@" ;;
+        need_elf ecu; need_elf ecu.bootloader; nproc
+        python scripts/speed.py systems/ecu.yaml "ecu=$(elf ecu)" \
+            "ecu.bootloader=$(elf ecu.bootloader)" --mips "$@"' "$@" ;;
 ifs-hil)
     run_args=("${vcan_args[@]}")
     in_container "$prelude"'
@@ -183,7 +185,8 @@ editor)
     # the host: macOS's AirPlay Receiver holds it.
     image=$editor_image run_args=(-p "127.0.0.1:${VHIL_EDITOR_PORT:-5050}:5000")
     in_container "$prelude"'
-        export VHIL_ECU_ELF=$(elf ecu) VHIL_AMS_ELF=$(elf ams) PM_HOST=0.0.0.0
+        export VHIL_ECU_ELF=$(elf ecu) VHIL_AMS_ELF=$(elf ams) PM_HOST=0.0.0.0 \
+            VHIL_CAN_BOOTLOADER_ELF=$(elf ecu.bootloader)
         exec scripts/editor.sh' ;;
 editor-check)
     # Pipeline Manager's ./validate (its frontend's load) on each system's

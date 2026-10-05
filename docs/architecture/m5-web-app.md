@@ -66,7 +66,8 @@ All JSON; times in microseconds of virtual time.
   A pytest scenario reads the checked-out tests and systems: HEAD only.
   Board `firmware_ref`s of the system as saved pick the images. A scenario is either
   `{"kind": "run", "virtual_ms": N, "stimuli": [...]}` (stimuli: CAN
-  send / periodic, GPIO set, analog set at virtual times) or
+  send / periodic, GPIO set, analog set at virtual times from power-on, so
+  the first 2 s are each MainLite's bootloader window, before its app runs) or
   `{"kind": "pytest", "select": "tests/sim/test_x.py::test_y"}`.
   Limits ([`docs/deploy.md`](../deploy.md#limits)): a run over the
   server's virtual time, stimuli or watch limit is 422; with too many

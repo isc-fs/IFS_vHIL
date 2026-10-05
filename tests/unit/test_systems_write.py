@@ -129,14 +129,14 @@ def test_dev_mode_takes_the_author_from_the_request(env):
 @pytest.mark.parametrize("body, message", [
     ("kind: system\nid: ams\nboards: [unclosed\n", "not YAML"),
     ("- a\n- list\n", "YAML mapping"),
-    ("kind: system\nid: other\nboards:\n  a: {board: mainlite, firmware: ams}\n",
+    ("kind: system\nid: other\nboards:\n  a: {board: mainlite, role: ams, firmware: ams}\n",
      "does not match the file name"),
     ("kind: system\nid: ams\nboards: {}\n", "should be non-empty"),
-    ("kind: system\nid: ams\nwheels: 4\nboards:\n  a: {board: mainlite, firmware: ams}\n",
+    ("kind: system\nid: ams\nwheels: 4\nboards:\n  a: {board: mainlite, role: ams, firmware: ams}\n",
      "wheels"),
     ("kind: system\nid: ams\nboards:\n  a: {board: no-such-board, firmware: ams}\n",
      "no board 'no-such-board'"),
-    ("kind: system\nid: ams\nboards:\n  a: {board: mainlite, firmware: ams}\n"
+    ("kind: system\nid: ams\nboards:\n  a: {board: mainlite, role: ams, firmware: ams}\n"
      "buses:\n  b: {kind: can, nodes: [a.FDCAN9]}\n", "no connector or pin 'FDCAN9'"),
 ])
 def test_invalid_systems_are_422_with_the_reason_and_save_nothing(env, body, message):

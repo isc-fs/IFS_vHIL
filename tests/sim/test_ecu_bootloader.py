@@ -50,9 +50,8 @@ def _flat(elf: Path) -> bytes:
 
 
 @pytest.fixture
-def ecu(firmware):
-    with Sim(REPO / "systems" / "ecu-bl.yaml",
-             {"ecu": firmware("ecu"), "ecu.bootloader": firmware("can-bootloader")}) as sim:
+def ecu(images):
+    with Sim(REPO / "systems" / "ecu.yaml", images("ecu")) as sim:
         yield sim
 
 

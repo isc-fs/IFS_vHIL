@@ -8,7 +8,10 @@ time:
   # time on a desktop; still 20x finer than the firmware's 10 ms period.
   quantum_s: 0.0005
 boards:
-  ecu: {board: mainlite, firmware: ecu}
+  # A MainLite in the ECU role: node 0x1, flashed over FDCAN2 (the role's,
+  # catalog/boards/mainlite.yaml). It boots through its CAN bootloader, then
+  # jumps to the app after the 2 s auto-jump window, as on the car.
+  ecu: {board: mainlite, role: ecu, firmware: ecu}
 buses:
   # Bus names are what tests attach to. host_netdev follows bench-01's
   # netdev names, so IFS_HIL's suites open the same interfaces.

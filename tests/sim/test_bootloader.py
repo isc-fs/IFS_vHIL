@@ -25,19 +25,15 @@ AUTO_JUMP_MS = 2000
 META_CRC = 0x080FFFE8                 # metadata word 2: image_crc32
 
 
-def _bl_firmware(firmware, board):
-    return {board: firmware(board), f"{board}.bootloader": firmware("can-bootloader")}
-
-
 @pytest.fixture
-def ecu_bl(firmware):
-    with Sim(REPO / "systems" / "ecu-bl.yaml", _bl_firmware(firmware, "ecu")) as sim:
+def ecu_bl(images):
+    with Sim(REPO / "systems" / "ecu.yaml", images("ecu")) as sim:
         yield sim
 
 
 @pytest.fixture
-def ams_bl(firmware):
-    with Sim(REPO / "systems" / "ams-bl.yaml", _bl_firmware(firmware, "ams")) as sim:
+def ams_bl(images):
+    with Sim(REPO / "systems" / "ams.yaml", images("ams")) as sim:
         yield sim
 
 

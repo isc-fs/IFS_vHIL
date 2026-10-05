@@ -93,10 +93,11 @@ class Rig:
 
 
 @pytest.fixture
-def rig(firmware):
+def rig(images):
     with Sim(REPO / "systems" / "ecu-ams.yaml",
-             {"ecu": firmware("ecu"), "ams": firmware("ams")}) as sim:
+             images("ecu-ams")) as sim:
         rig = Rig(sim)
+        sim.wait_for_app()                      # both boards, past their bootloaders
         rig.run(3000)
         yield rig
 

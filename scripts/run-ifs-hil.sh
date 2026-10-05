@@ -7,9 +7,11 @@
 # suite`, exactly as /hil-test does. SocketCAN is used when can0..can2 exist
 # (CI, or WSL2 after scripts/wsl-vcan.sh --load). RENODE overrides the
 # launcher path, VHIL_SYSTEM the system file (default systems/ecu.yaml).
-# ECU_FIRMWARE_BIN defaults to the .bin next to the .elf. In a system with
-# more boards than the ECU, VHIL_FIRMWARE names the others' images:
-# VHIL_FIRMWARE="ams=build/AMS.elf" with VHIL_SYSTEM=systems/ecu-ams.yaml.
+# ECU_FIRMWARE_BIN defaults to the .bin next to the .elf. VHIL_FIRMWARE names
+# every other image of the system: the CAN bootloader each MainLite carries
+# (VHIL_FIRMWARE="ecu.bootloader=CAN_BL.elf"), and with
+# VHIL_SYSTEM=systems/ecu-ams.yaml the AMS's ("... ams=build/AMS.elf
+# ams.bootloader=CAN_BL.elf").
 set -euo pipefail
 here=$(cd "$(dirname "$0")/.." && pwd)
 ifs_hil=$(realpath "$1"); elf=$(realpath "$2"); suite=${3:-smoke}

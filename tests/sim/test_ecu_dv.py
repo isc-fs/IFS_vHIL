@@ -141,6 +141,7 @@ def _confirm(car, since_us):
 
 
 def _to_wait_start_brake(car):
+    car.sim.wait_for_app()
     car.sim.run_for(ms=1000)
     assert car.state() == WAIT_START_BRAKE
 
@@ -164,21 +165,21 @@ def _to_dv_active(car, pct=40):
     assert _confirm(car, t) == 1, "0x511 not confirming the DV drive"
 
 
-def _boot(firmware):
-    return Sim(REPO / "systems" / "ecu.yaml", {"ecu": firmware("ecu")})
+def _boot(images):
+    return Sim(REPO / "systems" / "ecu.yaml", images("ecu"))
 
 
 @pytest.fixture
-def car(firmware):
-    with _boot(firmware) as sim:
+def car(images):
+    with _boot(images) as sim:
         yield _Car(sim)
 
 
 # -- the contract frames, on one boot parked in WaitStartBrake -------------------
 
 @pytest.fixture(scope="module")
-def parked(firmware):
-    with _boot(firmware) as sim:
+def parked(images):
+    with _boot(images) as sim:
         car = _Car(sim)
         _to_wait_start_brake(car)
         yield car
@@ -229,7 +230,9 @@ def test_dv_refused_without_hard_braking_or_a_request(parked, brake, req):
     t = parked.sim.run_for(ms=500)
     parked.acu.stop_periodic("r2d")
     parked.brake(BRAKE_RELEASED)
-    parked.sim.run_for(ms=50)
+    # Past UdvR2dStaleMs: the next case must not meet this case's request,
+    # still fresh, with its own hard braking (as [2700-0] did after [2500-1]).
+    parked.sim.run_for(ms=R2D_STALE_MS + 3 * TICK_MS)
     assert parked.state() == WAIT_START_BRAKE, "a DV R2D entry it should have refused"
     assert all(f.data[0] == 0 for f in parked.acu.frames([R2D_CONFIRM], since_us=t - 500_000))
 
@@ -304,8 +307,8 @@ def test_manual_r2d_takes_precedence(car):
 # -- DV torque --------------------------------------------------------------------
 
 @pytest.fixture(scope="module")
-def driving(firmware):
-    with _boot(firmware) as sim:
+def driving(images):
+    with _boot(images) as sim:
         car = _Car(sim)
         _to_dv_active(car)
         yield car

@@ -7,7 +7,10 @@ description: >-
 time:
   quantum_s: 0.0005
 boards:
-  ams: {board: mainlite, firmware: ams}
+  # A MainLite in the AMS role: node 0x2, flashed over FDCAN1 (the role's,
+  # catalog/boards/mainlite.yaml). It boots through its CAN bootloader, then
+  # jumps to the app after the 2 s auto-jump window, as on the car.
+  ams: {board: mainlite, role: ams, firmware: ams}
 buses:
   can_acu: {kind: can, nodes: [ams.FDCAN1], host_netdev: can2}  # CAN_H/L_ACU, J1.9/J1.10, H/L swapped (docs/backplanes/ams.md)
 devices:
