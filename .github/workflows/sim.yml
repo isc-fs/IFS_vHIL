@@ -29,13 +29,16 @@ jobs:
       fail-fast: false
       matrix:
         # <group>-<k>: the group's test files, sorted, round-robin over its
-        # shards (ams 3, ecu 2, other 2), so each stays well inside the
+        # shards (ams 4, ecu 3, other 2), so each stays well inside the
         # timeout as suites are added (sim (ams) alone had reached 42 of 45
-        # min; other 27 before every boot gained the bootloader's 2 s window).
+        # min). Every boot spends the bootloader's 2 s window first, ~16 s of
+        # wall time on a desktop (its FDCAN polling loop emulates at ~1/8 real
+        # time): the same app suites take ~1.7x as long as without it.
         # Flashing over CAN at the bus rate is minutes of emulation per image,
         # so the *bootloader* files get shards of their own: ams-bootloader,
         # and bootloader (the rest).
-        shard: [ams-1, ams-2, ams-3, ecu-1, ecu-2, ams-bootloader, bootloader, other-1, other-2]
+        shard: [ams-1, ams-2, ams-3, ams-4, ecu-1, ecu-2, ecu-3, ams-bootloader, bootloader,
+                other-1, other-2]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -85,8 +88,8 @@ jobs:
           case "$SHARD" in
             ams-bootloader) all=tests/sim/test_ams_bootloader.py; n=1 ;;
             bootloader) all=$(ls tests/sim/test_*.py | grep "$bl" | grep -v '/test_ams_'); n=1 ;;
-            ams-*) all=$(ls tests/sim/test_ams_*.py | grep -v "$bl"); n=3 ;;
-            ecu-*) all=$(ls tests/sim/test_ecu_*.py | grep -v "$bl"); n=2 ;;
+            ams-*) all=$(ls tests/sim/test_ams_*.py | grep -v "$bl"); n=4 ;;
+            ecu-*) all=$(ls tests/sim/test_ecu_*.py | grep -v "$bl"); n=3 ;;
             other-*) all=$(ls tests/sim/test_*.py | grep -v -e '/test_ams_' -e '/test_ecu_' -e "$bl"); n=2 ;;
           esac
           k=${SHARD##*-}; case "$k" in [0-9]*) ;; *) k=1 ;; esac
