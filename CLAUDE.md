@@ -70,8 +70,10 @@ gives each its firmware source (at the catalogue's ref, or the board's
 `firmware_ref` / `bootloader_ref`), and wires them together. Renode scripts and
 the virtual broker's wiring are **generated** from it by `vhil/system.py`.
 Never hand-edit a generated script, and never put a car-specific name in the
-catalogue (`ecu`, not `ifs08-ecu`). Devices (`catalog/models/`) attach to a
-board's connectors or to another device's port: the LTC6811s sit on the
+catalogue (`ecu`, not `ifs08-ecu`). A board sits on a backplane
+(`catalog/backplanes/`, `backplane:` in the system) whose signals name the
+pins it routes, from the car's schematics: `ams.LTC6820_CS` is `ams.PB9`.
+Devices (`catalog/models/`) attach to a board's connectors or to another device's port: the LTC6811s sit on the
 LTC6820's isoSPI chain, one per IC, in chain order. Analog sources (models
 with backend `analog`, e.g. the AMS's current sensors) drive a board's
 analog inputs through `outputs`; their pin voltages are set at load. Plants (a
