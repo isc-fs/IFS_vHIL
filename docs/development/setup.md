@@ -36,8 +36,8 @@ authentication, and has no option to bind one address. `vhil.sim` and
 themselves on `127.0.0.1` only ([`models/renode/VhilMonitor.cs`](../../models/renode/VhilMonitor.cs),
 `vhil.renode.launch`). `scripts/explore.sh` and `probe.sh` use the console
 monitor (`--console -P -1`). `renode-test`'s Robot server listens on every
-interface too, so `vhil-docker.sh smoke` runs it in a loopback-only network
-namespace (`unshare --net`).
+interface too; `vhil-docker.sh smoke` runs it on the default Docker network
+with no published port, so it is not reachable from the host.
 
 An `sd-card` `image` is opened read-write, so it must lie inside a card-image
 directory: `$VHIL_CARD_DIR` (`:`-separated; default `build/cards`). A relative
