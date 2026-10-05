@@ -64,7 +64,8 @@ def test_ecu_ams_share_the_acu_bus_and_power_separately():
     """M3 (#11): one ACU bus, two boards; each relay powers only its own
     board's CAN controllers (vhil/broker.py)."""
     system = System(REPO / "systems" / "ecu-ams.yaml")
-    assert system.buses["can_acu"]["nodes"] == ["ecu.FDCAN2", "ams.FDCAN1"]
+    assert system.buses["can_acu"]["nodes"] == ["ecu.CAN_ACU", "ams.CAN_ACU"]
+    assert system.can_of("ecu")["sysbus.fdcan2_h7"] == system.can_of("ams")["sysbus.fdcan1_h7"]
     cfg = system.bench_config()
     power = {c["machine"]: c for c in cfg["power"]}
     assert power["ecu"]["relay"]["pin"] == 3 and power["ecu"]["ina_addr"] == 0x45
@@ -110,6 +111,84 @@ def test_a_firmware_can_contract_must_name_a_can_connector_of_its_board(tmp_path
     fw.write_text(fw.read_text().replace("contract: [FDCAN9]", "contract: []"))
     with pytest.raises(SystemError, match="'contract': \\[\\]"):   # schema: minItems 1
         System(REPO / "systems" / "ecu.yaml", catalog)
+
+
+# -- backplanes ---------------------------------------------------------------
+
+@pytest.mark.parametrize("path", SYSTEMS, ids=lambda p: p.name)
+def test_every_board_of_a_system_sits_on_its_backplane(path):
+    system = System(path)
+    for b in system.boards.values():
+        assert b.backplane is not None and b.backplane["mounts"] == b.board["id"]
+
+
+@pytest.mark.parametrize("signal, pin", [("ams.LTC6820_CS", "ams.PB9"),
+                                         ("ams.CAN_ACU", "ams.FDCAN1"),
+                                         ("ams.S_CURRENT_DCDC", "ams.PC1"),
+                                         ("ecu.APPS_1", "ecu.PF8"), ("ecu.START", "ecu.PB5"),
+                                         ("ecu.CAN_DASH", "ecu.FDCAN3")])
+def test_a_backplane_signal_is_the_pin_it_routes(signal, pin):
+    system = System(REPO / "systems" / "ecu-ams.yaml")
+    assert system.resolve(signal)[1:] == system.resolve(pin)[1:]
+
+
+def test_backplanes_change_no_generated_script(tmp_path):
+    """Naming only: the same system with MCU names renders the same script."""
+    for name in ("ecu-ams", "ams-bl"):
+        text = (REPO / "systems" / f"{name}.yaml").read_text()
+        doc = yaml.safe_load(text)
+        system = System(REPO / "systems" / f"{name}.yaml")
+        for b in system.boards.values():
+            for signal, pin in b.backplane["signals"].items():
+                text = text.replace(f"{b.name}.{signal}]", f"{b.name}.{pin}]")
+                text = text.replace(f"{b.name}.{signal},", f"{b.name}.{pin},")
+                text = text.replace(f"{b.name}.{signal}}}", f"{b.name}.{pin}}}")
+        p = tmp_path / f"{name}.yaml"
+        p.write_text(text.replace("backplane: ams, ", "").replace("backplane: ecu, ", ""))
+        bare = yaml.safe_load(p.read_text())
+        assert not any("backplane" in b for b in bare["boards"].values()) and bare != doc
+        fw = {k: Path(f"/fw/{k}.elf") for k in system.boards}
+        assert System(p).render_renode(fw, socketcan=True) == system.render_renode(fw, socketcan=True)
+        assert System(p).bench_config() == system.bench_config()
+
+
+def test_the_firmware_contract_follows_a_signal_to_its_connector():
+    system = System(REPO / "systems" / "ecu-ams.yaml")
+    assert system.contract_buses("ecu") == ["can_acu"]   # ecu firmware: contract [FDCAN2]
+
+
+def _backplane(tmp_path, **change):
+    catalog = tmp_path / "catalog"
+    shutil.copytree(REPO / "catalog", catalog)
+    path = catalog / "backplanes" / "ecu.yaml"
+    doc = yaml.safe_load(path.read_text())
+    doc.update(change)
+    path.write_text(yaml.safe_dump(doc))
+    return catalog
+
+
+@pytest.mark.parametrize("change, message", [
+    ({"mounts": "other"}, "mounts other, not mainlite"),
+    ({"signals": {"X": "PB7"}}, "X goes to PB7, which mainlite lacks"),
+    ({"signals": {"PB4": "PB5"}}, "PB4 is named like a mainlite connector"),
+    ({"signals": {"A": "PB5", "B": "PB5"}}, "A and B both go to PB5"),
+])
+def test_bad_backplanes_are_rejected_with_a_reason(tmp_path, change, message):
+    with pytest.raises(SystemError, match=message):
+        System(REPO / "systems" / "ecu.yaml", _backplane(tmp_path, **change))
+
+
+def test_a_pin_is_on_one_bus_by_either_name(tmp_path):
+    p = tmp_path / "s.yaml"
+    p.write_text("kind: system\nid: t\nboards:\n  ecu: {board: mainlite, backplane: ecu, firmware: ecu}\n"
+                 "buses:\n  a: {kind: can, nodes: [ecu.CAN_ACU]}\n  b: {kind: can, nodes: [ecu.FDCAN2]}\n")
+    with pytest.raises(SystemError, match="'ecu.FDCAN2' is on both 'a' and 'b' \\(as 'ecu.CAN_ACU'\\)"):
+        System(p)
+
+
+def test_a_signal_needs_its_board_on_the_backplane(tmp_path):
+    with pytest.raises(SystemError, match="no connector or pin 'CAN_ACU'"):
+        System(_system(tmp_path, "buses:\n  b: {kind: can, nodes: [ecu.CAN_ACU]}\n"))
 
 
 def test_unknown_catalogue_entries_are_rejected(tmp_path):

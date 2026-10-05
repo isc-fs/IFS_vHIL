@@ -29,7 +29,8 @@ port:
 | `can_rx` | system → plant | frames | Every frame with that ID the system sent on the bus during the last step, with its virtual timestamp (µs) and data. |
 | `can_tx` | plant → system | frames | Standard frames to put on the bus at the start of the next step, in order. |
 
-Endpoints are board connectors from the catalogue (`<board>.<pin>`); CAN
+Endpoints are board connectors from the catalogue (`<board>.<pin>`), or the
+board's backplane signals routed to them (`ecu.APPS_1`); CAN
 signals name a bus of the system. `python -m vhil.system validate` checks
 that each endpoint is of the kind its signal says.
 

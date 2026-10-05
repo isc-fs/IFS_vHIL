@@ -49,6 +49,30 @@ def test_isospi_chain_is_typed_end_to_end(spec):
     assert bridge["isospi"]["type"] == chip["isospi"]["type"]
 
 
+def test_a_board_on_a_backplane_shows_its_signals(spec):
+    """A board on a backplane is its own node type, its routed pins named by
+    the backplane's signals and the rest by the board's."""
+    ams = {i["name"]: i["type"] for i in _types(spec)["mainlite on ams"]["interfaces"]}
+    assert ams["CAN_ACU"] == "can" and ams["LTC6820_CS"] == "gpio"
+    assert ams["S_CURRENT_P"] == "analog" and ams["SPI1"] == "spi"
+    assert "FDCAN1" not in ams and "PB9" not in ams
+    ecu = {i["name"] for i in _types(spec)["mainlite on ecu"]["interfaces"]}
+    assert {"CAN_INV", "CAN_ACU", "CAN_DASH", "APPS_1", "START", "RTDS"} <= ecu
+    assert _types(spec)["mainlite on udv"]["additionalData"]["vhil"] == {
+        "kind": "board", "board": "mainlite", "backplane": "udv"}
+
+
+def test_a_pin_named_by_the_mcu_lands_on_its_signal(spec):
+    """ams.PB9 and ams.LTC6820_CS are one interface; the graph writes the
+    backplane's name back."""
+    doc = yaml.safe_load((REPO / "systems" / "ams.yaml").read_text())
+    doc["devices"]["isospi"]["cs"] = "ams.PB9"
+    doc["buses"]["can_acu"]["nodes"] = ["ams.FDCAN1"]
+    back = from_dataflow(to_dataflow(doc, spec), spec)
+    assert back["devices"]["isospi"]["cs"] == "ams.LTC6820_CS"
+    assert back["buses"]["can_acu"]["nodes"] == ["ams.CAN_ACU"]
+
+
 @pytest.mark.parametrize("path", SYSTEMS, ids=lambda p: p.name)
 def test_every_system_survives_the_round_trip(spec, path):
     doc = yaml.safe_load(path.read_text())
@@ -134,21 +158,22 @@ def test_an_edit_in_the_graph_is_a_valid_system(spec):
     graph = to_dataflow(yaml.safe_load((REPO / "systems" / "ams.yaml").read_text()), spec)
     g = graph["graphs"][0]
     ecu = copy.deepcopy(next(n for n in g["nodes"] if n["instanceName"] == "ams"))
-    ecu["id"], ecu["instanceName"] = "n:ecu", "ecu"
+    ecu["id"], ecu["instanceName"], ecu["name"] = "n:ecu", "ecu", "mainlite on ecu"
     for p in ecu["properties"]:
         p["id"] = p["id"].replace(":ams:", ":ecu:")
         if p["name"] == "firmware":
             p["value"] = "ecu"
-    for i in ecu["interfaces"]:
-        i["id"] = i["id"].replace(":ams:", ":ecu:")
+    ecu["interfaces"] = [{"id": f"i:ecu:{i['name']}", "name": i["name"],
+                          "direction": i["direction"], "side": i["side"]}
+                         for i in _types(spec)["mainlite on ecu"]["interfaces"]]
     g["nodes"].append(ecu)
     # As the UI does it: a new stub on the bus, the connection to the stub.
     bus = next(n for n in g["nodes"] if n["instanceName"] == "can_acu")["interfaces"][0]
     bus["bus"]["stubs"].append({"id": "3f6c-stub", "offset": 90, "side": "left"})
-    g["connections"].append({"id": "c:new", "from": "i:ecu:FDCAN2", "to": "3f6c-stub"})
+    g["connections"].append({"id": "c:new", "from": "i:ecu:CAN_ACU", "to": "3f6c-stub"})
     doc = from_dataflow(graph, spec)
-    assert doc["buses"]["can_acu"]["nodes"] == ["ams.FDCAN1", "ecu.FDCAN2"]
-    assert doc["boards"]["ecu"] == {"board": "mainlite", "firmware": "ecu"}
+    assert doc["buses"]["can_acu"]["nodes"] == ["ams.CAN_ACU", "ecu.CAN_ACU"]
+    assert doc["boards"]["ecu"] == {"board": "mainlite", "backplane": "ecu", "firmware": "ecu"}
     assert validate(doc) == []
 
 
@@ -199,7 +224,7 @@ def test_an_edit_keeps_the_files_comments():
     out = write_system(doc, text)
     assert yaml.safe_load(out) == doc
     assert "  ecu: {board: mainlite, firmware: ecu}\n" in out
-    assert "nodes: [ams.FDCAN1, ecu.FDCAN2]" in out
+    assert "nodes: [ams.CAN_ACU, ecu.FDCAN2]" in out
     assert "sd-card" not in out
     for line in text.splitlines():
         if line.lstrip().startswith("#"):

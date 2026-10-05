@@ -1,7 +1,8 @@
 """Systems as data: load, check, render and build them.
 
 A system file (systems/*.yaml) places boards from the catalogue (catalog/),
-gives each its firmware, and wires them together. This module turns one into
+each on the backplane that gives it its role, gives each its firmware, and
+wires them together. This module turns one into
 what the backend needs: a Renode script, the virtual broker's wiring, and the
 firmware images. Nothing outside the platform's `renode:` section is
 Renode-specific, and nothing here knows about any particular MCU.
@@ -80,7 +81,7 @@ def _load(path: Path, kind: str) -> dict:
 
 def _entry(kind: str, ident: str, catalog: Path) -> dict:
     folder = {"platform": "platforms", "board": "boards", "firmware": "firmware",
-              "model": "models"}[kind]
+              "model": "models", "backplane": "backplanes"}[kind]
     if not isinstance(ident, str) or not ID.fullmatch(ident):
         raise SystemError(f"{kind} id {ident!r} is not a catalogue id")
     path = catalog / folder / f"{ident}.yaml"
@@ -103,6 +104,12 @@ class Board:
     write_protect: list[int] = field(default_factory=list)   # WRP'd flash sectors at power-on
     firmware_ref: str | None = None     # this system's ref for the firmware, over the catalogue's
     bootloader_ref: str | None = None   # likewise for the bootloader
+    backplane: dict | None = None       # catalogue backplane the board is mounted on
+
+    def connector(self, name: str) -> str:
+        """The board's own connector or pin for a name: a backplane signal
+        (LTC6820_CS) is the pin it is routed to (PB9); anything else is itself."""
+        return (self.backplane or {}).get("signals", {}).get(name, name)
 
     def ref(self, image: str = "firmware") -> str:
         """The branch or tag to build: the system's, else the catalogue's."""
@@ -110,8 +117,10 @@ class Board:
         return (self.firmware_ref if image == "firmware" else self.bootloader_ref) or fw["ref"]
 
     def endpoint(self, connector: str) -> tuple[str, object]:
-        """(kind, target) for a connector or pin: ('can'|'spi'|'sdmmc'|'i2c',
-        peripheral), ('analog', {adc, channel}) or ('gpio', {port, pin})."""
+        """(kind, target) for a connector or pin, or a backplane signal routed
+        to one: ('can'|'spi'|'sdmmc'|'i2c', peripheral), ('analog', {adc,
+        channel}) or ('gpio', {port, pin})."""
+        connector = self.connector(connector)
         for kind, section in (("can", "can"), ("spi", "spi"), ("sdmmc", "sdmmc"),
                               ("i2c", "i2c"), ("analog", "analog_in"), ("gpio", "gpio")):
             if connector in self.board.get(section, {}):
@@ -137,7 +146,8 @@ class System:
                 _entry("firmware", spec["firmware"], catalog),
                 _entry("firmware", spec["bootloader"], catalog) if "bootloader" in spec else None,
                 spec.get("node_id"), list(spec.get("write_protect", [])),
-                spec.get("firmware_ref"), spec.get("bootloader_ref"))
+                spec.get("firmware_ref"), spec.get("bootloader_ref"),
+                _entry("backplane", spec["backplane"], catalog) if "backplane" in spec else None)
         self.buses = self.doc.get("buses", {})
         self.bench = self.doc.get("bench", {})
         self.devices = {name: dict(spec, model_doc=_entry("model", spec["model"], catalog))
@@ -170,8 +180,8 @@ class System:
         need(ID, self.id, "system id")
         for name, spec in self.doc["boards"].items():
             need(NAME, name, "board name")
-            for key, pattern in (("board", ID), ("firmware", ID), ("bootloader", ID),
-                                 ("firmware_ref", REF), ("bootloader_ref", REF)):
+            for key, pattern in (("board", ID), ("backplane", ID), ("firmware", ID),
+                                 ("bootloader", ID), ("firmware_ref", REF), ("bootloader_ref", REF)):
                 if key in spec:
                     need(pattern, spec[key], f"board '{name}': {key}")
         for bus, spec in self.buses.items():
@@ -272,9 +282,35 @@ class System:
         self._check_params(name, dev, values)
         dev["params"] = {**dev.get("params", {}), **values}
 
+    def _check_backplane(self, b: Board) -> None:
+        """The backplane mounts this board and routes each of its signals to a
+        connector or pin the board has, one signal per pin. No signal is named
+        like a board connector, so an endpoint means one thing."""
+        bp = b.backplane
+        if bp["mounts"] != b.board["id"]:
+            raise SystemError(f"board '{b.name}': backplane {bp['id']} mounts {bp['mounts']}, "
+                              f"not {b.board['id']}")
+        sections = ("can", "spi", "sdmmc", "i2c", "analog_in", "gpio")
+        own = {c for s in sections for c in b.board.get(s, {})}
+        routed: dict[str, str] = {}
+        for signal, pin in bp.get("signals", {}).items():
+            where = f"backplane {bp['id']}: signal"
+            for value in (signal, pin):
+                if not isinstance(value, str) or not NAME.fullmatch(value):
+                    raise SystemError(f"{where} {value!r} is not allowed here")
+            if signal in own:
+                raise SystemError(f"{where} {signal} is named like a {b.board['id']} connector")
+            if pin not in own:
+                raise SystemError(f"{where} {signal} goes to {pin}, which {b.board['id']} lacks")
+            if pin in routed:
+                raise SystemError(f"{where}s {routed[pin]} and {signal} both go to {pin}")
+            routed[pin] = signal
+
     def _check(self) -> None:
         self._check_names()
         for b in self.boards.values():
+            if b.backplane is not None:
+                self._check_backplane(b)
             if (b.bootloader is None) != (b.node_id is None):
                 raise SystemError(f"board '{b.name}': a bootloader needs a node_id, and only it")
             if b.bootloader_ref is not None and b.bootloader is None:
@@ -286,15 +322,18 @@ class System:
                 if connector not in b.board.get("can", {}):
                     raise SystemError(f"board '{b.name}': firmware {b.firmware['id']}'s CAN "
                                       f"contract rides {connector}, which {b.board['id']} lacks")
-        seen: dict[str, str] = {}
+        seen: dict[tuple, tuple] = {}
         for bus, spec in self.buses.items():
             for node in spec["nodes"]:
-                _, kind, _ = self.resolve(node)
+                board, kind, _ = self.resolve(node)
                 if kind != spec["kind"]:
                     raise SystemError(f"bus '{bus}' is {spec['kind']} but '{node}' is {kind}")
-                if node in seen:
-                    raise SystemError(f"'{node}' is on both '{seen[node]}' and '{bus}'")
-                seen[node] = bus
+                # By the board's own connector: ams.CAN_ACU is ams.FDCAN1.
+                key = (board.name, board.connector(node.split(".", 1)[1]))
+                if key in seen:
+                    raise SystemError(f"'{node}' is on both '{seen[key][1]}' and '{bus}'"
+                                      + (f" (as '{seen[key][0]}')" if seen[key][0] != node else ""))
+                seen[key] = (node, bus)
         for name, dev in self.devices.items():
             interface = dev["model_doc"].get("interface", {})
             boards = set()
@@ -387,7 +426,8 @@ class System:
                 continue
             for node in spec["nodes"]:
                 name, connector = node.split(".", 1)
-                if name == board and (wanted is None or connector in wanted):
+                if name == board and (wanted is None
+                                      or self.boards[board].connector(connector) in wanted):
                     out.append(bus)
         return out
 

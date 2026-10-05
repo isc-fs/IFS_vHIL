@@ -10,19 +10,19 @@ time:
   quantum_s: 0.0005
 boards:
   # Provisioned as on the car: the CAN bootloader in sector 0, node 0x1.
-  ecu: {board: mainlite, firmware: ecu, bootloader: can-bootloader, node_id: 1}
+  ecu: {board: mainlite, backplane: ecu, firmware: ecu, bootloader: can-bootloader, node_id: 1}
 buses:
   # Bus names are what tests attach to. host_netdev follows bench-01's
   # netdev names, so IFS_HIL's suites open the same interfaces.
-  can_inv:  {kind: can, nodes: [ecu.FDCAN1], host_netdev: can0}
-  can_dash: {kind: can, nodes: [ecu.FDCAN3], host_netdev: can1}
-  can_acu:  {kind: can, nodes: [ecu.FDCAN2], host_netdev: can2}
+  can_inv:  {kind: can, nodes: [ecu.CAN_INV], host_netdev: can0}
+  can_dash: {kind: can, nodes: [ecu.CAN_DASH], host_netdev: can1}
+  can_acu:  {kind: can, nodes: [ecu.CAN_ACU], host_netdev: can2}
 bench:
   power:
     # Slot 4: relay = TCA 0x20 port 0 pin 3, current monitor INA 0x45.
     - {board: ecu, slot: 4, relay: {addr: 0x20, port: 0, pin: 3}, ina_addr: 0x45, current_A: 0.13}
   dac_routes:
     # bench DAC1 -> pedal inputs (vcu_profile: brake, APPS1, APPS2)
-    - {dac: 0, channel: 0, to: ecu.PF7}
-    - {dac: 0, channel: 1, to: ecu.PF8}
-    - {dac: 0, channel: 2, to: ecu.PF9}
+    - {dac: 0, channel: 0, to: ecu.S_BRAKE}
+    - {dac: 0, channel: 1, to: ecu.APPS_1}
+    - {dac: 0, channel: 2, to: ecu.APPS_2}
