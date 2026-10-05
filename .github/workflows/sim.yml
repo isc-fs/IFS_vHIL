@@ -53,7 +53,7 @@ jobs:
         id: fw
         run: |
           pip install -q pyyaml "jsonschema>=4" pytest "fastapi==0.115.*" "httpx==0.28.*"
-          for s in ecu ams ecu-bl; do
+          for s in ecu ams; do
             python -m vhil.system build "systems/$s.yaml" --workdir "$RUNNER_TEMP/fw" | tee -a built.txt
           done
           echo "ecu=$(sed -n 's/^ecu=//p' built.txt | tail -1)" >> "$GITHUB_OUTPUT"
@@ -98,9 +98,11 @@ jobs:
         env:
           RENODE: ${{ runner.temp }}/renode/renode
           ECU_ELF: ${{ steps.fw.outputs.ecu }}
+          BL_ELF: ${{ steps.fw.outputs.bootloader }}
         run: |
           nproc
-          python scripts/speed.py systems/ecu.yaml "ecu=$ECU_ELF" --mips 100 528 \
+          python scripts/speed.py systems/ecu.yaml "ecu=$ECU_ELF" "ecu.bootloader=$BL_ELF" \
+            --mips 100 528 \
             | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Upload Renode logs

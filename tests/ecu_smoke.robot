@@ -3,8 +3,12 @@ ECU smoke suite on a virtual MainLite (STM32H733).
 
 Boots the unmodified ECU application image (the same ELF IFS_HIL flashes to a
 real MainLite) and checks it from the CAN side only, as the physical bench's
-Block A / Block I do. The Renode script is generated from systems/ecu.yaml:
-    python -m vhil.system render systems/ecu.yaml -o /tmp/ecu.resc
+Block A / Block I do. The ECU boots as the car's does, through the CAN
+bootloader in sector 0, whose 2 s auto-jump window comes first: the first
+frame of each case waits that much longer. The Renode script is generated
+from systems/ecu.yaml, with the flash image it provisions:
+    python -m vhil.system render systems/ecu.yaml --firmware ecu=/path/to/ECU08.elf \
+        --firmware ecu.bootloader=/path/to/CAN_BL.elf -o /tmp/ecu.resc
     renode-test tests/ecu_smoke.robot --variable ELF:/path/to/ECU08.elf --variable RESC:/tmp/ecu.resc
 
 
@@ -30,10 +34,11 @@ ${TASK_DIAG}            0x10
 Boot ECU
     [Arguments]    ${hub}
     Should Not Be Empty    ${ELF}    Pass the image with --variable ELF:/path/to/ECU08.elf
-    Should Not Be Empty    ${RESC}    Pass the script rendered from systems/ecu.yaml with --variable RESC:<path>
+    Should Not Be Empty    ${RESC}    Pass the script rendered from systems/ecu.yaml (with --firmware) as --variable RESC:<path>
     Execute Command    $elf_ecu=@${ELF}
     Execute Command    include @${RESC}
-    Create CAN Tester    ${hub}    defaultTimeout=3
+    # 3 s, plus the bootloader's 2 s window before the app's first frame.
+    Create CAN Tester    ${hub}    defaultTimeout=5
 
 Count Frames With Id
     [Arguments]    ${id}    ${count}
@@ -43,7 +48,7 @@ Count Frames With Id
 
 Health Byte
     [Arguments]    ${index}
-    ${data}=    Wait For Frame With Id    ${ID_PIT_HEALTH}    timeout=2
+    ${data}=    Wait For Frame With Id    ${ID_PIT_HEALTH}    timeout=4
     ${byte}=    Evaluate    $data[${index}]
     RETURN    ${byte}
 
@@ -66,7 +71,7 @@ Should Drive The Dash Bus On FDCAN3
 Should Publish The Health Frame At 1 Hz
     [Documentation]    0x704 is ungated, from DiagTask (I-001).
     Boot ECU    can_acu
-    Wait For Frame With Id    ${ID_PIT_HEALTH}    timeout=2
+    Wait For Frame With Id    ${ID_PIT_HEALTH}    timeout=4
     Wait For Frame With Id    ${ID_PIT_HEALTH}    timeout=1.2
 
 Health Frame Should Show All Five Tasks Running

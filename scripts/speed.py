@@ -1,6 +1,7 @@
 """How fast this host emulates a system: virtual seconds per wall second.
 
-    python scripts/speed.py systems/ecu.yaml ecu=ECU08.elf [--mips 100 528] [--seconds 5]
+    python scripts/speed.py systems/ecu.yaml ecu=ECU08.elf ecu.bootloader=CAN_BL.elf \
+        [--mips 100 528] [--seconds 5]
 
 Above 1.0x the wall-clock bench (IFS_HIL's suites) can keep real time; below
 it, wall-clock tests see stretched periods. Native tests (vhil.sim) are
@@ -32,7 +33,8 @@ def main() -> int:
             if mips is not None:
                 for board in sim.system.boards:
                     sim.monitor(f"cpu PerformanceInMips {mips}", board=board)
-            sim.run_for(ms=500)   # past boot
+            sim.wait_for_app()    # the bootloader's 2 s window
+            sim.run_for(ms=500)   # past the app's boot
             t0 = time.monotonic()
             sim.run_for(ms=args.seconds * 1000)
             wall = time.monotonic() - t0

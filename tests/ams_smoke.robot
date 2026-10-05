@@ -3,8 +3,10 @@ AMS smoke suite on systems/ams.yaml: the unmodified AMS application on a
 virtual MainLite, with its battery as models (LTC6820 bridge + 10 LTC6811s on
 isoSPI). Stimulus goes through the models' own API and checks read the AMS's
 CAN output, so the AMS is judged on what it reports about the battery it is
-given. Run with:
-    python -m vhil.system render systems/ams.yaml -o /tmp/ams.resc
+given. The AMS boots through the CAN bootloader in sector 0, as on the car:
+its 2 s auto-jump window comes before the first frame. Run with:
+    python -m vhil.system render systems/ams.yaml --firmware ams=/path/to/AMS.elf \
+        --firmware ams.bootloader=/path/to/CAN_BL.elf -o /tmp/ams.resc
     renode-test tests/ams_smoke.robot --variable ELF:/path/to/AMS.elf --variable RESC:/tmp/ams.resc
 
 
@@ -22,10 +24,11 @@ ${ALL_MODULES}          0x1F
 *** Keywords ***
 Boot AMS
     Should Not Be Empty    ${ELF}    Pass the image with --variable ELF:/path/to/AMS.elf
-    Should Not Be Empty    ${RESC}    Pass the script rendered from systems/ams.yaml with --variable RESC:<path>
+    Should Not Be Empty    ${RESC}    Pass the script rendered from systems/ams.yaml (with --firmware) as --variable RESC:<path>
     Execute Command    $elf_ams=@${ELF}
     Execute Command    include @${RESC}
-    Create CAN Tester    can_acu    defaultTimeout=3
+    # 3 s, plus the bootloader's 2 s window before the app's first frame.
+    Create CAN Tester    can_acu    defaultTimeout=5
 
 Status Should Become
     [Documentation]    Wait (up to ${frames} status frames, 500 ms apart) for a 0x4A0 field to equal a value.
