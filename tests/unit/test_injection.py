@@ -7,6 +7,7 @@ file, or the rendered script has exactly the structure of the clean one (same
 lines, same commands, same platform-description entries, string literals and
 file arguments aside)."""
 import copy
+import functools
 import math
 import os
 import re
@@ -20,6 +21,7 @@ from pydantic import ValidationError
 from vhil import renode as rn
 from vhil.renode import RenodeMonitor, UnsafeText
 from vhil.server.runs import RunRequest
+from vhil import system as vsystem
 from vhil.system import REPO, System, SystemError
 
 HOSTILE = [
@@ -46,6 +48,28 @@ def structure(text: str) -> list[str]:
         line = re.sub(r"@\S+", "@P", line)
         out.append(re.sub(r'^(    \w+): (?:"S"|true|false|-?[0-9][0-9A-Za-z.+-]*)$', r"\1: V", line))
     return out
+
+
+@pytest.fixture(autouse=True)
+def _cached_catalogue(monkeypatch):
+    """Catalogue entries parsed once: the matrix below builds ~2500 systems,
+    and parsing the catalogue's YAML is most of each one. A mutation only
+    ever touches the system file, never the catalogue."""
+    monkeypatch.setattr(vsystem, "_entry", _cached_entry)
+
+
+@functools.cache
+def _entry_once(kind: str, ident: str, catalog: Path) -> dict:
+    return _ORIGINAL_ENTRY(kind, ident, catalog)
+
+
+def _cached_entry(kind, ident, catalog):
+    if not isinstance(ident, str):
+        return _ORIGINAL_ENTRY(kind, ident, catalog)
+    return copy.deepcopy(_entry_once(kind, ident, catalog))
+
+
+_ORIGINAL_ENTRY = vsystem._entry
 
 
 def _render(path: Path) -> str:
@@ -126,23 +150,33 @@ CASES = [(src, field, value) for src, fields in MUTATIONS.items() for field in f
                          ids=[f"{s.stem}-{f}-{i % len(HOSTILE)}" for i, (s, f, _) in
                               enumerate(CASES)])
 def test_a_hostile_system_value_is_refused_or_inert(tmp_path, src, field, value):
-    def render(v):
-        doc = yaml.safe_load(src.read_text())
-        MUTATIONS[src][field](doc, v)
-        (tmp_path / v.encode().hex()[:32]).mkdir(exist_ok=True)
-        return _render(_write(tmp_path / v.encode().hex()[:32], doc, src.name))
-    # The clean scripts: the file as it is, and with a plain value in the field
-    # (an unset param, "", renders as the first).
-    clean = [structure(_render(src))]
     try:
-        clean.append(structure(render(BENIGN.get(field, "plain_1"))))
-    except SystemError:
-        pass
-    try:
-        text = render(value)
+        text = _render_with(tmp_path, src, field, value)
     except (SystemError, UnsafeText):
         return
-    assert structure(text) in clean, f"{field}={value!r} changed the script"
+    assert structure(text) in _clean(src, field), f"{field}={value!r} changed the script"
+
+
+def _render_with(folder: Path, src: Path, field: str, v: str) -> str:
+    doc = yaml.safe_load(src.read_text())
+    MUTATIONS[src][field](doc, v)
+    (folder / v.encode().hex()[:32]).mkdir(parents=True, exist_ok=True)
+    return _render(_write(folder / v.encode().hex()[:32], doc, src.name))
+
+
+@functools.cache
+def _clean(src: Path, field: str) -> tuple:
+    """The clean scripts' structures: the file as it is, and with a plain value
+    in the field (an unset param, "", renders as the first). Once per field."""
+    import tempfile
+    clean = [structure(_render(src))]
+    with tempfile.TemporaryDirectory() as d:
+        try:
+            clean.append(structure(_render_with(Path(d), src, field,
+                                                BENIGN.get(field, "plain_1"))))
+        except SystemError:
+            pass
+    return tuple(clean)
 
 
 @pytest.mark.parametrize("value", HOSTILE)
