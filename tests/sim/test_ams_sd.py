@@ -10,7 +10,7 @@ Firmware facts (IFS08-CE-AMS):
   rows at 4 Hz (SafetyTask capture period 250 ms, ams_config.hpp:273); 314
     columns: tick_ms, FSM / pack fields, then c<m>_<cell> (5 x 19) and
     t<m>_<slot> (5 x 40)
-  card detect PE3: LOW = card in; with the slot empty the carrier's pull-up
+  card detect PE3: LOW = card in; with the slot empty the MainLite's pull-up
     holds it HIGH and BSP_SD_Init returns before touching SDMMC
     (fatfs_platform.c BSP_PlatformIsDetected); the logger retries the mount
     every tick and never blocks (sd_logger_task.cpp:1-20)
@@ -38,7 +38,7 @@ LOG_S, AFTER_CUT_S = 8, 6
 RUNS, RUN_S = 3, 5
 COLUMNS = 314
 STATUS, TIMING = 0x4A0, 0x6C1
-SDMMC, CARD = "sysbus.sdmmc1", "sysbus.sdmmc1.sd"   # catalog/boards/mlc-carrier.yaml
+SDMMC, CARD = "sysbus.sdmmc1", "sysbus.sdmmc1.sd"   # catalog/boards/mainlite.yaml
 LOG_STATE = "_ZN12_GLOBAL__N_111g_log_stateE"      # sd_logger_task.cpp:117
 LOG_NO_CARD, LOG_LOGGING = 1, 2                    # sd_logger_task.cpp:117, 666, 668
 AMS_OK = ("sysbus.gpioPortB", 4)
@@ -180,7 +180,7 @@ def runs(tmp_path_factory, firmware):
 
 def test_one_sealed_log_per_run(runs):
     """U-161, U-162: per run, the 4 Hz LOG and the 100 Hz IMU log (the
-    carrier's BMI088, imu_task.cpp -> sd_logger_task.cpp) sealed with a
+    MainLite's BMI088, imu_task.cpp -> sd_logger_task.cpp) sealed with a
     matching .CRC each, the next ones open, no stray files (AMS#495
     fragmentation)."""
     files = _ls(runs)

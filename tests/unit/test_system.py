@@ -83,7 +83,7 @@ def test_gaps_name_systems_that_exist():
 
 def _system(tmp_path, body):
     p = tmp_path / "s.yaml"
-    p.write_text("kind: system\nid: t\nboards:\n  ecu: {board: mlc-carrier, firmware: ecu}\n" + body)
+    p.write_text("kind: system\nid: t\nboards:\n  ecu: {board: mainlite, firmware: ecu}\n" + body)
     return p
 
 
@@ -105,7 +105,7 @@ def test_a_firmware_can_contract_must_name_a_can_connector_of_its_board(tmp_path
     shutil.copytree(REPO / "catalog", catalog)
     fw = catalog / "firmware" / "ecu.yaml"
     fw.write_text(fw.read_text().replace("contract: [FDCAN2]", "contract: [FDCAN9]"))
-    with pytest.raises(SystemError, match="CAN contract rides FDCAN9, which mlc-carrier lacks"):
+    with pytest.raises(SystemError, match="CAN contract rides FDCAN9, which mainlite lacks"):
         System(REPO / "systems" / "ecu.yaml", catalog)
     fw.write_text(fw.read_text().replace("contract: [FDCAN9]", "contract: []"))
     with pytest.raises(SystemError, match="'contract': \\[\\]"):   # schema: minItems 1
@@ -137,7 +137,7 @@ AMS_SYSTEMS = [p for p in SYSTEMS if "ams" in System(p).boards]
 
 @pytest.mark.parametrize("path", AMS_SYSTEMS, ids=lambda p: p.name)
 def test_every_ams_has_its_imu_on_i2c2(path):
-    """The MLC's BMI088: accelerometer 0x18, gyroscope 0x68 on I2C2 (#59),
+    """The MainLite's BMI088: accelerometer 0x18, gyroscope 0x68 on I2C2 (#59),
     after the I2C model its dies build on."""
     s = System(path).render_renode()
     assert "imu_acc: Sensors.Bmi088Accelerometer @ i2c2_h7 0x18" in s
@@ -170,11 +170,11 @@ def test_ssa_2_legs_follow_the_current(tmp_path, amps, p_v, n_v):
 
 def test_port_signals_must_point_at_the_right_kind(tmp_path):
     p = tmp_path / "s.yaml"
-    p.write_text("kind: system\nid: t\nboards:\n  ecu: {board: mlc-carrier, firmware: ecu}\n"
+    p.write_text("kind: system\nid: t\nboards:\n  ecu: {board: mainlite, firmware: ecu}\n"
                  "port:\n  step_ms: 10\n  signals:\n    apps1: {analog: ecu.PB5}\n")
     with pytest.raises(SystemError, match="is gpio, not analog"):
         System(p)
-    p.write_text("kind: system\nid: t\nboards:\n  ecu: {board: mlc-carrier, firmware: ecu}\n"
+    p.write_text("kind: system\nid: t\nboards:\n  ecu: {board: mainlite, firmware: ecu}\n"
                  "port:\n  step_ms: 10\n  signals:\n    x: {can_tx: {bus: nope, id: 1}}\n")
     with pytest.raises(SystemError, match="no bus 'nope'"):
         System(p)
@@ -182,7 +182,7 @@ def test_port_signals_must_point_at_the_right_kind(tmp_path):
 
 def _ams(tmp_path, devices):
     p = tmp_path / "s.yaml"
-    p.write_text("kind: system\nid: t\nboards:\n  ams: {board: mlc-carrier, firmware: ams}\n"
+    p.write_text("kind: system\nid: t\nboards:\n  ams: {board: mainlite, firmware: ams}\n"
                  "devices:\n" + devices)
     return p
 
@@ -213,8 +213,8 @@ def test_each_board_sets_its_image_inside_its_own_machine(tmp_path):
     each $elf_<board> must follow its own `mach create`."""
     p = tmp_path / "s.yaml"
     p.write_text("kind: system\nid: t\nboards:\n"
-                 "  ecu: {board: mlc-carrier, firmware: ecu}\n"
-                 "  ams: {board: mlc-carrier, firmware: ams}\n"
+                 "  ecu: {board: mainlite, firmware: ecu}\n"
+                 "  ams: {board: mainlite, firmware: ams}\n"
                  "buses:\n  can_acu: {kind: can, nodes: [ecu.FDCAN2, ams.FDCAN1]}\n")
     lines = System(p).render_renode({"ecu": Path("/fw/ecu.elf"), "ams": Path("/fw/ams.elf")}).splitlines()
     for board in ("ecu", "ams"):
@@ -238,7 +238,7 @@ def test_an_i2c_model_must_place_its_targets(tmp_path):
 def _wp_system(tmp_path, sectors):
     p = tmp_path / "wp.yaml"
     p.write_text("kind: system\nid: wp\nboards:\n"
-                 f"  ecu: {{board: mlc-carrier, firmware: ecu, write_protect: {sectors}}}\n")
+                 f"  ecu: {{board: mainlite, firmware: ecu, write_protect: {sectors}}}\n")
     return p
 
 
@@ -289,7 +289,7 @@ def test_a_board_without_firmware_ref_builds_the_catalogue_ref(tmp_path, monkeyp
 def test_firmware_ref_overrides_the_catalogue_and_build_ref_overrides_both(tmp_path, monkeypatch):
     p = tmp_path / "r.yaml"
     p.write_text("kind: system\nid: r\nboards:\n"
-                 "  ecu: {board: mlc-carrier, firmware: ecu, firmware_ref: feat/x,"
+                 "  ecu: {board: mainlite, firmware: ecu, firmware_ref: feat/x,"
                  " bootloader: can-bootloader, bootloader_ref: v1.6.2, node_id: 1}\n")
     s = System(p)
     assert s.boards["ecu"].ref() == "feat/x" and s.boards["ecu"].ref("bootloader") == "v1.6.2"
@@ -300,7 +300,7 @@ def test_firmware_ref_overrides_the_catalogue_and_build_ref_overrides_both(tmp_p
 def test_a_bootloader_ref_needs_a_bootloader(tmp_path):
     p = tmp_path / "r.yaml"
     p.write_text("kind: system\nid: r\nboards:\n"
-                 "  ecu: {board: mlc-carrier, firmware: ecu, bootloader_ref: v1.6.2}\n")
+                 "  ecu: {board: mainlite, firmware: ecu, bootloader_ref: v1.6.2}\n")
     with pytest.raises(SystemError, match="bootloader_ref needs a bootloader"):
         System(p)
 
@@ -308,6 +308,6 @@ def test_a_bootloader_ref_needs_a_bootloader(tmp_path):
 def test_an_empty_firmware_ref_is_a_schema_error(tmp_path):
     p = tmp_path / "r.yaml"
     p.write_text("kind: system\nid: r\nboards:\n"
-                 "  ecu: {board: mlc-carrier, firmware: ecu, firmware_ref: ''}\n")
+                 "  ecu: {board: mainlite, firmware: ecu, firmware_ref: ''}\n")
     with pytest.raises(SystemError):
         System(p)

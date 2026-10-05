@@ -4,7 +4,7 @@ description: >-
   STM32H733ZG (Cortex-M7, 1 MB flash). Renode ships only H743/H753/H747, so
   this reuses its stm32h7.repl and adds FDCAN3, TIM23, USART10, SPI1, the H73x
   ADC3, SDMMC1 with IDMA and an I2C2 that NACKs, plus the 24 MHz HSE of the
-  MLC carriers, and a flash controller with non-volatile option bytes and
+  MainLite, and a flash controller with non-volatile option bytes and
   sector write protection. Addresses and IRQs from ST's stm32h733xx.h.
 backend: renode
 renode:

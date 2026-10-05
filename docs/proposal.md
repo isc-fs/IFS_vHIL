@@ -51,7 +51,7 @@ bench's own hardware stay physical.
 IFS_HIL recipe ─▶ ECU08.elf / AMS.elf  (identical to what the bench flashes)
                         │
         ┌───────────────▼────────────────────────────┐
-        │ Renode  ·  one machine per carrier          │
+        │ Renode  ·  one machine per board          │
         │  platforms/cpus/stm32h733.repl              │
         │   ├─ FDCAN1/2/3 ─▶ CAN hubs (inv/acu/dash)  │
         │   ├─ ADC3       ◀─ SetVoltage (pedals, I)   │

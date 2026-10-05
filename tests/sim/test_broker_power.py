@@ -58,7 +58,7 @@ def test_a_slow_power_on_still_boots_onto_every_bus(firmware, lag_ms):
 
 
 def test_backup_sram_survives_a_warm_reset_but_not_a_power_cut(firmware):
-    """The MLC carrier has no VBAT: the 4 KB backup SRAM (the CAN
+    """The MainLite has no VBAT: the 4 KB backup SRAM (the CAN
     bootloader's DTC log) keeps its contents across a warm reset and loses
     them when power goes (vhil.broker.power_on_commands)."""
     with Sim(REPO / "systems" / "ecu.yaml", {"ecu": firmware("ecu")}) as sim:

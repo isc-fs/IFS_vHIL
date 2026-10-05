@@ -29,7 +29,7 @@ reaches it.
 |---|---|---|
 | **Platform** | An emulatable MCU or SoC: its memory map and peripheral models. The only layer that knows about a CPU architecture. | `stm32h733` ([`platforms/cpus/stm32h733.repl`](../platforms/cpus/stm32h733.repl)) |
 | **Chip model** | An external component on a board, behind a bus the platform exposes. | LTC6820 + LTC6811 chain on SPI1; BMI088 on I²C2 |
-| **Board** | A platform plus its chip models plus named pins and connectors. User-definable. | MLC carrier (STM32H733, 3× FDCAN, ADC3 pedal inputs) |
+| **Board** | A platform plus its chip models plus named pins and connectors. User-definable. | MainLite (STM32H733, 3× FDCAN, ADC3 inputs; AMS, ECU or uDV by backplane) |
 | **Firmware source** | Repository + ref + build recipe for one board's image. Never an emulator-only build. | `isc-fs/IFS08-CE-ECU@dev`, IFS_HIL's `configs/firmware/ecu.yaml` |
 | **System** | Boards placed, each with its firmware, plus the nets between them: CAN buses, wires, analog lines. Stored in a git-versionable file. | ECU + AMS + uDV on a shared ACU bus |
 | **Plant** | Something outside the electronics that the system senses and drives, connected through a co-simulation port. | Scripted inverter, cell voltages; later MingoCIL |

@@ -1,4 +1,4 @@
-"""The flash image a provisioned MLC board holds: what an SWD bootloader burn
+"""The flash image a provisioned MainLite holds: what an SWD bootloader burn
 plus a `cf flash` leave behind, for the CAN bootloader (isc-fs/
 stm32-can-bootloader, docs ARCHITECTURE.md "Memory map" and "Application
 metadata record"; Core/Inc/bl_memmap.h, bl_provision.h).

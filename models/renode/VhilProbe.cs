@@ -356,7 +356,7 @@ namespace Antmicro.Renode.Testing
         {
             this.machine = machine;
             // A level driven from outside the MCU (a switch, a pull-up on the
-            // carrier) doesn't change because the MCU resets, but Renode's
+            // board) doesn't change because the MCU resets, but Renode's
             // GPIO ports clear their inputs on machine Reset. Put them back
             // once the reset is done (MachineReset fires after the
             // peripherals' Reset), before the firmware runs again.

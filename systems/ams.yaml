@@ -1,13 +1,13 @@
 kind: system
 id: ams
 description: >-
-  One AMS on an MLC carrier on the ACU bus, with its battery: the
+  One AMS (a MainLite on the AMS backplane) on the ACU bus, with its battery: the
   LTC6820/LTC6811 chain of 5 modules x 2 ICs on SPI1. What IFS_HIL's AMS
   suites expect from bench-01 slot 2 plus its Pico LTC emulator.
 time:
   quantum_s: 0.0005
 boards:
-  ams: {board: mlc-carrier, firmware: ams}
+  ams: {board: mainlite, firmware: ams}
 buses:
   can_acu: {kind: can, nodes: [ams.FDCAN1], host_netdev: can2}
 devices:
@@ -16,7 +16,7 @@ devices:
   isospi: {model: ltc6820, spi: ams.SPI1, cs: ams.PB9}
   cells: {model: ltc6811, attach: isospi, count: 10}
   sd: {model: sd-card, sdmmc: ams.SDMMC1}
-  # The carrier's BMI088 on I2C2 (accelerometer 0x18, gyroscope 0x68:
+  # The MainLite's BMI088 on I2C2 (accelerometer 0x18, gyroscope 0x68:
   # SDO1/SDO2 to GND, ams_config.hpp ImuAccAddr7b/ImuGyrAddr7b), which
   # the AMS's ImuTask samples at 100 Hz into IMUnnnn.CSV on the card.
   imu: {model: bmi088, i2c: ams.I2C2}

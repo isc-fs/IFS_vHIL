@@ -10,7 +10,7 @@ time:
   quantum_s: 0.0005
 boards:
   # Provisioned as on the car: the CAN bootloader in sector 0, node 0x1.
-  ecu: {board: mlc-carrier, firmware: ecu, bootloader: can-bootloader, node_id: 1}
+  ecu: {board: mainlite, firmware: ecu, bootloader: can-bootloader, node_id: 1}
 buses:
   # Bus names are what tests attach to. host_netdev follows bench-01's
   # netdev names, so IFS_HIL's suites open the same interfaces.

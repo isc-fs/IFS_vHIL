@@ -3,7 +3,8 @@
 IFS_HIL's tests talk to the bench through `hil-broker` (newline-delimited
 JSON-RPC on a Unix socket). This serves the same protocol with IFS_HIL's own
 server and its in-memory FakeHardwareManager, and overrides only the calls
-that reach a carrier:
+that reach a carrier (the bench's MLC carrier slot a MainLite sits in, as the
+system's `bench.carriers` maps it):
 
   tca.write_pin on a carrier relay   -> power: open = its CAN controllers
                                         leave their buses, close = machine
@@ -57,7 +58,7 @@ def power_on_commands(machine: str, vbat: bool) -> list[str]:
 
     machine Reset keeps the backup domain, as a warm reset does. Without VBAT
     a power cut wipes it (the AMS's sticky ErrorLatch must not outlive the
-    carrier's power), so it is cleared first, before the booting firmware can
+    board's power), so it is cleared first, before the booting firmware can
     read the old value: the RTC backup registers, and the 4 KB backup SRAM
     at 0x38800000 that the CAN bootloader keeps its DTC log in (RM0468:
     retained only from the backup domain supply). The reset macro reloads the image and sets VTOR.

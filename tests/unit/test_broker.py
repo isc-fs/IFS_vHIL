@@ -55,7 +55,7 @@ def test_each_relay_powers_only_its_own_board():
 
 
 def test_power_on_wipes_the_backup_domain_without_vbat():
-    """An MLC carrier has no VBAT: a power cut clears the RTC backup
+    """The MainLite has no VBAT: a power cut clears the RTC backup
     registers, where the AMS keeps its sticky ErrorLatch (BKP1R)."""
     backend, monitor = _backend("ecu-ams.yaml")
     monitor.commands.clear()

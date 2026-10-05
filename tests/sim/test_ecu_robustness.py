@@ -13,8 +13,8 @@ ECU facts (IFS08-CE-ECU):
   Fault latch: HardFault/MemManage/BusFault/UsageFault handlers stamp
     0xFA1700F1..F4 into RTC BKP1R and spin (stm32h7xx_it.c:90-145); the stack-
     overflow and malloc-failed hooks stamp F5/F6 (freertos.c:145-152,156-169).
-    The latch survives warm resets, not a power cut: no VBAT on the carrier
-    (error_latch.hpp:3-11, catalog/boards/mlc-carrier.yaml). Only a bench build
+    The latch survives warm resets, not a power cut: no VBAT on the MainLite
+    (error_latch.hpp:3-11, catalog/boards/mainlite.yaml). Only a bench build
     (ECU_HIL_CLEAR_ERROR_LATCH) clears it at boot (app_init_task.cpp:65-71).
   configCHECK_FOR_STACK_OVERFLOW = 2 (FreeRTOSConfig.h:79): at each switch-out
     FreeRTOS checks the 16 bytes at the bottom of the task's stack still hold

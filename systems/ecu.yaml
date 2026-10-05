@@ -1,14 +1,14 @@
 kind: system
 id: ecu
 description: >-
-  One ECU on an MLC carrier with its three CAN buses: what IFS_HIL's ECU
+  One ECU (a MainLite on the ECU backplane) with its three CAN buses: what IFS_HIL's ECU
   suites expect from bench-01 slot 4.
 time:
   # 500 us sync quantum (Renode default 100 us) keeps one H7 at about real
   # time on a desktop; still 20x finer than the firmware's 10 ms period.
   quantum_s: 0.0005
 boards:
-  ecu: {board: mlc-carrier, firmware: ecu}
+  ecu: {board: mainlite, firmware: ecu}
 buses:
   # Bus names are what tests attach to. host_netdev follows bench-01's
   # netdev names, so IFS_HIL's suites open the same interfaces.

@@ -2,8 +2,8 @@
 
 You are working on **IFS_vHIL**, the virtual hardware-in-the-loop bench for
 ISC Racing Team's Formula Student STM32 firmware. It runs the same images
-[IFS_HIL](https://github.com/isc-fs/IFS_HIL) flashes to real carriers, on
-emulated STM32H733 boards in [Renode](https://github.com/renode/renode).
+[IFS_HIL](https://github.com/isc-fs/IFS_HIL) flashes to the real MainLite
+boards, on emulated STM32H733s in [Renode](https://github.com/renode/renode).
 This file is the fast path for an assistant entering a new session:
 operational, not architectural. For where the project is going, read
 [`docs/vision.md`](docs/vision.md); for the Phase 0/1 design and findings,
@@ -96,7 +96,7 @@ IFS_HIL recipe ─▶ ECU08.elf / AMS.elf  (same image the physical bench flashe
    image the bench flashes. Build with IFS_HIL's recipe
    (`configs/firmware/<dut>.yaml`), and model the hardware instead of
    patching the firmware.
-2. **HSE is 24 MHz** on every MLC carrier (`rcc.hseFrequency` in the
+2. **HSE is 24 MHz** on the MainLite (`rcc.hseFrequency` in the
    platform). With Renode's 8 MHz default every FreeRTOS period runs 3× slow.
 3. **TIM23 is the HAL timebase.** Remove it and every HAL timeout spins
    forever.

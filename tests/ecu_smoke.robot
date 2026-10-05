@@ -1,8 +1,8 @@
 *** Comments ***
-ECU smoke suite on a virtual STM32H733 carrier.
+ECU smoke suite on a virtual MainLite (STM32H733).
 
 Boots the unmodified ECU application image (the same ELF IFS_HIL flashes to a
-real carrier) and checks it from the CAN side only, as the physical bench's
+real MainLite) and checks it from the CAN side only, as the physical bench's
 Block A / Block I do. The Renode script is generated from systems/ecu.yaml:
     python -m vhil.system render systems/ecu.yaml -o /tmp/ecu.resc
     renode-test tests/ecu_smoke.robot --variable ELF:/path/to/ECU08.elf --variable RESC:/tmp/ecu.resc
