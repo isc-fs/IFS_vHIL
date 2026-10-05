@@ -29,7 +29,10 @@ worker that died mid-run leaves a run another worker picks up again, at most
 MAX_ATTEMPTS times in all (vhil/server/runs.py). A worker that finds its run
 reclaimed from under it (it stalled past the timeout) drops it without
 writing a final state. A run's next attempt starts a fresh trace; the last
-one is kept as trace.attempt<N>.jsonl.
+one is kept as trace.attempt<N>.jsonl. A first attempt that finds its results
+directory already there (a database restored to a snapshot hands out the ids
+of runs it rolled back, whose results stay on the runs volume) moves it to
+`<results>/.orphaned/<id>-<time>` instead of appending to it.
 """
 from __future__ import annotations
 
@@ -98,6 +101,20 @@ class Heartbeat:
     def __exit__(self, *exc) -> None:
         self._stop.set()
         self._thread.join()
+
+
+def set_aside(run_dir: Path) -> Path:
+    """Move a stale results directory to <results>/.orphaned/<id>-<time>, so a
+    new run with its id starts empty and the old files are kept for whoever
+    wants them."""
+    dest = run_dir.parent / ".orphaned" / f"{run_dir.name}-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    n = 1
+    while dest.exists():
+        dest = dest.with_name(f"{dest.name.split('.')[0]}.{n}")
+        n += 1
+    run_dir.rename(dest)
+    return dest
 
 
 class TraceLimit(Exception):
@@ -465,6 +482,10 @@ class Worker:
         if run is None:
             return None
         run_dir = Path(self.settings.results) / str(run["id"])
+        if run["attempts"] == 1 and run_dir.exists():
+            orphan = set_aside(run_dir)
+            print(f"run {run['id']}: results already at {run_dir} (from before a database "
+                  f"restore?) moved to {orphan}", flush=True)
         if run["attempts"] > 1 and (run_dir / TRACE).is_file():
             (run_dir / TRACE).rename(run_dir / f"trace.attempt{run['attempts'] - 1}.jsonl")
         trace = TraceWriter(run_dir / TRACE, max_bytes=self.limits.max_trace_bytes)

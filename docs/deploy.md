@@ -424,9 +424,10 @@ $dc start api worker
 ```
 
 `start` re-runs `workspace` (a fetch) first; that's harmless. Runs created
-after the snapshot are gone; their trace directories stay in `runs` and are
-overwritten when the IDs are reused (delete `/data/runs/<id>` for ids above
-the restored maximum if that matters).
+after the snapshot are gone; their result directories stay in `runs`. When a
+new run reuses one of their ids, the worker moves the old directory to
+`/data/runs/.orphaned/<id>-<time>` first, so the new run starts empty; delete
+`.orphaned` when you no longer need them.
 
 **Restore saved branches** (after losing the `workspace` volume, or one
 branch):
