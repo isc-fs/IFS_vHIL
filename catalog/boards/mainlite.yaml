@@ -35,5 +35,7 @@ analog_in:
   PF7: {adc: sysbus.adc3_h73x, channel: 3}
   PF8: {adc: sysbus.adc3_h73x, channel: 7}
   PF9: {adc: sysbus.adc3_h73x, channel: 2}
-  # AMS DCDC current sensor, single-ended (ams_config.hpp:710).
+  # Single-ended. The AMS backplane routes it to J3.5, the DC-DC's ACS758
+  # (docs/backplanes/ams.md), but AMS dev does not sample it, by design: no
+  # DC-DC is fitted (IFS08-CE-AMS af07ec8; ams_config.hpp:607, :713-715).
   PC1: {adc: sysbus.adc3_h73x, channel: 11}
