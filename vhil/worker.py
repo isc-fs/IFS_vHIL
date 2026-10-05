@@ -57,7 +57,7 @@ from vhil.server.config import Settings
 from vhil.server.runs import (HEARTBEAT_S, MAX_ATTEMPTS, RECLAIM_AFTER_S, TRACE, Limits,
                               RunStore, code_changes, materialise_system)
 from vhil.server.workspace import Workspace
-from vhil.system import System
+from vhil.system import System, built_images, image_path
 
 DEFAULT_FW_DIR = Path(os.environ.get("VHIL_FW_DIR", "/vhil/fw"))
 
@@ -392,14 +392,7 @@ class FirmwareResolver:
         self.fw_dir, self.build, self.log = Path(fw_dir), build, log
 
     def _built(self) -> dict[Path, str]:
-        listing = self.fw_dir / "built.txt"
-        out = {}
-        if listing.is_file():
-            for line in listing.read_text().splitlines():
-                key, sep, path = line.partition("=")
-                if sep:
-                    out[Path(path.strip()).resolve()] = key
-        return out
+        return built_images(self.fw_dir)
 
     def expected(self, system: System, refs: dict) -> dict[str, tuple[str, Path]]:
         """key -> (ref, the ELF path vhil.system build gives it)."""
@@ -410,8 +403,7 @@ class FirmwareResolver:
             # The run's ref, else the system's (firmware_ref / bootloader_ref),
             # else the catalogue's.
             ref = refs.get(key) or system.boards[board].ref("bootloader" if part else "firmware")
-            out[key] = (ref, (self.fw_dir / f"{fw['id']}@{ref.replace('/', '_')}"
-                              / fw["build"]["elf"]).resolve())
+            out[key] = (ref, image_path(self.fw_dir, fw, ref).resolve())
         return out
 
     def resolve(self, system: System, refs: dict) -> dict[str, Path]:
