@@ -11,7 +11,10 @@ graph is a view of it, translated both ways here. Catalogue entries become
 node types:
 
   board     a node with one typed connector per CAN/SPI/SDMMC/I2C/GPIO/analog pin;
-            its firmware is a select property
+            a board with roles (the MainLite) is a node type per role
+            ("mainlite · ecu"), which fixes its firmware and labels each pin
+            with what the role's backplane carries on it ("PF8 · APPS_1",
+            "FDCAN3 · n.c."); a board without roles has a firmware select
   CAN bus   a node with a BUS interface: connect any number of CAN connectors
   model     a node per chip model: its host-side ports (spi, cs, sdmmc, i2c), the
             port it provides (an LTC6820 provides `isospi`) and the port it
@@ -46,6 +49,11 @@ FORMAT_VERSION = "20250623.14"
 
 BUS_NODE = "CAN bus"
 GRAPH_ID = "system"
+# Between a board and its role in a node type's name, and between a pin and
+# its label in an interface's ("PF8 · APPS_1").
+ROLE_SEP = " · "
+# The label of a pin the role's backplane leaves unconnected.
+NOT_CONNECTED = "n.c."
 # A bus interface's length in pixels: each connection lands on a stub along
 # it. Pipeline Manager places a new stub at size / 2, so a tiny bus stacks
 # every connection on the node header.
@@ -70,14 +78,17 @@ def _catalog(kind: str, catalog: Path = CATALOG) -> dict[str, dict]:
     return {d["id"]: d for d in docs}
 
 
-def role_label(board_id: str, role: str | None, catalog: Path = CATALOG) -> str:
-    """A role as the editor's select shows it, with the node ID it gives the
-    bootloader: "ecu (node 0x1)". Saving keeps the first word."""
-    if not role:
-        return ""
-    node_id = ((_catalog("board", catalog).get(board_id) or {}).get("roles") or {}) \
-        .get(role, {}).get("node_id")
-    return role if node_id is None else f"{role} (node 0x{node_id:X})"
+def board_type(board_id: str, role: str | None) -> str:
+    """The node type of a board in a role: one per role ("mainlite · ecu"),
+    since a role decides the node's firmware and what its pins carry; a
+    board without roles is its own id."""
+    return f"{board_id}{ROLE_SEP}{role}" if role else board_id
+
+
+def pin_of(interface_name: str) -> str:
+    """The board pin an interface stands for: "PF8 · APPS_1" -> PF8. The
+    label is display only; a system names the pin."""
+    return interface_name.split(ROLE_SEP, 1)[0]
 
 
 # -- specification -------------------------------------------------------------
@@ -92,51 +103,91 @@ def _property(name: str, value) -> dict:
     return {"name": name, "type": "text", "default": str(value)}
 
 
+def _board_interfaces(board: dict, role: dict | None) -> list[dict]:
+    """A board's connectors and pins as interfaces, typed by kind: the
+    role's GPIO re-kinds (AMS PF9 = TSMS) are GPIO. In a role that says what
+    its backplane routes, each reads "PF8 · APPS_1"; what it leaves
+    unconnected reads "FDCAN3 · n.c." and comes last."""
+    role = role or {}
+    pins, onboard = role.get("pins"), board.get("onboard") or {}
+    override = role.get("gpio") or {}
+    routed, unrouted = [], []
+    for section, base_type, side in _BOARD_PORTS:
+        for pin in board.get(section, {}):
+            itype = "gpio" if section == "analog_in" and pin in override else base_type
+            label = (None if pins is None else
+                     pins.get(pin) or onboard.get(pin) or NOT_CONNECTED)
+            iface = {"name": pin if label is None else f"{pin}{ROLE_SEP}{label}", "type": itype,
+                     "direction": "inout", "side": side, "maxConnectionsCount": 1}
+            (unrouted if label == NOT_CONNECTED else routed).append(iface)
+    return routed + unrouted
+
+
+def _role_description(board: dict, name: str, role: dict, firmware: dict) -> str:
+    bp = role.get("backplane") or {}
+    fw = role["firmware"]
+    lines = [f"A {board['id']} in the **{name}** role"
+             + (f", on the {bp['name']} backplane ([{bp['doc']}]({bp['doc']}))" if bp else "")
+             + ".",
+             f"Bootloader node 0x{role['node_id']:X}, app flashed over {role['flash_bus']}.",
+             (f"Runs the **{fw}** firmware ({firmware[fw]['repo']})." if fw in firmware else
+              f"**No {fw} firmware in the catalogue yet**: a system can't place this role "
+              f"until catalog/firmware/{fw}.yaml exists."),
+             f"Pins read *pin · car signal*; *{NOT_CONNECTED}* is not connected on this backplane."]
+    return "\n\n".join(lines)
+
+
 def specification(catalog: Path = CATALOG) -> dict:
     """Pipeline Manager node types for everything in the catalogue."""
-    firmware = sorted(_catalog("firmware", catalog))
+    firmware_docs = _catalog("firmware", catalog)
+    firmware = sorted(firmware_docs)
     nodes = []
     for board_id, board in _catalog("board", catalog).items():
         roles = board.get("roles") or {}
-        interfaces = [{"name": pin, "type": itype, "direction": "inout", "side": side,
-                       "maxConnectionsCount": 1}
-                      for section, itype, side in _BOARD_PORTS
-                      for pin in board.get(section, {})]
-        nodes.append({
-            "name": board_id, "category": "Boards", "layer": "board",
-            "description": board.get("description", ""),
-            "interfaces": interfaces,
-            "properties": [
-                           # A board with roles (the MainLite) is placed in one:
-                           # it sets the bootloader's node ID (and flash bus),
-                           # shown with each choice.
-                           *([{"name": "role", "type": "select",
-                               "values": [role_label(board_id, r, catalog) for r in roles],
-                               "default": role_label(board_id, next(iter(roles)), catalog),
-                               "description": "The role this unit is provisioned for: its "
-                                              "bootloader's node ID and flash bus."}]
-                             if roles else []),
-                           {"name": "firmware", "type": "select", "values": firmware,
-                            "default": firmware[0]},
-                           {"name": "firmware_ref", "type": "text", "default": "",
-                            "description": "Branch or tag of the firmware to build "
-                                           "(empty: the catalogue's)."},
-                           # The bootloader comes with the board; only its ref
-                           # is the system's.
-                           *([{"name": "bootloader", "type": "constant",
-                               "default": board["bootloader"],
-                               "description": "Firmware in sector 0: every unit of this "
-                                              "board carries it."},
-                              {"name": "bootloader_ref", "type": "text", "default": "",
-                               "description": "Branch or tag of the bootloader to build "
-                                              "(empty: the catalogue's)."},
-]
-                             if "bootloader" in board else []),
-                           {"name": "write_protect", "type": "text", "default": "",
-                            "description": "Flash sectors write-protected in the option bytes "
-                                           "at power-on, comma-separated (e.g. 0; empty: none)."}],
-            "additionalData": {"vhil": {"kind": "board"}},
-        })
+        tail = [
+            # The bootloader comes with the board; only its ref is the
+            # system's (the shell's firmware panel picks it).
+            *([{"name": "bootloader", "type": "constant", "default": board["bootloader"],
+                "description": "Firmware in sector 0: every unit of this board carries it."},
+               {"name": "bootloader_ref", "type": "text", "default": "",
+                "description": "Tag (or branch) of the bootloader to build (empty: the "
+                               "catalogue's)."}]
+              if "bootloader" in board else []),
+            {"name": "write_protect", "type": "text", "default": "",
+             "description": "Flash sectors write-protected in the option bytes at power-on, "
+                            "comma-separated (e.g. 0; empty: none)."}]
+        ref = {"name": "firmware_ref", "type": "text", "default": "",
+               "description": "Branch or tag of the firmware to build (empty: the catalogue's)."}
+        if not roles:
+            nodes.append({
+                "name": board_id, "category": "Boards", "layer": "board",
+                "description": board.get("description", ""),
+                "interfaces": _board_interfaces(board, None),
+                "properties": [{"name": "firmware", "type": "select", "values": firmware,
+                                "default": firmware[0]}, ref, *tail],
+                "additionalData": {"vhil": {"kind": "board", "board": board_id}},
+            })
+            continue
+        # A board with roles (the MainLite) is one node type per role: the
+        # role fixes its firmware, node ID and flash bus, and what its pins
+        # carry, so there is nothing to choose on the node but refs.
+        for name, role in roles.items():
+            fw = role["firmware"]
+            nodes.append({
+                "name": board_type(board_id, name), "category": "Boards", "layer": "board",
+                "description": _role_description(board, name, role, firmware_docs),
+                "interfaces": _board_interfaces(board, role),
+                "properties": [
+                    {"name": "role", "type": "constant",
+                     "default": f"{name} · node 0x{role['node_id']:X} · flash {role['flash_bus']}",
+                     "description": "The role this unit is provisioned for: its bootloader's "
+                                    "node ID and flash bus, and its firmware."},
+                    {"name": "firmware", "type": "constant",
+                     "default": fw if fw in firmware_docs else f"{fw} (not in the catalogue yet)",
+                     "description": "The role's firmware: an ECU runs the ECU firmware."},
+                    ref, *tail],
+                "additionalData": {"vhil": {"kind": "board", "board": board_id, "role": name}},
+            })
     nodes.append({
         "name": BUS_NODE, "category": "Buses", "layer": "bus",
         "description": "A CAN bus. Connect every node's CAN connector to it.",
@@ -190,7 +241,9 @@ def to_dataflow(doc: dict, spec: dict | None = None, source: str | None = None) 
         t = types[type_name]
         props = [{"id": f"p:{name}:{p['name']}", "name": p["name"],
                   "value": values.get(p["name"], p.get("default"))} for p in t["properties"]]
-        ifaces = [{"id": f"i:{name}:{i['name']}", "name": i["name"], "direction": i["direction"],
+        # An interface's ID is its pin's: a label never reaches the system.
+        ifaces = [{"id": f"i:{name}:{pin_of(i['name'])}", "name": i["name"],
+                   "direction": i["direction"],
                    **({"side": i["side"]} if "side" in i else {})}
                   for i in t["interfaces"]]
         n = {"id": f"n:{name}", "name": type_name, "instanceName": name,
@@ -202,12 +255,13 @@ def to_dataflow(doc: dict, spec: dict | None = None, source: str | None = None) 
         connections.append({"id": f"c:{len(connections)}", "from": a, "to": b})
 
     for row, (name, b) in enumerate(doc["boards"].items()):
-        node(b["board"], name, {"firmware": b["firmware"],
-                                "role": role_label(b["board"], b.get("role")),
-                                "firmware_ref": b.get("firmware_ref", ""),
-                                "bootloader_ref": b.get("bootloader_ref", ""),
-                                "write_protect": ",".join(str(s) for s in b.get("write_protect", []))},
-             0, 420 * row)
+        # A board in a role is that role's node type, whose firmware is fixed.
+        values = {"firmware_ref": b.get("firmware_ref", ""),
+                  "bootloader_ref": b.get("bootloader_ref", ""),
+                  "write_protect": ",".join(str(s) for s in b.get("write_protect", []))}
+        if not b.get("role") and "firmware" in b:
+            values["firmware"] = b["firmware"]
+        node(board_type(b["board"], b.get("role")), name, values, 0, 420 * row)
     y = 0
     for name, bus in doc.get("buses", {}).items():
         # One stub per connection, spread along the bus, facing the boards
@@ -258,6 +312,9 @@ def from_dataflow(dataflow: dict, spec: dict | None = None) -> dict:
     meaning for). Schema and catalogue checks are validate()'s job."""
     spec = spec or specification()
     kinds = {n["name"]: n["additionalData"]["vhil"]["kind"] for n in spec["nodes"]}
+    # A board node type's board and role ("mainlite · ecu" -> mainlite, ecu).
+    placed = {n["name"]: n["additionalData"]["vhil"] for n in spec["nodes"]
+              if n["additionalData"]["vhil"]["kind"] == "board"}
     graphs = {g["id"]: g for g in dataflow["graphs"]}
     graph = graphs[dataflow.get("entryGraph") or dataflow["graphs"][0]["id"]]
 
@@ -268,7 +325,9 @@ def from_dataflow(dataflow: dict, spec: dict | None = None) -> dict:
         name = n.get("instanceName") or n["id"]
         names[n["id"]] = name
         for i in n["interfaces"]:
-            by_iface[i["id"]] = (n, name, i["name"])
+            # A board interface stands for its pin, whatever its label.
+            by_iface[i["id"]] = (n, name, pin_of(i["name"]) if kinds[n["name"]] == "board"
+                                 else i["name"])
             # A connection to a bus ends on one of its stubs.
             for stub in (i.get("bus") or {}).get("stubs") or []:
                 by_iface[stub["id"]] = (n, name, i["name"])
@@ -285,11 +344,14 @@ def from_dataflow(dataflow: dict, spec: dict | None = None) -> dict:
         name, props = names[n["id"]], {p["name"]: p["value"] for p in n.get("properties", [])}
         kind = kinds[n["name"]]
         if kind == "board":
-            boards[name] = {"board": n["name"]}
-            if props.get("role"):
-                # "ecu (node 0x1)" -> ecu: the label shows the derived node ID.
-                boards[name]["role"] = str(props["role"]).split()[0]
-            boards[name]["firmware"] = props["firmware"]
+            # The node type is the board in its role, which sets the
+            # firmware; a board without roles names its own.
+            where = placed[n["name"]]
+            boards[name] = {"board": where["board"]}
+            if where.get("role"):
+                boards[name]["role"] = where["role"]
+            else:
+                boards[name]["firmware"] = props["firmware"]
             if str(props.get("firmware_ref") or "").strip():
                 boards[name]["firmware_ref"] = str(props["firmware_ref"]).strip()
             if str(props.get("bootloader_ref") or "").strip():
@@ -430,8 +492,10 @@ def write_system(doc: dict, source: str | None = None) -> str:
     return "\n".join(original.get(norm(line), line) for line in out.getvalue().splitlines()) + "\n"
 
 
-def validate(doc: dict) -> list[str]:
-    """Schema and catalogue errors of a system document ([] if it is valid)."""
+def check_system(doc: dict) -> tuple[list[str], list[str]]:
+    """(errors, warnings) of a system document: schema and catalogue errors,
+    or, for a valid one, what `vhil.system validate` warns of (a pin its
+    role's backplane leaves unconnected)."""
     with tempfile.TemporaryDirectory() as tmp:
         # The file is named by its id only once the id is one: an id with a
         # path in it would write outside tmp.
@@ -440,10 +504,15 @@ def validate(doc: dict) -> list[str]:
         path = Path(tmp) / f"{name}.yaml"
         path.write_text(dump_system(doc))
         try:
-            System(path)
+            system = System(path)
         except SystemError as e:
-            return [str(e).replace(str(path) + ": ", "")]
-    return []
+            return [str(e).replace(str(path) + ": ", "")], []
+    return [], list(system.warnings)
+
+
+def validate(doc: dict) -> list[str]:
+    """Schema and catalogue errors of a system document ([] if it is valid)."""
+    return check_system(doc)[0]
 
 
 # -- JSON-RPC methods (Pipeline Manager external app) -------------------------------
@@ -473,12 +542,15 @@ class EditorMethods:
         return {}   # null_or_empty
 
     def dataflow_validate(self, dataflow, **_):
+        warnings = []
         try:
-            errors = validate(from_dataflow(dataflow, self.spec))
+            errors, warnings = check_system(from_dataflow(dataflow, self.spec))
         except (SystemError, KeyError) as e:
             errors = [str(e)]
         if errors:
             return {"type": ERROR, "content": "; ".join(errors)}
+        if warnings:
+            return {"type": WARNING, "content": "valid system, with warnings: " + "; ".join(warnings)}
         return {"type": OK, "content": "valid system"}
 
     def dataflow_export(self, dataflow, **_):
@@ -514,16 +586,17 @@ class EditorMethods:
             errors = validate(doc)
             if errors:
                 return {"type": ERROR, "content": "; ".join(errors)}
-            firmware = {}
-            for board, b in doc["boards"].items():
-                elf = os.environ.get(f"VHIL_{b['firmware'].upper()}_ELF")
-                if not elf:
-                    return {"type": ERROR, "content": f"no image for {board}: set "
-                                                      f"VHIL_{b['firmware'].upper()}_ELF"}
-                firmware[board] = elf
             with tempfile.TemporaryDirectory() as tmp:
                 path = Path(tmp) / f"{doc['id']}.yaml"
                 path.write_text(dump_system(doc))
+                # Each board's firmware: its role's, or the one it names.
+                firmware = {}
+                for board, b in System(path).boards.items():
+                    var = f"VHIL_{b.firmware['id'].upper().replace('-', '_')}_ELF"
+                    elf = os.environ.get(var)
+                    if not elf:
+                        return {"type": ERROR, "content": f"no image for {board}: set {var}"}
+                    firmware[board] = elf
                 with Sim(path, firmware) as sim:
                     sim.run_for(ms=self.run_ms)
                     lines = []
