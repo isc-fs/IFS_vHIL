@@ -184,8 +184,15 @@ class CanBus:
                          f'{_arg(bool(extended))}')
 
     def send_periodic(self, key: str, can_id: int, data: bytes, period_ms: float,
-                      start_us: int = 0, extended: bool = False) -> None:
-        self.sim.monitor(f'{self.probe} SendPeriodic {rn.quote(key)} {_int(can_id)} '
+                      start_us: Optional[int] = None, extended: bool = False) -> None:
+        """Send every period_ms from start_us (default: now). The probe's own
+        "start 0 = now" reads its clock from the monitor thread, where it is
+        0, so it would replay every period since power-on, one per sync
+        quantum: now is passed explicitly."""
+        key = rn.quote(key)                     # refused before anything is asked of Renode
+        if start_us is None:
+            start_us = self.sim.now_us()
+        self.sim.monitor(f'{self.probe} SendPeriodic {key} {_int(can_id)} '
                          f'{_hex(data)} {int(period_ms * 1000)} {_int(start_us)} '
                          f'{_arg(bool(extended))}')
 
