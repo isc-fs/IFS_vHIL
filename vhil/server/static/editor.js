@@ -46,6 +46,12 @@ function rpcClient(frame, origin) {
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// What `vhil.system validate` warns of (a pin the role's backplane leaves
+// unconnected): shown, but it doesn't stop a save.
+const warningList = (warnings) => warnings?.length
+  ? `<div class="warning"><strong>Warnings:</strong><ul>${warnings.map((w) => `<li>${esc(w)}</li>`).join("")}</ul></div>`
+  : "";
 const today = () => new Date().toISOString().slice(0, 10).replace(/-/g, "");
 
 export async function editorPage(view, initialId) {
@@ -157,11 +163,24 @@ export async function editorPage(view, initialId) {
     prForm.elements.title.value = saveForm.elements.message.value;
     setState(`${id}${s.exists ? "" : " (new)"} · ${branch || "checked-out tree"} @ ${(s.ref || "").slice(0, 8)}`);
     if (s.errors.length) showErrors(`${id} does not validate as it is:`, s.errors);
+    else if (s.warnings?.length) show(`${esc(id)} is valid.${warningList(s.warnings)}`);
     await refreshFirmware();
   }
 
+  // One refs request per firmware per panel refresh (the API caches ls-remote).
+  const refsCache = new Map();
+  const refsOf = (id) => {
+    if (!refsCache.has(id)) refsCache.set(id, call("GET", `/api/firmware/${encodeURIComponent(id)}/refs`));
+    return refsCache.get(id);
+  };
+
+  // The firmware panel: per board, the app's branch or tag and the
+  // bootloader's tag. The role sets which firmware (a node property the
+  // editor shows read-only); the panel picks only refs. A ref equal to the
+  // catalogue's is written as no ref, so the file keeps no firmware_ref.
   async function refreshFirmware() {
     const box = $("#ed-fw");
+    refsCache.clear();
     let graph;
     try { graph = await currentGraph(); } catch (e) { box.textContent = e.message; return; }
     const g = graph.graphs.find((x) => x.id === graph.entryGraph) || graph.graphs[0];
@@ -171,40 +190,61 @@ export async function editorPage(view, initialId) {
     box.innerHTML = "";
     for (const node of boards) {
       const prop = (name) => node.properties.find((p) => p.name === name)?.value ?? "";
-      for (const [fwProp, refProp] of [["firmware", "firmware_ref"], ["bootloader", "bootloader_ref"]]) {
-        const fw = fwById[prop(fwProp)];
-        if (!fw) continue;
-        const row = document.createElement("label");
+      const name = node.instanceName || node.id;
+      for (const [what, fwProp, refProp, kinds] of [
+        ["app", "firmware", "firmware_ref", ["branches", "tags"]],
+        ["bootloader", "bootloader", "bootloader_ref", ["tags"]]]) {
+        // "udv (not in the catalogue yet)" -> udv: the role names it all the same.
+        const fwId = String(prop(fwProp)).split(" ")[0];
+        if (!fwId) continue;
+        const fw = fwById[fwId];
+        const row = document.createElement("div");
         row.className = "ed-fw-row";
-        row.innerHTML = `<span><strong>${esc(node.instanceName || node.id)}</strong> ${esc(fwProp)}
-          <span class="muted">${esc(fw.id)} · ${esc(fw.repo)}</span></span>`;
         const sel = document.createElement("select");
+        sel.setAttribute("aria-label", `${name} ${what} ref`);
+        const info = document.createElement("span");
+        info.className = "muted ed-fw-info";
+        row.innerHTML = `<span><strong>${esc(name)}</strong> ${esc(what)}
+          <span class="muted">${esc(fwId)}${fw ? ` · ${esc(fw.repo)}` : ""}</span></span>`;
+        row.append(sel, info);
+        box.append(row);
+        if (!fw) {
+          // The role names a firmware the catalogue lacks (the uDV's).
+          sel.disabled = true;
+          sel.innerHTML = `<option>none</option>`;
+          info.textContent = `No ${fwId} firmware in the catalogue yet: this role can't run.`;
+          continue;
+        }
         const current = prop(refProp);
-        sel.innerHTML = `<option value="">catalogue: ${esc(fw.ref)}</option>${
+        sel.innerHTML = `<option value="">${esc(fw.ref)} (catalogue)</option>${
           current ? `<option value="${esc(current)}" selected>${esc(current)}</option>` : ""}`;
-        sel.addEventListener("focus", async () => {
-          if (sel.dataset.loaded) return;
-          sel.dataset.loaded = "1";
-          try {
-            const refs = await call("GET", `/api/firmware/${encodeURIComponent(fw.id)}/refs`);
-            const opt = (r) => `<option value="${esc(r)}" ${r === current ? "selected" : ""}>${esc(r)}</option>`;
-            sel.innerHTML = `<option value="">catalogue: ${esc(fw.ref)}</option>
-              <optgroup label="branches">${refs.branches.map((r) => opt(r)).join("")}</optgroup>
-              <optgroup label="tags">${refs.tags.map((r) => opt(r)).join("")}</optgroup>`;
-            if (current && ![...refs.branches, ...refs.tags].includes(current)) {
-              sel.insertAdjacentHTML("beforeend", `<option value="${esc(current)}" selected>${esc(current)} (not found)</option>`);
-            }
-          } catch (e) { showErrors(`refs of ${fw.repo}`, e.errors || [e.message]); }
-        });
+        let byName = new Map();
+        const describe = () => {
+          const r = byName.get(sel.value || fw.ref);
+          if (!r) { info.textContent = sel.value ? "not on the remote" : ""; return; }
+          info.innerHTML = `<code title="${esc(r.sha)}">${esc(r.sha.slice(0, 8))}</code>${
+            r.built ? "" : ' <span class="ed-fw-unbuilt">not built yet — the first run builds it</span>'}`;
+        };
+        refsOf(fw.id).then((refs) => {
+          byName = new Map(kinds.flatMap((k) => refs[k]).map((r) => [r.name, r]));
+          const opt = (r) => r.name === fw.ref ? "" :
+            `<option value="${esc(r.name)}" ${r.name === current ? "selected" : ""}>${esc(r.name)}</option>`;
+          sel.innerHTML = `<option value="">${esc(fw.ref)} (catalogue)</option>${kinds.map((k) =>
+            `<optgroup label="${k}">${refs[k].map(opt).join("")}</optgroup>`).join("")}`;
+          if (current && current !== fw.ref && !byName.has(current)) {
+            sel.insertAdjacentHTML("beforeend",
+              `<option value="${esc(current)}" selected>${esc(current)} (not found)</option>`);
+          }
+          describe();
+        }).catch((e) => { info.textContent = `refs of ${fw.repo}: ${e.message}`; });
         sel.addEventListener("change", async () => {
+          describe();
           try {
             await rpc("properties_change", { graph_id: g.id, node_id: node.id,
               properties: [{ name: refProp, new_value: sel.value }] });
-            show(`${esc(node.instanceName)} ${esc(fwProp)} → ${esc(sel.value || `catalogue (${fw.ref})`)}. Save to keep it.`);
+            show(`${esc(name)} ${esc(what)} → ${esc(sel.value || `${fw.ref} (catalogue)`)}. Save to keep it.`);
           } catch (e) { showErrors("could not set the ref in the editor", [e.message]); }
         });
-        row.append(sel);
-        box.append(row);
       }
     }
   }
@@ -228,7 +268,7 @@ export async function editorPage(view, initialId) {
     const p = await call("POST", `/api/systems/${encodeURIComponent(state.id)}/preview`, { dataflow: await currentGraph() });
     const yaml = `<details><summary>systems/${esc(state.id)}.yaml</summary><pre>${esc(p.yaml)}</pre></details>`;
     if (p.errors.length) show(`<strong>Not valid:</strong><ul>${p.errors.map((e) => `<li>${esc(e)}</li>`).join("")}</ul>${yaml}`, "error");
-    else show(`Valid. ${yaml}`);
+    else show(`Valid.${warningList(p.warnings)} ${yaml}`);
   }));
 
   saveForm.addEventListener("submit", (ev) => { ev.preventDefault(); guarded(async () => {
@@ -251,9 +291,9 @@ export async function editorPage(view, initialId) {
     state.isNew = false;
     if (out.changed) {
       state.savedBranch = out.branch;
-      show(`Saved <code>${esc(out.path)}</code> on <code>${esc(out.branch)}</code> @ <code>${esc(out.ref.slice(0, 8))}</code>.`);
+      show(`Saved <code>${esc(out.path)}</code> on <code>${esc(out.branch)}</code> @ <code>${esc(out.ref.slice(0, 8))}</code>.${warningList(out.warnings)}`);
     } else {
-      show(`Nothing to save: identical to <code>${esc(out.ref.slice(0, 8))}</code>.`);
+      show(`Nothing to save: identical to <code>${esc(out.ref.slice(0, 8))}</code>.${warningList(out.warnings)}`);
     }
   }); });
 

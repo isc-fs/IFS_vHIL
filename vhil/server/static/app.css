@@ -106,7 +106,9 @@ body[data-page="editor"] main { max-width: none; }
 .ed-grid form, .ed-grid label { display: flex; flex-direction: column; gap: .3rem; }
 .ed-grid form { gap: .5rem; }
 .ed-grid .row { display: flex; gap: .5rem; justify-content: flex-end; }
-.ed-fw-row { margin-bottom: .6rem; font-size: .875rem; }
+.ed-fw-row { margin-bottom: .6rem; font-size: .875rem; display: flex; flex-direction: column; gap: .3rem; }
+.ed-fw-info code { background: var(--code); padding: 0 .2rem; }
+.ed-fw-unbuilt, .warning { color: var(--s2); }
 input, textarea, select, button { font: inherit; color: var(--fg); background: var(--bg);
   border: 1px solid var(--line); border-radius: 4px; padding: .3rem .45rem; }
 button { cursor: pointer; }
