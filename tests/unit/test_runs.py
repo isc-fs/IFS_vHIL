@@ -840,6 +840,26 @@ def test_a_worker_reclaims_and_reruns_a_dead_workers_run(settings, store):
     assert not any(r.get("text") == "first attempt" for r in trace)
 
 
+def test_a_first_attempt_sets_aside_results_left_by_a_rolled_back_run(settings, store):
+    """A database restored to a snapshot reuses the ids of the runs it rolled
+    back; their results are still on the runs volume and must not be mixed
+    into the new run's."""
+    run_id = store.create("ecu", "", {}, {"kind": "run", "virtual_ms": 200, "slice_ms": 100})
+    d = settings.results / str(run_id)
+    (d / "system").mkdir(parents=True)
+    (d / "trace.jsonl").write_text('{"kind": "log", "t_us": 0, "text": "rolled back run"}\n')
+    (d / "system" / "ecu.yaml").write_text("old")
+    worker = Worker(settings, worker_id="w1", sim_factory=lambda *a: FakeSim(),
+                    resolver=FixedResolver())
+    assert worker.run_once() == run_id
+    assert store.get(run_id)["state"] == "passed"
+    assert not any(r.get("text") == "rolled back run" for r in read_trace(d / "trace.jsonl"))
+    assert not (d / "system" / "ecu.yaml").exists()
+    [orphan] = (settings.results / ".orphaned").iterdir()
+    assert orphan.name.startswith(f"{run_id}-")
+    assert read_trace(orphan / "trace.jsonl")[0]["text"] == "rolled back run"
+
+
 def test_a_live_worker_keeps_its_run_while_another_polls(settings, store):
     """Worker A runs a slow run, beating every 20 ms; worker B polls with a
     0.3 s reclaim timeout the whole time and never takes it."""
