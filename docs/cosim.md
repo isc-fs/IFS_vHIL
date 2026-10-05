@@ -63,10 +63,11 @@ from vhil.sim import Sim
 from vhil.cosim import Port
 from vhil.plants import AcuStimulus, Inverter, Pedals
 
-with Sim("systems/ecu.yaml", {"ecu": "ECU08.elf"}) as sim:
+with Sim("systems/ecu.yaml", {"ecu": "ECU08.elf", "ecu.bootloader": "CAN_BL.elf"}) as sim:
+    t0 = sim.wait_for_app()     # after the bootloader's 2 s auto-jump window
     port = Port(sim)
     inverter = Inverter()
-    port.run([AcuStimulus(), Pedals(driver), inverter], ms=5000)
+    port.run([AcuStimulus(), Pedals(driver, start_us=t0), inverter], ms=5000)
 ```
 
 A plant is any object with `step(port, t_us)`. Inside it, `port.received(name)`,

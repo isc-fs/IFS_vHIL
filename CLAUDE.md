@@ -67,7 +67,10 @@ Same model as IFS_HIL.
 
 A system (`systems/*.yaml`) places boards from the catalogue (`catalog/`),
 gives each its firmware source (at the catalogue's ref, or the board's
-`firmware_ref` / `bootloader_ref`), and wires them together. Renode scripts and
+`firmware_ref` / `bootloader_ref`), and wires them together. Every MainLite
+carries the CAN bootloader and is placed in a `role:` (ecu, ams or udv), whose
+node ID and flash bus come from the board's `roles` table
+(`catalog/boards/mainlite.yaml`). Renode scripts and
 the virtual broker's wiring are **generated** from it by `vhil/system.py`.
 Never hand-edit a generated script, and never put a car-specific name in the
 catalogue (`ecu`, not `ifs08-ecu`). Endpoints name the MainLite's own
@@ -106,12 +109,19 @@ IFS_HIL recipe ─▶ ECU08.elf / AMS.elf  (same image the physical bench flashe
    forever.
 4. **Every address and IRQ in `stm32h733.repl` comes from ST's
    `stm32h733xx.h`.** Cite it; don't guess.
-5. **The app images never set VTOR themselves** (the ECU doesn't): the
-   boot script sets VTOR = `0x08020000`, as the CAN bootloader would.
+5. **Every MainLite boots through its CAN bootloader**, as on the car: the
+   generated script loads the provisioned flash (bootloader in sector 0, app
+   at `0x08020000`, metadata, node-ID seed; `vhil/flash_image.py`) and the
+   bootloader sets VTOR when it jumps to the app (the ECU never sets it
+   itself). Never shortcut it: a power-on spends the bootloader's 2 s
+   auto-jump window first, and tests wait for the app with
+   `Sim.wait_for_app()` instead of assuming it starts at t = 0.
 6. **A virtual power-on writes `BASEPRI` = 0 after `machine Reset`.**
    Renode 1.17's reset zeroes the register as read but not its masking, so a
-   cut inside a FreeRTOS critical section hangs the next boot in `HAL_Delay`
-   (`vhil/broker.py`). Don't remove it until upstream Renode fixes this.
+   cut inside a FreeRTOS critical section hangs the next boot (`vhil/broker.py`).
+   The bootloader in front doesn't change that: the stale mask survives the
+   reset into it, and the bootloader never writes BASEPRI before it jumps.
+   Don't remove it until upstream Renode fixes this.
 7. **Unmodelled hardware fails the run unless it is explained.** Renode drops
    writes to unmodelled registers and returns 0 for reads. The plugin's
    peripheral guard (`vhil/peripheral_guard.py`) fails a session on any such
@@ -138,12 +148,14 @@ IFS_HIL recipe ─▶ ECU08.elf / AMS.elf  (same image the physical bench flashe
 ```sh
 python -m vhil.system validate systems/ecu.yaml                 # schema + catalogue
 python -m vhil.system build systems/ecu.yaml --workdir build/fw  # firmware from its declared source
-python -m vhil.system render systems/ecu.yaml -o build/ecu.resc  # generated Renode script
+python -m vhil.system render systems/ecu.yaml --firmware ecu=<elf> --firmware ecu.bootloader=<bl-elf> \
+    -o build/ecu.resc                                             # generated script + flash image
+export VHIL_CAN_BOOTLOADER_ELF=<bl-elf>                            # every MainLite boots through it
 RENODE=<renode> scripts/explore.sh systems/ecu.yaml <elf> 5       # boot + CAN log
-RENODE=<renode> scripts/probe.sh systems/ecu.yaml <elf> 1 "nvic Frequency"
+RENODE=<renode> scripts/probe.sh systems/ecu.yaml <elf> 3 "nvic Frequency"
 <renode-dir>/renode-test tests/ecu_smoke.robot --variable ELF:<elf> --variable RESC:build/ecu.resc
 python -m pytest tests/unit                                       # host-only, no Renode
-python -m pytest tests/sim --ecu-elf <elf>                        # native tests in virtual time (vhil/sim.py)
+python -m pytest tests/sim --ecu-elf <elf> --can-bootloader-elf <bl-elf>  # native tests (vhil/sim.py)
 python -m vhil.editor spec|to-graph|to-system|serve              # system editor backend (Pipeline Manager)
 python -m vhil.editor check                                       # Pipeline Manager loads every system (editor image)
 ```

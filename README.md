@@ -58,19 +58,26 @@ Requirements: Renode 1.17.0 (portable Linux build) and Arm GNU Toolchain
 ```sh
 export RENODE=~/renode_1.17.0-portable/renode     # and the Arm toolchain on PATH
 
-# build every board's firmware from the source its system declares
-python -m vhil.system build systems/ecu.yaml --workdir build/fw   # prints ecu=<elf>
+# build every board's firmware from the source its system declares: the app
+# and the CAN bootloader every MainLite boots through (prints ecu=<elf>,
+# ecu.bootloader=<elf>)
+python -m vhil.system build systems/ecu.yaml --workdir build/fw
+export VHIL_CAN_BOOTLOADER_ELF=$PWD/build/fw/can-bootloader@v1.7.0/build/Release/CAN_BL.elf
 
-# 5 virtual seconds, logging every CAN frame the ECU queues
+# 5 virtual seconds (2 in the bootloader's auto-jump window, then the app),
+# logging every CAN frame the ECU queues
 scripts/explore.sh systems/ecu.yaml build/fw/ecu@dev/build/ECU08.elf 5
 
-# automated smoke checks (the Renode script is generated from the system)
-python -m vhil.system render systems/ecu.yaml -o build/ecu.resc
+# automated smoke checks (the Renode script is generated from the system,
+# with the provisioned flash image it builds from both ELFs)
+python -m vhil.system render systems/ecu.yaml --firmware ecu=build/fw/ecu@dev/build/ECU08.elf \
+    --firmware ecu.bootloader=$VHIL_CAN_BOOTLOADER_ELF -o build/ecu.resc
 $RENODE-test tests/ecu_smoke.robot --variable ELF:$PWD/build/fw/ecu@dev/build/ECU08.elf --variable RESC:$PWD/build/ecu.resc
 
 # IFS_HIL's own ECU suite, unmodified, against the virtual ECU (needs vcan
 # can0..can2; on WSL2 run scripts/wsl-vcan.sh --load first)
-scripts/run-ifs-hil.sh ~/IFS_HIL build/fw/ecu@dev/build/ECU08.elf smoke
+VHIL_FIRMWARE="ecu.bootloader=$VHIL_CAN_BOOTLOADER_ELF" \
+    scripts/run-ifs-hil.sh ~/IFS_HIL build/fw/ecu@dev/build/ECU08.elf smoke
 ```
 
 A system file is the source of truth: edit `systems/*.yaml`, never a

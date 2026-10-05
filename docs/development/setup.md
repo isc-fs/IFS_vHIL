@@ -142,7 +142,8 @@ it back onto the original text, comments kept. Natively:
 3. The same backend library, and `ruamel.yaml==0.18.*`, in this repo's venv.
 4. `scripts/editor.sh`, then open http://localhost:5000. Load a system with
    `python -m vhil.editor to-graph systems/ams.yaml -o ams.json` and drop the
-   file on the canvas. Run needs `VHIL_<FIRMWARE>_ELF` (e.g. `VHIL_AMS_ELF`).
+   file on the canvas. Run needs `VHIL_<FIRMWARE>_ELF` (e.g. `VHIL_AMS_ELF`, and
+   `VHIL_CAN_BOOTLOADER_ELF` for the bootloader every MainLite boots through).
 
 The image applies our patches in [`docker/pm/`](../../docker/pm) on top of
 the pinned release before building the frontend (natively: `git apply
@@ -165,7 +166,10 @@ over Pipeline Manager's postMessage API. Save commits `systems/<id>.yaml` on
 the branch you name, in the API's workspace, with git plumbing: no checkout
 moves, `dev`/`main` are never written, a branch checked out in the workspace
 is refused (`vhil/server/gitstore.py`). The file is validated first as
-`python -m vhil.system validate` would. The firmware picker sets a board's
+`python -m vhil.system validate` would. A MainLite node has a `role` select
+(ECU, AMS or uDV), each choice shown with the node id it gives the bootloader
+(`ecu (node 0x1)`); saving writes `role: ecu`, and the bootloader it carries is
+a read-only `bootloader` property. The firmware picker sets a board's
 `firmware_ref` (a branch or tag of the catalogue repo, listed with `git
 ls-remote`). Open PR pushes the branch and opens a PR to `dev`; it needs
 `VHIL_GITHUB_TOKEN` (or `VHIL_GITHUB_TOKEN_FILE`; contents + pull requests write) on the API until the
