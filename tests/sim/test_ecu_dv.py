@@ -230,7 +230,9 @@ def test_dv_refused_without_hard_braking_or_a_request(parked, brake, req):
     t = parked.sim.run_for(ms=500)
     parked.acu.stop_periodic("r2d")
     parked.brake(BRAKE_RELEASED)
-    parked.sim.run_for(ms=50)
+    # Past UdvR2dStaleMs: the next case must not meet this case's request,
+    # still fresh, with its own hard braking (as [2700-0] did after [2500-1]).
+    parked.sim.run_for(ms=R2D_STALE_MS + 3 * TICK_MS)
     assert parked.state() == WAIT_START_BRAKE, "a DV R2D entry it should have refused"
     assert all(f.data[0] == 0 for f in parked.acu.frames([R2D_CONFIRM], since_us=t - 500_000))
 
