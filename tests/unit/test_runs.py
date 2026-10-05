@@ -623,16 +623,20 @@ def test_resolver_reuses_an_image_built_at_the_ref(tmp_path):
     elf = tmp_path / "ecu@feat_x" / "build" / "ECU08.elf"
     elf.parent.mkdir(parents=True)
     elf.write_bytes(b"\x7fELF")
-    (tmp_path / "built.txt").write_text(f"ecu={elf}\n")
+    bl = tmp_path / "can-bootloader@v1.7.0" / "build" / "Release" / "CAN_BL.elf"
+    bl.parent.mkdir(parents=True)
+    bl.write_bytes(b"\x7fELF")
+    (tmp_path / "built.txt").write_text(f"ecu={elf}\necu.bootloader={bl}\n")
     resolver = FirmwareResolver(tmp_path, build=False)
-    assert resolver.resolve(system, {"ecu": "feat/x"}) == {"ecu": elf.resolve()}
+    assert resolver.resolve(system, {"ecu": "feat/x"}) == {"ecu": elf.resolve(),
+                                                           "ecu.bootloader": bl.resolve()}
     # The catalogue's ref (dev) was never built here.
     with pytest.raises(RuntimeError, match="no built image"):
         resolver.resolve(system, {})
 
 
 def test_image_env_names_bootloaders_by_firmware_id():
-    system = System(REPO / "systems" / "ecu-bl.yaml")
+    system = System(REPO / "systems" / "ecu.yaml")
     env = image_env(system, {k: Path(f"/fw/{k}.elf") for k in system.images()})
     assert env["VHIL_ECU_ELF"] == "/fw/ecu.elf"
     assert env["VHIL_CAN_BOOTLOADER_ELF"] == "/fw/ecu.bootloader.elf"

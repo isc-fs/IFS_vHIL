@@ -6,6 +6,20 @@ description: >-
   Connector and pin names follow the MCU (FDCANn, port pins); what a
   backplane and its firmware use them for belongs to the system, not the board.
 platform: stm32h733
+# Every MainLite carries the CAN bootloader in sector 0, burned at
+# provisioning: it boots first, then jumps to the application after its 2 s
+# auto-jump window (repo owner, 2026-10-05; stm32-can-bootloader v1.7.0
+# ARCHITECTURE.md "Boot flow", PROVISIONING.md step 1.1).
+bootloader: can-bootloader
+# The role a MainLite is provisioned for (a system's `role:`): the node ID
+# its bootloader answers to, and the bus its app is flashed over (owner,
+# 2026-10-05; stm32-can-bootloader v1.7.0 PROVISIONING.md step 1.3, "ecu ->
+# 0x1, ams -> 0x2, udv -> 0x3"). Each role's natural firmware is the
+# catalogue's of the same name (ecu, ams; no udv yet), but a system names it.
+roles:
+  ecu: {node_id: 0x1, flash_bus: FDCAN2}
+  ams: {node_id: 0x2, flash_bus: FDCAN1}
+  udv: {node_id: 0x3, flash_bus: FDCAN2}
 # No coin cell or supercap on VBAT, so a power cut wipes the backup domain:
 # the RTC backup registers (the AMS's sticky ErrorLatch, BKP1R) start clear.
 # Source: IFS08-CE-AMS app_init_task.cpp:78-80; to confirm on the MainLite

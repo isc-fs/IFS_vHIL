@@ -42,8 +42,11 @@ def test_ecu_system_renders_the_bench_setup():
     assert s.count("models/renode/Stm32H7Adc3.cs") == 1
     for controller, bus in (("fdcan1_h7", "can_inv"), ("fdcan2_h7", "can_acu"), ("fdcan3_h7", "can_dash")):
         assert f"connector Connect sysbus.{controller} {bus}" in s
-    assert "sysbus LoadELF $elf_ecu" in s
-    assert "cpu VectorTableOffset 0x08020000" in s
+    # The provisioned flash, booted from the bootloader's reset vector: the
+    # bootloader sets VTOR to the app when it jumps, not the script.
+    assert "sysbus LoadBinary $flash_ecu 0x08000000" in s
+    assert "cpu VectorTableOffset 0x08000000" in s
+    assert "0x08020000" not in s
     for bus, netdev in (("can_inv", "can0"), ("can_dash", "can1"), ("can_acu", "can2")):
         assert f'machine CreateSocketCANBridge "br_{bus}" "{netdev}"' in s
     assert "CreateSocketCANBridge" not in System(REPO / "systems" / "ecu.yaml").render_renode()
@@ -83,7 +86,7 @@ def test_gaps_name_systems_that_exist():
 
 def _system(tmp_path, body):
     p = tmp_path / "s.yaml"
-    p.write_text("kind: system\nid: t\nboards:\n  ecu: {board: mainlite, firmware: ecu}\n" + body)
+    p.write_text("kind: system\nid: t\nboards:\n  ecu: {board: mainlite, role: ecu, firmware: ecu}\n" + body)
     return p
 
 
@@ -170,11 +173,11 @@ def test_ssa_2_legs_follow_the_current(tmp_path, amps, p_v, n_v):
 
 def test_port_signals_must_point_at_the_right_kind(tmp_path):
     p = tmp_path / "s.yaml"
-    p.write_text("kind: system\nid: t\nboards:\n  ecu: {board: mainlite, firmware: ecu}\n"
+    p.write_text("kind: system\nid: t\nboards:\n  ecu: {board: mainlite, role: ecu, firmware: ecu}\n"
                  "port:\n  step_ms: 10\n  signals:\n    apps1: {analog: ecu.PB5}\n")
     with pytest.raises(SystemError, match="is gpio, not analog"):
         System(p)
-    p.write_text("kind: system\nid: t\nboards:\n  ecu: {board: mainlite, firmware: ecu}\n"
+    p.write_text("kind: system\nid: t\nboards:\n  ecu: {board: mainlite, role: ecu, firmware: ecu}\n"
                  "port:\n  step_ms: 10\n  signals:\n    x: {can_tx: {bus: nope, id: 1}}\n")
     with pytest.raises(SystemError, match="no bus 'nope'"):
         System(p)
@@ -182,7 +185,7 @@ def test_port_signals_must_point_at_the_right_kind(tmp_path):
 
 def _ams(tmp_path, devices):
     p = tmp_path / "s.yaml"
-    p.write_text("kind: system\nid: t\nboards:\n  ams: {board: mainlite, firmware: ams}\n"
+    p.write_text("kind: system\nid: t\nboards:\n  ams: {board: mainlite, role: ams, firmware: ams}\n"
                  "devices:\n" + devices)
     return p
 
@@ -213,8 +216,8 @@ def test_each_board_sets_its_image_inside_its_own_machine(tmp_path):
     each $elf_<board> must follow its own `mach create`."""
     p = tmp_path / "s.yaml"
     p.write_text("kind: system\nid: t\nboards:\n"
-                 "  ecu: {board: mainlite, firmware: ecu}\n"
-                 "  ams: {board: mainlite, firmware: ams}\n"
+                 "  ecu: {board: mainlite, role: ecu, firmware: ecu}\n"
+                 "  ams: {board: mainlite, role: ams, firmware: ams}\n"
                  "buses:\n  can_acu: {kind: can, nodes: [ecu.FDCAN2, ams.FDCAN1]}\n")
     lines = System(p).render_renode({"ecu": Path("/fw/ecu.elf"), "ams": Path("/fw/ams.elf")}).splitlines()
     for board in ("ecu", "ams"):
@@ -238,7 +241,7 @@ def test_an_i2c_model_must_place_its_targets(tmp_path):
 def _wp_system(tmp_path, sectors):
     p = tmp_path / "wp.yaml"
     p.write_text("kind: system\nid: wp\nboards:\n"
-                 f"  ecu: {{board: mainlite, firmware: ecu, write_protect: {sectors}}}\n")
+                 f"  ecu: {{board: mainlite, role: ecu, firmware: ecu, write_protect: {sectors}}}\n")
     return p
 
 
@@ -283,31 +286,96 @@ def _clones(monkeypatch, system, refs=None):
 def test_a_board_without_firmware_ref_builds_the_catalogue_ref(tmp_path, monkeypatch):
     s = System(_system(tmp_path, ""))
     assert s.boards["ecu"].ref() == "dev"
-    assert _clones(monkeypatch, s) == {"ecu@dev": "dev"}
+    assert _clones(monkeypatch, s) == {"ecu@dev": "dev", "can-bootloader@v1.7.0": "v1.7.0"}
 
 
 def test_firmware_ref_overrides_the_catalogue_and_build_ref_overrides_both(tmp_path, monkeypatch):
     p = tmp_path / "r.yaml"
     p.write_text("kind: system\nid: r\nboards:\n"
-                 "  ecu: {board: mainlite, firmware: ecu, firmware_ref: feat/x,"
-                 " bootloader: can-bootloader, bootloader_ref: v1.6.2, node_id: 1}\n")
+                 "  ecu: {board: mainlite, role: ecu, firmware: ecu, firmware_ref: feat/x,"
+                 " bootloader_ref: v1.6.2}\n")
     s = System(p)
     assert s.boards["ecu"].ref() == "feat/x" and s.boards["ecu"].ref("bootloader") == "v1.6.2"
     assert _clones(monkeypatch, s) == {"ecu@feat_x": "feat/x", "can-bootloader@v1.6.2": "v1.6.2"}
     assert _clones(monkeypatch, s, {"ecu": "dev"})["ecu@dev"] == "dev"
 
 
-def test_a_bootloader_ref_needs_a_bootloader(tmp_path):
+def _catalog_with(tmp_path, old, new):
+    """A copy of the catalogue whose mainlite has `old` replaced by `new`."""
+    catalog = tmp_path / "catalog"
+    shutil.copytree(REPO / "catalog", catalog)
+    path = catalog / "boards" / "mainlite.yaml"
+    assert old in path.read_text()
+    path.write_text(path.read_text().replace(old, new))
+    return catalog
+
+
+def test_a_bootloader_ref_needs_a_board_that_carries_one(tmp_path):
     p = tmp_path / "r.yaml"
     p.write_text("kind: system\nid: r\nboards:\n"
-                 "  ecu: {board: mainlite, firmware: ecu, bootloader_ref: v1.6.2}\n")
+                 "  ecu: {board: mainlite, role: ecu, firmware: ecu, bootloader_ref: v1.6.2}\n")
+    System(p)                                   # mainlite carries one
     with pytest.raises(SystemError, match="bootloader_ref needs a bootloader"):
+        System(p, _catalog_with(tmp_path, "bootloader: can-bootloader\n", ""))
+
+
+@pytest.mark.parametrize("path", SYSTEMS, ids=lambda p: p.name)
+def test_every_mainlite_boots_through_the_can_bootloader(path):
+    """Every MainLite carries the CAN bootloader and is placed in a role, which
+    gives its node ID and flash bus (catalog/boards/mainlite.yaml; owner,
+    2026-10-05; PROVISIONING.md step 1.3). No system boots its app directly."""
+    system = System(path)
+    roles = {"ecu": (1, "FDCAN2"), "ams": (2, "FDCAN1"), "udv": (3, "FDCAN2")}
+    for b in system.boards.values():
+        assert b.bootloader["id"] == "can-bootloader"
+        assert f"{b.name}.bootloader" in system.images()
+        assert (b.node_id, b.flash_bus) == roles[b.role]
+        assert system.flash_bus(b.name) == "can_acu"
+    script = system.render_renode()
+    assert "LoadELF" not in script and "0x08020000" not in script
+
+
+def test_the_mainlite_roles_are_the_cars():
+    roles = yaml.safe_load((REPO / "catalog" / "boards" / "mainlite.yaml").read_text())["roles"]
+    assert roles == {"ecu": {"node_id": 1, "flash_bus": "FDCAN2"},
+                     "ams": {"node_id": 2, "flash_bus": "FDCAN1"},
+                     "udv": {"node_id": 3, "flash_bus": "FDCAN2"}}
+
+
+@pytest.mark.parametrize("entry, message", [
+    ("{board: mainlite, firmware: ecu}", "needs a role \\(ecu, ams, udv\\)"),
+    ("{board: mainlite, role: dash, firmware: ecu}", "'role': 'dash'"),
+])
+def test_a_mainlite_needs_one_of_its_roles(tmp_path, entry, message):
+    p = tmp_path / "r.yaml"
+    p.write_text(f"kind: system\nid: r\nboards:\n  ecu: {entry}\n")
+    with pytest.raises(SystemError, match=message):
         System(p)
+
+
+def test_node_id_is_the_roles_not_a_system_field(tmp_path):
+    p = tmp_path / "r.yaml"
+    p.write_text("kind: system\nid: r\nboards:\n"
+                 "  ecu: {board: mainlite, role: ecu, firmware: ecu, node_id: 5}\n")
+    with pytest.raises(SystemError, match="node_id"):        # schema: no such field
+        System(p)
+
+
+def test_a_roles_flash_bus_must_be_a_can_connector(tmp_path):
+    catalog = _catalog_with(tmp_path, "flash_bus: FDCAN1}", "flash_bus: PB4}")
+    with pytest.raises(SystemError, match="role ams's flash_bus 'PB4' is not one of its CAN"):
+        System(REPO / "systems" / "ecu.yaml", catalog)
+
+
+def test_an_unprovisioned_board_leaves_the_seed_erased():
+    from vhil import flash_image as fi
+    image = fi.build(b"\x00" * 64, b"\x01" * 64, None)
+    assert image[fi.SEED_ADDR - fi.FLASH_BASE:][:32] == b"\xFF" * 32
 
 
 def test_an_empty_firmware_ref_is_a_schema_error(tmp_path):
     p = tmp_path / "r.yaml"
     p.write_text("kind: system\nid: r\nboards:\n"
-                 "  ecu: {board: mainlite, firmware: ecu, firmware_ref: ''}\n")
+                 "  ecu: {board: mainlite, role: ecu, firmware: ecu, firmware_ref: ''}\n")
     with pytest.raises(SystemError):
         System(p)

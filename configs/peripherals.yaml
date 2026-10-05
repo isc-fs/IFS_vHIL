@@ -57,7 +57,7 @@
   offsets: [0x8, 0x10, 0x24]
   why: "DMA1 Stream0, the AMS's I2C2 RX from the BMI088. HAL_DMA_Init / HAL_DMA_Start_IT clear FEIF0/DMEIF0/TEIF0/HTIF0 in LIFCR, enable TEIE/DMEIE in S0CR and write back S0FCR's read-only FS. Renode's STM32DMA never raises a FIFO, direct-mode or transfer error (the emulated bus has none), so those flags are never set and their interrupts never fire either way; the transfer itself and its TCIF are modelled"
 
-# The CAN bootloader's accesses (boards with a bootloader, e.g. ecu-bl.yaml).
+# The CAN bootloader's accesses (every MainLite carries it in sector 0).
 
 - peripheral: flashController_h7
   offsets: [0xC]

@@ -39,7 +39,9 @@ def metadata(app: bytes, version: int = 0) -> bytes:
     return struct.pack("<8I", META_MAGIC, len(app), zlib.crc32(app), APP_BASE, version, 0, 0, 0)
 
 
-def build(bootloader: bytes, app: bytes, node_id: int, version: int = 0) -> bytes:
+def build(bootloader: bytes, app: bytes, node_id: int | None, version: int = 0) -> bytes:
+    """node_id None leaves the seed erased: an unprovisioned board, whose
+    bootloader answers to its compile-time default (PROVISIONING.md step 1.3)."""
     if len(bootloader) > APP_BASE - FLASH_BASE:
         raise ValueError(f"bootloader is {len(bootloader)} B, sector 0 holds 128 KB")
     if len(app) > APP_MAX:
@@ -48,6 +50,7 @@ def build(bootloader: bytes, app: bytes, node_id: int, version: int = 0) -> byte
     image[0:len(bootloader)] = bootloader
     offset = APP_BASE - FLASH_BASE
     image[offset:offset + len(app)] = app
-    image[SEED_ADDR - FLASH_BASE:SEED_ADDR - FLASH_BASE + 32] = seed(node_id)
+    if node_id is not None:
+        image[SEED_ADDR - FLASH_BASE:SEED_ADDR - FLASH_BASE + 32] = seed(node_id)
     image[META_ADDR - FLASH_BASE:META_ADDR - FLASH_BASE + 32] = metadata(app, version)
     return bytes(image)
