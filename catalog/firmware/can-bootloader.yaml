@@ -1,7 +1,7 @@
 kind: firmware
 id: can-bootloader
 description: >-
-  The CAN bootloader of the MLC carriers (isc-fs/stm32-can-bootloader):
+  The CAN bootloader of the MainLite boards (isc-fs/stm32-can-bootloader):
   sector 0, classic CAN on FDCAN1/2/3 at 500 kbps, wire protocol 0.2. It
   validates the application's metadata record and jumps to it after a 2 s
   auto-jump window, or stays to erase, program and verify over CAN for

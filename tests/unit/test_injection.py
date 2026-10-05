@@ -125,7 +125,7 @@ MUTATIONS = {
             "params", {}).update(current_A=v),
         "output key": lambda d, v: _rename(d["devices"]["dcdc_current"]["outputs"], "out", v),
         "output endpoint": _set("devices", "dcdc_current", "outputs", "out"),
-        "bench carrier": lambda d, v: d["bench"]["carriers"][0].update(board=v),
+        "bench power": lambda d, v: d["bench"]["power"][0].update(board=v),
         "quantum_s": _set("time", "quantum_s"),
     },
     ECU_AMS: {

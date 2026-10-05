@@ -1,14 +1,14 @@
 kind: system
 id: ecu-ams
 description: >-
-  The ECU and the AMS on the car's ACU bus, each on its own MLC carrier. The
+  The ECU and the AMS on the car's ACU bus, each a MainLite on its own backplane. The
   AMS carries its battery chain, SD card and current sensors as in ams.yaml.
   IFS_HIL's real-AMS block (F-real) runs against it.
 time:
   quantum_s: 0.0005
 boards:
-  ecu: {board: mlc-carrier, firmware: ecu}
-  ams: {board: mlc-carrier, firmware: ams}
+  ecu: {board: mainlite, firmware: ecu}
+  ams: {board: mainlite, firmware: ams}
 buses:
   # As in ecu.yaml. The ACU bus is the one the two share in the car: the
   # ECU's FDCAN2 (its 0x100 heartbeat, tests/sim/test_ecu_boot.py) and the
@@ -21,17 +21,17 @@ devices:
   isospi: {model: ltc6820, spi: ams.SPI1, cs: ams.PB9}
   cells: {model: ltc6811, attach: isospi, count: 10}
   sd: {model: sd-card, sdmmc: ams.SDMMC1}
-  # The carrier's BMI088 on I2C2 (accelerometer 0x18, gyroscope 0x68:
+  # The MainLite's BMI088 on I2C2 (accelerometer 0x18, gyroscope 0x68:
   # SDO1/SDO2 to GND, ams_config.hpp ImuAccAddr7b/ImuGyrAddr7b), which
   # the AMS's ImuTask samples at 100 Hz into IMUnnnn.CSV on the card.
   imu: {model: bmi088, i2c: ams.I2C2}
   pack_current: {model: ssa-2-250a, outputs: {out_p: ams.PF7, out_n: ams.PF8}}
   dcdc_current: {model: acs758lcb-050b, outputs: {out: ams.PC1}}
 bench:
-  carriers:
-    # MLC4 (ECU): relay K4 = TCA 0x20 port 0 pin 3, current monitor INA 0x45.
+  power:
+    # Slot 4 (ECU): relay = TCA 0x20 port 0 pin 3, current monitor INA 0x45.
     - {board: ecu, slot: 4, relay: {addr: 0x20, port: 0, pin: 3}, ina_addr: 0x45, current_A: 0.13}
-    # MLC2 (AMS): relay K2 = TCA 0x20 port 0 pin 1, current monitor INA 0x41.
+    # Slot 2 (AMS): relay = TCA 0x20 port 0 pin 1, current monitor INA 0x41.
     - {board: ams, slot: 2, relay: {addr: 0x20, port: 0, pin: 1}, ina_addr: 0x41, current_A: 0.12}
   dac_routes:
     # bench DAC1 -> ECU pedal inputs (vcu_profile: brake, APPS1, APPS2)

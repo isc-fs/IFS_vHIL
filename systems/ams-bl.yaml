@@ -8,7 +8,7 @@ time:
   quantum_s: 0.0005
 boards:
   # Provisioned as on the car: the CAN bootloader in sector 0, node 0x2.
-  ams: {board: mlc-carrier, firmware: ams, bootloader: can-bootloader, node_id: 2}
+  ams: {board: mainlite, firmware: ams, bootloader: can-bootloader, node_id: 2}
 buses:
   can_acu: {kind: can, nodes: [ams.FDCAN1], host_netdev: can2}
 devices:
@@ -17,7 +17,7 @@ devices:
   isospi: {model: ltc6820, spi: ams.SPI1, cs: ams.PB9}
   cells: {model: ltc6811, attach: isospi, count: 10}
   sd: {model: sd-card, sdmmc: ams.SDMMC1}
-  # The carrier's BMI088 on I2C2 (accelerometer 0x18, gyroscope 0x68:
+  # The MainLite's BMI088 on I2C2 (accelerometer 0x18, gyroscope 0x68:
   # SDO1/SDO2 to GND, ams_config.hpp ImuAccAddr7b/ImuGyrAddr7b), which
   # the AMS's ImuTask samples at 100 Hz into IMUnnnn.CSV on the card.
   imu: {model: bmi088, i2c: ams.I2C2}
@@ -28,8 +28,8 @@ devices:
   pack_current: {model: ssa-2-250a, outputs: {out_p: ams.PF7, out_n: ams.PF8}}
   dcdc_current: {model: acs758lcb-050b, outputs: {out: ams.PC1}}
 bench:
-  carriers:
-    # MLC2: relay K2 = TCA 0x20 port 0 pin 1, current monitor INA 0x41
+  power:
+    # Slot 2: relay = TCA 0x20 port 0 pin 1, current monitor INA 0x41
     # (bench-01: 118-128 mA alive).
     - {board: ams, slot: 2, relay: {addr: 0x20, port: 0, pin: 1}, ina_addr: 0x41, current_A: 0.12}
   # Not yet mapped: the bench's DAC4 pack-current pair and the TSMS /

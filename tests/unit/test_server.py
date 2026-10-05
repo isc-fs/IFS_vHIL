@@ -26,7 +26,7 @@ def test_health(client):
 
 def test_catalog_lists_boards_and_models(client):
     cat = client.get("/api/catalog").json()
-    assert "mlc-carrier" in {b["id"] for b in cat["boards"]}
+    assert "mainlite" in {b["id"] for b in cat["boards"]}
     assert {"ltc6811", "sd-card"} <= {m["id"] for m in cat["models"]}
 
 
@@ -39,7 +39,7 @@ def test_systems_lists_the_checkout(client):
 def test_a_system_comes_back_as_file_and_document(client):
     s = client.get("/api/systems/ams").json()
     assert s["path"] == "systems/ams.yaml" and s["errors"] == []
-    assert s["doc"]["boards"]["ams"]["board"] == "mlc-carrier"
+    assert s["doc"]["boards"]["ams"]["board"] == "mainlite"
     assert s["yaml"] == (REPO / "systems" / "ams.yaml").read_text()
 
 

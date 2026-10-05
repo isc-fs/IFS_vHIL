@@ -1,6 +1,6 @@
 *** Comments ***
 AMS smoke suite on systems/ams.yaml: the unmodified AMS application on a
-virtual carrier, with its battery as models (LTC6820 bridge + 10 LTC6811s on
+virtual MainLite, with its battery as models (LTC6820 bridge + 10 LTC6811s on
 isoSPI). Stimulus goes through the models' own API and checks read the AMS's
 CAN output, so the AMS is judged on what it reports about the battery it is
 given. Run with:

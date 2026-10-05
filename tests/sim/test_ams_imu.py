@@ -1,4 +1,4 @@
-"""The AMS's ImuTask against the MLC carrier's BMI088 on I2C2 (#59).
+"""The AMS's ImuTask against the MainLite's BMI088 on I2C2 (#59).
 
 Firmware facts (IFS08-CE-AMS, the image's source):
   ImuTask: init_sensor reads ACC_CHIP_ID (0x18, reg 0x00, want 0x1E) then

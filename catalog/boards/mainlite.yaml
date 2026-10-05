@@ -1,13 +1,14 @@
 kind: board
-id: mlc-carrier
+id: mainlite
 description: >-
-  MLC carrier: the STM32H733ZG daughter-board in every BACKPLANE_HIL slot.
+  MainLite: the minimal STM32H733ZG unit. Mounted on a backplane it becomes
+  the AMS, the ECU or the uDV.
   Connector and pin names follow the MCU (FDCANn, port pins); what a
-  firmware uses them for belongs to the system, not the board.
+  backplane and its firmware use them for belongs to the system, not the board.
 platform: stm32h733
 # No coin cell or supercap on VBAT, so a power cut wipes the backup domain:
 # the RTC backup registers (the AMS's sticky ErrorLatch, BKP1R) start clear.
-# Source: IFS08-CE-AMS app_init_task.cpp:78-80; to confirm on the carrier
+# Source: IFS08-CE-AMS app_init_task.cpp:78-80; to confirm on the MainLite
 # schematic.
 vbat: false
 can:
@@ -19,7 +20,7 @@ spi:
 sdmmc:
   SDMMC1: sysbus.sdmmc1
 i2c:
-  # PF0 SDA / PF1 SCL, to the carrier's BMI088 (MAIN_LITE IC1; IFS08-CE-AMS
+  # PF0 SDA / PF1 SCL, to the MainLite's BMI088 (MAIN_LITE IC1; IFS08-CE-AMS
   # stm32h7xx_hal_msp.c:282-291, ams_config.hpp:343-346).
   I2C2: sysbus.i2c2_h7
 gpio:
@@ -30,7 +31,7 @@ gpio:
   PB4: {port: sysbus.gpioPortB, pin: 4}
   PB5: {port: sysbus.gpioPortB, pin: 5}
 analog_in:
-  # ADC3 inputs routed to the carrier connector (IFS_HIL vcu_profile.yaml).
+  # ADC3 inputs routed to the MainLite's connector (IFS_HIL vcu_profile.yaml).
   PF7: {adc: sysbus.adc3_h73x, channel: 3}
   PF8: {adc: sysbus.adc3_h73x, channel: 7}
   PF9: {adc: sysbus.adc3_h73x, channel: 2}

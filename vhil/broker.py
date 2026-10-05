@@ -3,12 +3,13 @@
 IFS_HIL's tests talk to the bench through `hil-broker` (newline-delimited
 JSON-RPC on a Unix socket). This serves the same protocol with IFS_HIL's own
 server and its in-memory FakeHardwareManager, and overrides only the calls
-that reach a carrier:
+that power a board (the system's `bench.power` maps the bench's relays and
+current monitors to its boards):
 
-  tca.write_pin on a carrier relay   -> power: open = its CAN controllers
+  tca.write_pin on a board's relay   -> power: open = its CAN controllers
                                         leave their buses, close = machine
                                         Reset and back on the buses
-  ina.current on a carrier's monitor -> its nominal draw while powered, else 0
+  ina.current on a board's monitor   -> its nominal draw while powered, else 0
   dac.set_voltage on a routed channel -> `<adc> SetVoltage <uV> <ch>`
 
 Everything else (PSU, health, unrouted DACs, other TCA pins) keeps the fake's
@@ -57,7 +58,7 @@ def power_on_commands(machine: str, vbat: bool) -> list[str]:
 
     machine Reset keeps the backup domain, as a warm reset does. Without VBAT
     a power cut wipes it (the AMS's sticky ErrorLatch must not outlive the
-    carrier's power), so it is cleared first, before the booting firmware can
+    board's power), so it is cleared first, before the booting firmware can
     read the old value: the RTC backup registers, and the 4 KB backup SRAM
     at 0x38800000 that the CAN bootloader keeps its DTC log in (RM0468:
     retained only from the backup domain supply). The reset macro reloads the image and sets VTOR.
@@ -75,14 +76,14 @@ def power_on_commands(machine: str, vbat: bool) -> list[str]:
 def make_backend(fake_cls, monitor: RenodeMonitor, config: dict, boot_check: bool = False):
     """Build the backend as a subclass of IFS_HIL's FakeHardwareManager."""
 
-    carriers = {(c["relay"]["addr"], c["relay"]["port"], c["relay"]["pin"]): c
-                for c in config.get("carriers", [])}
-    vbat = {c["machine"]: c.get("vbat", True) for c in config.get("carriers", [])}
-    by_ina = {c["ina_addr"]: c for c in config.get("carriers", [])}
+    relays = {(c["relay"]["addr"], c["relay"]["port"], c["relay"]["pin"]): c
+                for c in config.get("power", [])}
+    vbat = {c["machine"]: c.get("vbat", True) for c in config.get("power", [])}
+    by_ina = {c["ina_addr"]: c for c in config.get("power", [])}
     routes = {(r["dac"], r["channel"]): r for r in config.get("dac_routes", [])}
     # The broker server is threaded; `mach set` + the command must not interleave.
     lock = threading.Lock()
-    can_of = {c["machine"]: c.get("can", {}) for c in config.get("carriers", [])}
+    can_of = {c["machine"]: c.get("can", {}) for c in config.get("power", [])}
 
     def checked(command: str) -> str:
         """Run a power-path command and log anything Renode says back: these
@@ -108,7 +109,7 @@ def make_backend(fake_cls, monitor: RenodeMonitor, config: dict, boot_check: boo
     class VirtualHardwareManager(fake_cls):
         def __init__(self) -> None:
             super().__init__()
-            self._powered = {c["machine"]: False for c in carriers.values()}
+            self._powered = {c["machine"]: False for c in relays.values()}
 
         def _on(self, machine: str, command: str) -> str:
             with lock:
@@ -117,13 +118,13 @@ def make_backend(fake_cls, monitor: RenodeMonitor, config: dict, boot_check: boo
 
         def tca_write_pin(self, addr, port, pin, value):
             super().tca_write_pin(addr, port, pin, value)
-            carrier = carriers.get((addr, port, pin))
-            if carrier is None:
+            entry = relays.get((addr, port, pin))
+            if entry is None:
                 return
-            machine, value = carrier["machine"], bool(value)
+            machine, value = entry["machine"], bool(value)
             if value == self._powered[machine]:
                 return
-            # Power is the carrier's CAN controllers on/off its buses, not
+            # Power is the board's CAN controllers on/off its buses, not
             # machine Pause: Renode paces virtual time to host time only while
             # a CPU executes, and repays a paused interval by running fast
             # afterwards (3x seen in CI), which breaks IFS_HIL's wall-clock
@@ -195,11 +196,11 @@ def make_backend(fake_cls, monitor: RenodeMonitor, config: dict, boot_check: boo
                 log.warning("%s boot check failed: %s", machine, e)
 
         def ina_current(self, addr):
-            carrier = by_ina.get(addr)
-            if carrier is None:
+            entry = by_ina.get(addr)
+            if entry is None:
                 return super().ina_current(addr)
             self._tick()
-            return float(carrier["current_A"]) if self._powered[carrier["machine"]] else 0.0
+            return float(entry["current_A"]) if self._powered[entry["machine"]] else 0.0
 
         def dac_set_voltage(self, idx, channel, volts):
             super().dac_set_voltage(idx, channel, volts)

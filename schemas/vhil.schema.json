@@ -395,8 +395,9 @@
           "description": "IFS_HIL bench compatibility: what the virtual broker maps the physical bench's relays, current monitors and DACs to.",
           "additionalProperties": false,
           "properties": {
-            "carriers": {
+            "power": {
               "type": "array",
+              "description": "How IFS_HIL's broker powers each board: the bench slot it sits in, the TCA relay that switches it and the INA monitor that reads its current.",
               "items": {
                 "type": "object",
                 "required": [

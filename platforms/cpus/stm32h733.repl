@@ -1,4 +1,4 @@
-// STM32H733ZG — the MCU on every MLC carrier (ECU and AMS).
+// STM32H733ZG — the MCU of the MainLite (AMS, ECU, uDV).
 //
 // Renode ships only the H743/H753/H747 parts. The H72x/H73x line shares their
 // peripheral IP, so this file reuses Renode's common stm32h7.repl and corrects
@@ -21,7 +21,7 @@ sram1:
 sram2:
     size: 0x4000
 
-// --- Clock tree: the MLC carriers have a 24 MHz HSE (Renode defaults to the
+// --- Clock tree: the MainLite has a 24 MHz HSE (Renode defaults to the
 // Nucleo's 8 MHz). The firmwares run HSE/2*44 = 528 MHz SYSCLK; with the wrong
 // HSE the RCC model derives 176 MHz and every FreeRTOS period runs 3x slow.
 
@@ -73,7 +73,7 @@ fdcan3_h7: CAN.STM32H7_FDCAN @ sysbus 0x4000D400
 
 // TIM23 — CubeMX's HAL timebase on both firmwares. Without it HAL_GetTick never
 // advances and every HAL timeout loop spins forever. 32-bit; the timer kernel
-// clock is 2 x PCLK1 = 264 MHz with the carriers' clock tree.
+// clock is 2 x PCLK1 = 264 MHz with the MainLite's clock tree.
 timer23: Timers.STM32_Timer @ sysbus 0x4000E000
     initialLimit: 0xffffffff
     frequency: 264000000
@@ -110,7 +110,7 @@ sdmmc1: SD.STM32H7_SDMMC @ sysbus 0x52007000
 // SPI1 — the AMS's LTC6820 isoSPI master. The base platform only tags it.
 spi1: SPI.STM32H7_SPI @ sysbus 0x40013000
 
-// I2C2 — the MLC's BMI088 IMU (PF0 SDA / PF1 SCL), read by the AMS's ImuTask
+// I2C2 — the MainLite's BMI088 IMU (PF0 SDA / PF1 SCL), read by the AMS's ImuTask
 // with RX on DMA1 Stream 0 through DMAMUX1. Our model,
 // models/renode/Stm32H7I2c.cs: Renode's STM32F7_I2C never NACKs an address
 // nobody answers, so a missing chip cost the HAL its whole timeout. Same

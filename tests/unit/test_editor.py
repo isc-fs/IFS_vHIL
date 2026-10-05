@@ -34,9 +34,9 @@ def test_spec_has_a_node_type_per_catalogue_entry(spec):
 
 
 def test_board_connectors_are_typed(spec):
-    carrier = {i["name"]: i["type"] for i in _types(spec)["mlc-carrier"]["interfaces"]}
-    assert carrier["FDCAN1"] == "can" and carrier["SPI1"] == "spi"
-    assert carrier["PB9"] == "gpio" and carrier["PF7"] == "analog"
+    board = {i["name"]: i["type"] for i in _types(spec)["mainlite"]["interfaces"]}
+    assert board["FDCAN1"] == "can" and board["SPI1"] == "spi"
+    assert board["PB9"] == "gpio" and board["PF7"] == "analog"
     bus = _types(spec)[BUS_NODE]["interfaces"][0]
     assert bus["type"] == "can" and "bus" in bus
 
@@ -118,7 +118,7 @@ def test_bus_connections_land_on_spread_stubs(spec):
     """Pipeline Manager draws a bus connection to its stub: one per
     connection, along the bus, not at the bus node's header."""
     doc = yaml.safe_load((REPO / "systems" / "ams.yaml").read_text())
-    doc["boards"]["ecu"] = {"board": "mlc-carrier", "firmware": "ecu"}
+    doc["boards"]["ecu"] = {"board": "mainlite", "firmware": "ecu"}
     doc["buses"]["can_acu"]["nodes"].append("ecu.FDCAN2")
     g = to_dataflow(doc, spec)["graphs"][0]
     bus = next(n for n in g["nodes"] if n["instanceName"] == "can_acu")["interfaces"][0]["bus"]
@@ -148,7 +148,7 @@ def test_an_edit_in_the_graph_is_a_valid_system(spec):
     g["connections"].append({"id": "c:new", "from": "i:ecu:FDCAN2", "to": "3f6c-stub"})
     doc = from_dataflow(graph, spec)
     assert doc["buses"]["can_acu"]["nodes"] == ["ams.FDCAN1", "ecu.FDCAN2"]
-    assert doc["boards"]["ecu"] == {"board": "mlc-carrier", "firmware": "ecu"}
+    assert doc["boards"]["ecu"] == {"board": "mainlite", "firmware": "ecu"}
     assert validate(doc) == []
 
 
@@ -193,12 +193,12 @@ def test_an_edit_keeps_the_files_comments():
     stay; the new board and bus member appear in the file's style."""
     text = (REPO / "systems" / "ams.yaml").read_text()
     doc = yaml.safe_load(text)
-    doc["boards"]["ecu"] = {"board": "mlc-carrier", "firmware": "ecu"}
+    doc["boards"]["ecu"] = {"board": "mainlite", "firmware": "ecu"}
     doc["buses"]["can_acu"]["nodes"].append("ecu.FDCAN2")
     del doc["devices"]["sd"]
     out = write_system(doc, text)
     assert yaml.safe_load(out) == doc
-    assert "  ecu: {board: mlc-carrier, firmware: ecu}\n" in out
+    assert "  ecu: {board: mainlite, firmware: ecu}\n" in out
     assert "nodes: [ams.FDCAN1, ecu.FDCAN2]" in out
     assert "sd-card" not in out
     for line in text.splitlines():

@@ -1,7 +1,7 @@
 # IFS_vHIL — virtual hardware-in-the-loop
 
 Runs the same firmware images [IFS_HIL](https://github.com/isc-fs/IFS_HIL)
-flashes to real carriers, on emulated STM32H733 boards in
+flashes to the real MainLite boards (AMS, ECU), on emulated STM32H733s in
 [Renode](https://github.com/renode/renode). The goal is HIL-style testing on
 every push, in parallel, with no hardware attached. Physical-only work stays
 on the physical bench: analog accuracy, real power, flash wear and bus physics.
@@ -28,7 +28,7 @@ See [`docs/development/setup.md`](docs/development/setup.md), and
 ```
 systems/                        Systems as data: boards, their firmware, the buses between them
 catalog/platforms/              Emulatable MCUs (stm32h733)
-catalog/boards/                 Boards: a platform plus named connectors and pins (mlc-carrier)
+catalog/boards/                 Boards: a platform plus named connectors and pins (mainlite)
 catalog/firmware/               Firmware sources: repo, ref, build recipe, load address (ecu, ams)
 catalog/models/                 Device models: ltc6820 isoSPI bridge, ltc6811 battery monitor, sd-card
 models/renode/IsoSpi.cs         The LTC6820 + LTC6811 isoSPI models (C#, compiled by Renode at load)

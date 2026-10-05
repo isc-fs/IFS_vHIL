@@ -75,14 +75,14 @@ class VirtualBench:
         for board in self.system.boards:
             m.execute(f"mach set {rn.quote(rn.ident(board))}")
             m.execute(f"cpu PerformanceInMips {WALL_CLOCK_MIPS}")
-        # Carriers start unpowered: off their CAN buses, while the emulation
+        # Boards start unpowered: off their CAN buses, while the emulation
         # runs so virtual time stays paced to host time (see broker.py). The
         # suite's relay fixture powers them, which resets them.
         config = self.system.bench_config()
         m.execute("start")
-        for carrier in config.get("carriers", []):
-            m.execute(f"mach set {rn.quote(rn.ident(carrier['machine']))}")
-            for controller, hub in carrier.get("can", {}).items():
+        for entry in config.get("power", []):
+            m.execute(f"mach set {rn.quote(rn.ident(entry['machine']))}")
+            for controller, hub in entry.get("can", {}).items():
                 m.execute(f"connector Disconnect {rn.path(controller)} {rn.ident(hub)}")
 
         sys.path.insert(0, str(self.ifs_hil))

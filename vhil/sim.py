@@ -205,7 +205,7 @@ class BoardIO:
     def set_input(self, port: str, pin: int, level: bool) -> None:
         """Drive an input from outside the MCU, e.g. set_input("sysbus.gpioPortB",
         5, True). The level holds across the board's resets, as a switch or a
-        carrier pull-up does (models/renode/VhilProbe.cs, Drive)."""
+        pull-up on the board does (models/renode/VhilProbe.cs, Drive)."""
         self.sim.monitor(f'{self.probe} Drive {rn.quote(rn.path(port))} {_int(pin)} '
                          f'{_arg(bool(level))}', board=self.board)
 

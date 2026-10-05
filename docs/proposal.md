@@ -9,7 +9,7 @@
 ## 1. Why
 
 [IFS_HIL](https://github.com/isc-fs/IFS_HIL) runs the real firmware on real
-carriers, and nothing replaces that. But it is one bench, behind one runner,
+boards, and nothing replaces that. But it is one bench, behind one runner,
 on one person's desk:
 
 - A run needs `bench-01` powered, online and unwedged. When it isn't, every
@@ -51,7 +51,7 @@ bench's own hardware stay physical.
 IFS_HIL recipe ─▶ ECU08.elf / AMS.elf  (identical to what the bench flashes)
                         │
         ┌───────────────▼────────────────────────────┐
-        │ Renode  ·  one machine per carrier          │
+        │ Renode  ·  one machine per board          │
         │  platforms/cpus/stm32h733.repl              │
         │   ├─ FDCAN1/2/3 ─▶ CAN hubs (inv/acu/dash)  │
         │   ├─ ADC3       ◀─ SetVoltage (pedals, I)   │
@@ -68,7 +68,7 @@ IFS_HIL recipe ─▶ ECU08.elf / AMS.elf  (identical to what the bench flashes)
   ([`platforms/cpus/stm32h733.repl`](../platforms/cpus/stm32h733.repl)): it
   reuses Renode's common `stm32h7.repl` and adds what the H733 has and the
   H743 lacks — FDCAN3, TIM23 (the HAL timebase), USART10, a real SPI1 — plus
-  the H733 memory map and the carriers' 24 MHz HSE. Every address and IRQ is
+  the H733 memory map and the MainLite's 24 MHz HSE. Every address and IRQ is
   from ST's `stm32h733xx.h`.
 - **Boot.** The app images are linked at `0x08020000` behind the CAN
   bootloader. The ECU never sets VTOR itself, so the boot script does what

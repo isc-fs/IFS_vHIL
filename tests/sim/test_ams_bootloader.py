@@ -27,7 +27,7 @@ AMS app facts (IFS08-CE-AMS):
     git hash[0..3], BL node id, all from the firmware-info record
     (pit_fw_id.def, firmware_info.cpp:100-112);
   - card detect PE3 (MICROSD_DET, no internal pull: main.c:716-720) reads high
-    with no card (the carrier's pull-up); the BSP checks it before touching
+    with no card (the MainLite's pull-up); the BSP checks it before touching
     SDMMC (fatfs_platform.c:21-31, bsp_driver_sd.c:46); with no card the
     logger's g_log_state is 1 (sd_logger_task.cpp:117, 660-669).
 """
@@ -72,7 +72,7 @@ def _start(firmware, card=True):
         del sim.system.devices["sd"]
     sim.start()
     if not card:
-        # The empty slot: the carrier's pull-up holds card detect high from
+        # The empty slot: the MainLite's pull-up holds card detect high from
         # power-on, through every reset.
         sim.io("ams").set_input("sysbus.gpioPortE", 3, True)
     return sim

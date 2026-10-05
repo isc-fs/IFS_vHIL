@@ -1,5 +1,5 @@
 """AMS state across resets (#23): the backup domain survives a warm reset and
-is lost on a power cut (the MLC carrier has no VBAT).
+is lost on a power cut (the MainLite has no VBAT).
 
 Firmware facts (IFS08-CE-AMS):
   ErrorLatch in RTC BKP1R: set when Error latches, read at boot so the AMS

@@ -89,7 +89,7 @@ def ecu(request, firmware):
 @pytest.fixture
 def ecu_wrp(request, firmware):
     """A board whose sector 0 was write-protected before this power-on, as
-    MLC2's is: the system file's write_protect."""
+    bench-01's AMS in slot 2 is: the system file's write_protect."""
     with _start(request, firmware, write_protect={"ecu": [0]}) as sim:
         yield sim
 
