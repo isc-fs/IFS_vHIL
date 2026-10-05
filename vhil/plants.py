@@ -123,12 +123,14 @@ COUNTS_TO_V = 3.3 / 4095
 @dataclass
 class Pedals:
     """A driver following a script: profile(t_s) -> (throttle 0..1, brake
-    0..1, start pressed)."""
+    0..1, start pressed), t_s counted from start_us (e.g. the app's start,
+    Sim.wait_for_app(), after the bootloader's window)."""
     profile: Callable[[float], tuple[float, float, bool]]
+    start_us: int = 0
     _last: tuple | None = None
 
     def step(self, port, t_us: int) -> None:
-        throttle, brake, start = self.profile(t_us / 1e6)
+        throttle, brake, start = self.profile((t_us - self.start_us) / 1e6)
         throttle, brake = min(max(throttle, 0.0), 1.0), min(max(brake, 0.0), 1.0)
         if (throttle, brake, start) == self._last:
             return                          # inputs hold their value: nothing to drive

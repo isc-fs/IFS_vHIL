@@ -28,8 +28,9 @@ def _status(state):
 
 
 @pytest.fixture
-def ecu(firmware):
-    with Sim(REPO / "systems" / "ecu.yaml", {"ecu": firmware("ecu")}) as sim:
+def ecu(images):
+    with Sim(REPO / "systems" / "ecu.yaml", images("ecu")) as sim:
+        sim.wait_for_app()                      # past the bootloader's window
         yield sim
 
 

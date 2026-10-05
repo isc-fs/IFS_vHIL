@@ -71,26 +71,25 @@ def _flat(elf_path: Path) -> bytes:
     return binary.read_bytes()
 
 
-def _start(request, firmware, **kwargs):
+def _start(request, images, **kwargs):
     log_dir = request.config.getoption("--sim-log-dir")
     if log_dir:
         Path(log_dir).mkdir(parents=True, exist_ok=True)
         kwargs["log_path"] = Path(log_dir) / f"flash-ob-{request.node.name}.log"
-    return Sim(REPO / "systems" / "ecu-bl.yaml",
-               {"ecu": firmware("ecu"), "ecu.bootloader": firmware("can-bootloader")}, **kwargs)
+    return Sim(REPO / "systems" / "ecu.yaml", images("ecu"), **kwargs)
 
 
 @pytest.fixture
-def ecu(request, firmware):
-    with _start(request, firmware) as sim:
+def ecu(request, images):
+    with _start(request, images) as sim:
         yield sim
 
 
 @pytest.fixture
-def ecu_wrp(request, firmware):
+def ecu_wrp(request, images):
     """A board whose sector 0 was write-protected before this power-on, as
     bench-01's AMS in slot 2 is: the system file's write_protect."""
-    with _start(request, firmware, write_protect={"ecu": [0]}) as sim:
+    with _start(request, images, write_protect={"ecu": [0]}) as sim:
         yield sim
 
 

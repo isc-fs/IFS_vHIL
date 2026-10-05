@@ -70,9 +70,9 @@ def _pulse(sim, offset, mask):
 
 
 @pytest.fixture
-def ecu(firmware):
+def ecu(images):
     """An ECU at t = 0: platform loaded, no instruction run yet."""
-    with Sim(REPO / "systems" / "ecu.yaml", {"ecu": firmware("ecu")}) as sim:
+    with Sim(REPO / "systems" / "ecu.yaml", images("ecu")) as sim:
         yield sim
 
 
@@ -145,11 +145,11 @@ def test_a_gpio_reset_keeps_levels_driven_from_outside(ecu):
     assert _rd(ecu, gpiob + 0x10) & (1 << 5), "PB5 lost its external level"
 
 
-def test_reserved_bits_and_cpurst_are_flagged(firmware, tmp_path):
+def test_reserved_bits_and_cpurst_are_flagged(images, tmp_path):
     """A reserved bit (APB1HRSTR bit 0) or AHB3RSTR.CPURST (a CPU reset, not
     modelled) is dropped and logged where the peripheral guard sees it."""
     log = tmp_path / "ecu.log"
-    with Sim(REPO / "systems" / "ecu.yaml", {"ecu": firmware("ecu")}, log_path=log) as sim:
+    with Sim(REPO / "systems" / "ecu.yaml", images("ecu"), log_path=log) as sim:
         _wr(sim, RCC + APB1H, 1 << 0 | 1 << 24)
         assert _rd(sim, RCC + APB1H) == 1 << 24
         _wr(sim, RCC + AHB3, 1 << 31)
@@ -166,20 +166,20 @@ def test_a_power_cycle_clears_the_registers(ecu):
 
 # -- through the bootloader ----------------------------------------------------
 
-def _bl(firmware, board, tmp_path):
-    fw = {board: firmware(board), f"{board}.bootloader": firmware("can-bootloader")}
-    return Sim(REPO / "systems" / f"{board}-bl.yaml", fw, log_path=tmp_path / f"{board}-bl.log")
+def _bl(images, board, tmp_path):
+    return Sim(REPO / "systems" / f"{board}.yaml", images(board),
+               log_path=tmp_path / f"{board}-bl.log")
 
 
 def _guard(log):
     return guard.unexplained(log.read_text(errors="replace"), guard.load_rules())
 
 
-def test_the_ecu_bootloader_resets_its_peripherals_before_the_app(firmware, tmp_path):
+def test_the_ecu_bootloader_resets_its_peripherals_before_the_app(images, tmp_path):
     """HAL_DeInit pulses every bit once: each model the ECU uses comes back
     at reset, the app starts as on ecu.yaml, and nothing in the handoff is
     unexplained to the peripheral guard (no KNOWN GAP #68 entries)."""
-    with _bl(firmware, "ecu", tmp_path) as sim:
+    with _bl(images, "ecu", tmp_path) as sim:
         sim.run_for(ms=AUTO_JUMP_MS + 1000)
         assert sim.can("can_acu").count([0x100]) > 0, "the application never started"
         # The ECU app pulses FDCANRST once more itself, before MX_FDCAN*_Init
@@ -192,11 +192,11 @@ def test_the_ecu_bootloader_resets_its_peripherals_before_the_app(firmware, tmp_
     assert _guard(tmp_path / "ecu-bl.log") == []
 
 
-def test_the_ams_comes_up_healthy_after_the_bootloader(firmware, tmp_path):
+def test_the_ams_comes_up_healthy_after_the_bootloader(images, tmp_path):
     """The AMS app after HAL_DeInit reset SPI1, SDMMC1 and ADC3 under it: a
     healthy Start with AMS_OK, every cell read over the reset SPI1 (as on
-    ams.yaml, test_ams_boot.py), and a clean guard."""
-    with _bl(firmware, "ams", tmp_path) as sim:
+    test_ams_boot.py), and a clean guard."""
+    with _bl(images, "ams", tmp_path) as sim:
         sim.run_for(ms=AUTO_JUMP_MS + 4000)
         for name in ("spi1", "sdmmc1", "adc3_h73x", "fdcan1_h7"):
             assert _resets(sim, "ams", name) == 2, name

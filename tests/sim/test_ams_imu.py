@@ -128,7 +128,7 @@ def _ls(img):
 
 
 @pytest.fixture(scope="module")
-def run(tmp_path_factory, firmware, request):
+def run(tmp_path_factory, images, request):
     """Boot with the IMU in MOTION_1, switch to MOTION_2, cut the power and
     boot again so the orphaned IMU0000.TMP is sealed. Returns what was seen
     along the way and the card."""
@@ -141,9 +141,10 @@ def run(tmp_path_factory, firmware, request):
         Path(log_dir).mkdir(parents=True, exist_ok=True)
         log = Path(log_dir) / "ams-imu.log"
     seen = {}
-    with Sim(REPO / "systems" / "ams.yaml", {"ams": firmware("ams")},
+    with Sim(REPO / "systems" / "ams.yaml", images("ams"),
              params={"sd": {"image": str(img)}}, card_dirs=[img.parent], log_path=log) as sim:
         move(sim, MOTION_1)
+        sim.wait_for_app()
         sim.run_for(ms=PHASE_1_MS)
         seen["phase1"] = imu(sim)
         seen["chip_id_reads"] = (call(sim, ACC, "ReadCount", 0x00), call(sim, GYR, "ReadCount", 0x00))
@@ -153,12 +154,15 @@ def run(tmp_path_factory, firmware, request):
             "ACC_PWR_CONF": (ACC, 0x7C), "ACC_PWR_CTRL": (ACC, 0x7D), "ACC_CONF": (ACC, 0x40),
             "ACC_RANGE": (ACC, 0x41), "GYRO_RANGE": (GYR, 0x0F),
             "GYRO_BANDWIDTH": (GYR, 0x10), "GYRO_LPM1": (GYR, 0x11)}.items()}
-        seen["switch_ms"] = sim.now_us() // 1000
+        # In the app's clock, as the rows' tick_ms: its HAL tick (the app
+        # starts after the bootloader's window, not at 0).
+        seen["switch_ms"] = sim.read_symbol("ams", "uwTick", 4)
         move(sim, MOTION_2)
         sim.run_for(ms=PHASE_2_MS)
         # Power cut as the virtual broker does it (vhil/broker.py).
         sim.monitor("machine Reset", board="ams")
         sim.monitor('cpu SetRegister "BasePri" 0x0', board="ams")
+        sim.wait_for_app()
         sim.run_for(ms=AFTER_CUT_MS)
         seen["after_cut"] = imu(sim)
     seen["card"] = img
@@ -231,8 +235,9 @@ def test_the_logged_rows_carry_what_the_sensor_measured(run):
 
 @pytest.fixture(scope="module")
 def dead(make_sim):
-    sim = make_sim("ams")
-    respond(sim, False)
+    sim = make_sim("ams", wait_for_app=False)
+    respond(sim, False)                         # dead from power-on
+    sim.wait_for_app()
     return sim
 
 

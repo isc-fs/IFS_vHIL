@@ -37,10 +37,11 @@ CELLS, CELL_MV = 95, 3700
 
 @pytest.fixture(scope="module")
 def booted(make_sim):
-    sim = make_sim("ams")
+    sim = make_sim("ams", wait_for_app=False)     # watched from power-on
     io = sim.io("ams")
     pins = {n: io.watch(GPIOB, p) for n, p in
             {"ok": AMS_OK, "air_p": AIR_P, "air_n": AIR_N, "pre": PRECHARGE}.items()}
+    sim.wait_for_app()
     sim.run_for(ms=BOOT_MS)
     sim.can("can_acu").send(PIT_ARM, bytes.fromhex("DEADBEEF"))
     sim.run_for(ms=1100)
@@ -48,8 +49,9 @@ def booted(make_sim):
 
 
 @pytest.fixture
-def ams(firmware):
-    with Sim(REPO / "systems" / "ams.yaml", {"ams": firmware("ams")}) as sim:
+def ams(images):
+    with Sim(REPO / "systems" / "ams.yaml", images("ams")) as sim:
+        sim.wait_for_app()
         sim.run_for(ms=BOOT_MS)
         yield sim
 
@@ -68,17 +70,21 @@ def test_ams_ok_is_low_in_grace_then_high(booted):
     sim, pins = booted
     ok = sim.io("ams").edges(pins["ok"])
     assert [e.level for e in ok] == [True], f"AMS_OK edges: {ok}"
-    t_ms = ok[0].t_us / 1000
-    assert GRACE_MS <= t_ms <= GRACE_MS + 50, f"AMS_OK HIGH at {t_ms} ms"
+    # From the app's start, after the bootloader's window; app_started is
+    # known to the ms (the app's HAL tick), so the grace is too.
+    t_ms = (ok[0].t_us - sim.app_started["ams"]) / 1000
+    assert GRACE_MS - 1 <= t_ms <= GRACE_MS + 50, f"AMS_OK HIGH {t_ms} ms into the app"
 
 
 def test_the_first_status_frame_reports_start(booted):
-    """A-004, S-144: the first 0x4A0 is in Start, well inside 4 s, with the
+    """A-004, S-144: the first 0x4A0 is in Start, well inside 4 s of the app's
+    start (after the bootloader's 2 s window), with the
     SD card fitted (its init is off the boot path)."""
     sim, _ = booted
     first = sim.can("can_acu").frames(STATUS)[0]
     assert first.data[0] == 0, f"first 0x4A0 state {first.data[0]}"
-    assert first.t_ms <= 1000, f"first 0x4A0 at {first.t_ms} ms"
+    t_ms = (first.t_us - sim.app_started["ams"]) / 1000
+    assert t_ms <= 1000, f"first 0x4A0 {t_ms} ms into the app"
 
 
 def test_status_reports_every_module_and_cell(booted):

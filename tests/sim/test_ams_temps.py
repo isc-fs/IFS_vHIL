@@ -29,8 +29,9 @@ SWEPT = list(range(10)) + list(range(16, 26))       # Adg731ChannelMap
 
 
 @pytest.fixture
-def ams(firmware):
-    with Sim(REPO / "systems" / "ams.yaml", {"ams": firmware("ams")}) as sim:
+def ams(images):
+    with Sim(REPO / "systems" / "ams.yaml", images("ams")) as sim:
+        sim.wait_for_app()
         sim.run_for(ms=1500)
         sim.can("can_acu").send(PIT_ARM, bytes.fromhex("DEADBEEF"))
         sim.run_for(ms=2500)                              # past boot grace

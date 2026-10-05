@@ -27,8 +27,9 @@ UPDATE_MS = 2000            # two mask updates, whatever the phase
 
 
 @pytest.fixture
-def ams(firmware):
-    with Sim(REPO / "systems" / "ams.yaml", {"ams": firmware("ams")}) as sim:
+def ams(images):
+    with Sim(REPO / "systems" / "ams.yaml", images("ams")) as sim:
+        sim.wait_for_app()
         sim.run_for(ms=3000)
         yield sim
 

@@ -65,9 +65,8 @@ def _flat(elf: Path) -> bytes:
     return binary.read_bytes()
 
 
-def _start(firmware, card=True):
-    sim = Sim(REPO / "systems" / "ams-bl.yaml",
-              {"ams": firmware("ams"), "ams.bootloader": firmware("can-bootloader")})
+def _start(images, card=True):
+    sim = Sim(REPO / "systems" / "ams.yaml", images("ams"))
     if not card:
         del sim.system.devices["sd"]
     sim.start()
@@ -79,8 +78,8 @@ def _start(firmware, card=True):
 
 
 @pytest.fixture
-def ams(firmware):
-    sim = _start(firmware)
+def ams(images):
+    sim = _start(images)
     try:
         yield sim
     finally:
@@ -294,10 +293,10 @@ def test_m05_flash_without_jump_then_a_cold_boot(ams, app):
     assert int.from_bytes(boot.data[0:4], "little") == 0
 
 
-def test_s142_with_no_card_the_trigger_still_reaches_the_bootloader(firmware, app):
+def test_s142_with_no_card_the_trigger_still_reaches_the_bootloader(images, app):
     """S-142: no card in the slot (detect high, no card model): the AMS boots,
     honours the trigger, and is reflashed."""
-    sim = _start(firmware, card=False)
+    sim = _start(images, card=False)
     try:
         _boot_app(sim)
         assert sim.can("can_acu").last(STATUS).data[0] == START

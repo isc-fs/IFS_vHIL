@@ -26,9 +26,10 @@ ERROR, CELL_OPEN_WIRE = 5, 16
     (4, 9, 2),     # top conductor of a 9-cell upper IC (module 2)
     (9, 10, 4),    # top conductor of a 10-cell lower IC (module 4)
 ], ids=["interior", "bottom", "top-upper", "top-lower"])
-def test_an_open_wire_faults_the_right_module(firmware, chip, conductor, module):
-    with Sim(REPO / "systems" / "ams.yaml", {"ams": firmware("ams")}) as sim:
+def test_an_open_wire_faults_the_right_module(images, chip, conductor, module):
+    with Sim(REPO / "systems" / "ams.yaml", images("ams")) as sim:
         can = sim.can("can_acu")
+        sim.wait_for_app()
         sim.run_for(ms=1500)
         can.send(PIT_ARM, bytes.fromhex("DEADBEEF"))
         t = sim.run_for(ms=2500)                  # past boot grace, healthy
@@ -43,11 +44,12 @@ def test_an_open_wire_faults_the_right_module(firmware, chip, conductor, module)
         assert status.data[7] == 1 << module, f"module mask 0x{status.data[7]:02X}"
 
 
-def test_a_healthy_chain_never_reads_open(firmware):
+def test_a_healthy_chain_never_reads_open(images):
     """ADOW runs on every voltage poll; with every wire connected it must
     not fault."""
-    with Sim(REPO / "systems" / "ams.yaml", {"ams": firmware("ams")}) as sim:
+    with Sim(REPO / "systems" / "ams.yaml", images("ams")) as sim:
         can = sim.can("can_acu")
+        sim.wait_for_app()
         sim.run_for(ms=1500)
         can.send(PIT_ARM, bytes.fromhex("DEADBEEF"))
         t = sim.run_for(ms=8000)

@@ -50,8 +50,9 @@ BURST = {INV_HARD: [HARD_FAULT_RESET, OFF | FLT_CLEAR],
 
 
 @pytest.fixture
-def ecu(firmware):
-    with Sim(REPO / "systems" / "ecu.yaml", {"ecu": firmware("ecu")}) as sim:
+def ecu(images):
+    with Sim(REPO / "systems" / "ecu.yaml", images("ecu")) as sim:
+        sim.wait_for_app()                      # past the bootloader's window
         yield sim
 
 
@@ -242,21 +243,22 @@ def test_ams_error_suppresses_the_recovery_burst(ecu):
     assert set(_words(cycles)) == {(OFF, ("T", 0))}
 
 
-def test_boot_latched_fault_is_cleared_and_the_car_reaches_active(firmware):
+def test_boot_latched_fault_is_cleared_and_the_car_reaches_active(images):
     """E-005: an inverter that boots in hard fault (Inverter plant, cleared by
     [0x0D, Off]) is recovered before R2D; the driver's R2D then climbs it
     Standby -> Ready -> TorqueEnable and the FSM reaches Active."""
     def driver(t):
         return 0.0, 1.0 if 0.5 <= t < 3.0 else 0.0, 0.8 <= t < 1.2
 
-    with Sim(REPO / "systems" / "ecu.yaml", {"ecu": firmware("ecu")}) as sim:
+    with Sim(REPO / "systems" / "ecu.yaml", images("ecu")) as sim:
         port, inv = Port(sim), Inverter(state=Inverter.HARD)
-        port.run([AcuStimulus(), Pedals(driver), inv], 3400)
+        t0 = sim.wait_for_app()                 # the driver's clock: the app's start
+        port.run([AcuStimulus(), Pedals(driver, start_us=t0), inv], 3400)
         assert [s for _, s in inv.history][:3] == [Inverter.STANDBY, Inverter.READY,
                                                    Inverter.TORQUE], f"inverter went {inv.history}"
         cleared_us = inv.history[0][0]
-        assert cleared_us < 800_000, "fault not cleared before the driver's R2D"
-        assert inv.history[1][0] >= 0.8e6 + R2D_SOUND_MS * 1000, "Ready before R2D"
+        assert cleared_us - t0 < 800_000, "fault not cleared before the driver's R2D"
+        assert inv.history[1][0] - t0 >= 0.8e6 + R2D_SOUND_MS * 1000, "Ready before R2D"
         assert _state(sim) == ACTIVE
         words = [f.data[2] for f in sim.can("can_inv").frames(MODE) if f.t_us <= cleared_us]
         assert words[-2:] == [HARD_FAULT_RESET, OFF | FLT_CLEAR], f"cleared after {words[-4:]}"

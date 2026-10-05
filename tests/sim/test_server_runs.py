@@ -19,36 +19,42 @@ from vhil.worker import Worker  # noqa: E402
 
 HEARTBEAT = 0x100
 CONTROL_PERIOD_US = 10_000
+# A run's times count from power-on (vhil.worker.execute_run): the ECU's app
+# starts after its bootloader's 2 s auto-jump window, so the scenario starts
+# its stimuli after that.
+BOOT_MS = 2500
 
 
 class Pinned:
-    """The image under test (--ecu-elf / VHIL_ECU_ELF), whatever its ref."""
+    """The images under test (--ecu-elf, --can-bootloader-elf), whatever their ref."""
 
-    def __init__(self, elf):
-        self.elf = elf
+    def __init__(self, images):
+        self.images = images
 
     def resolve(self, system, refs):
-        return {"ecu": self.elf}
+        return self.images
 
 
-def test_a_queued_run_streams_its_trace_and_passes(tmp_path, firmware):
+def test_a_queued_run_streams_its_trace_and_passes(tmp_path, images):
     settings = Settings(workspace=REPO, db=tmp_path / "vhil.db", results=tmp_path / "runs", auth="dev")
     client = TestClient(create_app(settings))
     r = client.post("/api/runs", json={"system": "ecu", "scenario": {
-        "kind": "run", "virtual_ms": 1000,
-        "stimuli": [{"kind": "can_send", "at_ms": 300, "bus": "can_acu", "id": 0x020, "data": "01"},
-                    {"kind": "can_periodic", "at_ms": 500, "bus": "can_inv", "id": 0x461,
-                     "data": "00", "period_ms": 10, "until_ms": 595}],
+        "kind": "run", "virtual_ms": BOOT_MS + 1000,
+        "stimuli": [{"kind": "can_send", "at_ms": BOOT_MS + 300, "bus": "can_acu", "id": 0x020,
+                     "data": "01"},
+                    {"kind": "can_periodic", "at_ms": BOOT_MS + 500, "bus": "can_inv", "id": 0x461,
+                     "data": "00", "period_ms": 10, "until_ms": BOOT_MS + 595}],
         "watch": [{"kind": "symbol", "board": "ecu", "name": "g_last_ctrl_state", "period_ms": 10}]}})
     assert r.status_code == 201, r.text
     run_id = r.json()["run_id"]
 
-    worker = Worker(settings, worker_id="test", resolver=Pinned(firmware("ecu").resolve()))
+    worker = Worker(settings, worker_id="test",
+                    resolver=Pinned({k: p.resolve() for k, p in images("ecu").items()}))
     assert worker.run_once() == run_id
 
     run = client.get(f"/api/runs/{run_id}").json()
     assert run["state"] == "passed", run["summary"]
-    assert run["virtual_us"] >= 1_000_000 and run["worker"] == "test"
+    assert run["virtual_us"] >= (BOOT_MS + 1000) * 1000 and run["worker"] == "test"
 
     frames = client.get(f"/api/runs/{run_id}/trace?kinds=frame").json()
     hb = [Frame(f["t_us"], f["id"], f["ext"], bytes.fromhex(f["data"]))
@@ -64,10 +70,10 @@ def test_a_queued_run_streams_its_trace_and_passes(tmp_path, firmware):
     # (A periodic start goes out up to one 500 us quantum late, as
     # tests/sim/test_probe.py shows; the trace has when it really went.)
     stim = [(f["t_us"], f["bus"], f["id"], f["data"]) for f in frames if f.get("src") == "stimulus"]
-    start = stim[1][0]
-    assert 500_000 <= start <= 500_500, start
-    assert stim == [(300_000, "can_acu", 0x020, "01")] + [
-        (t, "can_inv", 0x461, "00") for t in range(start, 595_000, 10_000)]
+    start, boot = stim[1][0], BOOT_MS * 1000
+    assert boot + 500_000 <= start <= boot + 500_500, start
+    assert stim == [(boot + 300_000, "can_acu", 0x020, "01")] + [
+        (t, "can_inv", 0x461, "00") for t in range(start, boot + 595_000, 10_000)]
     assert run["summary"]["sent"] == {"can_acu": 1, "can_inv": 10, "can_dash": 0}
     assert all(f["id"] != 0x461 for f in frames if not f.get("src")), "a send seen as received"
 

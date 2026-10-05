@@ -153,9 +153,10 @@ def test_current_never_goes_stale(ams):
 
 
 @pytest.fixture
-def fresh(firmware):
+def fresh(images):
     """A booted AMS past its grace, at 0 A, for tests that latch Error."""
-    with Sim(REPO / "systems" / "ams.yaml", {"ams": firmware("ams")}) as sim:
+    with Sim(REPO / "systems" / "ams.yaml", images("ams")) as sim:
+        sim.wait_for_app()
         sim.run_for(ms=3000)
         yield sim
 

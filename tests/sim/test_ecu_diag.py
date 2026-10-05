@@ -239,8 +239,9 @@ def live(make_sim):
 
 
 @pytest.fixture
-def ecu(firmware):
-    with Sim(REPO / "systems" / "ecu.yaml", {"ecu": firmware("ecu")}) as sim:
+def ecu(images):
+    with Sim(REPO / "systems" / "ecu.yaml", images("ecu")) as sim:
+        sim.wait_for_app()
         sim.run_for(ms=BOOT_MS)
         yield sim
 
@@ -507,13 +508,13 @@ def test_dash_frames_every_200_ms(live):
     seen = {f.id for f in dash.frames()}
     assert seen == set(DASH), f"FDCAN3 ids: extra {sorted(seen - set(DASH))}, missing {sorted(set(DASH) - seen)}"
     for can_id, dlc in DASH.items():
-        frames = dash.frames(can_id, since_us=BOOT_MS * 1000)
+        frames = dash.frames(can_id, since_us=sim.app_started["ecu"] + BOOT_MS * 1000)
         assert {len(f.data) for f in frames} == {dlc}, f"{can_id:#x} DLC"
         assert_period(frames, period_us=DASH_PERIOD_MS * 1000, tolerance_us=1000, min_count=8)
-    status = dash.frames(0x510, since_us=BOOT_MS * 1000)
+    status = dash.frames(0x510, since_us=sim.app_started["ecu"] + BOOT_MS * 1000)
     seq = [int.from_bytes(f.data[6:8], "little") for f in status]
     assert seq == list(range(seq[0], seq[0] + len(seq))), f"seq {seq}"
-    ticks = [int.from_bytes(f.data[4:8], "little") for f in dash.frames(0x51B, since_us=BOOT_MS * 1000)]
+    ticks = [int.from_bytes(f.data[4:8], "little") for f in dash.frames(0x51B, since_us=sim.app_started["ecu"] + BOOT_MS * 1000)]
     assert {b - a for a, b in zip(ticks, ticks[1:])} == {DASH_PERIOD_MS}, f"tick_ms {ticks}"
 
 

@@ -12,8 +12,9 @@ OK_PRECHARGE, TS_ACTIVE = 0x020, 0x504
 
 
 @pytest.fixture
-def ecu(firmware):
-    with Sim(REPO / "systems" / "ecu.yaml", {"ecu": firmware("ecu")}) as sim:
+def ecu(images):
+    with Sim(REPO / "systems" / "ecu.yaml", images("ecu")) as sim:
+        sim.wait_for_app()
         sim.run_for(ms=1000)
         yield sim
 

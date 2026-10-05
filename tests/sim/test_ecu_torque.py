@@ -178,13 +178,14 @@ def _state(sim):
 
 
 @pytest.fixture(scope="module")
-def car(firmware):
+def car(images):
     """One ECU driven to Active: inverter Ready, AMS precharged, START + brake."""
-    with Sim(REPO / "systems" / "ecu.yaml", {"ecu": firmware("ecu")}) as sim:
+    with Sim(REPO / "systems" / "ecu.yaml", images("ecu")) as sim:
         _feed(sim)
         io = sim.io("ecu")
         _pedals(sim, APPS1_REST, APPS2_REST)
         io.set_voltage("PF7", _v(BRAKE_FIRM))
+        sim.wait_for_app()
         sim.run_for(ms=1000)
         io.set_input("sysbus.gpioPortB", 5, True)
         sim.run_for(ms=100)

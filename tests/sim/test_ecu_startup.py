@@ -23,8 +23,9 @@ BRAKE_FIRM_V = 1500 * 3.3 / 4095          # well past BrakeArmRaw (750 counts)
 
 
 @pytest.fixture
-def ecu(firmware):
-    with Sim(REPO / "systems" / "ecu.yaml", {"ecu": firmware("ecu")}) as sim:
+def ecu(images):
+    with Sim(REPO / "systems" / "ecu.yaml", images("ecu")) as sim:
+        sim.wait_for_app()                      # past the bootloader's window
         yield sim
 
 

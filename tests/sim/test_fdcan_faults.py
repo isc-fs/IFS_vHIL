@@ -30,8 +30,9 @@ def _recoveries(frame):
 
 
 @pytest.fixture
-def ams(firmware):
-    with Sim(REPO / "systems" / "ams.yaml", {"ams": firmware("ams")}) as sim:
+def ams(images):
+    with Sim(REPO / "systems" / "ams.yaml", images("ams")) as sim:
+        sim.wait_for_app()
         sim.run_for(ms=1500)                       # booted, listening
         sim.can("can_acu").send(PIT_ARM, bytes.fromhex("DEADBEEF"))
         sim.run_for(ms=1000)
@@ -39,16 +40,26 @@ def ams(firmware):
 
 
 @pytest.fixture
-def ams_quiet(firmware):
+def ams_quiet(images):
     """The AMS without the pit-diag stream."""
-    with Sim(REPO / "systems" / "ams.yaml", {"ams": firmware("ams")}) as sim:
+    with Sim(REPO / "systems" / "ams.yaml", images("ams")) as sim:
+        sim.wait_for_app()
         sim.run_for(ms=2500)
         yield sim
 
 
 @pytest.fixture
-def ecu(firmware):
-    with Sim(REPO / "systems" / "ecu.yaml", {"ecu": firmware("ecu")}) as sim:
+def ecu(images):
+    with Sim(REPO / "systems" / "ecu.yaml", images("ecu")) as sim:
+        sim.wait_for_app()                      # past the bootloader's window
+        yield sim
+
+
+@pytest.fixture
+def ecu_powered(images):
+    """The ECU at power-on, still in its bootloader: for a hook the app's
+    own FDCAN bring-up must see."""
+    with Sim(REPO / "systems" / "ecu.yaml", images("ecu")) as sim:
         yield sim
 
 
@@ -138,21 +149,27 @@ def test_ecu_degraded_fdcan1_keeps_the_acu_heartbeat(ecu, fault):
     assert n >= 95, f"{n} heartbeats in 1 s with FDCAN1 {fault}"
 
 
-def test_fail_init_fails_the_bring_up(ecu):
+def test_fail_init_fails_the_bring_up(ecu_powered):
     """The hook itself: CCCR.INIT never acknowledges, HAL_FDCAN_Init times out,
-    and MX_FDCAN1_Init takes the firmware's Error_Handler path."""
+    and MX_FDCAN1_Init takes the firmware's Error_Handler path. Set inside the
+    bootloader's window, after its own FDCAN bring-up, so the app's meets it."""
+    ecu = ecu_powered
+    ecu.run_for(ms=1000)
     _fdcan(ecu, "ecu", 1, "FailInit true")
+    ecu.wait_for_app()
     ecu.run_for(ms=1000)
     pc = ecu.monitor("sysbus FindSymbolAt `cpu PC`", board="ecu").strip()
     assert pc.startswith("Error_Handler"), f"ECU at {pc}"
     assert ecu.can("can_acu").count([VCU_HEARTBEAT]) == 0
 
 
-def test_wire_timing_paces_tx_at_the_bit_rate(ecu):
+def test_wire_timing_paces_tx_at_the_bit_rate(ecu_powered):
     """The hook itself: NBTP holds what HAL_FDCAN_Init wrote, and a burst
     leaves one frame time apart (>= 47 bits, 94 us at 500 kbit/s) instead of
     in the instant the firmware queued it."""
+    ecu = ecu_powered
     _fdcan(ecu, "ecu", 2, "WireTiming true")
+    ecu.wait_for_app()
     ecu.run_for(ms=1000)
     nbtp = ecu.monitor("sysbus ReadDoubleWord 0x4000A41C", board="ecu")   # FDCAN2 + NBTP
     assert int(nbtp.strip(), 16) == 0x00020904

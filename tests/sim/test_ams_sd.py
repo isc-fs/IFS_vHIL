@@ -76,10 +76,11 @@ def _cut(sim):
     """Power cut as the virtual broker does it (vhil/broker.py)."""
     sim.monitor("machine Reset", board="ams")
     sim.monitor('cpu SetRegister "BasePri" 0x0', board="ams")
+    sim.wait_for_app()                          # through the bootloader again
 
 
 @pytest.fixture(scope="module")
-def logged(tmp_path_factory, firmware, request):
+def logged(tmp_path_factory, images, request):
     """Log for LOG_S on a fresh card with one cell and one NTC seeded, cut
     the power, boot again so the orphan .TMP is sealed, then stop. Keeps the
     card image and what the bus showed while logging."""
@@ -90,17 +91,18 @@ def logged(tmp_path_factory, firmware, request):
     if log_dir:
         Path(log_dir).mkdir(parents=True, exist_ok=True)
         log = Path(log_dir) / "ams-sd.log"
-    with Sim(system, {"ams": firmware("ams")}, params={"sd": {"image": str(img)}},
+    with Sim(system, images("ams"), params={"sd": {"image": str(img)}},
              card_dirs=[img.parent],
              log_path=log) as sim:
         sim.monitor("sysbus.spi1.isospi.cells3 SetCell 2 3650", board="ams")       # c1_11
         sim.monitor("sysbus.spi1.isospi.cells6 SetTemperature 16 400", board="ams")  # t3_10
+        sim.wait_for_app()
         sim.run_for(ms=1500)                    # CAN up, listening for the arm
         sim.can("can_acu").send(0x7F0, bytes.fromhex("DEADBEEF"))
         sim.run_for(ms=LOG_S * 1000 - 1500)
         status = [f.t_us for f in sim.can("can_acu").frames(STATUS)]
         timing = sim.can("can_acu").last(TIMING).data
-        cut_ms = sim.now_us() // 1000
+        cut_ms = sim.read_symbol("ams", "uwTick", 4)   # the app's clock, as tick_ms
         _cut(sim)
         sim.run_for(ms=AFTER_CUT_S * 1000)
     return SimpleNamespace(img=img, status=status, cut_ms=cut_ms,
@@ -166,12 +168,13 @@ def test_logging_never_disturbs_the_main_task(logged):
 
 
 @pytest.fixture(scope="module")
-def runs(tmp_path_factory, firmware):
+def runs(tmp_path_factory, images):
     """RUNS boots of RUN_S seconds on one card, each ended by a power cut."""
     img = _card(tmp_path_factory.mktemp("sd-runs"))
-    with Sim(REPO / "systems" / "ams.yaml", {"ams": firmware("ams")},
+    with Sim(REPO / "systems" / "ams.yaml", images("ams"),
              params={"sd": {"image": str(img)}}, card_dirs=[img.parent]) as sim:
         for _ in range(RUNS):
+            sim.wait_for_app()
             sim.run_for(ms=RUN_S * 1000)
             _cut(sim)
         sim.run_for(ms=3000)
@@ -202,17 +205,18 @@ def test_every_run_starts_fresh_and_keeps_the_mask(runs):
         assert {r["mod_mask"] for r in rows} == {"31"}
 
 
-def test_an_empty_slot_boots_clean(firmware):
+def test_an_empty_slot_boots_clean(images):
     """S-143: card detect HIGH from reset: the AMS boots to a healthy Start,
     AMS_OK HIGH, telemetry on time, the logger idle."""
-    with Sim(REPO / "systems" / "ams.yaml", {"ams": firmware("ams")}) as sim:
+    with Sim(REPO / "systems" / "ams.yaml", images("ams")) as sim:
         sim.io("ams").set_input("sysbus.gpioPortE", 3, True)
         ok = sim.io("ams").watch("sysbus.gpioPortB", 4)
+        sim.wait_for_app()
         sim.run_for(ms=6000)
         assert sim.read_symbol("ams", "g_state_telemetry") == 0
         assert sim.io("ams").level(ok), "AMS_OK low with the slot empty"
         t = [f.t_us for f in sim.can("can_acu").frames(STATUS)]
-        assert t and t[0] <= 1_000_000
+        assert t and t[0] - sim.app_started["ams"] <= 1_000_000
         assert all(abs((b - a) - 500_000) <= 10_000 for a, b in zip(t, t[1:]))
 
 
@@ -241,17 +245,20 @@ def _assert_healthy(h, what):
 
 
 def _boot_armed(sim, ms):
-    sim.run_for(ms=1500)                        # CAN up, listening for the arm
+    """Run to `ms` into the app (it starts after the bootloader's window),
+    arming the pit stream at 1.5 s."""
+    t0 = sim.wait_for_app()
+    sim.run_for(us=t0 + 1_500_000 - sim.now_us())   # CAN up, listening for the arm
     sim.can("can_acu").send(0x7F0, bytes.fromhex("DEADBEEF"))
-    sim.run_for(ms=ms - 1500)
+    sim.run_for(us=t0 + ms * 1000 - sim.now_us())
 
 
 @pytest.fixture(scope="module")
-def dead(tmp_path_factory, firmware):
+def dead(tmp_path_factory, images):
     """A card in the slot (detect LOW) that never answers from power-on, for
     6 s; then it answers, for 4 s more. Keeps what the AMS showed in each."""
     img = _card(tmp_path_factory.mktemp("sd-dead"))
-    with Sim(REPO / "systems" / "ams.yaml", {"ams": firmware("ams")},
+    with Sim(REPO / "systems" / "ams.yaml", images("ams"),
              params={"sd": {"image": str(img), "dead": True}},
              card_dirs=[img.parent]) as sim:
         ok = sim.io("ams").watch(*AMS_OK)
@@ -306,12 +313,12 @@ def test_a_card_that_comes_alive_is_mounted_and_logged(dead):
 
 
 @pytest.fixture(scope="module")
-def dies(tmp_path_factory, firmware):
+def dies(tmp_path_factory, images):
     """Logging on a good card for 5 s, then the card stops answering; 3 s
     more. (The logger's card-status busy-wait makes these 3 s slow to
     emulate.)"""
     img = _card(tmp_path_factory.mktemp("sd-dies"))
-    with Sim(REPO / "systems" / "ams.yaml", {"ams": firmware("ams")},
+    with Sim(REPO / "systems" / "ams.yaml", images("ams"),
              params={"sd": {"image": str(img)}}, card_dirs=[img.parent]) as sim:
         ok = sim.io("ams").watch(*AMS_OK)
         _boot_armed(sim, 5000)
@@ -350,11 +357,11 @@ def test_a_card_that_dies_mid_run_leaves_the_ams_healthy(dies):
     _assert_healthy(dies.after, "card died mid-run")
 
 
-def test_a_board_with_no_sd_device_boots_clean(firmware):
+def test_a_board_with_no_sd_device_boots_clean(images):
     """No card model at all and card detect left LOW: commands find no card
     and time out (CMDSENT / CTIMEOUT), so nothing spins on a missing CMDSENT
     (formerly CLAUDE.md invariant 8): healthy Start, logger at no_card."""
-    sim = Sim(REPO / "systems" / "ams.yaml", {"ams": firmware("ams")})
+    sim = Sim(REPO / "systems" / "ams.yaml", images("ams"))
     del sim.system.devices["sd"]
     with sim:
         ok = sim.io("ams").watch(*AMS_OK)

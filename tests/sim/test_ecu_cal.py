@@ -1,6 +1,6 @@
 """ecu-cal (#48): the operator pedal-calibration session, end to end in
-virtual time, on an ECU provisioned as the car's are (systems/ecu-bl.yaml:
-the CAN bootloader formats sector 7, the application appends to it).
+virtual time, on an ECU provisioned as the car's are (systems/ecu.yaml: the
+CAN bootloader formats sector 7, the application appends to it).
 
 ECU facts (IFS08-CE-ECU, Core/):
   0x7E2 PitCal_cmd (ACU bus, DLC 8): byte0 cmd, byte1 arg, bytes 4-7 guard,
@@ -63,7 +63,7 @@ GUARD = 0xCA11B0DE
 ALL_POINTS = 0x1F
 APPS_SPAN_MISMATCH = 1 << 2
 SESSION_TIMEOUT_MS, STREAM_MS, TICK_MS = 30000, 100, 10
-BOOT_MS = 3000                       # 2 s bootloader auto-jump window + app start
+BOOT_MS = 1000                       # app start, after the bootloader (Sim.wait_for_app)
 VREF = 3.3
 NVM_BASE, ENTRY, NVM_MAGIC, CAL_KEY = 0x080E0000, 32, 0xABCD, 0x1000
 
@@ -170,9 +170,9 @@ def _cal_status(sim, since_us):
     return (frame.data[5] >> 4) & 0x3
 
 
-def _boot(firmware):
-    sim = Sim(REPO / "systems" / "ecu-bl.yaml",
-              {"ecu": firmware("ecu"), "ecu.bootloader": firmware("can-bootloader")}).start()
+def _boot(images):
+    sim = Sim(REPO / "systems" / "ecu.yaml", images("ecu")).start()
+    sim.wait_for_app()
     sim.run_for(ms=BOOT_MS)
     return sim
 
@@ -180,6 +180,7 @@ def _boot(firmware):
 def _power_cycle(sim):
     t = sim.now_us()
     sim.power_cycle("ecu")
+    sim.wait_for_app()
     sim.run_for(ms=BOOT_MS)
     return t
 
@@ -187,8 +188,8 @@ def _power_cycle(sim):
 # -- the session, on one board ---------------------------------------------------
 
 @pytest.fixture(scope="module")
-def board(firmware):
-    sim = _boot(firmware)
+def board(images):
+    sim = _boot(images)
     yield sim
     sim.stop()
 
@@ -365,8 +366,8 @@ def test_the_session_keeps_reporting_committed(ecu):
 # -- persistence: fresh boards, power cycles ---------------------------------------
 
 @pytest.fixture
-def fresh(firmware):
-    sim = _boot(firmware)
+def fresh(images):
+    sim = _boot(images)
     yield sim
     sim.stop()
 

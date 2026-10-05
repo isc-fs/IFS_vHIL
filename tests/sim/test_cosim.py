@@ -29,27 +29,32 @@ def _driver(t):
     return throttle, 1.0 if 0.5 <= t < 3.0 else 0.0, 0.8 <= t < 1.2
 
 
-def _drive(firmware, ms=5000, during=None):
-    """Run the scenario; returns (inverter, frame trace of the ECU's setpoints,
-    RTDS edges, torques seen)."""
-    with Sim(REPO / "systems" / "ecu.yaml", {"ecu": firmware("ecu")}) as sim:
+def _drive(images, ms=5000, during=None):
+    """Run the scenario from the app's start (after the bootloader's window);
+    returns (inverter, frame trace of the ECU's setpoints, RTDS edges, torques
+    seen), every time counted from that start."""
+    with Sim(REPO / "systems" / "ecu.yaml", images("ecu")) as sim:
+        t0 = sim.wait_for_app()
         port, inv = Port(sim), Inverter()
-        plants = [AcuStimulus(), Pedals(_driver), inv]
+        plants = [AcuStimulus(), Pedals(_driver, start_us=t0), inv]
         torques = []
         step = 250
         for t in range(0, ms, step):
             if during:
-                during(t, inv)
+                during(t, inv, t0)
             port.run(plants, step)
             torques.append((t + step, inv.torque_nm))
-        setpoints = [(f.t_ms, f.id, f.data.hex()) for f in sim.can("can_inv").frames([0x360, 0x362])]
-        rtds = [(e.t_us, e.level) for e in sim.io("ecu").edges("sysbus.gpioPortB:4")]
+        setpoints = [((f.t_us - t0) / 1000, f.id, f.data.hex())
+                     for f in sim.can("can_inv").frames([0x360, 0x362], since_us=t0)]
+        rtds = [(e.t_us - t0, e.level) for e in sim.io("ecu").edges("sysbus.gpioPortB:4")
+                if e.t_us >= t0]
+        inv.history = [(t_us - t0, s) for t_us, s in inv.history]
         return inv, setpoints, rtds, torques
 
 
 @pytest.fixture(scope="module")
-def drive(firmware):
-    return _drive(firmware)
+def drive(images):
+    return _drive(images)
 
 
 def test_ready_to_drive_from_the_driver(drive):
@@ -73,23 +78,23 @@ def test_throttle_gives_forward_torque_and_speed(drive):
     assert inv.rpm > 1000, f"motor at {inv.rpm:.0f} rpm"
 
 
-def test_an_inverter_trip_is_recovered_in_the_loop(firmware):
+def test_an_inverter_trip_is_recovered_in_the_loop(images):
     """A hard fault mid-drive: the ECU's reset words bring the inverter back
     to Standby, and the ECU climbs it to TorqueEnable again."""
-    def trip(t, inv):
+    def trip(t, inv, t0):
         if t == 4000:
-            inv.fault(hard=True, t_us=4_000_000)
-    inv, _, _, _ = _drive(firmware, during=trip)
+            inv.fault(hard=True, t_us=t0 + 4_000_000)
+    inv, _, _, _ = _drive(images, during=trip)
     after = [(t, s) for t, s in inv.history if t >= 4_000_000]
     assert [s for _, s in after][:4] == [Inverter.HARD, Inverter.STANDBY, Inverter.READY,
                                          Inverter.TORQUE], f"after the trip: {after}"
     assert after[3][0] - after[0][0] <= 200_000, "recovery took longer than 200 ms"
 
 
-def test_the_loop_is_deterministic(firmware, drive):
+def test_the_loop_is_deterministic(images, drive):
     """The same scenario twice: the same setpoint frames at the same virtual
     times, the same inverter history."""
     inv, setpoints, rtds, _ = drive
-    inv2, setpoints2, rtds2, _ = _drive(firmware)
+    inv2, setpoints2, rtds2, _ = _drive(images)
     assert inv2.history == inv.history and rtds2 == rtds
     assert setpoints2 == setpoints

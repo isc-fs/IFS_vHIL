@@ -41,9 +41,10 @@ class Trace:
 
 
 @pytest.fixture
-def rig(firmware):
-    with Sim(REPO / "systems" / "ams.yaml", {"ams": firmware("ams")}) as sim:
+def rig(images):
+    with Sim(REPO / "systems" / "ams.yaml", images("ams")) as sim:
         trace = Trace(sim)                  # watched before the first instruction
+        sim.wait_for_app()
         sim.run_for(ms=3000)
         yield Car(sim), trace
 
