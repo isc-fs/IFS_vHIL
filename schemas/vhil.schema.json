@@ -323,7 +323,9 @@
                 "$ref": "#/$defs/id"
               },
               "firmware_ref": {
-                "$ref": "#/$defs/ref",
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^(?![-/])(?!.*\\.\\.)(?!.*//)[A-Za-z0-9._/+-]{1,100}(?<![./])$(?![\\s\\S])",
                 "description": "Branch or tag of the firmware's repo to build for this board, in place of the catalogue entry's ref. `vhil.system build --ref` still overrides it."
               },
               "bootloader": {
@@ -331,7 +333,9 @@
                 "description": "Firmware (catalog/firmware) in sector 0 ahead of the application, as the board is provisioned. The board then boots through it from a provisioned flash image."
               },
               "bootloader_ref": {
-                "$ref": "#/$defs/ref",
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^(?![-/])(?!.*\\.\\.)(?!.*//)[A-Za-z0-9._/+-]{1,100}(?<![./])$(?![\\s\\S])",
                 "description": "Branch or tag of the bootloader's repo, in place of its catalogue ref. Only with a bootloader."
               },
               "node_id": {
@@ -811,11 +815,6 @@
           }
         }
       }
-    },
-    "ref": {
-      "type": "string",
-      "description": "A plain git branch or tag: no option look-alike, no '..'.",
-      "pattern": "^(?!-)(?!.*\\.\\.)[A-Za-z0-9_./-]{1,100}$"
     }
   },
   "oneOf": [

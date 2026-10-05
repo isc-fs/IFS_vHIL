@@ -12,6 +12,7 @@ API says so (409); nothing is pushed.
 """
 from __future__ import annotations
 
+import base64
 import os
 import re
 import subprocess
@@ -36,6 +37,32 @@ class HostError(Exception):
 
 def _scrub(text: str, token: str | None) -> str:
     return text.replace(token, "***") if token else text
+
+
+def git_auth_env(token: str | None, base: dict[str, str] | None = None) -> dict[str, str]:
+    """The environment for a git subprocess that authenticates to github.com
+    with `token`: `base` (default os.environ) plus an `http.extraHeader`
+    entry through GIT_CONFIG_COUNT/KEY/VALUE (git >= 2.31), appended after
+    any entries `base` already carries (the dev compose sets safe.directory
+    that way).
+
+    The token never goes on git's command line or into a URL: argv is
+    readable by every process on the host (ps, /proc/<pid>/cmdline) and git
+    echoes URLs in its errors, while a process's environment is readable only
+    by its own user and root.
+    """
+    env = dict(os.environ if base is None else base)
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    if token:
+        try:
+            n = int(env.get("GIT_CONFIG_COUNT") or 0)
+        except ValueError:
+            n = 0
+        basic = base64.b64encode(f"x-access-token:{token}".encode()).decode()
+        env[f"GIT_CONFIG_KEY_{n}"] = "http.https://github.com/.extraHeader"
+        env[f"GIT_CONFIG_VALUE_{n}"] = f"Authorization: Basic {basic}"
+        env["GIT_CONFIG_COUNT"] = str(n + 1)
+    return env
 
 
 def repo_slug(workspace: Path) -> str:
@@ -80,11 +107,10 @@ class GitHubHost(GitHost):
 
     def push(self, workspace: Path, branch: str) -> None:
         token = self._need_token()
-        url = f"https://x-access-token:{token}@github.com/{self.repo}.git"
+        url = f"https://github.com/{self.repo}.git"
         out = subprocess.run(["git", "-C", str(workspace), "-c", "credential.helper=",
                               "push", "--porcelain", url, f"refs/heads/{branch}:refs/heads/{branch}"],
-                             capture_output=True, text=True,
-                             env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
+                             capture_output=True, text=True, env=git_auth_env(token))
         if out.returncode != 0:
             raise HostError(_scrub(f"push of {branch} failed: {out.stderr.strip()}", token))
 
@@ -152,14 +178,12 @@ class LsRemote(RefLister):
         self.token = token
 
     def refs(self, repo: str) -> dict[str, list[str]]:
-        auth = f"x-access-token:{self.token}@" if self.token else ""
         out = subprocess.run(["git", "-c", "credential.helper=", "ls-remote", "--heads", "--tags",
-                              f"https://{auth}github.com/{repo}.git"],
+                              f"https://github.com/{repo}.git"],
                              capture_output=True, text=True, timeout=30,
                              # Outside any checkout: needs none, and a broken
                              # one in the cwd (a mounted worktree) makes git fail.
-                             cwd=tempfile.gettempdir(),
-                             env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
+                             cwd=tempfile.gettempdir(), env=git_auth_env(self.token))
         if out.returncode != 0:
             hint = "" if self.token else " (a private repo needs VHIL_GITHUB_TOKEN)"
             raise HostError(_scrub(f"ls-remote {repo} failed{hint}: {out.stderr.strip()}",

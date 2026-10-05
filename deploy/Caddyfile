@@ -10,21 +10,48 @@
 # cookie (cookies are per host, not per port), and every request to it is
 # first checked against the API's /api/me: 2xx (a signed-in org member, or
 # anyone in dev mode) passes, anything else is answered with the API's 401.
+# The app's cookies stop at the gate: they are cut from what reaches
+# Pipeline Manager.
+#
+# Response headers (both sites): nosniff, no referrer across origins, and
+# who may frame the page (CSP frame-ancestors): nobody for the app, only the
+# app (VHIL_PUBLIC_URL) for the editor, which the shell embeds. HSTS on
+# HTTPS responses, max-age VHIL_HSTS_MAX_AGE (default one year; 0 for a
+# localhost site, or the browser keeps forcing HTTPS on localhost).
 (common) {
 	encode zstd gzip
 	log {
 		output stdout
 		format console
 	}
+	@https protocol https
+	header @https Strict-Transport-Security "max-age={$VHIL_HSTS_MAX_AGE:31536000}"
+	header {
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		-Server
+	}
 }
 
 {$VHIL_SITE} {
 	import common
+	header {
+		Content-Security-Policy "frame-ancestors 'none'; base-uri 'self'; object-src 'none'"
+		X-Frame-Options DENY
+	}
+	# System files and API bodies are small; nothing posts megabytes.
+	request_body {
+		max_size 8MB
+	}
 	reverse_proxy api:8080
 }
 
 {$VHIL_EDITOR_SITE} {
 	import common
+	header Content-Security-Policy "frame-ancestors {$VHIL_PUBLIC_URL}; base-uri 'self'; object-src 'none'"
+	request_body {
+		max_size 8MB
+	}
 	forward_auth api:8080 {
 		uri /api/me
 		# The check is a plain GET even when the request upgrades to a
@@ -34,5 +61,9 @@
 		header_up -Upgrade
 		header_up -Sec-WebSocket-*
 	}
-	reverse_proxy editor:5000
+	reverse_proxy editor:5000 {
+		# The session (and CSRF, OAuth) cookies are for the API: Pipeline
+		# Manager never sees them. Its own cookies, if any, pass.
+		header_up Cookie "vhil_[a-z]+=[^;]*(;\s*)?" ""
+	}
 }

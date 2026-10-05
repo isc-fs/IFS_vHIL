@@ -38,7 +38,12 @@ base_image=${VHIL_IMAGE:-ifs-vhil}
 editor_image=$base_image-editor
 image=$base_image
 docker=(docker --context "$context")
-run_args=(--privileged --network host)
+# Unprivileged on Docker's default network unless a job needs vcan: only
+# `ifs-hil` (and `shell`/`run` with VHIL_DOCKER_VCAN=1) gets --privileged
+# --network host. Published ports bind 127.0.0.1 only.
+run_args=()
+vcan_args=(--privileged --network host)
+[ "${VHIL_DOCKER_VCAN:-0}" = 1 ] && run_args=("${vcan_args[@]}")
 
 vm() {
     if ! colima status "$profile" >/dev/null 2>&1; then
@@ -72,14 +77,14 @@ ensure_image() {
     "${docker[@]}" image inspect "$image" >/dev/null 2>&1 || build_images
 }
 
-# Run a script in the container. Host networking puts can0..can2 in the
-# VM's namespace, where they outlive the container; --privileged lets the
-# container create them.
+# Run a script in the container. For vcan jobs, host networking puts
+# can0..can2 in the VM's namespace, where they outlive the container, and
+# --privileged lets the container create them.
 in_container() {
     ensure_image
     local tty=()
     [ -t 0 ] && [ -t 1 ] && tty=(-it)
-    "${docker[@]}" run --rm ${tty[@]+"${tty[@]}"} "${run_args[@]}" \
+    "${docker[@]}" run --rm ${tty[@]+"${tty[@]}"} ${run_args[@]+"${run_args[@]}"} \
         -v "$repo:/work" -v vhil-data:/vhil \
         -e IFS_HIL_REF="${IFS_HIL_REF:-dev}" -e FW_REFS="${FW_REFS:-}" \
         -e VHIL_SYSTEM="${VHIL_SYSTEM:-}" \
@@ -117,10 +122,9 @@ smoke)
         python -m vhil.system render "systems/$1.yaml" -o /tmp/system.resc
         # renode-test drives Renode through its Robot server, which listens on
         # every interface (HttpListener http://*:port/, no bind option in
-        # Renode 1.17), and this container shares the host network. A network
-        # namespace of its own, loopback only, keeps the port off the host.
-        unshare --net -- bash -c "ip link set lo up && exec \"\$@\"" smoke \
-            renode-test "tests/$1_smoke.robot" --variable ELF:"$(elf "$1")" \
+        # Renode 1.17). This job runs on the default Docker network, in its own
+        # namespace with no published port, so the server is not on the host.
+        renode-test "tests/$1_smoke.robot" --variable ELF:"$(elf "$1")" \
             --variable RESC:/tmp/system.resc -r "results/smoke-$1"' "$sys" ;;
 sim)
     in_container "$prelude"'
@@ -141,6 +145,7 @@ speed)
         need_elf ecu; nproc
         python scripts/speed.py systems/ecu.yaml "ecu=$(elf ecu)" --mips "$@"' "$@" ;;
 ifs-hil)
+    run_args=("${vcan_args[@]}")
     in_container "$prelude"'
         need_elf ecu
         # The other boards of $VHIL_SYSTEM run their last-built images.
@@ -176,7 +181,7 @@ editor)
     # Its own network: the UI port is published (Colima forwards it to the
     # Mac); Run needs no vcan. Images come from the last `fw`. Not 5000 on
     # the host: macOS's AirPlay Receiver holds it.
-    image=$editor_image run_args=(-p "${VHIL_EDITOR_PORT:-5050}:5000")
+    image=$editor_image run_args=(-p "127.0.0.1:${VHIL_EDITOR_PORT:-5050}:5000")
     in_container "$prelude"'
         export VHIL_ECU_ELF=$(elf ecu) VHIL_AMS_ELF=$(elf ams) PM_HOST=0.0.0.0
         exec scripts/editor.sh' ;;
@@ -186,10 +191,17 @@ editor-check)
     image=$editor_image
     in_container 'exec python -m vhil.editor check "$@"' "$@" ;;
 server)
-    run_args=(-p "${VHIL_WEB_PORT:-8080}:8080")
+    # A local checkout: dev mode (no login) unless VHIL_AUTH says otherwise.
+    # The server refuses dev mode off loopback, and in the container it
+    # listens on 0.0.0.0, so the port is published on the host's 127.0.0.1
+    # only and VHIL_ALLOW_DEV_ON_NETWORK=1 says so (vhil/server/config.py).
+    export VHIL_AUTH=${VHIL_AUTH:-dev}
+    run_args=(-p "127.0.0.1:${VHIL_WEB_PORT:-8080}:8080")
+    [ "$VHIL_AUTH" = dev ] && run_args+=(-e VHIL_ALLOW_DEV_ON_NETWORK=1)
     # Auth settings pass through when set (docs/development/web-app.md).
     for v in VHIL_AUTH VHIL_GITHUB_ORG VHIL_GITHUB_CLIENT_ID VHIL_GITHUB_CLIENT_SECRET \
-             VHIL_SESSION_SECRET VHIL_PUBLIC_URL VHIL_GITHUB_APP_ID VHIL_GITHUB_APP_KEY; do
+             VHIL_SESSION_SECRET VHIL_PUBLIC_URL VHIL_GITHUB_APP_ID VHIL_GITHUB_APP_KEY \
+             VHIL_ADMINS; do
         run_args+=(-e "$v")
     done
     in_container 'export VHIL_DATA=/vhil/server; exec python -m vhil.server --host 0.0.0.0 --port 8080' ;;

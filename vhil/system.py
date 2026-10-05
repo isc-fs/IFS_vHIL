@@ -43,7 +43,7 @@ ID = re.compile(r"[a-z0-9][a-z0-9-]*")                       # $defs/id
 NAME = rn.IDENT                                              # $defs/name
 ENDPOINT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z0-9_]+")   # $defs/endpoint
 NETDEV = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,14}")           # a Linux interface name
-REF = re.compile(r"(?!-)(?!.*\.\.)[A-Za-z0-9_./-]{1,100}")    # a plain git branch or tag
+REF = re.compile(r"(?![-/])(?!.*\.\.)(?!.*//)[A-Za-z0-9._/+-]{1,100}(?<![./])")  # git ref, as the schema
 # A string device param without a declared format (catalogue param_formats).
 SAFE_PARAM = re.compile(r"[A-Za-z0-9_.+-]{0,128}")
 CARD_DIR_ENV = "VHIL_CARD_DIR"

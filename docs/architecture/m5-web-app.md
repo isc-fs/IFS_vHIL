@@ -29,8 +29,8 @@ browser, and the system file they produced runs identically in CI.
 | Workers | `python -m vhil.worker` in the `ifs-vhil` image, N replicas | Same image and code path as CI; vcan and pacing as in CI |
 | Live views | WebSocket per run; the worker appends frames/samples to the run's trace file, the API tails it | Live and history are the same data: a finished run replays from the file it streamed |
 | Traces | One JSON-lines file per run (frames, GPIO edges, signals, FSM/state samples), plus pytest JUnit, failure snapshots (#104) and coverage | Already what the sim produces; no new format |
-| Auth | **GitHub OAuth** login restricted to the isc-fs org; a **GitHub App** installation token for firmware clones and for pushing system-file branches / opening PRs | Vision §4: no personal tokens. A dev mode with auth off for local use |
-| Deployment | `docker compose`: `api`, `worker` (×N), `editor`; on a host, behind Caddy with its own git clone and SQLite backups ([`docs/deploy.md`](../deploy.md)) | Runs on any Linux host or a Mac with Colima, like the rest of the repo. Workers need no privileges: runs use Renode's in-process CAN hubs, not vcan |
+| Auth | **GitHub OAuth** login restricted to the isc-fs org; a **GitHub App** installation token for firmware clones and for pushing system-file branches / opening PRs | Vision §4: no personal tokens. A dev mode with auth off for local use, only when asked for and on loopback ([`web-app.md`](../development/web-app.md)) |
+| Deployment | `docker compose`: `api`, `worker` (×N), `editor`; on a host, behind Caddy with its own git clone and SQLite backups ([`docs/deploy.md`](../deploy.md)) | Runs on any Linux host or a Mac with Colima, like the rest of the repo. Workers need no privileges: runs use Renode's in-process CAN hubs, not vcan. Every service runs unprivileged (uid 10001, no capabilities, read-only root); workers have no secrets and reach only GitHub, through an egress proxy ([hardening](../deploy.md#hardening)) |
 
 ## Components
 
@@ -67,13 +67,18 @@ All JSON; times in microseconds of virtual time.
   Board `firmware_ref`s of the system as saved pick the images. A scenario is either
   `{"kind": "run", "virtual_ms": N, "stimuli": [...]}` (stimuli: CAN
   send / periodic, GPIO set, analog set at virtual times) or
-  `{"kind": "pytest", "select": "tests/sim/test_x.py::test_y"}`
+  `{"kind": "pytest", "select": "tests/sim/test_x.py::test_y"}`.
+  Limits ([`docs/deploy.md`](../deploy.md#limits)): a run over the
+  server's virtual time, stimuli or watch limit is 422; with too many
+  active (queued + running) runs, the user's or everyone's, 429
 - `GET /api/tests` → `{root, files, tests, error?}`: the test files and
   node ids under `tests/sim` a pytest scenario can select (`pytest
   --collect-only -q`, cached until a file there changes)
 - `GET /api/runs` (history, newest first) · `GET /api/runs/{id}` →
   `{id, state: queued|running|passed|failed|error, system, ref, created,
-  started, finished, virtual_us, summary, worker, heartbeat, attempts}`.
+  started, finished, virtual_us, summary, worker, heartbeat, attempts, owner,
+  can_cancel}` (`owner`: who started it; `can_cancel`: whether the requester
+  may, as its owner or an admin).
   A worker beats `heartbeat` while it holds a run; a run whose worker died
   is reclaimed by the next worker's poll: back to `queued`, or `error` after
   its second attempt (`vhil/server/runs.py`)
@@ -83,8 +88,9 @@ All JSON; times in microseconds of virtual time.
   what it returns;
   `WS /api/runs/{id}/live` → the same records as they are written, then
   `{"kind": "end", "state": …}`
-- `GET /api/runs/{id}/artifacts/{name}` → JUnit, snapshots, coverage, logs
-- `POST /api/runs/{id}/cancel`
+- `GET /api/runs/{id}/artifacts/{name}` → JUnit, snapshots, coverage, logs,
+  never rendered: `text/plain` or an attachment, `CSP: sandbox`
+- `POST /api/runs/{id}/cancel` (owner or admin, else 403)
 
 Trace record kinds: `frame {t_us, bus, id, ext, data, src?}` (`src:
 "stimulus"` on the frames the scenario itself sent, stamped when the probe

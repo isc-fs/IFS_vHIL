@@ -33,7 +33,7 @@ export async function renderRuns(view, { api, esc }) {
       <label>State <select name="state"><option value="">all</option>${
         STATES.map((s) => `<option>${s}</option>`).join("")}</select></label>
     </form>
-    <div class="scroll-x"><table id="runs"><thead><tr><th>Run</th><th>State</th><th>System</th><th>Scenario</th>
+    <div class="scroll-x"><table id="runs"><thead><tr><th>Run</th><th>State</th><th>System</th><th>Owner</th><th>Scenario</th>
       <th>Virtual</th><th>Wall</th><th>Frames / tests</th><th>Created</th><th></th></tr></thead><tbody></tbody></table></div>`;
   const table = view.querySelector("#runs tbody");
   const msg = view.querySelector("#run-msg");
@@ -94,7 +94,9 @@ export async function renderRuns(view, { api, esc }) {
 
   table.addEventListener("click", async (ev) => {
     const id = ev.target.dataset.cancel;
-    if (id) { await api(`/api/runs/${id}/cancel`, { method: "POST" }); refresh(); }
+    if (!id) return;
+    try { await api(`/api/runs/${id}/cancel`, { method: "POST" }); } catch (e) { msg.textContent = `error: ${e.message}`; msg.className = "error"; }
+    refresh();
   });
   const filter = view.querySelector("#run-filter");
   filter.addEventListener("change", () => refresh());
@@ -136,12 +138,13 @@ export async function renderRuns(view, { api, esc }) {
     table.innerHTML = runs.map((r) => `<tr>
       <td><a href="#/runs/${r.id}">${r.id}</a></td><td><span class="badge state-${esc(r.state)}">${esc(r.state)}</span></td>
       <td>${esc(r.system)}${r.ref_name ? ` <span class="muted">@ ${esc(r.ref_name)}</span>` : ""}</td>
+      <td>${esc(r.owner || "")}</td>
       <td class="muted">${esc(r.scenario.kind === "run" ? `run ${r.scenario.virtual_ms} ms` : `pytest ${r.scenario.select}`)}</td>
       <td>${(r.virtual_us / 1000).toFixed(0)} ms</td><td>${duration(wallSeconds(r))}</td>
       <td data-frames="${r.id}">${counts(r)}</td>
       <td class="muted">${esc((r.created || "").replace("T", " ").slice(0, 19))}</td>
       <td>${TERMINAL.has(r.state) ? (r.summary?.error ? `<span class="error">${esc(r.summary.error)}</span>` : "")
-             : `<button data-cancel="${r.id}">Cancel</button>`}</td></tr>`).join("");
+             : r.can_cancel ? `<button data-cancel="${r.id}">Cancel</button>` : ""}</td></tr>`).join("");
     runs.filter((r) => r.state === "running").forEach(follow);
     clearTimeout(timer);
     if (runs.some((r) => !TERMINAL.has(r.state))) timer = setTimeout(refresh, 2000);

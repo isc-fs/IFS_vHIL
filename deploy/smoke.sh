@@ -5,8 +5,11 @@
 #   deploy/smoke.sh [workspace-ref]       default: dev
 #
 #   1. up: workspace clone, api, 1 worker, editor, proxy (plain HTTP on
-#      localhost, non-default ports), backup; dev auth
-#   2. /api/health through the proxy; the editor through the proxy's auth gate
+#      127.0.0.1 only, non-default ports), backup; dev auth; empty secret files
+#   2. /api/health through the proxy; the editor through the proxy's auth gate;
+#      the hardening holds: uid 10001, read-only root, no secrets in the
+#      worker, the worker reaches neither the API, the editor nor the metadata
+#      address, and only GitHub through the egress proxy; security headers
 #   3. save: an edit of systems/ecu.yaml committed through the API to a
 #      branch of the workspace clone; it survives the workspace service
 #      running again (fetch + checkout never touch local branches)
@@ -33,12 +36,22 @@ fw_volume=${SMOKE_FW_VOLUME-vhil-data}
 base="http://localhost:$http_port"
 
 env_file=$(mktemp)
-trap 'rm -f "$env_file"' EXIT
+# Secret files are bind-mounted by the Docker daemon, so they live under this
+# checkout (inside $HOME: Colima's VM sees it), not in the Mac's $TMPDIR.
+secrets=$(mktemp -d "$here/.smoke-secrets.XXXXXX")
+for f in session_secret github_client_secret github-app.pem github_token; do
+    : > "$secrets/$f"
+done
+chmod 0755 "$secrets"; chmod 0444 "$secrets"/*   # empty, and readable by uid 10001
+# SMOKE_KEEP=1 leaves the stack up, and so the secret files it mounts.
+cleanup() { rm -f "$env_file"; [ "${SMOKE_KEEP:-0}" = 1 ] || rm -rf "$secrets"; }
+trap cleanup EXIT
 cat > "$env_file" <<EOF
 VHIL_IMAGE=${SMOKE_IMAGE:-ifs-vhil}
 VHIL_TAG=${SMOKE_TAG:-latest}
 VHIL_WORKSPACE_REF=$ref
 VHIL_AUTH=dev
+VHIL_ALLOW_DEV_ON_NETWORK=1
 VHIL_SITE=http://localhost
 VHIL_EDITOR_SITE=http://localhost:5443
 VHIL_PUBLIC_URL=$base
@@ -49,6 +62,9 @@ VHIL_EDITOR_PORT=$editor_port
 VHIL_WORKERS=1
 VHIL_WORKER_CPUS=${SMOKE_WORKER_CPUS:-4}
 VHIL_BACKUP_DIR=backups
+VHIL_SECRETS_DIR=$secrets
+VHIL_BIND_ADDR=127.0.0.1
+VHIL_HSTS_MAX_AGE=0
 EOF
 
 dc() { docker --context "$context" compose -p "$project" -f "$here/compose.prod.yaml" \
@@ -60,7 +76,7 @@ json() { python3 -c "import json,sys; d=json.load(sys.stdin); print($1)"; }
 
 if [ "${SMOKE_KEEP:-0}" != 1 ]; then
     # down needs the env file (its required variables): remove it last.
-    trap 'say "down"; dc down -v --remove-orphans >/dev/null 2>&1 || true; rm -f "$env_file"' EXIT
+    trap 'say "down"; dc down -v --remove-orphans >/dev/null 2>&1 || true; cleanup' EXIT
 fi
 
 say "up ($project, workspace ref $ref)"
@@ -86,6 +102,41 @@ echo "  $health"
 code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:$editor_port/")
 [ "$code" = 200 ] || fail "editor through the proxy: HTTP $code"
 echo "  editor: HTTP $code"
+
+say "hardening"
+in_svc() { dc exec -T "$1" "${@:2}"; }
+for svc in api worker editor egress backup; do
+    [ "$(in_svc "$svc" id -u)" = 10001 ] || fail "$svc does not run as uid 10001"
+    in_svc "$svc" sh -c 'touch /probe 2>/dev/null' && fail "$svc has a writable root filesystem"
+    [ "$(in_svc "$svc" sh -c 'grep CapEff /proc/self/status' | awk '{print $2}')" = 0000000000000000 ] \
+        || fail "$svc has capabilities"
+done
+echo "  api worker editor egress backup: uid 10001, read-only root, no capabilities"
+in_svc worker sh -c 'ls /run/secrets 2>/dev/null | grep -q .' && fail "the worker has secrets"
+in_svc worker sh -c 'env | grep -qi -e secret -e token' && fail "the worker's environment holds a secret"
+echo "  worker: no secrets mounted or in its environment"
+reach() {   # service host port: exit 0 if a TCP connection to host:port opens
+    in_svc "$1" python -c "import socket,sys; socket.create_connection((sys.argv[1], int(sys.argv[2])), 3)" \
+        "$2" "$3" >/dev/null 2>&1
+}
+reach worker api 8080 && fail "the worker reaches the API"
+reach worker editor 5000 && fail "the worker reaches the editor"
+reach worker 169.254.169.254 80 && fail "the worker reaches the metadata address"
+reach worker 1.1.1.1 443 && fail "the worker has a route off the host"
+reach api editor 5000 && fail "the API reaches the editor directly"
+echo "  worker: no API, no editor, no metadata, no direct route out; api: no editor"
+in_svc worker git ls-remote -q https://github.com/isc-fs/IFS_vHIL.git HEAD >/dev/null \
+    || fail "the worker can't reach GitHub through the egress proxy"
+in_svc worker python -c "import urllib.request as u; u.urlopen('https://example.com', timeout=10)" \
+    >/dev/null 2>&1 && fail "the egress proxy let the worker reach example.com"
+echo "  worker egress: github.com yes, example.com no"
+headers=$(curl -sS -D - -o /dev/null "$base/")
+for h in "X-Content-Type-Options: nosniff" "Referrer-Policy:" "frame-ancestors 'none'"; do
+    echo "$headers" | grep -qiF "$h" || fail "the app's responses lack '$h'"
+done
+curl -sS -D - -o /dev/null "http://localhost:$editor_port/" \
+    | grep -qiF "frame-ancestors $base" || fail "the editor may be framed by other origins"
+echo "  headers: nosniff, Referrer-Policy, frame-ancestors (app: none; editor: $base)"
 
 say "save an edit of systems/ecu.yaml to branch smoke/deploy"
 api "$base/api/systems/ecu" | python3 -c '
@@ -129,6 +180,9 @@ say "backup, another run, restore"
 dc exec -T backup python /deploy/backup.py once | tee /dev/stderr | grep -q " 1 branches" \
     || fail "backup once (with the saved branch)"
 snap=$(dc exec -T backup python /deploy/backup.py list | head -1)
+modes=$(dc exec -T backup stat -c %a "/backups/$snap" "/backups/$snap/vhil.db" | tr '\n' ' ')
+[ "$modes" = "700 600 " ] || fail "snapshot $snap is not private (modes $modes)"
+echo "  snapshot $snap: directory 700, files 600"
 before=$(count)
 second=$(run)
 [ "$(count)" -eq $((before + 1)) ] || fail "the second run is not in the history"

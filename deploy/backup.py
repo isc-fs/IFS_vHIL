@@ -20,6 +20,11 @@ A snapshot is a directory <VHIL_BACKUP_DIR>/<UTC time>/ with
 Snapshots beyond the newest VHIL_BACKUP_KEEP are deleted. Run traces and
 firmware builds are not included: traces are large and only history, firmware
 is rebuilt from its source (docs/deploy.md says how to copy traces if wanted).
+Snapshots hold every run's scenario and summary and the unpushed branches:
+directories are created 0700 and files 0600 (umask 077), so only the service's
+user (and root) on the host can read them. Copy them off the host encrypted
+(docs/deploy.md, "Off-host copies").
+
 Only the Python standard library and git: runs in the ifs-vhil image.
 """
 from __future__ import annotations
@@ -39,6 +44,12 @@ DEST = Path(os.environ.get("VHIL_BACKUP_DIR", "/backups"))
 KEEP = int(os.environ.get("VHIL_BACKUP_KEEP", "14"))
 INTERVAL_H = float(os.environ.get("VHIL_BACKUP_INTERVAL_H", "24"))
 STAMP = "%Y%m%dT%H%M%SZ"
+
+
+def private(path: Path) -> None:
+    """0700 for a directory, 0600 for a file, below and including `path`."""
+    for p in [path, *path.rglob("*")] if path.is_dir() else [path]:
+        p.chmod(0o700 if p.is_dir() else 0o600)
 
 
 def log(msg: str) -> None:
@@ -99,10 +110,16 @@ def once() -> Path:
     final = DEST / stamp
     tmp = DEST / f"{stamp}.partial"
     shutil.rmtree(tmp, ignore_errors=True)
-    tmp.mkdir(parents=True)
+    DEST.mkdir(parents=True, exist_ok=True, mode=0o700)
+    try:
+        DEST.chmod(0o700)      # a host directory or volume made before this
+    except PermissionError:
+        log(f"can't make {DEST} 0700 (not its owner); the snapshots in it are")
+    tmp.mkdir(mode=0o700)
     try:
         copy_db(DB, tmp / "vhil.db")
         n = bundle_branches(tmp / "branches.bundle")
+        private(tmp)
         tmp.rename(final)
     except BaseException:
         shutil.rmtree(tmp, ignore_errors=True)
@@ -125,6 +142,7 @@ def restore(name: str) -> None:
         # Keep what is being replaced, next to it, until someone deletes it.
         keep = DB.with_name(f"{DB.name}.before-restore-{datetime.now(timezone.utc).strftime(STAMP)}")
         copy_db(DB, keep)
+        private(keep)
         log(f"current database saved as {keep}")
     # Through the backup API into the database itself, so a stale -wal/-shm
     # next to it is replaced consistently rather than replayed over the copy.
@@ -145,6 +163,7 @@ def restore(name: str) -> None:
 
 
 def main(argv: list[str]) -> int:
+    os.umask(0o077)
     cmd = argv[0] if argv else "once"
     if cmd == "once":
         once()

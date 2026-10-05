@@ -5,9 +5,13 @@
 # Images come from `scripts/vhil-docker.sh image` (ifs-vhil, ifs-vhil-editor).
 # The repository checkout is the workspace: its systems/ and catalog/ are what
 # the app shows and edits; `worker` executes the runs the api queues.
-# VHIL_AUTH=dev: no login. For GitHub login set VHIL_AUTH=github and the
-# VHIL_GITHUB_* / VHIL_SESSION_SECRET variables (docs/development/web-app.md),
-# e.g. from an env file kept out of git.
+# VHIL_AUTH=dev: no login, set explicitly (unset means github: the server
+# fails closed). The server refuses dev mode off loopback; the api listens on
+# 0.0.0.0 inside its container, so its port is published on the host's
+# 127.0.0.1 only and VHIL_ALLOW_DEV_ON_NETWORK=1 says so. For GitHub login set
+# VHIL_AUTH=github, drop that override, and set the VHIL_GITHUB_* /
+# VHIL_SESSION_SECRET variables (docs/development/web-app.md), e.g. from an
+# env file kept out of git.
 name: ifs-vhil
 services:
   api:
@@ -21,6 +25,7 @@ services:
       VHIL_WORKSPACE: /work
       VHIL_DATA: /vhil/server
       VHIL_AUTH: dev
+      VHIL_ALLOW_DEV_ON_NETWORK: "1"   # the port below is on 127.0.0.1 only
       # Where the browser reaches the editor service (the shell embeds it).
       VHIL_EDITOR_URL: http://localhost:${VHIL_EDITOR_PORT:-5050}
       # Pushing saved system branches and opening PRs (until the GitHub App).
@@ -31,17 +36,18 @@ services:
       GIT_CONFIG_KEY_0: safe.directory
       GIT_CONFIG_VALUE_0: /work
     ports:
-      - "${VHIL_WEB_PORT:-8080}:8080"
+      # Loopback only: dev auth lets anyone who reaches it in.
+      - "127.0.0.1:${VHIL_WEB_PORT:-8080}:8080"
   worker:
     # Claims queued runs (vhil/worker.py); scale with --scale worker=N.
-    # Privileged + host network like the wrapper's runs (vcan); shares the
-    # run table and results with the api through the vhil-data volume, and
-    # reuses (or builds into) /vhil/fw like `scripts/vhil-docker.sh fw`.
+    # Shares the run table and results with the api through the vhil-data
+    # volume, and reuses (or builds into) /vhil/fw like
+    # `scripts/vhil-docker.sh fw`. Unprivileged, on the default network:
+    # run scenarios and tests/sim use Renode's in-process CAN hubs, not vcan
+    # (the IFS_HIL suites over vcan are `scripts/vhil-docker.sh ifs-hil`).
     image: ifs-vhil
     command: python -m vhil.worker
     working_dir: /work
-    privileged: true
-    network_mode: host
     volumes:
       - ..:/work
       - vhil-data:/vhil
@@ -60,8 +66,8 @@ services:
     environment:
       PM_HOST: 0.0.0.0
     ports:
-      # Not 5000 on the host: macOS's AirPlay Receiver holds it.
-      - "${VHIL_EDITOR_PORT:-5050}:5000"
+      # Not 5000 on the host: macOS's AirPlay Receiver holds it. Loopback only.
+      - "127.0.0.1:${VHIL_EDITOR_PORT:-5050}:5000"
 volumes:
   vhil-data:
     external: true

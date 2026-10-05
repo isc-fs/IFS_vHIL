@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import re
 import sqlite3
@@ -33,15 +34,19 @@ import tempfile
 import sys
 import threading
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Literal, Optional, Union
 
-from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from vhil.server.workspace import SYSTEM_ID
 from vhil.system import System, SystemError
+
+log = logging.getLogger("vhil.server.runs")
 
 STATES = ("queued", "running", "passed", "failed", "error", "cancelled")
 TERMINAL = frozenset({"passed", "failed", "error", "cancelled"})
@@ -54,9 +59,43 @@ HEARTBEAT_S = 10.0
 RECLAIM_AFTER_S = 60.0
 MAX_ATTEMPTS = 2
 
+
+def _env_int(name: str, default: int) -> int:
+    v = os.environ.get(name, "")
+    return int(v) if v.strip() else default
+
+
+@dataclass(frozen=True)
+class Limits:
+    """What one user, or everyone, may ask of the workers (docs/deploy.md,
+    "Limits"). Each is an environment variable, read when the API starts
+    (the worker reads max_trace_bytes / max_output_bytes)."""
+    max_virtual_ms: int = 600_000           # VHIL_MAX_VIRTUAL_MS
+    max_active: int = 50                    # VHIL_MAX_QUEUED: queued + running, everyone
+    max_active_per_user: int = 10           # VHIL_MAX_QUEUED_PER_USER
+    max_stimuli: int = 1000                 # VHIL_MAX_STIMULI
+    max_watch: int = 100                    # VHIL_MAX_WATCHES
+    max_trace_bytes: int = 512 << 20        # VHIL_MAX_TRACE_MB: a run's trace.jsonl
+    max_output_bytes: int = 64 << 20        # VHIL_MAX_OUTPUT_MB: a pytest run's output
+
+    @classmethod
+    def from_env(cls) -> "Limits":
+        d = cls()
+        return cls(max_virtual_ms=_env_int("VHIL_MAX_VIRTUAL_MS", d.max_virtual_ms),
+                   max_active=_env_int("VHIL_MAX_QUEUED", d.max_active),
+                   max_active_per_user=_env_int("VHIL_MAX_QUEUED_PER_USER", d.max_active_per_user),
+                   max_stimuli=_env_int("VHIL_MAX_STIMULI", d.max_stimuli),
+                   max_watch=_env_int("VHIL_MAX_WATCHES", d.max_watch),
+                   max_trace_bytes=_env_int("VHIL_MAX_TRACE_MB", d.max_trace_bytes >> 20) << 20,
+                   max_output_bytes=_env_int("VHIL_MAX_OUTPUT_MB", d.max_output_bytes >> 20) << 20)
+
+
+class QueueFull(Exception):
+    """Too many active runs, for the user or for everyone (HTTP 429)."""
+
 # A git ref we pass to `git clone -b` and use in a directory name: no option
 # look-alikes, no path climbing.
-_REF = re.compile(r"^(?!-)(?!.*\.\.)[\w./-]{1,100}$")
+_REF = re.compile(r"^(?!-)(?!.*\.\.)[\w./-]{1,100}\Z", re.ASCII)
 _SELECT = re.compile(r"^tests/(?!.*\.\.)[\w/.-]+\.py(::[\w\[\]\-.,=]+)*$")
 _HEX = re.compile(r"^([0-9a-fA-F]{2})*$")
 # Names a scenario uses to point into its system: a board or bus instance
@@ -174,6 +213,14 @@ class RunRequest(_Model):
     firmware: dict[str, Optional[str]] = {}
     scenario: Scenario
 
+    @field_validator("system")
+    @classmethod
+    def _system(cls, v: str) -> str:
+        if not SYSTEM_ID.match(v):
+            raise ValueError("system must be a system id: lowercase letters, digits and '-', "
+                             "at most 64")
+        return v
+
     @field_validator("firmware")
     @classmethod
     def _refs(cls, v: dict) -> dict:
@@ -248,14 +295,15 @@ CREATE TABLE IF NOT EXISTS runs (
     worker     TEXT,
     heartbeat  REAL,
     attempts   INTEGER NOT NULL DEFAULT 0,
-    ref_name   TEXT NOT NULL DEFAULT ''
+    ref_name   TEXT NOT NULL DEFAULT '',
+    owner      TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS runs_state ON runs (state, id);
 """
 # Columns added after the first release: a database created before them
 # gets them on open.
 _ADDED = {"heartbeat": "REAL", "attempts": "INTEGER NOT NULL DEFAULT 0",
-          "ref_name": "TEXT NOT NULL DEFAULT ''"}
+          "ref_name": "TEXT NOT NULL DEFAULT ''", "owner": "TEXT NOT NULL DEFAULT ''"}
 
 
 class RunStore:
@@ -306,13 +354,39 @@ class RunStore:
         return _row(rows[0]) if rows else None
 
     def create(self, system: str, ref: str, firmware: dict, scenario: dict,
-               ref_name: str = "") -> int:
+               ref_name: str = "", owner: str = "", max_active: Optional[int] = None,
+               max_active_per_user: Optional[int] = None) -> int:
         """A queued run. `ref`: the workspace commit its system file is read
-        at ("" outside git); `ref_name`: the branch/tag/commit it was asked as."""
-        row = self._write(
-            "INSERT INTO runs (state, system, ref, firmware, scenario, created, ref_name) "
-            "VALUES ('queued', ?, ?, ?, ?, ?, ?) RETURNING id",
-            (system, ref, json.dumps(firmware), json.dumps(scenario), now_iso(), ref_name))
+        at ("" outside git); `ref_name`: the branch/tag/commit it was asked as;
+        `owner`: the login of who started it ("dev" in dev mode). Raises QueueFull when the active runs
+        (queued or running) already number `max_active`, or `max_active_per_user`
+        of `owner`'s: counted and inserted under one write lock, so
+        concurrent requests can't overshoot."""
+        db = self._connect()
+        try:
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                active = "SELECT count(*) FROM runs WHERE state IN ('queued', 'running')"
+                if max_active is not None and \
+                        db.execute(active).fetchone()[0] >= max_active:
+                    raise QueueFull(f"the queue is full ({max_active} active runs): "
+                                    "try again when some have finished")
+                if max_active_per_user is not None and db.execute(
+                        active + " AND owner = ?", (owner,)).fetchone()[0] \
+                        >= max_active_per_user:
+                    raise QueueFull(f"{owner or 'you'} already has {max_active_per_user} "
+                                    "queued or running runs: wait for one to finish or cancel one")
+                row = db.execute(
+                    "INSERT INTO runs (state, system, ref, firmware, scenario, created, ref_name, "
+                    "owner) VALUES ('queued', ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+                    (system, ref, json.dumps(firmware), json.dumps(scenario), now_iso(), ref_name,
+                     owner)).fetchone()
+                db.execute("COMMIT")
+            except BaseException:
+                db.execute("ROLLBACK")
+                raise
+        finally:
+            db.close()
         return row["id"]
 
     def get(self, run_id: int) -> Optional[dict]:
@@ -510,6 +584,44 @@ def _kinds(text: Optional[str]) -> Optional[set]:
     return kinds
 
 
+# -- artifacts -------------------------------------------------------------------
+#
+# A run's directory holds what the firmware, the sim and pytest wrote, and a
+# pytest scenario runs any test of the workspace: none of it is the app's own
+# content. Served from the app's origin as text/html or image/svg+xml it would
+# run script there (stored XSS). So no artifact is ever rendered: text is
+# text/plain, anything else an attachment, and every response carries nosniff
+# and `Content-Security-Policy: sandbox` (no script, a unique origin) in case
+# a browser renders it anyway. The run page's views (JUnit, snapshots, logs)
+# fetch artifacts as text and escape them.
+
+ARTIFACT_HEADERS = {"X-Content-Type-Options": "nosniff",
+                    "Content-Security-Policy": "sandbox; default-src 'none'",
+                    "Cache-Control": "private, no-cache"}
+
+
+def _is_text(path: Path) -> bool:
+    with open(path, "rb") as f:
+        head = f.read(8192)
+    if b"\0" in head:
+        return False
+    try:
+        head.decode("utf-8")
+    except UnicodeDecodeError as e:
+        return e.start >= len(head) - 3      # a character cut by the 8 KiB window
+    return True
+
+
+def artifact_response(path: Path) -> FileResponse:
+    if _is_text(path):
+        return FileResponse(path, media_type="text/plain; charset=utf-8",
+                            content_disposition_type="inline", filename=path.name,
+                            headers=ARTIFACT_HEADERS)
+    return FileResponse(path, media_type="application/octet-stream",
+                        content_disposition_type="attachment", filename=path.name,
+                        headers=ARTIFACT_HEADERS)
+
+
 # -- runs at a saved ref -------------------------------------------------------------
 #
 # The editor saves a system as a one-file commit on a branch of the workspace
@@ -651,10 +763,25 @@ def pickers_router(workspace) -> APIRouter:
 
 # -- the API -------------------------------------------------------------------
 
-def router(settings, workspace) -> APIRouter:
+def check_limits(req: RunRequest, limits: Limits) -> list[str]:
+    """What in the request is over the per-run limits (Limits)."""
+    sc, errors = req.scenario, []
+    if isinstance(sc, RunScenario):
+        if sc.virtual_ms > limits.max_virtual_ms:
+            errors.append(f"virtual_ms: {sc.virtual_ms} is over this server's limit of "
+                          f"{limits.max_virtual_ms}")
+        if len(sc.stimuli) > limits.max_stimuli:
+            errors.append(f"stimuli: {len(sc.stimuli)} is over the limit of {limits.max_stimuli}")
+        if len(sc.watch) > limits.max_watch:
+            errors.append(f"watch: {len(sc.watch)} is over the limit of {limits.max_watch}")
+    return errors
+
+
+def router(settings, workspace, limits: Optional[Limits] = None) -> APIRouter:
     """/api/runs over settings.db and settings.results."""
     from vhil.server.workspace import NotFound
 
+    limits = limits or Limits.from_env()
     store = RunStore(settings.db)
     results = Path(settings.results)
     r = APIRouter(prefix="/api/runs", tags=["runs"])
@@ -665,8 +792,27 @@ def router(settings, workspace) -> APIRouter:
             raise HTTPException(404, f"no run {run_id}")
         return run
 
+    def login(request: Request) -> str:
+        user = getattr(request.state, "user", None) or {}
+        return user.get("login") or ""
+
+    def may_cancel(request: Request, run: dict) -> bool:
+        """Its owner or an admin (VHIL_ADMINS); anyone in dev mode. A run
+        from before owners were recorded (owner "") is an admin's."""
+        if settings.auth == "dev":
+            return True
+        who = login(request)
+        return bool(who) and (who.lower() == run.get("owner", "").lower()
+                              or settings.is_admin(who))
+
+    def shown(request: Request, run: dict) -> dict:
+        return {**run, "can_cancel": run["state"] not in TERMINAL and may_cancel(request, run)}
+
     @r.post("", status_code=201)
-    def create(req: RunRequest):
+    def create(req: RunRequest, request: Request):
+        over = check_limits(req, limits)
+        if over:
+            raise HTTPException(422, over)
         head = workspace.ref()
         commit = head
         if req.ref:
@@ -703,25 +849,36 @@ def router(settings, workspace) -> APIRouter:
         errors = check_against_system(req, system, workspace.root)
         if errors:
             raise HTTPException(422, errors)
-        run_id = store.create(req.system, commit, req.firmware, req.scenario.model_dump(),
-                              ref_name=req.ref or "")
+        try:
+            run_id = store.create(req.system, commit, req.firmware, req.scenario.model_dump(),
+                                  ref_name=req.ref or "", owner=login(request),
+                                  max_active=limits.max_active,
+                                  max_active_per_user=limits.max_active_per_user)
+        except QueueFull as e:
+            raise HTTPException(429, str(e))
         return {"run_id": run_id}
 
     @r.get("")
-    def history(limit: int = Query(100, ge=1, le=1000), state: Optional[str] = None,
-                system: Optional[str] = None):
+    def history(request: Request, limit: int = Query(100, ge=1, le=1000),
+                state: Optional[str] = None, system: Optional[str] = None):
         if state is not None and state not in STATES:
             raise HTTPException(422, f"unknown state '{state}'")
-        return store.list(limit, state, system)
+        return [shown(request, run) for run in store.list(limit, state, system)]
 
     @r.get("/{run_id}")
-    def get(run_id: int):
-        return run_or_404(run_id)
+    def get(run_id: int, request: Request):
+        return shown(request, run_or_404(run_id))
 
     @r.post("/{run_id}/cancel")
-    def cancel(run_id: int):
-        run_or_404(run_id)
-        return store.cancel(run_id)
+    def cancel(run_id: int, request: Request):
+        run = run_or_404(run_id)
+        if not may_cancel(request, run):
+            raise HTTPException(403, f"run {run_id} is {run.get('owner') or 'nobody'}'s: only its "
+                                     f"owner or an admin may cancel it")
+        if run.get("owner", "").lower() != login(request).lower():
+            log.warning("run %s (owner %r) cancelled by admin %r", run_id, run.get("owner"),
+                        login(request))
+        return shown(request, store.cancel(run_id))
 
     @r.get("/{run_id}/trace")
     def trace(run_id: int, since_us: int = Query(0, ge=0), kinds: Optional[str] = None,
@@ -751,7 +908,7 @@ def router(settings, workspace) -> APIRouter:
         path = (root / name).resolve()
         if name.startswith("/") or not path.is_relative_to(root) or not path.is_file():
             raise HTTPException(404, f"no artifact '{name}'")
-        return FileResponse(path)
+        return artifact_response(path)
 
     @r.websocket("/{run_id}/live")
     async def live(ws: WebSocket, run_id: int, kinds: Optional[str] = None):

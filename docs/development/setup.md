@@ -23,7 +23,10 @@ On macOS it uses a Colima VM rather than Docker Desktop: Docker Desktop's
 LinuxKit kernel has no vcan, so IFS_HIL's suites could not reach the buses.
 Colima's Ubuntu image lacks `linux-modules-extra` for its shipped kernel, so
 `vm` moves it to the current generic kernel once and restarts. On a Linux
-host, load vcan and set `VHIL_DOCKER_CONTEXT=default`.
+host, load vcan and set `VHIL_DOCKER_CONTEXT=default`. Only `ifs-hil` runs
+its container `--privileged --network host` (it creates `can0..can2`); every
+other job runs unprivileged on Docker's default network (`VHIL_DOCKER_VCAN=1`
+gives `shell`/`run` vcan too), and `server`/`editor` publish on 127.0.0.1.
 
 ### Renode's monitor, card images and what a system file may say
 
@@ -165,7 +168,7 @@ is refused (`vhil/server/gitstore.py`). The file is validated first as
 `python -m vhil.system validate` would. The firmware picker sets a board's
 `firmware_ref` (a branch or tag of the catalogue repo, listed with `git
 ls-remote`). Open PR pushes the branch and opens a PR to `dev`; it needs
-`VHIL_GITHUB_TOKEN` (contents + pull requests write) on the API until the
+`VHIL_GITHUB_TOKEN` (or `VHIL_GITHUB_TOKEN_FILE`; contents + pull requests write) on the API until the
 GitHub App (M5.5) replaces it. Without it the button is off and the branch
 stays local. Known gap: Pipeline Manager 0.5.2 rejects the graphs of the
 systems with more than one CAN bus ("Missing dst s:can_inv:0": the earlier
