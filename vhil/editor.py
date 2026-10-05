@@ -398,9 +398,10 @@ def write_system(doc: dict, source: str | None = None) -> str:
     _merge(root, doc)
     out = io.StringIO()
     y.dump(root, out)
-    # ruamel drops alignment padding after a key (`can_inv:  {...}`): an
+    # ruamel drops alignment padding after a key (`can_inv:  {...}`) and keeps
+    # a trailing comment's column, so it moves the padding before the `#`: an
     # unchanged line is the original line.
-    norm = lambda line: re.sub(r":\s+", ": ", line)
+    norm = lambda line: re.sub(r"\s+#", " #", re.sub(r":\s+", ": ", line))
     original = {norm(line): line for line in source.splitlines()}
     return "\n".join(original.get(norm(line), line) for line in out.getvalue().splitlines()) + "\n"
 
