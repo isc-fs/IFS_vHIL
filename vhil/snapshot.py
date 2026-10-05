@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from vhil import elf, trace
+from vhil import renode as rn
 
 # RAM of the STM32H733 (RM0468 table 7, Memory map): DTCM, AXI SRAM,
 # SRAM1/2, SRAM4. Pointers outside these are not followed.
@@ -271,7 +272,7 @@ def take_all(sim, timeout_s: float = 30.0) -> list[BoardSnapshot]:
             if sock is not None:
                 sock.settimeout(old_timeout)
             if prev_mach is not None and sim._mach != prev_mach:
-                mon.execute(f'mach set "{prev_mach}"')
+                mon.execute(f"mach set {rn.quote(rn.ident(prev_mach))}")
                 sim._mach = prev_mach
         except Exception:
             pass
@@ -307,5 +308,5 @@ def take(sim, board: str, ring_blocks: Optional[int] = None) -> BoardSnapshot:
     if sim.trace_blocks:
         last = ring_blocks or 0
         snap.ring = step("trace", lambda: trace.parse_ring(
-            sim.monitor(f"vhil_trace_{board} Ring {last}"))) or []
+            sim.monitor(f"vhil_trace_{rn.ident(board)} Ring {int(last)}"))) or []
     return snap

@@ -10,7 +10,9 @@ board=$(python3 -c "from vhil.system import System; print(*System('$system').boa
 script=$(mktemp --suffix=.resc)
 python3 -m vhil.system render "$system" --firmware "$board=$elf" -o "$script"
 cmds=$(printf '%s\n' "$@")
-"$renode" --disable-gui --plain --console -e "
+# The monitor is this console: -P -1 keeps Renode from also opening its
+# monitor port, which listens on every interface (vhil/renode.py).
+"$renode" --disable-gui --plain --console -P -1 -e "
 include @$script
 emulation RunFor \"$secs\"
 $cmds

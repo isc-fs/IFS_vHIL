@@ -120,6 +120,10 @@ smoke)
     in_container "$prelude"'
         need_elf "$1"
         python -m vhil.system render "systems/$1.yaml" -o /tmp/system.resc
+        # renode-test drives Renode through its Robot server, which listens on
+        # every interface (HttpListener http://*:port/, no bind option in
+        # Renode 1.17). This job runs on the default Docker network, in its own
+        # namespace with no published port, so the server is not on the host.
         renode-test "tests/$1_smoke.robot" --variable ELF:"$(elf "$1")" \
             --variable RESC:/tmp/system.resc -r "results/smoke-$1"' "$sys" ;;
 sim)

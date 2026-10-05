@@ -38,7 +38,7 @@ from pathlib import Path
 
 import yaml
 
-from vhil.system import CATALOG, REPO, System, SystemError
+from vhil.system import CATALOG, ID, REPO, System, SystemError
 
 # Pipeline Manager's specification/dataflow format version these were written
 # against (the docs' examples).
@@ -408,7 +408,11 @@ def write_system(doc: dict, source: str | None = None) -> str:
 def validate(doc: dict) -> list[str]:
     """Schema and catalogue errors of a system document ([] if it is valid)."""
     with tempfile.TemporaryDirectory() as tmp:
-        path = Path(tmp) / f"{doc.get('id', 'system')}.yaml"
+        # The file is named by its id only once the id is one: an id with a
+        # path in it would write outside tmp.
+        ident = doc.get("id") if isinstance(doc, dict) else None
+        name = ident if isinstance(ident, str) and ID.fullmatch(ident) else "system"
+        path = Path(tmp) / f"{name}.yaml"
         path.write_text(dump_system(doc))
         try:
             System(path)

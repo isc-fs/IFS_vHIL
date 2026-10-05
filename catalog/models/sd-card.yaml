@@ -16,6 +16,9 @@ params:
   image: ""
   # In the slot but not answering from power-on (a dead or unpowered card).
   dead: false
+# The image is opened read-write, so it must be a file inside a card-image
+# directory ($VHIL_CARD_DIR, default build/cards; vhil.system.card_dirs).
+param_formats: {image: card-image}
 backend: renode
 renode:
   source: models/renode/Stm32H7Sdmmc.cs

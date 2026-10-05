@@ -384,7 +384,8 @@
               },
               "host_netdev": {
                 "type": "string",
-                "description": "SocketCAN interface this bus is bridged to, when bridging is on."
+                "description": "SocketCAN interface this bus is bridged to, when bridging is on.",
+                "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,14}$"
               }
             }
           }
@@ -500,7 +501,11 @@
                     "string",
                     "boolean"
                   ]
-                }
+                },
+                "propertyNames": {
+                  "$ref": "#/$defs/name"
+                },
+                "description": "Overrides of the model's params, each of its default's type; a string param takes the model's param_formats format, or else letters, digits and _ . + -."
               },
               "sdmmc": {
                 "$ref": "#/$defs/endpoint"
@@ -669,6 +674,21 @@
               "number",
               "string",
               "boolean"
+            ]
+          },
+          "propertyNames": {
+            "$ref": "#/$defs/name"
+          }
+        },
+        "param_formats": {
+          "type": "object",
+          "description": "String param -> the format its values take. card-image: a card image file inside a card-image directory (vhil.system.card_dirs). A string param without one takes letters, digits and _ . + - only.",
+          "propertyNames": {
+            "$ref": "#/$defs/name"
+          },
+          "additionalProperties": {
+            "enum": [
+              "card-image"
             ]
           }
         },

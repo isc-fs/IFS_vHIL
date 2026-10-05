@@ -142,7 +142,7 @@ def run(tmp_path_factory, firmware, request):
         log = Path(log_dir) / "ams-imu.log"
     seen = {}
     with Sim(REPO / "systems" / "ams.yaml", {"ams": firmware("ams")},
-             params={"sd": {"image": str(img)}}, log_path=log) as sim:
+             params={"sd": {"image": str(img)}}, card_dirs=[img.parent], log_path=log) as sim:
         move(sim, MOTION_1)
         sim.run_for(ms=PHASE_1_MS)
         seen["phase1"] = imu(sim)
