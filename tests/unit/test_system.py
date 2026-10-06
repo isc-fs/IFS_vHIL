@@ -9,7 +9,10 @@ from jsonschema import Draft202012Validator
 
 from vhil.system import REPO, System, SystemError
 
-DOCS = sorted((REPO / "catalog").glob("*/*.yaml")) + sorted((REPO / "systems").glob("*.yaml"))
+# Catalogue entries and systems; catalog/pin-models/ holds vendored pin
+# models, not catalogue documents (tests/unit/test_pin_model.py).
+DOCS = (sorted(p for p in (REPO / "catalog").glob("*/*.yaml") if p.parent.name != "pin-models")
+        + sorted((REPO / "systems").glob("*.yaml")))
 SYSTEMS = sorted((REPO / "systems").glob("*.yaml"))
 
 
@@ -358,13 +361,18 @@ def test_the_mainlite_roles_are_the_cars():
 PIN_LABELS = {
     "ecu": {"FDCAN1": "CAN_INV", "FDCAN2": "CAN_ACU", "FDCAN3": "CAN_DASH", "SPI1": "NRF24",
             "PB4": "RTDS", "PB5": "START", "PF7": "S_BRAKE", "PF8": "APPS_1", "PF9": "APPS_2",
-            "PB9": "SPARE_J3", "PC1": "SPARE_J3"},
+            "PB9": "SPARE_J3", "PC1": "SPARE_J3", "PB6": "DISCHARGE", "PD5": "S_TEMP_REFRI",
+            "USART10": "GPS", "PB0": "NRF24_CS", "PC5": "NRF24_CE", "PC4": "NRF24_IRQ",
+            "PB7": "SPARE_J3", "PB8": "SPARE_J3", "PF10": "SPARE_J3", "PC0": "SPARE_J3",
+            "PC2_C": "SPARE_J3"},
     "ams": {"FDCAN1": "CAN_ACU", "SPI1": "LTC6820", "PB9": "LTC6820_CS", "PB4": "AMS_OK",
             "PB5": "AIR_P", "PF7": "S_CURRENT_P", "PF8": "S_CURRENT_N", "PF9": "TSMS",
-            "PC1": "S_CURRENT_DCDC"},
+            "PC1": "S_CURRENT_DCDC", "PB6": "AIR_N", "PB7": "PRECHARGE", "PF10": "RST_PIL",
+            "PC0": "S_TEMP_DCDC", "PB8": "SPARE", "PB0": "SPARE", "PC2_C": "SPARE"},
     "udv": {"FDCAN1": "CAN_DV", "FDCAN2": "CAN_ACU", "PB4": "EBS_VALVE1", "PB5": "EBS_VALVE2",
             "PB9": "ASSI_BLUE", "PF7": "EBS_PRES1", "PF8": "EBS_PRES2", "PF9": "EBS_24V",
-            "PC1": "DEBUG_LED"},
+            "PC1": "DEBUG_LED2", "PB6": "DEBUG_LED1", "PB7": "SDC_CTRL", "PB8": "ASSI_YELLOW",
+            "PF10": "SDC_SENSE", "PC0": "RES_IN", "PC2_C": "DEBUG_LED3"},
 }
 
 
@@ -469,7 +477,8 @@ def test_a_role_rekinds_an_analog_pin_as_gpio(tmp_path):
     ("  SDMMC1: microSD", "  SDMMC1: 'micro\"SD'", "not valid under any"),
     ("    firmware: udv\n", "    firmware: ../udv\n", "not valid under any"),
     ("doc: docs/backplanes/udv.md", "doc: ../../etc/passwd", "not valid under any"),
-    ("      PF8: APPS_1 ", "      PX9: APPS_1 ", "role ecu labels 'PX9', which it lacks"),
+    ("      PF8: APPS_1 ", "      PX9: APPS_1 ", "role ecu labels 'PX9', which its pin model "
+                                                 "v1.0 lacks"),
     ("      PF9: {port: sysbus.gpioPortF, pin: 9}", "      PB4: {port: sysbus.gpioPortB, pin: 4}",
      "makes 'PB4' a GPIO, but the board models no analog input"),
 ])

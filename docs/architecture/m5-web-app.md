@@ -121,7 +121,9 @@ sent them; counted in the summary's `sent`, not `frames`),
    file to a branch in the workspace; firmware picker (repo/ref) from the
    boards' firmware sources; PR creation. A MainLite is one node type per
    role (`mainlite · ecu`): the role fixes its firmware, and its pins read
-   `PF8 · APPS_1` (`n.c.` where its backplane routes nothing). The shell's
+   `PF8 · APPS_1` (`n.c.` where its backplane routes nothing). The node shows
+   every pin the MainLite's pin model routes off the module, also those the
+   emulator doesn't wire yet, which validate refuses. The shell's
    firmware panel, not the node, picks each board's app branch/tag and
    bootloader tag: Pipeline Manager's select values come from the
    specification and can't list a remote's refs.

@@ -7,6 +7,13 @@ description: >-
   backplane routes some of them; the roles table labels those with their car
   signal, for display only: systems name the MCU's pins.
 platform: stm32h733
+# Which pins exist and leave the module comes from the MainLite's published pin
+# model (catalog/pin-models/, isc-fs/IFS08-ES-MainLite pin-model-v1.0; vendored
+# by scripts/update-pin-model.sh). Every pin it routes to the backplane headers
+# J3/J4 is a connector or pin of this board, below: the ones the emulator wires
+# (can, spi, gpio, analog_in) and the ones it doesn't yet (`unwired`). On-board
+# peripherals (`onboard`) are the only others a system may use.
+pin_model: mainlite.pins.yaml
 # Every MainLite carries the CAN bootloader in sector 0, burned at
 # provisioning: it boots first, then jumps to the application after its 2 s
 # auto-jump window (repo owner, 2026-10-05; stm32-can-bootloader v1.7.0
@@ -45,6 +52,17 @@ roles:
       PF9: APPS_2          # J1.6
       PB9: SPARE_J3        # D6, header J3 only
       PC1: SPARE_J3        # A6, header J3 only
+      PB6: DISCHARGE       # D3, the firmware's DC-link discharge; header J3.18 only, no driver (IFS08-CE-ECU#253)
+      PD5: S_TEMP_REFRI    # J1.15, 1-Wire; no firmware
+      USART10: GPS         # PG11/PG12
+      PB0: NRF24_CS        # on board
+      PC5: NRF24_CE        # on board
+      PC4: NRF24_IRQ       # on board
+      PB7: SPARE_J3        # D4, header J3 only
+      PB8: SPARE_J3        # D5, header J3 only
+      PF10: SPARE_J3       # A4, header J3 only
+      PC0: SPARE_J3        # A5, header J3 only
+      PC2_C: SPARE_J3      # PC2, header J3 only
   ams:
     node_id: 0x2
     flash_bus: FDCAN1
@@ -62,6 +80,13 @@ roles:
       PF8: S_CURRENT_N     # pack current sensor OUTN, J4.2
       PF9: TSMS            # TSMS_FIL, a digital input (main.h:70 TSMS_Pin)
       PC1: S_CURRENT_DCDC  # J3.5, the DC-DC's ACS758; not fitted, not sampled
+      PB6: AIR_N           # J11.5 (main.h:78 RELAY_AIR_N_Pin)
+      PB7: PRECHARGE       # J11.4 (main.h:80 RELAY_PRECHARGE_Pin)
+      PF10: RST_PIL        # RST_PIL_FIL, a digital input (main.h:72 DASH_CHG_Pin)
+      PC0: S_TEMP_DCDC     # J3.7; not read
+      PB8: SPARE           # J1.20
+      PB0: SPARE           # J1.21
+      PC2_C: SPARE         # PC2, J1.22
     # TSMS is a digital input on this backplane, not an ADC channel.
     gpio:
       PF9: {port: sysbus.gpioPortF, pin: 9}
@@ -82,14 +107,20 @@ roles:
       PF7: EBS_PRES1       # /Micro in pres 1 (A1), J6.27
       PF8: EBS_PRES2       # /Micro in pres 2 (A2), J6.28
       PF9: EBS_24V         # /Micro in EBS (A3), from /24V EBS, on board
-      PC1: DEBUG_LED       # /Debug 2, LED D27, on board
+      PC1: DEBUG_LED2      # /Debug 2, LED D27, on board
+      PB6: DEBUG_LED1      # /Debug 1, LED D26, on board
+      PB7: SDC_CTRL        # /Control SDC Micro (D4), the K1 SDC relay
+      PB8: ASSI_YELLOW     # /PWM yellow (D5)
+      PF10: SDC_SENSE      # /Sensor SDC micro (A4), from /SDC out, on board
+      PC0: RES_IN          # /Lectura RES (A5), J6.29
+      PC2_C: DEBUG_LED3    # PC2, /Debug 3, LED D28, on board
     # PC1 drives a debug LED on this backplane: an output, not an ADC channel.
     gpio:
       PC1: {port: sysbus.gpioPortC, pin: 1}
 # No coin cell or supercap on VBAT, so a power cut wipes the backup domain:
 # the RTC backup registers (the AMS's sticky ErrorLatch, BKP1R) start clear.
-# Source: IFS08-CE-AMS app_init_task.cpp:78-80; to confirm on the MainLite
-# schematic.
+# Source: IFS08-CE-AMS app_init_task.cpp:78-80; the pin model agrees (VBAT,
+# pin 6, unconnected: interfaces.vbat.backup_battery false).
 vbat: false
 # On the MainLite itself, not through a backplane: connected in every role
 # (docs/backplanes/README.md, "Common to every unit").
@@ -124,3 +155,19 @@ analog_in:
   # (docs/backplanes/ams.md), but AMS dev does not sample it, by design: no
   # DC-DC is fitted (IFS08-CE-AMS af07ec8; ams_config.hpp:607, :713-715).
   PC1: {adc: sysbus.adc3_h73x, channel: 11}
+# Backplane pins (pin model class backplane) the emulator does not wire yet,
+# with their kind: what the editor offers them as. A system that wires one is
+# refused ("not emulated yet") until it moves to gpio or analog_in above, with
+# its port or ADC channel. SPI1's pins (PA5/PA6/PA7) are SPI1.
+unwired:
+  PB6: gpio      # J3.8 GPIO3: ECU D3, AMS AIR-, uDV debug LED
+  PB7: gpio      # J3.9 GPIO4: ECU D4, AMS PRECHARGE, uDV SDC relay
+  PB8: gpio      # J3.10 GPIO5: ECU D5, uDV ASSI yellow
+  PF10: analog   # J3.15 GPIO10: ECU A4, uDV A4 (ADC3 INP6, docs/backplanes/udv.md)
+  PC0: analog    # J3.16 GPIO11: ECU A5, uDV A5 (ADC3 INP10, docs/backplanes/udv.md)
+  PC2_C: analog  # J3.18 GPIO13: the firmware's PC2, uDV A7 (main.h:76)
+  PD5: gpio      # J3.3 DS18B20_REFRI: 1-Wire, 4k7 pull-up R10 on the MainLite
+  PB0: gpio      # J4.9 NRF24_CS
+  PC5: gpio      # J4.10 NRF24_CE
+  PC4: gpio      # J4.11 NRF24_IRQ
+  USART10: uart  # PG11 RX J3.4, PG12 TX J3.5

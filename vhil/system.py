@@ -29,6 +29,7 @@ from typing import Iterable
 import yaml
 
 from vhil import flash_image
+from vhil import pin_model as pm
 from vhil import renode as rn
 from vhil.flash_image import FLASH_BASE
 
@@ -51,6 +52,10 @@ BACKPLANE_DOC = re.compile(r"docs/backplanes/[a-z0-9-]+\.md")  # a role's backpl
 # A string device param without a declared format (catalogue param_formats).
 SAFE_PARAM = re.compile(r"[A-Za-z0-9_.+-]{0,128}")
 CARD_DIR_ENV = "VHIL_CARD_DIR"
+# A board's pin model, in catalog/pin-models/ (catalogue $defs/board pin_model).
+PIN_MODEL_FILE = re.compile(r"[a-z0-9][a-z0-9-]*\.pins\.yaml")
+# The board sections whose connectors and pins the emulator wires.
+WIRED = ("can", "spi", "sdmmc", "i2c", "gpio", "analog_in")
 
 
 def card_dirs() -> list[Path]:
@@ -65,6 +70,21 @@ def card_dirs() -> list[Path]:
 
 class SystemError(ValueError):
     pass
+
+
+def board_pin_model(board: dict, catalog: Path = CATALOG) -> pm.PinModel | None:
+    """The board's pin model (catalog/pin-models/<pin_model>), or None if it
+    names none."""
+    name = board.get("pin_model")
+    if name is None:
+        return None
+    if not isinstance(name, str) or not PIN_MODEL_FILE.fullmatch(name):
+        raise SystemError(f"board {board['id']}: pin model {name!r} is not a "
+                          f"catalog/pin-models/ file")
+    try:
+        return pm.load(Path(catalog) / "pin-models" / name)
+    except (pm.PinModelError, OSError, UnicodeDecodeError, yaml.YAMLError) as e:
+        raise SystemError(f"board {board['id']}: pin model {name}: {e}") from None
 
 
 # Where `vhil.system build --workdir <dir>` puts a firmware source at a ref,
@@ -135,6 +155,7 @@ class Board:
     role: str | None = None             # the board's role (catalogue board roles)
     flash_bus: str | None = None        # CAN connector the app is flashed over: the role's
     role_spec: dict | None = None       # the role's catalogue entry (firmware, pins, gpio)
+    pin_model: pm.PinModel | None = None   # the board's pin model, if it names one
 
     def ref(self, image: str = "firmware") -> str:
         """The branch or tag to build: the system's, else the catalogue's."""
@@ -152,8 +173,20 @@ class Board:
                               ("i2c", "i2c"), ("analog", "analog_in"), ("gpio", "gpio")):
             if connector in self.board.get(section, {}):
                 return kind, self.board[section][connector]
-        raise SystemError(f"board '{self.name}' ({self.board['id']}) has no "
-                          f"connector or pin '{connector}'")
+        where = f"board '{self.name}' ({self.board['id']})"
+        model = self.pin_model
+        status = model.status(connector) if model is not None else None
+        if connector in (self.board.get("unwired") or {}):
+            at = f" ({status.where})" if status is not None else ""
+            raise SystemError(f"{where}: {connector}{at} leaves the module but is not "
+                              f"emulated yet: the catalogue lists it as unwired, with no "
+                              f"port or ADC channel to wire it to")
+        if status is not None:
+            raise SystemError(f"{where}: {connector} is not routed off the "
+                              f"{model.board_name} ({model.label}: class {status.cls}"
+                              f"{', ' + status.where if status.cls == 'onboard' else ''})")
+        raise SystemError(f"{where} has no connector or pin '{connector}'"
+                          + (f" (nor has its {model.label})" if model is not None else ""))
 
     def routed(self, connector: str) -> bool | None:
         """Whether the role's backplane connects a connector or pin: one of
@@ -171,6 +204,7 @@ class System:
         """extra_card_dirs: directories an sd-card image may also come from,
         besides card_dirs() (vhil.sim.Sim's card_dirs, for a test's tmp_path)."""
         self.path = Path(path)
+        self.catalog = Path(catalog)
         self.card_dirs = [*card_dirs(), *(Path(d) for d in extra_card_dirs)]
         self.doc = _load(self.path, "system")
         self.id = self.doc["id"]
@@ -188,7 +222,8 @@ class System:
                 (role_spec or {}).get("node_id"),
                 list(spec.get("write_protect", [])),
                 spec.get("firmware_ref"), spec.get("bootloader_ref"),
-                role, (role_spec or {}).get("flash_bus"), role_spec)
+                role, (role_spec or {}).get("flash_bus"), role_spec,
+                board_pin_model(board, catalog))
             self._check_role(b)
             b.firmware = self._firmware(b, spec, catalog)
             self.boards[name] = b
@@ -349,16 +384,68 @@ class System:
         return _entry("firmware", spec["firmware"], catalog)
 
     @staticmethod
-    def check_board_roles(board: dict) -> None:
+    def check_board_pins(board: dict, model: pm.PinModel | None) -> None:
+        """The board against its pin model: every connector and pin it has
+        (wired or `unwired`) is in the model and leaves the module, or is an
+        on-board peripheral it lists in `onboard`; and every pin the model
+        routes to the backplane is one of them, or one of a peripheral's."""
+        bid = board["id"]
+        unwired = board.get("unwired") or {}
+        if model is None:
+            if unwired:
+                raise SystemError(f"board {bid}: its unwired pins need a pin_model")
+            return
+        onboard = board.get("onboard") or {}
+        names = [c for s in WIRED for c in (board.get(s) or {})] + list(unwired)
+        covered = set()
+        for name in dict.fromkeys(names):
+            status = model.status(name)
+            if status is None:
+                raise SystemError(f"board {bid}: {name} is not a pin or peripheral of its "
+                                  f"{model.label}")
+            if name in onboard:
+                if status.cls != "onboard":
+                    raise SystemError(f"board {bid}: onboard {name} is not on the board only "
+                                      f"({model.label}: class {status.cls}, {status.where})")
+            elif status.cls != "backplane":
+                raise SystemError(f"board {bid}: {name} is not routed off the board "
+                                  f"({model.label}: class {status.cls}, {status.where})")
+            covered |= {p["port"] for p in model.pins_of(name)}
+        missing = [p for p in model.backplane_pins() if p["port"] not in covered]
+        if missing:
+            raise SystemError(
+                f"board {bid}: its {model.label} routes "
+                + ", ".join(f"{p['port']} ({p['backplane'][0]['connector']}."
+                            f"{p['backplane'][0]['pin']})" for p in missing)
+                + " to the backplane, but the board lacks them: list each in `unwired` "
+                  "with its kind")
+
+    @staticmethod
+    def check_board_roles(board: dict, catalog: Path = CATALOG) -> None:
         """The catalogue board's roles table: each role a known one, its flash
         bus a CAN connector, its firmware a catalogue id, its pin labels on
-        connectors the board has, and its GPIO re-kinds on pins the board
-        models as analog inputs only. Labels are display text: plain words."""
-        sections = ("can", "spi", "sdmmc", "i2c", "gpio", "analog_in")
-        connectors = {c for s in sections for c in (board.get(s) or {})}
+        connectors the board has (and, with a pin model, ones that leave the
+        module), and its GPIO re-kinds on pins the board models as analog
+        inputs only. Labels are display text: plain words. The board's own
+        connectors and pins are checked against its pin model first."""
+        model = board_pin_model(board, catalog)
+        System.check_board_pins(board, model)
+        connectors = ({c for s in WIRED for c in (board.get(s) or {})}
+                      | set(board.get("unwired") or {}))
         bid = board["id"]
 
         def label(where: str, pin, text) -> None:
+            if model is not None and where != "onboard" and isinstance(pin, str):
+                # A role names what its backplane routes: only what leaves
+                # the module can be.
+                status = model.status(pin)
+                if status is None:
+                    raise SystemError(f"board {bid}: {where} labels {pin!r}, which its "
+                                      f"{model.label} lacks")
+                if status.cls != "backplane":
+                    raise SystemError(f"board {bid}: {where} routes {pin}, which does not "
+                                      f"leave the board ({model.label}: class {status.cls}, "
+                                      f"{status.where})")
             if pin not in connectors:
                 raise SystemError(f"board {bid}: {where} labels {pin!r}, which it lacks")
             if not isinstance(text, str) or not LABEL.fullmatch(text):
@@ -398,7 +485,7 @@ class System:
         them, which gives its bootloader's node ID, flash bus and firmware.
         A board without roles takes none."""
         roles = b.board.get("roles") or {}
-        self.check_board_roles(b.board)
+        self.check_board_roles(b.board, self.catalog)
         if not roles:
             if b.role is not None:
                 raise SystemError(f"board '{b.name}': {b.board['id']} has no roles, "

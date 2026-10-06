@@ -51,7 +51,9 @@ pins:
 - `ams.PC1` for the DC-DC sensor, which the firmware ignores.
 
 The other routed pins are not modelled yet: PB4–PB7 (relay drivers), PF10,
-PC0 and the spare pins. The MainLite models PF9 as an analog input, but on
+PC0 and the spare pins. The ones the board doesn't wire (PB6, PB7, PB8, PB0,
+PF10, PC0, PC2_C) are `unwired` in it, from the MainLite's pin model: the
+editor shows them, and `validate` refuses them as not emulated yet. The MainLite models PF9 as an analog input, but on
 the AMS it is the TSMS digital input, so the AMS role makes it a GPIO
 (`gpio: PF9` in its roles entry): `ams.PF9` takes a `gpio_in` port signal,
 and an analog source on it is refused. No AMS system uses it yet.

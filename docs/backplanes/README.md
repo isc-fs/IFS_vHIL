@@ -11,7 +11,34 @@ backplane's KiCad schematic and checked against the firmware:
 | [`ecu.md`](ecu.md) | ECU (vehicle control unit) | isc-fs/IFS08-ES `boards/BACKPLANE_ECU/kicad/BACKPLANE_ECU.kicad_sch` (v3.0) |
 | [`udv.md`](udv.md) | uDV (driverless controller) | IFS09-DV-uDV `MicroDV_PCB_Schematics/MicroDV2/MicroDV2.kicad_sch` (`feat/5-hardware`) |
 
-**These pages are the reference; the catalogue copies only labels.** The
+**Which MainLite pins exist is the MainLite's pin model, not these pages.**
+isc-fs/IFS08-ES-MainLite publishes it, generated from the MainLite schematic
+(`docs/pin-model.md` there): all 144 MCU pins, and for each I/O pin whether
+it leaves the module through the backplane headers J3/J4 (class
+`backplane`, 22 pins), is used on the module only (`onboard`: microSD, IMU,
+CAN transceivers, crystal, SWD, USB, LEDs) or is unconnected (`nc`). The
+vHIL vendors a pinned release in
+[`catalog/pin-models/mainlite.pins.yaml`](../../catalog/pin-models/mainlite.pins.yaml)
+(`scripts/update-pin-model.sh <tag>` replaces it and checks its sha256), and
+the board (`pin_model:` in `catalog/boards/mainlite.yaml`) has every
+connector and pin that leaves the module: the ones the emulator wires, and
+the rest as `unwired`, with their kind. `python -m vhil.system validate`
+checks against it:
+
+- a pin a system wires must leave the module, or be an on-board peripheral
+  the board models (SDMMC1, I2C2); anything else is an error:
+  `PF3 is not routed off the MainLite (pin model v1.0: class nc)`;
+- an `unwired` pin is refused as not emulated yet, until the board gives it
+  a port or an ADC channel;
+- every pin a role names must leave the module; a role that routes an
+  on-board or unconnected pin is a catalogue error.
+
+These pages say which of those pins each car backplane uses, and for what.
+The two agree today; where a page and the model disagree, the model wins
+for what exists, and the disagreement is an issue on whichever is wrong.
+
+**These pages are the reference for the backplanes; the catalogue copies
+only labels.** The
 vHIL has no backplane kind. Systems name the MainLite's own connectors and pins
 (`ams.PB9`, `ecu.FDCAN2`) and cite the car signal in a trailing comment:
 
@@ -64,5 +91,7 @@ including the pins the vHIL does not model.
   R5 and R9 and no jumper (IFS08-CE-AMS#622).
 - The microSD (SDMMC1) and the BMI088 IMU (I2C2, PF0/PF1) are on the MainLite
   itself, not on a backplane.
+- The pages' `PC2` (J3.18, `GPIO13`) is `PC2_C` in the pin model, ST's name
+  for LQFP-144 pin 28, and so in the catalogue and systems (`ecu.PC2_C`).
 - Which FDCAN carries which car bus depends on the unit. Don't generalise
   it: the ACU bus is FDCAN1 on the AMS but FDCAN2 on the ECU and the uDV.
