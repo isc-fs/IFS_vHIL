@@ -301,6 +301,8 @@ class System:
             need(ENDPOINT, r["to"], "GPIO route")
         for r in self.bench.get("adc_routes", []):
             need(ENDPOINT, r["from"], "ADC route")
+        if "cell_stimulus" in self.bench:
+            need(NAME, self.bench["cell_stimulus"]["device"], "cell stimulus device")
 
     # -- device params --------------------------------------------------------
 
@@ -622,6 +624,12 @@ class System:
             _, kind, _ = self.resolve(r["from"])
             if kind != "gpio":
                 raise SystemError(f"ADC route from '{r['from']}': {kind}, not a GPIO")
+        if "cell_stimulus" in self.bench:
+            name = self.bench["cell_stimulus"]["device"]
+            dev = self.devices.get(name)
+            if dev is None or dev["model_doc"].get("interface", {}).get("provides") != "isospi":
+                raise SystemError(f"cell stimulus device '{name}': not an isoSPI bridge "
+                                  f"of this system (the LTC6811 chain's ltc6820)")
         self.warnings = self._routing_warnings()
 
     def endpoints(self) -> list[str]:
@@ -933,6 +941,12 @@ class System:
                 config["adc_routes"].append(
                     {"adc": r["adc"], "channel": r["channel"], "machine": board.name,
                      "gpio_port": target["port"], "gpio_pin": target["pin"]})
+        if "cell_stimulus" in self.bench:
+            cs = self.bench["cell_stimulus"]
+            dev = self.devices[cs["device"]]
+            board, _, spi = self.resolve(dev["spi"])
+            config["cell_stimulus"] = {"machine": board.name, "bridge": f"{spi}.{cs['device']}",
+                                       "cell_mV": cs["cell_mV"], "temp_dC": cs["temp_dC"]}
         return config
 
     def build_firmware(self, workdir: Path, refs: dict[str, str] | None = None,

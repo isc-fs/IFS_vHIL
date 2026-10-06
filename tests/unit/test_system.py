@@ -136,6 +136,9 @@ def _system(tmp_path, body):
     ("bench:\n  adc_routes:\n    - {adc: 0, channel: 0, from: ecu.PB4}\n"
      "    - {adc: 0, channel: 0, from: ecu.PB5}\n", "routed twice"),
     ("bench:\n  adc_routes:\n    - {adc: 0, channel: 8, from: ecu.PB4}\n", "not valid"),
+    ("bench:\n  cell_stimulus: {device: isospi, cell_mV: 3750, temp_dC: 250}\n",
+     "not an isoSPI bridge"),
+    ("bench:\n  cell_stimulus: {device: isospi, cell_mV: 9000, temp_dC: 250}\n", "not valid"),
 ])
 def test_bad_systems_are_rejected_with_a_reason(tmp_path, body, message):
     with pytest.raises(SystemError, match=message):

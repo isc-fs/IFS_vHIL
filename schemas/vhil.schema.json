@@ -655,6 +655,31 @@
                   }
                 }
               }
+            },
+            "cell_stimulus": {
+              "type": "object",
+              "description": "The bench's cell and temperature source on an LTC6811 chain (bench-01: the Pico LTC emulator, separately powered): every cell and NTC it holds, re-applied after each power-on of the chain's board, since the source keeps its state while the board is off.",
+              "required": [
+                "device",
+                "cell_mV",
+                "temp_dC"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "device": {
+                  "$ref": "#/$defs/name"
+                },
+                "cell_mV": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 5000
+                },
+                "temp_dC": {
+                  "type": "integer",
+                  "minimum": -400,
+                  "maximum": 1250
+                }
+              }
             }
           }
         },
