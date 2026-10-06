@@ -28,7 +28,7 @@ BOARDS = {"ams": ("ams.yaml", 0x6CA), "ecu": ("ecu.yaml", 0x704)}
 # power-on case also hits IFS08-CE-ECU#245 (reset_cause.cpp checks PINRSTF
 # before PORRSTF, and a power-on sets both, RM0468 Table 52 row 1: Pin).
 pytestmark = pytest.mark.xfail(strict=True, reason=(
-    "stm32-can-bootloader v1.7.0 bl_health.c:59-63 clears RCC_RSR before the "
+    "stm32-can-bootloader#193: v1.7.0 bl_health.c:59-63 clears RCC_RSR before the "
     "jump: the app reads no reset flag and reports cause 0 (Unknown)"))
 
 
