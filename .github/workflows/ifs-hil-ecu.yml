@@ -131,7 +131,7 @@ jobs:
         run: |
           set +e
           scripts/run-ifs-hil.sh ifs_hil "$ECU_ELF" "$SUITE" \
-            --vhil-log "$GITHUB_WORKSPACE/vhil-renode.log" \
+            --vhil-log="$GITHUB_WORKSPACE/vhil-renode.log" \
             --junitxml="$GITHUB_WORKSPACE/junit.xml" | tee pytest.txt
           rc=${PIPESTATUS[0]}
           # A missing bus must never pass as a skip.
@@ -229,7 +229,7 @@ jobs:
           set +e
           scripts/run-ifs-hil.sh ifs_hil "$ECU_ELF" \
             tests/hil/vcu/test_block_f_real_ams.py \
-            --vhil-log "$GITHUB_WORKSPACE/vhil-renode.log" \
+            --vhil-log="$GITHUB_WORKSPACE/vhil-renode.log" \
             --junitxml="$GITHUB_WORKSPACE/junit.xml" | tee pytest.txt
           rc=${PIPESTATUS[0]}
           if grep -q "^SKIPPED" pytest.txt; then
