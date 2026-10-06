@@ -4,8 +4,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-/* Download fonts (Montserrat, Roboto, Roboto Mono) */
-@import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@500&family=Roboto&family=Roboto+Mono&display=swap');
+/* Fonts: self-hosted Inter and JetBrains Mono, from the vHIL tokens
+   (src/vhil/index.ts), not Google Fonts (CHANGELOG-VHIL.md). */
 
 /* Import styles */
 @import 'variables';

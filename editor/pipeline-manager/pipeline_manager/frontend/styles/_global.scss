@@ -20,6 +20,12 @@ body,
     overflow: hidden;
 }
 
+/* vHIL: a visible ring on keyboard focus (CHANGELOG-VHIL.md). */
+:focus-visible {
+    outline: 2px solid $focus;
+    outline-offset: 2px;
+}
+
 body.grabbing * {
     cursor: grabbing !important;
 }

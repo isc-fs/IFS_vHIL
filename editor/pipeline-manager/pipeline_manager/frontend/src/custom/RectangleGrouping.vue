@@ -155,7 +155,6 @@ export default defineComponent({
 .rectangle-grouping-name-input {
     @extend .rectangle-grouping-name;
     border: none;
-    outline: none;
     background-color: #{$gray-700};
 }
 </style>
