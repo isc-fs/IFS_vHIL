@@ -15,7 +15,7 @@
 #                                                (default test_*) into results/coverage
 #   scripts/vhil-docker.sh speed [mips ...]      scripts/speed.py on the ECU
 #   scripts/vhil-docker.sh ifs-hil [suite] [pytest args]
-#                                                IFS_HIL's ECU suite over vcan
+#                                                IFS_HIL's ECU suite over vcan (VHIL_DUT=ams: AMS suite)
 #                                                (VHIL_SYSTEM=systems/ecu-ams.yaml: with the AMS)
 #   scripts/vhil-docker.sh editor                system editor on http://localhost:5050
 #   scripts/vhil-docker.sh server                web app API + shell on http://localhost:8080
@@ -87,7 +87,7 @@ in_container() {
     "${docker[@]}" run --rm ${tty[@]+"${tty[@]}"} ${run_args[@]+"${run_args[@]}"} \
         -v "$repo:/work" -v vhil-data:/vhil \
         -e IFS_HIL_REF="${IFS_HIL_REF:-dev}" -e FW_REFS="${FW_REFS:-}" \
-        -e VHIL_SYSTEM="${VHIL_SYSTEM:-}" \
+        -e VHIL_SYSTEM="${VHIL_SYSTEM:-}" -e VHIL_DUT="${VHIL_DUT:-ecu}" \
         -e EDITOR_URL="http://localhost:${VHIL_EDITOR_PORT:-5050}" \
         "$image" bash -c "$1" vhil "${@:2}"
 }
@@ -149,12 +149,12 @@ speed)
 ifs-hil)
     run_args=("${vcan_args[@]}")
     in_container "$prelude"'
-        need_elf ecu
+        need_elf "$VHIL_DUT"
         # The other boards of $VHIL_SYSTEM run their last-built images.
-        export VHIL_SYSTEM=${VHIL_SYSTEM:-systems/ecu.yaml}
+        export VHIL_SYSTEM=${VHIL_SYSTEM:-systems/$VHIL_DUT.yaml}
         VHIL_FIRMWARE=
         for b in $(python -c "import sys; from vhil.system import System; print(*System(sys.argv[1]).images())" "$VHIL_SYSTEM"); do
-            [ "$b" = ecu ] && continue
+            [ "$b" = "$VHIL_DUT" ] && continue
             need_elf "$b"; VHIL_FIRMWARE+="$b=$(elf "$b") "
         done
         export VHIL_FIRMWARE
@@ -171,8 +171,8 @@ ifs-hil)
         mkdir -p results/ifs-hil
         candump -L -t a can0 can1 can2 > results/ifs-hil/candump.log 2>&1 &
         set +e
-        scripts/run-ifs-hil.sh /vhil/IFS_HIL "$(elf ecu)" "${1:-smoke}" \
-            --vhil-log /work/results/ifs-hil/vhil-renode.log \
+        scripts/run-ifs-hil.sh /vhil/IFS_HIL "$(elf "$VHIL_DUT")" "${1:-smoke}" \
+            --vhil-log=/work/results/ifs-hil/vhil-renode.log \
             --junitxml=/work/results/ifs-hil/junit.xml "${@:2}" | tee results/ifs-hil/pytest.txt
         rc=${PIPESTATUS[0]}
         if grep -q "SocketCAN interface .* not present" results/ifs-hil/pytest.txt; then

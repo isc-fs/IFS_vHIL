@@ -67,3 +67,8 @@ bench:
     - {adc: 2, channel: 1, from: ams.PB5}  # AIR+ (docs/backplanes/ams.md)
     - {adc: 2, channel: 2, from: ams.PB6}  # AIR- (docs/backplanes/ams.md)
     - {adc: 2, channel: 3, from: ams.PB7}  # PRECHARGE (docs/backplanes/ams.md)
+  # bench-01's Pico LTC emulator seed, which it holds from its own cold boot
+  # across the AMS's power cycles: 3750 mV cells, 25.0 C (IFS_HIL
+  # tools/pico_ltc_emulator/firmware/src/cell_state.h DEFAULT_CELL_MV, README
+  # "Default state on cold boot"). The model's own default stays 3700 mV.
+  cell_stimulus: {device: isospi, cell_mV: 3750, temp_dC: 250}

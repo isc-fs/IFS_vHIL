@@ -1,11 +1,168 @@
-# IFS_HIL tests the virtual bench cannot pass yet, and why. The vhil plugin
-# skips them with this reason, so they show in every report. A test leaves
-# this list when the virtual bench can run it, never to make a run green.
+# IFS_HIL tests the virtual bench cannot pass yet, and why: the parity
+# ledger. The vhil plugin skips them with this reason, so they show in every
+# report. A test leaves this list when the virtual bench can run it, never to
+# make a run green.
 #
-# path:    IFS_HIL test file or node id (prefix match)
-# why:     model gap or physical-only, with the issue that tracks it
+# path:    IFS_HIL test file, or file::test-function (prefix match; the class
+#          name is not part of it, a parameter id is)
+# why:     the model gap with the vHIL issue that tracks it; or the IFS_HIL /
+#          firmware issue when the test and the firmware disagree; or
+#          "physical-only" and why only real hardware can answer it
 # systems: (optional) the system ids it applies to; default every system
+#
+# Last full runs (IFS_HIL dev fa11a25; AMS main df1c961, ECU dev 544b651),
+# AMS `full` on systems/ams.yaml and ECU `full` on systems/ecu.yaml. The tail
+# of this file lists what IFS_HIL itself skips or deselects; those are not
+# gaps.
+
+# -- ECU (tests/hil/vcu) -------------------------------------------------------
 
 - path: tests/hil/vcu/test_block_f_real_ams.py
   systems: [ecu]
   why: "needs a live AMS on the ACU bus: run it on systems/ecu-ams.yaml (M3, #11)"
+
+# START is pressed over a 0x7E0 byte ECU dev no longer reads; the PB5 route is
+# in place for when the profile drives the pin instead.
+- path: tests/hil/vcu/test_block_c_fsm.py::test_c004_full_startup_to_active
+  why: "needs START: vcu_profile presses it over 0x7E0 byte 4, which ECU dev no longer reads (IFS_HIL#150)"
+- path: tests/hil/vcu/test_block_e_inverter.py
+  why: "needs the FSM past WaitStartBrake, i.e. START (IFS_HIL#150)"
+- path: tests/hil/vcu/test_block_e_fault_recovery.py::test_e006_fault_in_active_cuts_torque
+  why: "needs the FSM in Active, i.e. START (IFS_HIL#150)"
+- path: tests/hil/vcu/test_block_g_plausibility.py
+  why: "needs the FSM in Active, i.e. START (IFS_HIL#150)"
+- path: tests/hil/vcu/test_block_j_soak.py::test_j001_drive_soak
+  why: "needs the FSM in Active, i.e. START (IFS_HIL#150)"
+- path: tests/hil/vcu/test_block_l_dv.py::test_l009_manual_precedence
+  why: "needs the manual START press (IFS_HIL#150)"
+- path: tests/hil/vcu/test_block_l_dv.py::test_l012_cycle_exit_clears_latch
+  why: "needs the manual START press for the re-entry (IFS_HIL#150)"
+
+- path: tests/hil/vcu/test_block_e_fault_recovery.py::test_e003_hard_fault_commands_reset
+  why: "reads the last 0x360, but ECU dev follows the recovery word with Off in the same cycle (IFS_HIL#152)"
+- path: tests/hil/vcu/test_block_e_fault_recovery.py::test_e004_soft_fault_commands_fault
+  why: "reads the last 0x360, but ECU dev follows the recovery word with Off in the same cycle (IFS_HIL#152)"
+- path: tests/hil/vcu/test_block_e_fault_recovery.py::test_e005_recovery_clears_and_fsm_advances
+  why: "reads the last 0x360, but ECU dev follows the recovery word with Off in the same cycle (IFS_HIL#152); then needs START (IFS_HIL#150)"
+
+- path: tests/hil/vcu/test_block_l_dv.py::test_l007_torque_from_0x507
+  why: "expects the old 10 % deadband torque map; ECU dev maps from 5 % (IFS_HIL#151)"
+- path: tests/hil/vcu/test_block_l_dv.py::test_l008_stale_torque_zero_no_apps_fallback
+  why: "expects the old 10 % deadband torque map; ECU dev maps from 5 % (IFS_HIL#151)"
+- path: tests/hil/vcu/test_block_l_dv.py::test_l010_conditioner_failsafes
+  why: "expects 100 % where a firmware torque cap reads 51 % (IFS_HIL#151)"
+- path: tests/hil/vcu/test_block_l_dv.py::test_l011_ev23_exemption
+  why: "expects the old 10 % deadband torque map; ECU dev maps from 5 % (IFS_HIL#151)"
+
+- path: tests/hil/vcu/test_block_j_soak.py::test_j002_reflash_cycles
+  why: "needs IFS_HIL's HIL-stub ECU image (ECU_HIL_STUB_BIN); the virtual bench runs the image IFS_HIL's recipe builds, never an emulator-only one (invariant 1)"
+
+# -- AMS (tests/hil/ams) -------------------------------------------------------
+
+- path: tests/hil/ams/test_block_a_boot.py::test_a003_flash_and_jump
+  why: "flashes without --yes and can-flasher 3 cancels at its erase prompt (IFS_HIL#149)"
+- path: tests/hil/ams/test_block_d_bootloader.py::test_d052_jump_reason_in_pit_diag
+  why: "flashes without --yes and can-flasher 3 cancels at its erase prompt (IFS_HIL#149)"
+- path: tests/hil/ams/test_block_a_boot.py::test_a012
+  why: "races its own acu_heartbeat: two standard 0x100 streams (100 V and 0 V) at once; fails on CI, passes locally (IFS_HIL#153)"
+
+- path: tests/hil/ams/test_block_i_current.py::test_i100_reported_current_tracks_injection
+  why: "physical-only: analog accuracy. The firmware's current gain and zero (AMS #350) are commissioned on bench-01's own sensor front-end and VREF; the virtual ADC is ideal and reads -200 A as -218 A"
+- path: tests/hil/ams/test_block_i_current.py::test_j102_under_limit_does_not_trip
+  why: "physical-only: analog accuracy. 190 A reads above the 200 A trip through the bench-commissioned gain (see I-100)"
+
+- path: tests/hil/ams/test_block_d_bootloader.py::test_d050
+  why: "a virtual power-on is slower than real time: first telemetry 3.4-4.1 s of wall time after K_n close, the test allows 3 s (#154)"
+- path: tests/hil/ams/test_block_s_sdcard.py::test_s144_boot_time_no_sd_stall
+  why: "a virtual power-on is slower than real time: first telemetry 4.1 s on CI, the test allows 4.0 s (#154)"
+- path: tests/hil/ams/test_block_c_fsm.py::test_c039c_charge_survives_dash_release
+  why: "its wall-clock margins are tighter than the virtual bench's power-on stalls (#154)"
+
+- path: tests/hil/ams/test_block_k_encoders.py::test_k103
+  why: "the AMS takes an IWDG reset ~98 s after boot on the virtual bench (#151)"
+
+# The Pico LTC emulator's injections (pico_emu): no virtual Pico yet (#150).
+- path: tests/hil/ams/test_block_b_safety.py::test_b022_bms_stale_trips_error
+  why: "needs pico_emu (STOP_REPLY): no virtual Pico LTC emulator yet (#150)"
+- path: tests/hil/ams/test_block_b_safety.py::test_b026_
+  why: "needs pico_emu (cell/temp injection): no virtual Pico LTC emulator yet (#150)"
+- path: tests/hil/ams/test_block_b_safety.py::test_b028_
+  why: "needs pico_emu (cell injection): no virtual Pico LTC emulator yet (#150)"
+- path: tests/hil/ams/test_block_b_safety.py::test_b029_cell_
+  why: "needs pico_emu (cell/temp injection): no virtual Pico LTC emulator yet (#150)"
+- path: tests/hil/ams/test_block_b_safety.py::test_b029_bms_stale_reason
+  why: "needs pico_emu (STOP_REPLY): no virtual Pico LTC emulator yet (#150)"
+- path: tests/hil/ams/test_block_bal.py
+  why: "needs pico_emu (cell spread): no virtual Pico LTC emulator yet (#150)"
+- path: tests/hil/ams/test_block_c_fsm.py::test_c042_cockpit_byte_per_state
+  why: "needs pico_emu (fault injection for Error): no virtual Pico LTC emulator yet (#150)"
+- path: tests/hil/ams/test_block_c_fsm.py::test_c048_ams_ok_drops_on_error
+  why: "needs pico_emu (fault injection for Error): no virtual Pico LTC emulator yet (#150)"
+- path: tests/hil/ams/test_block_d_bootloader.py::test_d051b_trigger_works_from_error
+  why: "needs pico_emu (fault injection for Error): no virtual Pico LTC emulator yet (#150)"
+- path: tests/hil/ams/test_block_e_ltc.py::test_e065
+  why: "needs pico_emu (STOP_REPLY): no virtual Pico LTC emulator yet (#150)"
+- path: tests/hil/ams/test_block_e_ltc.py::test_e066_module2_only
+  why: "needs pico_emu (STOP_REPLY): no virtual Pico LTC emulator yet (#150)"
+- path: tests/hil/ams/test_block_e_ltc.py::test_e067_pec_localisation
+  why: "needs pico_emu: no virtual Pico LTC emulator yet (#150)"
+- path: tests/hil/ams/test_block_f_relays.py::test_f063
+  why: "needs pico_emu (fault injection for Error): no virtual Pico LTC emulator yet (#150)"
+- path: tests/hil/ams/test_block_f_relays.py::test_f066
+  why: "needs pico_emu (cell-UV injection for Error): no virtual Pico LTC emulator yet (#150)"
+- path: tests/hil/ams/test_block_g_soak.py::test_g102_pec_localisation
+  why: "needs pico_emu: no virtual Pico LTC emulator yet (#150)"
+- path: tests/hil/ams/test_block_k_encoders.py::test_k100
+  why: "needs pico_emu (fault injection for Error): no virtual Pico LTC emulator yet (#150)"
+- path: tests/hil/ams/test_block_r_relays.py::test_r111_ams_ok_bit_tracks_pit_diag
+  why: "needs pico_emu (fault injection for Error): no virtual Pico LTC emulator yet (#150)"
+- path: tests/hil/ams/test_block_r_relays.py::test_r115_error_opens_all_contactors
+  why: "needs pico_emu (fault injection for Error): no virtual Pico LTC emulator yet (#150)"
+
+# Skipped on bench-01 too unless an operator does a step by hand; the virtual
+# bench could do the step itself (#152).
+- path: tests/hil/ams/test_block_s_sdcard.py::test_s142_bl_recovery_no_card
+  why: "operator-gated (AMS_SD_NOCARD=1, card out); vHIL could run it without the card (#152)"
+- path: tests/hil/ams/test_block_s_sdcard.py::test_s143_no_card_boots
+  why: "operator-gated (AMS_SD_NOCARD=1, card out); vHIL could run it without the card (#152)"
+- path: tests/hil/ams/test_block_t_sdlogger.py::test_t151_log_content_manual
+  why: "operator-gated (AMS_SD_CARD_PULL=1, read the card); vHIL could read a card image (#152)"
+- path: tests/hil/ams/test_block_t_sdlogger.py::test_t152_power_loss_durability_manual
+  why: "operator-gated (AMS_SD_CARD_PULL=1, read the card); vHIL could read a card image (#152)"
+- path: tests/hil/ams/test_block_u_microsd_multirun.py::test_u161_file_per_run_no_fragmentation
+  why: "operator-gated (card pull, AMS_SD_MOUNT); vHIL could mount a card image (#152)"
+- path: tests/hil/ams/test_block_u_microsd_multirun.py::test_u162_no_truncation_and_sealed
+  why: "operator-gated (card pull, AMS_SD_MOUNT); vHIL could mount a card image (#152)"
+- path: tests/hil/ams/test_block_j_busoff.py::test_j130_busoff_is_recovered
+  why: "operator-gated (AMS_BUSOFF_IFACE, a USB-CAN adapter); vHIL could use its FDCAN fault hooks (#152)"
+- path: tests/hil/ams/test_block_j_busoff.py::test_j131_recovery_count_increments
+  why: "operator-gated (AMS_BUSOFF_IFACE, a USB-CAN adapter); vHIL could use its FDCAN fault hooks (#152)"
+
+# Physical-only. IFS_HIL deselects all of these by default (`soak`, its
+# pyproject.toml addopts); they are listed so a `-m soak` run skips them here.
+- path: tests/hil/ams/test_block_f_flash_endurance.py
+  why: "physical-only: flash endurance and power-cut recovery of the real STM32 flash (F-070..F-081, soak): the emulated flash neither wears nor tears mid-write the way silicon does (F-077 is the #166 double-ECC brick)"
+- path: tests/hil/ams/test_block_g_soak.py::test_e05
+  why: "physical-only: 30-min idle/run soaks and 50 power cycles of the real carrier (soak)"
+- path: tests/hil/ams/test_block_can1m.py::test_m05_reboot_and_reflash
+  why: "physical-only: 1 Mbit/s bus timing and transceivers (soak); vcan has no bit timing"
+- path: tests/hil/ams/test_block_can1m.py::test_m06_zero_errors_5min
+  why: "physical-only: 1 Mbit/s sample-point error soak; vcan has no bit timing or errors"
+
+# -- Not gaps: skipped or deselected by IFS_HIL itself --------------------------
+# These need nothing from the virtual bench; they skip on bench-01 the same way.
+#   tests/hil/ams/test_block_can1m.py M01-M04: 1 Mbit/s migration reverted (AMS #351)
+#   tests/hil/ams/test_block_k_encoders.py K-101: current_heartbeat not rewired (IFS08-CE-AMS#189)
+#   tests/hil/ams/test_block_c_fsm.py C-037c: skips itself when the charger reaches
+#     Charge before the post-press 0x101 stop lands (a race the test detects)
+#   tests/hil/vcu/test_block_f_ams.py F-003: needs an acu_inject stop-stream hook (deferred)
+#
+# -- Hardware recorded as a gap, not modelled (docs/backplanes/ecu.md) ----------
+# No IFS_HIL test depends on these today; each is a bare MCU pin in the
+# emulator (wired by #148), with nothing behind it:
+#   ECU PB6, the DC-link discharge coil-interrupt: no driver on any schematic,
+#     header J3.18 only (IFS08-CE-ECU#253). M8 (#147) keeps it out of scope.
+#   ECU PB4, RTDS: unbuffered bare pin to J1.20 (IFS08-CE-ECU#254); the bench
+#     ADC readback (adc_routes) sees the logic level only, as bench-01 does.
+#   ECU PD5, S_TEMP_REFRI (1-Wire, J1.15): no firmware drives it, no sensor model.
+#   ECU PB9 / PC1 and the other spare header pins: unconnected on the backplane.
