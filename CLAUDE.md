@@ -78,18 +78,20 @@ Same model as IFS_HIL.
 ## Systems are data
 
 A system (`systems/*.yaml`) places boards from the catalogue (`catalog/`),
-gives each its firmware source (at the catalogue's ref, or the board's
+builds each one's firmware (at the catalogue's ref, or the board's
 `firmware_ref` / `bootloader_ref`), and wires them together. Every MainLite
 carries the CAN bootloader and is placed in a `role:` (ecu, ams or udv), whose
-node ID and flash bus come from the board's `roles` table
-(`catalog/boards/mainlite.yaml`). Emulator scripts (Renode `.resc` today) and
+node ID, flash bus and firmware come from the board's `roles` table
+(`catalog/boards/mainlite.yaml`); such a board names no `firmware:`, and its
+role's pin labels and routing are display and `validate` warnings only, never
+endpoint aliases. Emulator scripts (Renode `.resc` today) and
 the virtual broker's wiring are **generated** from it by `vhil/system.py`.
 Never hand-edit a generated script, and never put a car-specific name in the
 catalogue (`ecu`, not `ifs08-ecu`). Endpoints name the MainLite's own
 connectors and pins (`ams.PB9`, `ecu.FDCAN2`); which car signal each carries
-on its backplane is reference documentation in
-[`docs/backplanes/`](docs/backplanes/), not catalogue data, cited in a
-trailing comment on the endpoint. Devices (`catalog/models/`) attach to a
+on its backplane is traced in [`docs/backplanes/`](docs/backplanes/), cited in
+a trailing comment on the endpoint and copied into the roles table as a
+label. Devices (`catalog/models/`) attach to a
 board's connectors or to another device's port: the LTC6811s sit on the
 LTC6820's isoSPI chain, one per IC, in chain order. Analog sources (models
 with backend `analog`, e.g. the AMS's current sensors) drive a board's

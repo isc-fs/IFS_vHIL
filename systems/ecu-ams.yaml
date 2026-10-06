@@ -7,11 +7,12 @@ description: >-
 time:
   quantum_s: 0.0005
 boards:
-  # Each a MainLite in its role (catalog/boards/mainlite.yaml): ECU node 0x1
-  # flashed over FDCAN2, AMS node 0x2 over FDCAN1. Both boot through their
-  # CAN bootloader, as in ecu.yaml and ams.yaml.
-  ecu: {board: mainlite, role: ecu, firmware: ecu}
-  ams: {board: mainlite, role: ams, firmware: ams}
+  # Each a MainLite in its role, which sets its firmware, node ID and flash
+  # bus (catalog/boards/mainlite.yaml): ECU node 0x1 flashed over FDCAN2,
+  # AMS node 0x2 over FDCAN1. Both boot through their CAN bootloader, as in
+  # ecu.yaml and ams.yaml.
+  ecu: {board: mainlite, role: ecu}
+  ams: {board: mainlite, role: ams}
 buses:
   # As in ecu.yaml. The ACU bus is the one the two share in the car: the
   # ECU's FDCAN2 (its 0x100 heartbeat, tests/sim/test_ecu_boot.py) and the

@@ -86,7 +86,7 @@ def test_gaps_name_systems_that_exist():
 
 def _system(tmp_path, body):
     p = tmp_path / "s.yaml"
-    p.write_text("kind: system\nid: t\nboards:\n  ecu: {board: mainlite, role: ecu, firmware: ecu}\n" + body)
+    p.write_text("kind: system\nid: t\nboards:\n  ecu: {board: mainlite, role: ecu}\n" + body)
     return p
 
 
@@ -173,11 +173,11 @@ def test_ssa_2_legs_follow_the_current(tmp_path, amps, p_v, n_v):
 
 def test_port_signals_must_point_at_the_right_kind(tmp_path):
     p = tmp_path / "s.yaml"
-    p.write_text("kind: system\nid: t\nboards:\n  ecu: {board: mainlite, role: ecu, firmware: ecu}\n"
+    p.write_text("kind: system\nid: t\nboards:\n  ecu: {board: mainlite, role: ecu}\n"
                  "port:\n  step_ms: 10\n  signals:\n    apps1: {analog: ecu.PB5}\n")
     with pytest.raises(SystemError, match="is gpio, not analog"):
         System(p)
-    p.write_text("kind: system\nid: t\nboards:\n  ecu: {board: mainlite, role: ecu, firmware: ecu}\n"
+    p.write_text("kind: system\nid: t\nboards:\n  ecu: {board: mainlite, role: ecu}\n"
                  "port:\n  step_ms: 10\n  signals:\n    x: {can_tx: {bus: nope, id: 1}}\n")
     with pytest.raises(SystemError, match="no bus 'nope'"):
         System(p)
@@ -185,7 +185,7 @@ def test_port_signals_must_point_at_the_right_kind(tmp_path):
 
 def _ams(tmp_path, devices):
     p = tmp_path / "s.yaml"
-    p.write_text("kind: system\nid: t\nboards:\n  ams: {board: mainlite, role: ams, firmware: ams}\n"
+    p.write_text("kind: system\nid: t\nboards:\n  ams: {board: mainlite, role: ams}\n"
                  "devices:\n" + devices)
     return p
 
@@ -216,8 +216,8 @@ def test_each_board_sets_its_image_inside_its_own_machine(tmp_path):
     each $elf_<board> must follow its own `mach create`."""
     p = tmp_path / "s.yaml"
     p.write_text("kind: system\nid: t\nboards:\n"
-                 "  ecu: {board: mainlite, role: ecu, firmware: ecu}\n"
-                 "  ams: {board: mainlite, role: ams, firmware: ams}\n"
+                 "  ecu: {board: mainlite, role: ecu}\n"
+                 "  ams: {board: mainlite, role: ams}\n"
                  "buses:\n  can_acu: {kind: can, nodes: [ecu.FDCAN2, ams.FDCAN1]}\n")
     lines = System(p).render_renode({"ecu": Path("/fw/ecu.elf"), "ams": Path("/fw/ams.elf")}).splitlines()
     for board in ("ecu", "ams"):
@@ -241,7 +241,7 @@ def test_an_i2c_model_must_place_its_targets(tmp_path):
 def _wp_system(tmp_path, sectors):
     p = tmp_path / "wp.yaml"
     p.write_text("kind: system\nid: wp\nboards:\n"
-                 f"  ecu: {{board: mainlite, role: ecu, firmware: ecu, write_protect: {sectors}}}\n")
+                 f"  ecu: {{board: mainlite, role: ecu, write_protect: {sectors}}}\n")
     return p
 
 
@@ -292,7 +292,7 @@ def test_a_board_without_firmware_ref_builds_the_catalogue_ref(tmp_path, monkeyp
 def test_firmware_ref_overrides_the_catalogue_and_build_ref_overrides_both(tmp_path, monkeypatch):
     p = tmp_path / "r.yaml"
     p.write_text("kind: system\nid: r\nboards:\n"
-                 "  ecu: {board: mainlite, role: ecu, firmware: ecu, firmware_ref: feat/x,"
+                 "  ecu: {board: mainlite, role: ecu, firmware_ref: feat/x,"
                  " bootloader_ref: v1.6.2}\n")
     s = System(p)
     assert s.boards["ecu"].ref() == "feat/x" and s.boards["ecu"].ref("bootloader") == "v1.6.2"
@@ -313,7 +313,7 @@ def _catalog_with(tmp_path, old, new):
 def test_a_bootloader_ref_needs_a_board_that_carries_one(tmp_path):
     p = tmp_path / "r.yaml"
     p.write_text("kind: system\nid: r\nboards:\n"
-                 "  ecu: {board: mainlite, role: ecu, firmware: ecu, bootloader_ref: v1.6.2}\n")
+                 "  ecu: {board: mainlite, role: ecu, bootloader_ref: v1.6.2}\n")
     System(p)                                   # mainlite carries one
     with pytest.raises(SystemError, match="bootloader_ref needs a bootloader"):
         System(p, _catalog_with(tmp_path, "bootloader: can-bootloader\n", ""))
@@ -337,14 +337,148 @@ def test_every_mainlite_boots_through_the_can_bootloader(path):
 
 def test_the_mainlite_roles_are_the_cars():
     roles = yaml.safe_load((REPO / "catalog" / "boards" / "mainlite.yaml").read_text())["roles"]
-    assert roles == {"ecu": {"node_id": 1, "flash_bus": "FDCAN2"},
-                     "ams": {"node_id": 2, "flash_bus": "FDCAN1"},
-                     "udv": {"node_id": 3, "flash_bus": "FDCAN2"}}
+    assert {r: (v["node_id"], v["flash_bus"], v["firmware"]) for r, v in roles.items()} == {
+        "ecu": (1, "FDCAN2", "ecu"), "ams": (2, "FDCAN1", "ams"), "udv": (3, "FDCAN2", "udv")}
+
+
+# The pins each backplane routes, with the car signal each carries
+# (docs/backplanes/{ecu,ams,udv}.md, pin map tables). Display only.
+PIN_LABELS = {
+    "ecu": {"FDCAN1": "CAN_INV", "FDCAN2": "CAN_ACU", "FDCAN3": "CAN_DASH", "SPI1": "NRF24",
+            "PB4": "RTDS", "PB5": "START", "PF7": "S_BRAKE", "PF8": "APPS_1", "PF9": "APPS_2",
+            "PB9": "SPARE_J3", "PC1": "SPARE_J3"},
+    "ams": {"FDCAN1": "CAN_ACU", "SPI1": "LTC6820", "PB9": "LTC6820_CS", "PB4": "AMS_OK",
+            "PB5": "AIR_P", "PF7": "S_CURRENT_P", "PF8": "S_CURRENT_N", "PF9": "TSMS",
+            "PC1": "S_CURRENT_DCDC"},
+    "udv": {"FDCAN1": "CAN_DV", "FDCAN2": "CAN_ACU", "PB4": "EBS_VALVE1", "PB5": "EBS_VALVE2",
+            "PB9": "ASSI_BLUE", "PF7": "EBS_PRES1", "PF8": "EBS_PRES2", "PF9": "EBS_24V",
+            "PC1": "DEBUG_LED"},
+}
+
+
+def test_each_role_labels_the_pins_its_backplane_routes():
+    board = yaml.safe_load((REPO / "catalog" / "boards" / "mainlite.yaml").read_text())
+    for role, labels in PIN_LABELS.items():
+        assert board["roles"][role]["pins"] == labels, role
+        assert board["roles"][role]["backplane"]["doc"] == f"docs/backplanes/{role}.md"
+        assert (REPO / board["roles"][role]["backplane"]["doc"]).is_file()
+    assert board["onboard"] == {"SDMMC1": "microSD", "I2C2": "BMI088"}
+
+
+def test_the_role_sets_the_firmware(tmp_path):
+    p = tmp_path / "r.yaml"
+    p.write_text("kind: system\nid: r\nboards:\n  a: {board: mainlite, role: ams}\n"
+                 "  b: {board: mainlite, role: ecu}\n")
+    s = System(p)
+    assert s.boards["a"].firmware["id"] == "ams" and s.boards["b"].firmware["id"] == "ecu"
+
+
+@pytest.mark.parametrize("firmware", ["ecu", "ams"])
+def test_a_system_names_no_firmware_for_a_board_in_a_role(tmp_path, firmware):
+    """Even one that agrees: the role is the only place it is said."""
+    p = tmp_path / "r.yaml"
+    p.write_text(f"kind: system\nid: r\nboards:\n  a: {{board: mainlite, role: ecu, "
+                 f"firmware: {firmware}}}\n")
+    with pytest.raises(SystemError, match="the ecu role sets the firmware \\(ecu\\)"):
+        System(p)
+
+
+def test_a_role_without_catalogue_firmware_is_refused_by_name(tmp_path):
+    p = tmp_path / "r.yaml"
+    p.write_text("kind: system\nid: r\nboards:\n  dv: {board: mainlite, role: udv}\n")
+    with pytest.raises(SystemError, match="role udv has no firmware in the catalogue yet"):
+        System(p)
+
+
+def test_a_board_without_roles_names_its_firmware(tmp_path):
+    catalog = tmp_path / "catalog"
+    shutil.copytree(REPO / "catalog", catalog)
+    board = yaml.safe_load((catalog / "boards" / "mainlite.yaml").read_text())
+    for key in ("roles", "bootloader"):
+        del board[key]
+    board["id"] = "plain"
+    (catalog / "boards" / "plain.yaml").write_text(yaml.safe_dump(board))
+    p = tmp_path / "r.yaml"
+    p.write_text("kind: system\nid: r\nboards:\n  a: {board: plain, firmware: ams}\n")
+    assert System(p, catalog).boards["a"].firmware["id"] == "ams"
+    p.write_text("kind: system\nid: r\nboards:\n  a: {board: plain}\n")
+    with pytest.raises(SystemError, match="has no roles, so it needs a firmware"):
+        System(p, catalog)
+
+
+@pytest.mark.parametrize("path", SYSTEMS, ids=lambda p: p.name)
+def test_the_systems_wire_only_routed_pins(path):
+    assert System(path).warnings == []
+
+
+def test_an_unrouted_pin_is_a_warning_not_an_error(tmp_path, capsys):
+    from vhil.system import main
+    p = _ams(tmp_path, "  i: {model: acs758lcb-050b, outputs: {out: ams.PF8}}\n")
+    p.write_text(p.read_text() + "buses:\n  x: {kind: can, nodes: [ams.FDCAN3]}\n"
+                 "  y: {kind: can, nodes: [ams.FDCAN2]}\n")
+    s = System(p)
+    assert s.warnings == [
+        "ams: FDCAN3 is not connected on the AMS backplane (docs/backplanes/ams.md)",
+        "ams: FDCAN2 is not connected on the AMS backplane (docs/backplanes/ams.md)"]
+    assert main(["validate", str(p)]) == 0
+    out = capsys.readouterr()
+    assert ": OK (ams)" in out.out
+    assert "warning: " in out.err and "FDCAN3 is not connected on the AMS backplane" in out.err
+
+
+def test_onboard_connectors_are_routed_in_every_role(tmp_path):
+    s = System(_ams(tmp_path, "  sd: {model: sd-card, sdmmc: ams.SDMMC1}\n"
+                              "  imu: {model: bmi088, i2c: ams.I2C2}\n"))
+    assert s.warnings == []
+
+
+def test_a_role_rekinds_an_analog_pin_as_gpio(tmp_path):
+    """On the AMS backplane PF9 is TSMS, a digital input: a GPIO there, an
+    analog input on the ECU (APPS_2)."""
+    p = tmp_path / "r.yaml"
+    p.write_text("kind: system\nid: r\nboards:\n  ams: {board: mainlite, role: ams}\n"
+                 "  ecu: {board: mainlite, role: ecu}\n"
+                 "port:\n  step_ms: 10\n  signals:\n    tsms: {gpio_in: ams.PF9}\n"
+                 "    apps2: {analog: ecu.PF9}\n")
+    s = System(p)
+    assert s.resolve("ams.PF9")[1:] == ("gpio", {"port": "sysbus.gpioPortF", "pin": 9})
+    assert s.resolve("ecu.PF9")[1] == "analog"
+    p.write_text("kind: system\nid: r\nboards:\n  ams: {board: mainlite, role: ams}\n"
+                 "devices:\n  i: {model: acs758lcb-050b, outputs: {out: ams.PF9}}\n")
+    with pytest.raises(SystemError, match="which is gpio, not an analog input"):
+        System(p)
+
+
+@pytest.mark.parametrize("old, new, message", [
+    # The schema refuses a label, a firmware id or a page that isn't one
+    # (test_injection checks System() refuses them without it); System()
+    # what the schema can't see.
+    ("      PF8: APPS_1 ", "      PF8: 'APPS 1' ", "not valid under any"),
+    ("  SDMMC1: microSD", "  SDMMC1: 'micro\"SD'", "not valid under any"),
+    ("    firmware: udv\n", "    firmware: ../udv\n", "not valid under any"),
+    ("doc: docs/backplanes/udv.md", "doc: ../../etc/passwd", "not valid under any"),
+    ("      PF8: APPS_1 ", "      PX9: APPS_1 ", "role ecu labels 'PX9', which it lacks"),
+    ("      PF9: {port: sysbus.gpioPortF, pin: 9}", "      PB4: {port: sysbus.gpioPortB, pin: 4}",
+     "makes 'PB4' a GPIO, but the board models no analog input"),
+])
+def test_the_roles_table_is_checked(tmp_path, old, new, message):
+    with pytest.raises(SystemError, match=message):
+        System(REPO / "systems" / "ecu.yaml", _catalog_with(tmp_path, old, new))
+
+
+def test_built_images_name_the_source_dir_by_ref(tmp_path):
+    from vhil.system import built_images, image_path
+    fw = {"id": "ecu", "build": {"elf": "build/ECU08.elf"}}
+    elf = image_path(tmp_path, fw, "feat/x")
+    assert elf == tmp_path / "ecu@feat_x" / "build" / "ECU08.elf"
+    assert built_images(tmp_path) == {}
+    (tmp_path / "built.txt").write_text(f"ecu={elf}\nnot a line\n")
+    assert built_images(tmp_path) == {elf.resolve(): "ecu"}
 
 
 @pytest.mark.parametrize("entry, message", [
-    ("{board: mainlite, firmware: ecu}", "needs a role \\(ecu, ams, udv\\)"),
-    ("{board: mainlite, role: dash, firmware: ecu}", "'role': 'dash'"),
+    ("{board: mainlite}", "needs a role \\(ecu, ams, udv\\)"),
+    ("{board: mainlite, role: dash}", "'role': 'dash'"),
 ])
 def test_a_mainlite_needs_one_of_its_roles(tmp_path, entry, message):
     p = tmp_path / "r.yaml"
@@ -356,13 +490,13 @@ def test_a_mainlite_needs_one_of_its_roles(tmp_path, entry, message):
 def test_node_id_is_the_roles_not_a_system_field(tmp_path):
     p = tmp_path / "r.yaml"
     p.write_text("kind: system\nid: r\nboards:\n"
-                 "  ecu: {board: mainlite, role: ecu, firmware: ecu, node_id: 5}\n")
+                 "  ecu: {board: mainlite, role: ecu, node_id: 5}\n")
     with pytest.raises(SystemError, match="node_id"):        # schema: no such field
         System(p)
 
 
 def test_a_roles_flash_bus_must_be_a_can_connector(tmp_path):
-    catalog = _catalog_with(tmp_path, "flash_bus: FDCAN1}", "flash_bus: PB4}")
+    catalog = _catalog_with(tmp_path, "    flash_bus: FDCAN1\n", "    flash_bus: PB4\n")
     with pytest.raises(SystemError, match="role ams's flash_bus 'PB4' is not one of its CAN"):
         System(REPO / "systems" / "ecu.yaml", catalog)
 
@@ -376,6 +510,6 @@ def test_an_unprovisioned_board_leaves_the_seed_erased():
 def test_an_empty_firmware_ref_is_a_schema_error(tmp_path):
     p = tmp_path / "r.yaml"
     p.write_text("kind: system\nid: r\nboards:\n"
-                 "  ecu: {board: mainlite, role: ecu, firmware: ecu, firmware_ref: ''}\n")
+                 "  ecu: {board: mainlite, role: ecu, firmware_ref: ''}\n")
     with pytest.raises(SystemError):
         System(p)

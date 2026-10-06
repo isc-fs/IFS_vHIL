@@ -501,3 +501,97 @@ class _Dir:
 
     def __exit__(self, *exc):
         pass
+
+
+# -- roles: labels, GPIO re-kinds, firmware refs from a remote ----------------------
+
+def _mainlite() -> dict:
+    return yaml.safe_load((REPO / "catalog" / "boards" / "mainlite.yaml").read_text())
+
+
+@pytest.mark.parametrize("value", HOSTILE)
+@pytest.mark.parametrize("where", ["pin label", "onboard label", "role firmware",
+                                   "backplane page"])
+def test_a_hostile_roles_table_is_refused_without_the_schema(value, where):
+    """The catalogue's labels, role firmware and backplane page are checked
+    by System() too, so a schema that loosens lets none of them through."""
+    board = _mainlite()
+    if where == "pin label":
+        board["roles"]["ecu"]["pins"]["PF8"] = value
+    elif where == "onboard label":
+        board["onboard"]["SDMMC1"] = value
+    elif where == "role firmware":
+        board["roles"]["udv"]["firmware"] = value
+    else:
+        board["roles"]["ams"]["backplane"]["doc"] = value
+    plain = {"pin label": vsystem.LABEL, "onboard label": vsystem.LABEL,
+             "role firmware": vsystem.ID, "backplane page": vsystem.BACKPLANE_DOC}[where]
+    if plain.fullmatch(value):
+        System.check_board_roles(board)       # a plain word is just a label
+        return
+    with pytest.raises(SystemError):
+        System.check_board_roles(board)
+
+
+@pytest.mark.parametrize("value", HOSTILE)
+def test_a_hostile_label_never_reaches_a_system_file(value):
+    """Labels are display only: whatever an interface reads, the system file
+    the editor writes names the pin."""
+    from vhil import editor
+    spec = editor.specification()
+    doc = yaml.safe_load(AMS.read_text())
+    graph = editor.to_dataflow(doc, spec)
+    for n in graph["graphs"][0]["nodes"]:
+        for i in n["interfaces"]:
+            if n["name"].startswith("mainlite") and " · " in i["name"]:
+                i["name"] = f"{editor.pin_of(i['name'])} · {value}"
+    assert editor.from_dataflow(graph, spec) == doc
+
+
+@pytest.mark.parametrize("value", HOSTILE)
+def test_a_hostile_gpio_rekind_port_is_refused_or_inert(tmp_path, value):
+    """A role's GPIO re-kind lands in the script only through a device's
+    chip select, as a board GPIO's does: through the path encoder."""
+    def catalog_with(port: str, where: Path) -> Path:
+        shutil.copytree(REPO / "catalog", where)
+        board = _mainlite()
+        board["roles"]["ams"]["gpio"]["PF9"]["port"] = port
+        (where / "boards" / "mainlite.yaml").write_text(yaml.safe_dump(board, sort_keys=False))
+        return where
+
+    doc = yaml.safe_load(AMS.read_text())
+    doc["devices"]["isospi"]["cs"] = "ams.PF9"
+    path = _write(tmp_path, doc, "ams.yaml")
+    images = {"ams": Path("/fw/ams.elf")}
+    try:
+        text = System(path, catalog_with(value, tmp_path / "hostile")).render_renode(
+            images, socketcan=True)
+    except (SystemError, UnsafeText):
+        return
+    clean = System(path, catalog_with("sysbus.gpioPortF", tmp_path / "clean"))
+    # The port is a value: one peripheral path, alone on its line (a plain
+    # one, like sysbus.cpu, names another peripheral but adds nothing).
+    port = lambda s: [re.sub(r"^[A-Za-z_][\w.]*:$", "PORT:", line) for line in structure(s)]
+    assert port(text) == port(clean.render_renode(images, socketcan=True)), value
+
+
+@pytest.mark.parametrize("value", HOSTILE + ["--upload-pack=touch /tmp/x", "a..b", "x\x00y"])
+def test_a_remote_ref_name_reaches_nothing_unless_a_system_could_hold_it(value):
+    """git ls-remote output is the remote's: a branch or tag name that isn't
+    a plain git ref (vhil.system.REF, what a firmware_ref may be) is dropped
+    before the picker ever offers it."""
+    from vhil.server.githost import parse_ls_remote
+    sha = "a" * 40
+    got = parse_ls_remote(f"{sha}\trefs/heads/{value}\n{sha}\trefs/tags/{value}\n")
+    names = [r["name"] for kind in ("branches", "tags") for r in got[kind]]
+    assert all(vsystem.REF.fullmatch(n) for n in names)
+    if vsystem.REF.fullmatch(value):
+        assert names == [value, value]
+    else:
+        assert value not in names
+
+
+@pytest.mark.parametrize("value", HOSTILE)
+def test_a_hostile_remote_sha_is_dropped(value):
+    from vhil.server.githost import parse_ls_remote
+    assert parse_ls_remote(f"{value}\trefs/heads/dev\n") == {"branches": [], "tags": []}
