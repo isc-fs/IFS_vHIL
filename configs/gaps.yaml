@@ -10,7 +10,7 @@
 #          "physical-only" and why only real hardware can answer it
 # systems: (optional) the system ids it applies to; default every system
 #
-# Last full runs (IFS_HIL dev fa11a25; AMS main df1c961, ECU dev 544b651):
+# Last full runs (IFS_HIL dev fa11a25; AMS main df1c961, ECU dev 544b651),
 # AMS `full` on systems/ams.yaml and ECU `full` on systems/ecu.yaml. The tail
 # of this file lists what IFS_HIL itself skips or deselects; those are not
 # gaps.
@@ -68,6 +68,13 @@
   why: "physical-only: analog accuracy. The firmware's current gain and zero (AMS #350) are commissioned on bench-01's own sensor front-end and VREF; the virtual ADC is ideal and reads -200 A as -218 A"
 - path: tests/hil/ams/test_block_i_current.py::test_j102_under_limit_does_not_trip
   why: "physical-only: analog accuracy. 190 A reads above the 200 A trip through the bench-commissioned gain (see I-100)"
+
+- path: tests/hil/ams/test_block_d_bootloader.py::test_d050
+  why: "a virtual power-on is slower than real time: first telemetry 3.4-4.1 s of wall time after K_n close, the test allows 3 s (#154)"
+- path: tests/hil/ams/test_block_s_sdcard.py::test_s144_boot_time_no_sd_stall
+  why: "a virtual power-on is slower than real time: first telemetry 4.1 s on CI, the test allows 4.0 s (#154)"
+- path: tests/hil/ams/test_block_c_fsm.py::test_c039c_charge_survives_dash_release
+  why: "its wall-clock margins are tighter than the virtual bench's power-on stalls (#154)"
 
 - path: tests/hil/ams/test_block_k_encoders.py::test_k103
   why: "the AMS takes an IWDG reset ~98 s after boot on the virtual bench (#151)"
