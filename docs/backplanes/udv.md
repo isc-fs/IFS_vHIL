@@ -48,10 +48,13 @@ No uDV system exists yet, and none can until the catalogue has the uDV's
 firmware: the udv role names `udv`, which `catalog/firmware/` lacks, so a
 system placing it is refused. When one is added, its endpoints will name
 these MainLite pins (`udv.FDCAN2` for the ACU bus, and so on). The MainLite
-models PC1 as an analog input, but on MicroDV2 it is a debug LED output, so
-the udv role makes it a GPIO (`gpio: PC1`) and refuses an analog source on
-it. PB6–PB8, PF10, PC0 and PC2 (`PC2_C`) are `unwired` on the board: shown in
-the editor, refused by `validate` as not emulated yet.
+models PC1 and PC2 (`PC2_C`) as analog inputs, but on MicroDV2 they drive
+debug LEDs, so the udv role makes them GPIOs (`gpio: PC1`, `PC2_C`: GPIOC
+pins 1 and 2) and refuses an analog source on them. PB6–PB8 are GPIOs, and
+PF10 and PC0 ADC3 INP6 and INP10, the channels `uDV.ioc` gives A4 and A5.
+The firmware configures PC2_C as ADC3 INP0 (A7), not the LED's output
+([#7](https://github.com/isc-fs/IFS09-DV-uDV/issues/7)); in the udv role it
+is a GPIO endpoint all the same, as the backplane uses it.
 
 ## Known gotchas
 
