@@ -12,7 +12,7 @@ import threading
 from pathlib import Path
 
 from vhil import renode as rn
-from vhil.broker import make_backend, watch_pacing
+from vhil.broker import make_backend, probe_commands, watch_pacing
 from vhil.renode import RenodeMonitor
 from vhil.system import System
 
@@ -79,6 +79,9 @@ class VirtualBench:
         # runs so virtual time stays paced to host time (see broker.py). The
         # suite's relay fixture powers them, which resets them.
         config = self.system.bench_config()
+        # GPIO probes for the bench's TCA -> GPIO and GPIO -> ADC routes.
+        for command in probe_commands(config):
+            m.execute(command)
         m.execute("start")
         for entry in config.get("power", []):
             m.execute(f"mach set {rn.quote(rn.ident(entry['machine']))}")

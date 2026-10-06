@@ -517,7 +517,7 @@
         },
         "bench": {
           "type": "object",
-          "description": "IFS_HIL bench compatibility: what the virtual broker maps the physical bench's relays, current monitors and DACs to.",
+          "description": "IFS_HIL bench compatibility: what the virtual broker maps the physical bench's relays, current monitors, DACs, I/O expander pins and ADCs to.",
           "additionalProperties": false,
           "properties": {
             "power": {
@@ -590,6 +590,67 @@
                     "minimum": 0
                   },
                   "to": {
+                    "$ref": "#/$defs/endpoint"
+                  }
+                }
+              }
+            },
+            "gpio_routes": {
+              "type": "array",
+              "description": "Bench TCA9555 output pins wired to a board's GPIO inputs: the virtual broker drives the input with the pin's level while the TCA drives it (direction output), else low.",
+              "items": {
+                "type": "object",
+                "required": [
+                  "tca",
+                  "port",
+                  "pin",
+                  "to"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "tca": {
+                    "type": "integer",
+                    "minimum": 32,
+                    "maximum": 39
+                  },
+                  "port": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  "pin": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 7
+                  },
+                  "to": {
+                    "$ref": "#/$defs/endpoint"
+                  }
+                }
+              }
+            },
+            "adc_routes": {
+              "type": "array",
+              "description": "Bench MCP3208 channels tapping a board's GPIO outputs: the virtual broker answers a read of the channel with the pin's live level (0 or 3.3 V), and 0 V while the board is unpowered.",
+              "items": {
+                "type": "object",
+                "required": [
+                  "adc",
+                  "channel",
+                  "from"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "adc": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "channel": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 7
+                  },
+                  "from": {
                     "$ref": "#/$defs/endpoint"
                   }
                 }

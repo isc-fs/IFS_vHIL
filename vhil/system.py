@@ -297,6 +297,10 @@ class System:
             need(NAME, c["board"], "bench power board")
         for r in self.bench.get("dac_routes", []):
             need(ENDPOINT, r["to"], "DAC route")
+        for r in self.bench.get("gpio_routes", []):
+            need(ENDPOINT, r["to"], "GPIO route")
+        for r in self.bench.get("adc_routes", []):
+            need(ENDPOINT, r["from"], "ADC route")
 
     # -- device params --------------------------------------------------------
 
@@ -592,6 +596,32 @@ class System:
             _, kind, _ = self.resolve(r["to"])
             if kind != "analog":
                 raise SystemError(f"DAC route to '{r['to']}': not an analog input")
+        # A TCA pin either powers a board or drives one GPIO; an ADC channel
+        # reads one GPIO.
+        relays = {(c["relay"]["addr"], c["relay"]["port"], c["relay"]["pin"])
+                  for c in self.bench.get("power", [])}
+        seen: set = set()
+        for r in self.bench.get("gpio_routes", []):
+            key = (r["tca"], r["port"], r["pin"])
+            where = f"GPIO route from TCA {r['tca']:#04x} port {r['port']} pin {r['pin']}"
+            if key in relays:
+                raise SystemError(f"{where}: that pin is a board's power relay")
+            if key in seen:
+                raise SystemError(f"{where}: routed twice")
+            seen.add(key)
+            _, kind, _ = self.resolve(r["to"])
+            if kind != "gpio":
+                raise SystemError(f"GPIO route to '{r['to']}': {kind}, not a GPIO")
+        seen = set()
+        for r in self.bench.get("adc_routes", []):
+            key = (r["adc"], r["channel"])
+            if key in seen:
+                raise SystemError(f"ADC route on ADC {r['adc']} channel {r['channel']}: "
+                                  f"routed twice")
+            seen.add(key)
+            _, kind, _ = self.resolve(r["from"])
+            if kind != "gpio":
+                raise SystemError(f"ADC route from '{r['from']}': {kind}, not a GPIO")
         self.warnings = self._routing_warnings()
 
     def endpoints(self) -> list[str]:
@@ -603,6 +633,8 @@ class System:
         for spec in self.doc.get("port", {}).get("signals", {}).values():
             used += [v for k, v in spec.items() if k not in ("can_rx", "can_tx")]
         used += [r["to"] for r in self.bench.get("dac_routes", [])]
+        used += [r["to"] for r in self.bench.get("gpio_routes", [])]
+        used += [r["from"] for r in self.bench.get("adc_routes", [])]
         return list(dict.fromkeys(used))
 
     def _routing_warnings(self) -> list[str]:
@@ -883,7 +915,25 @@ class System:
             board, _, target = self.resolve(r["to"])
             routes.append({"dac": r["dac"], "channel": r["channel"], "machine": board.name,
                            "adc": target["adc"], "adc_channel": target["channel"]})
-        return {"power": power, "dac_routes": routes}
+        config = {"power": power, "dac_routes": routes}
+        # Present only in a system that routes them, so the others' wiring
+        # stays as it was.
+        if "gpio_routes" in self.bench:
+            config["gpio_routes"] = []
+            for r in self.bench["gpio_routes"]:
+                board, _, target = self.resolve(r["to"])
+                config["gpio_routes"].append(
+                    {"tca": r["tca"], "port": r["port"], "pin": r["pin"],
+                     "machine": board.name, "gpio_port": target["port"],
+                     "gpio_pin": target["pin"]})
+        if "adc_routes" in self.bench:
+            config["adc_routes"] = []
+            for r in self.bench["adc_routes"]:
+                board, _, target = self.resolve(r["from"])
+                config["adc_routes"].append(
+                    {"adc": r["adc"], "channel": r["channel"], "machine": board.name,
+                     "gpio_port": target["port"], "gpio_pin": target["pin"]})
+        return config
 
     def build_firmware(self, workdir: Path, refs: dict[str, str] | None = None,
                        log=print) -> dict[str, Path]:
