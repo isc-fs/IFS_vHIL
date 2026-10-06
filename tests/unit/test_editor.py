@@ -194,6 +194,34 @@ def test_write_protect_is_not_on_the_node(spec):
     assert props["write_protect"]["hidden"] is True
 
 
+PM_METADATA_SCHEMA = Path(os.environ.get("PM_DIR", "/opt/pm")) / "pipeline_manager" / \
+    "resources" / "schemas" / "metadata_schema.json"
+
+
+def test_every_interface_type_and_category_is_styled(spec):
+    """A wire with no entry would fall back to Pipeline Manager's white,
+    and a node type with no style to its default header."""
+    meta = spec["metadata"]
+    types = {i["type"] for n in spec["nodes"] for i in n["interfaces"] + n.get("interfaceGroups", [])
+             if "type" in i}
+    assert types <= set(meta["interfaces"]), types - set(meta["interfaces"])
+    for n in spec["nodes"]:
+        assert n["style"] == n["category"] and n["style"] in meta["styles"], n["name"]
+    assert meta["welcome"] is False and meta["newNodeType"] is False
+
+
+@pytest.mark.skipif(not PM_METADATA_SCHEMA.exists(),
+                    reason="Pipeline Manager not installed (the ifs-vhil-editor image has it)")
+def test_the_metadata_is_what_pipeline_manager_takes(spec):
+    """Every key against the pinned release's own schema: an unknown key
+    fails its load."""
+    import json
+
+    import jsonschema
+    schema = json.loads(PM_METADATA_SCHEMA.read_text())
+    jsonschema.validate(spec["metadata"], schema)
+
+
 @pytest.mark.parametrize("path", SYSTEMS, ids=lambda p: p.name)
 def test_write_protect_survives_the_round_trip(spec, path):
     doc = yaml.safe_load(path.read_text())

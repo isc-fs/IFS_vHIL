@@ -72,6 +72,34 @@ BOARD_PITCH = 900
 # about as wide as it is tall.
 BOARD_WIDTH = 520
 
+# The canvas look (docs/architecture/editor-workspace.md, "Tokens"), in
+# what Pipeline Manager v0.5.2's metadata takes (its
+# resources/schemas/metadata_schema.json): a port's and its wire's colour and
+# pattern per interface type, and a header colour, icon and pill per node
+# category. Wire colours follow the type, never status: CAN is the amber
+# backbone, analog teal so it isn't read as "ok" green, GPIO a dotted grey.
+_WIRES = {"can": ("#f59f00", "solid"), "spi": ("#4dabf7", "solid"),
+          "isospi": ("#4dabf7", "solid"), "i2c": ("#3bc9db", "solid"),
+          "sdmmc": ("#9775fa", "solid"), "uart": ("#e599f7", "solid"),
+          "gpio": ("#adb5bd", "dotted"), "analog": ("#20c997", "dashed")}
+# Category -> (header colour, built-in icon, pill). Headers are the raised
+# surface (--bg-3); the pill names the kind in its wire colour.
+_CATEGORY_STYLES = {"Boards": ("#262c36", "Cube", {"text": "board", "color": "#4c8dff"}),
+                    "Buses": ("#262c36", "Backend", {"text": "CAN", "color": "#f59f00"}),
+                    "Models": ("#1d222a", "Cogwheel", {"text": "device", "color": "#adb5bd"})}
+CANVAS_METADATA = {
+    "interfaces": {t: {"interfaceColor": c, "interfaceConnectionColor": c,
+                       "interfaceConnectionPattern": p} for t, (c, p) in _WIRES.items()},
+    "styles": {cat: {"color": c, "icon": i, "pill": pill}
+               for cat, (c, i, pill) in _CATEGORY_STYLES.items()},
+    # --bg-0, a 24 px grid and an 8 px snap (the 4 px spacing grid, doubled).
+    "backgroundColor": "#0f1115", "backgroundSize": 24, "movementStep": 8,
+    # A system is opened by the shell, never dropped in as a file, and node
+    # types come from the catalogue: no welcome panel, no "new node type" or
+    # "new graph" entries in the palette.
+    "welcome": False, "newGraphNode": False, "newNodeType": False,
+}
+
 # Board catalogue section -> interface type. A board's pins are two columns:
 # on the left what devices attach to (they sit to its left in a graph: SPI,
 # UART, SDMMC, I2C, analog inputs), on the right the CAN connectors (the
@@ -273,8 +301,8 @@ def specification(catalog: Path = CATALOG) -> dict:
                "description": "Branch or tag of the firmware to build (empty: the catalogue's)."}
         if not roles:
             nodes.append({
-                "name": board_id, "category": "Boards", "layer": "board", "width": BOARD_WIDTH,
-                "twoColumn": True,
+                "name": board_id, "category": "Boards", "style": "Boards", "layer": "board",
+                "width": BOARD_WIDTH, "twoColumn": True,
                 "description": board.get("description", ""),
                 "interfaces": _rows([_iface(name, kind)
                                      for _, name, kind in _readings(board, None)]),
@@ -288,8 +316,8 @@ def specification(catalog: Path = CATALOG) -> dict:
         first, role = next(iter(roles.items()))
         interfaces, groups = _role_interfaces(board)
         nodes.append({
-            "name": board_id, "category": "Boards", "layer": "board", "width": BOARD_WIDTH,
-            "twoColumn": True,
+            "name": board_id, "category": "Boards", "style": "Boards", "layer": "board",
+            "width": BOARD_WIDTH, "twoColumn": True,
             "description": _role_description(board, firmware_docs),
             "interfaces": interfaces, "interfaceGroups": groups,
             "defaultInterfaceGroups": role_interfaces(board, first)[1],
@@ -309,7 +337,7 @@ def specification(catalog: Path = CATALOG) -> dict:
                                                   for n, r in roles.items()}}},
         })
     nodes.append({
-        "name": BUS_NODE, "category": "Buses", "layer": "bus",
+        "name": BUS_NODE, "category": "Buses", "style": "Buses", "layer": "bus",
         "description": "A CAN bus. Connect every node's CAN connector to it.",
         "interfaces": [{"name": "bus", "type": "can", "direction": "inout",
                         "maxConnectionsCount": -1,
@@ -337,7 +365,7 @@ def specification(catalog: Path = CATALOG) -> dict:
             properties.insert(0, {"name": "count", "type": "integer", "default": 1, "min": 1,
                                   "description": "Identical chips in a row on the port."})
         nodes.append({
-            "name": model_id, "category": "Models", "layer": "model",
+            "name": model_id, "category": "Models", "style": "Models", "layer": "model",
             "description": model.get("description", ""),
             "interfaces": interfaces, "properties": properties,
             "additionalData": {"vhil": {"kind": "model"}},
@@ -346,7 +374,7 @@ def specification(catalog: Path = CATALOG) -> dict:
             # notifyWhenChanged: the frontend tells the backend of each edit,
             # so it can relabel a board whose role changes (properties_on_change).
             "metadata": {"connectionStyle": "orthogonal", "twoColumn": True,
-                         "notifyWhenChanged": True},
+                         "notifyWhenChanged": True, **CANVAS_METADATA},
             "nodes": nodes}
 
 
