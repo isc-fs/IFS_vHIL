@@ -1227,6 +1227,12 @@ export const createBaklavaInterfaces = (parsedInterfaces) => {
         return () => {
             const baklavaIntf = new NodeInterface(intf.name);
             Object.assign(baklavaIntf, intf);
+            // Each instance owns its bus: Object.assign shares the type's
+            // object, so every node of the type would hold the stubs of the
+            // last one loaded (and connections to the others would dangle).
+            if (intf.bus) {
+                baklavaIntf.bus = { ...intf.bus, stubs: intf.bus.stubs?.map((s) => ({ ...s })) };
+            }
             return baklavaIntf;
         };
     }
