@@ -215,6 +215,21 @@
             }
           }
         },
+        "pin_model": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]*\\.pins\\.yaml$(?![\\s\\S])",
+          "description": "The board's published pin model, a file in catalog/pin-models/ (vhil/pin_model.py): the source of truth for which of its pins exist and leave the module. Every connector and pin of the board must leave it (or be `onboard`), and every pin it routes to the backplane must be a connector or pin of the board."
+        },
+        "unwired": {
+          "type": "object",
+          "description": "Pins and peripherals that leave the module (pin model) but that the emulator does not wire yet, with their kind: the editor offers them, and a system that wires one is refused as not emulated yet.",
+          "propertyNames": {
+            "$ref": "#/$defs/name"
+          },
+          "additionalProperties": {
+            "enum": ["gpio", "analog", "uart"]
+          }
+        },
         "vbat": {
           "type": "boolean",
           "description": "Whether the board backs the MCU's backup domain (VBAT). Without it a power cut wipes the RTC backup registers; default true, Renode's behaviour."
