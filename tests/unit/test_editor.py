@@ -428,7 +428,8 @@ def test_every_bus_carries_its_own_stubs(spec, path):
     """Each bus node holds exactly the stubs its connections end on, under
     IDs no other bus uses, and the node type holds none: stubs belong to an
     instance. (Pipeline Manager v0.5.2 shared the type's `bus` object between
-    instances, so a second bus wiped the first's stubs on load: docker/pm/.)"""
+    instances, so a second bus wiped the first's stubs on load: bus-per-instance
+    in editor/pipeline-manager/CHANGELOG-VHIL.md.)"""
     doc = yaml.safe_load(path.read_text())
     g = to_dataflow(doc, spec)["graphs"][0]
     assert "stubs" not in _types(spec)[BUS_NODE]["interfaces"][0]["bus"]

@@ -232,9 +232,9 @@ run only).
 
 Two images, tagged together: `<VHIL_IMAGE>:<VHIL_TAG>` and
 `<VHIL_IMAGE>-editor:<VHIL_TAG>` (default `ghcr.io/isc-fs/ifs-vhil`,
-`ghcr.io/isc-fs/ifs-vhil-editor`). They hold only the toolchain, so they
-change when `docker/Dockerfile` or `docker/editor.Dockerfile` change, not on
-every app change. The API needs `cryptography` (the GitHub App's JWT), which
+`ghcr.io/isc-fs/ifs-vhil-editor`). They hold only the toolchain (and the
+editor its Pipeline Manager build), so they change when `docker/Dockerfile`,
+`docker/editor.Dockerfile` or `editor/` change, not on every app change. The API needs `cryptography` (the GitHub App's JWT), which
 `docker/Dockerfile` installs since M5.5: an image built before that can't
 start with `VHIL_GITHUB_APP_ID` set.
 
@@ -249,7 +249,7 @@ docker buildx build --platform linux/amd64,linux/arm64 \
     -t "$img:$tag" -t "$img:latest" --push docker/
 docker buildx build --platform linux/amd64,linux/arm64 \
     --build-arg BASE="$img:$tag" -f docker/editor.Dockerfile \
-    -t "$img-editor:$tag" -t "$img-editor:latest" --push docker/
+    -t "$img-editor:$tag" -t "$img-editor:latest" --push .
 ```
 
 Then `VHIL_TAG=$tag` in `deploy/.env`, and the digests the push printed (or
@@ -264,7 +264,8 @@ The images' inputs are pinned too: `python:3.11-bookworm` by digest, and
 every download in `docker/Dockerfile` and `docker/editor.Dockerfile`
 (Renode, the Arm GNU toolchain, can-flasher, Node) is checked against a
 SHA-256 hard-coded there (`sha256sum -c`), from the publisher's checksum file
-or GitHub's release asset digest; Pipeline Manager must be the pinned commit.
+or GitHub's release asset digest; Pipeline Manager is vendored in the repo
+(`editor/pipeline-manager/`) and its npm dependencies come from its lockfile.
 Bumping a version means fetching its new hash the same way (the Dockerfiles
 say where). Without a registry, build on the
 host itself (`VHIL_DOCKER_CONTEXT=default scripts/vhil-docker.sh image` gives
