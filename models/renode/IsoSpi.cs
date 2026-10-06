@@ -20,6 +20,14 @@
 // IFS_HIL's Pico emulator, minus its known quirks (IFS_HIL#135).
 // Conversions complete instantly: firmware only waits fixed delays.
 //
+// Cell source: what each chip converts (SetCell / SetAllCells, SetTemperature
+// / SetAllTemperatures, SetAuxRaw) is the battery's state, not the chip's.
+// Today tests set it through the monitor; the Simscape battery stacks (M9)
+// will drive the same setters every co-simulation step, as a plant on the
+// system's port (docs/cosim.md "Cell source"). Nothing else writes it, except
+// Reset() restoring the defaults on the AMS's reset: a plant re-applies its
+// values on its next step.
+//
 using System;
 using System.Collections.Generic;
 using System.Linq;

@@ -89,7 +89,8 @@ def test_a_temperature_lands_in_its_slot(ams, chip, channel, slot):
 
 @pytest.mark.parametrize("deci, label", [(700, "over"), (-120, "under")])
 def test_out_of_range_temperatures_are_not_faults_while_untrusted(ams, deci, label):
-    """B-026c, B-029-OT: TempFaultsTrusted = false, so 70 C (> 60) and -12 C
+    """Replaces IFS_HIL B-026 (overtemperature) and B-029 (cell_overtemp_
+    reason): TempFaultsTrusted = false, so 70 C (> 60) and -12 C
     (< -10) on a whole chip read through but never fault (IFS_HIL expects
     an Error: drift)."""
     _chip(ams, 0, f"SetAllTemperatures {deci}")

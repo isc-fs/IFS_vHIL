@@ -21,6 +21,8 @@ safety_task.cpp, relay_driver.cpp):
   grace unless Error is latched (ams_ok_asserted).
   0x4A4 byte 0: bit 0 AIR-, 1 AIR+, 2 PRE, 3 AMS_OK read back from the ODR
   (relay_status.def), every 100 ms.
+  0x6C0 byte 3: AMS_OK read back from the pin (pit_fsm_status.def,
+  acu_can_task.cpp:311-312), 1 Hz once 0x7F0 DE AD BE EF arms it.
 """
 import pytest
 
@@ -29,6 +31,7 @@ from vhil.sim import Sim
 from vhil.system import REPO
 
 RELAYS = 0x4A4
+PIT_ARM, PIT_FSM = 0x7F0, 0x6C0
 TICK_US = 10_000
 
 
@@ -152,7 +155,8 @@ def test_the_swap_closes_air_plus_and_opens_precharge_at_once(rig):
 
 @pytest.mark.parametrize("cause", ["undervoltage", "vcu-stale"])
 def test_error_opens_everything_and_drops_ams_ok_in_one_tick(rig, cause):
-    """F-066, R-115, C-048, R-111: every contactor and AMS_OK fall within one
+    """Replaces IFS_HIL F-063, F-066 and R-115 ("undervoltage", a cell set low
+    on the chain model): every contactor and AMS_OK fall within one
     SafetyTask tick, and 0x4A4 follows."""
     car, trace = rig
     car.to_run()
@@ -168,6 +172,41 @@ def test_error_opens_everything_and_drops_ams_ok_in_one_tick(rig, cause):
     assert max(times) - min(times) < TICK_US, falls
     assert not trace.level("pre") and trace.edges("pre", t) == []
     assert _relay_bits(car) == {"air_n": False, "air_p": False, "pre": False, "ok": False}
+
+
+def test_ams_ok_stays_low_while_error_is_latched(rig):
+    """Replaces IFS_HIL C-048: AMS_OK falls with the Error latch and never
+    rises again for the boot, though the cell that tripped it is healthy
+    again and the cockpit is re-armed (ams_ok_asserted, safety_task.cpp:371)."""
+    car, trace = rig
+    car.to_run()
+    t = car.sim.now_us()
+    car.sim.monitor("sysbus.spi1.isospi.cells1 SetCell 0 2500", board="ams")
+    assert car.wait_for(ERROR, 1000) is not None
+    car.sim.monitor("sysbus.spi1.isospi.cells1 SetCell 0 3700", board="ams")
+    car.tsms(False)
+    car.sim.run_for(ms=500)
+    car.tsms(True)
+    car.press()
+    car.sim.run_for(ms=3000)
+    assert [e.level for e in trace.edges("ok", t)] == [False], trace.edges("ok", t)
+    assert car.state() == ERROR and not trace.level("ok")
+
+
+def test_the_ams_ok_bit_tracks_the_pit_diag_readback(rig):
+    """Replaces IFS_HIL R-111: 0x4A4 bit 3, 0x6C0 byte 3 and the PB4 pin agree,
+    HIGH while healthy and LOW once a cell under-voltage latches Error."""
+    car, trace = rig
+    car.can.send(PIT_ARM, bytes.fromhex("DEADBEEF"))
+
+    def readbacks():
+        car.sim.run_for(ms=1100)                      # a fresh 0x6C0 (1 Hz)
+        return _relay_bits(car)["ok"], bool(car.can.last(PIT_FSM).data[3]), trace.level("ok")
+
+    assert readbacks() == (True, True, True)
+    car.sim.monitor("sysbus.spi1.isospi.cells1 SetCell 0 2500", board="ams")
+    assert car.wait_for(ERROR, 1000) is not None
+    assert readbacks() == (False, False, False)
 
 
 def test_a_tsms_drop_opens_the_contactors_but_keeps_ams_ok(rig):

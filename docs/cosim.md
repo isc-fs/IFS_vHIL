@@ -95,3 +95,16 @@ it is.
   which has none. `ecu-ams.yaml` has the real AMS; a tractive-system plant
   closing precharge through the AMS's contactor outputs is the faithful next
   step.
+
+## Cell source
+
+The AMS reads its cells and NTCs from the LTC6811 chain model
+(`models/renode/IsoSpi.cs`). Today a native test sets them through the
+monitor (`SetCell`, `SetAllCells`, `SetTemperature`, `SetAuxRaw` per chip;
+`SetAllCells`, `StopReply` on the bridge), as `tests/sim/test_ams_*.py` do.
+There is no Pico LTC emulator on the virtual bench and won't be (#150). When
+the Simscape battery stacks arrive (M9), the stack plant drives the same
+setters at each step boundary: one more plant, with the chain's chips (module
+`m` = chips `2m` and `2m + 1`) as its signals. The model keeps no other
+writer, so tests and the plant don't contend; a test that sets a cell is a
+scripted stand-in for that plant.
