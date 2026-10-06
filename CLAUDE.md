@@ -1,11 +1,11 @@
 # Claude operating model — IFS_vHIL
 
 You are working on **IFS_vHIL**, the virtual hardware-in-the-loop bench for
-ISC Racing Team's Formula Student STM32 firmware. It runs the same images
-[IFS_HIL](https://github.com/isc-fs/IFS_HIL) flashes to the real MainLite
-boards, on emulated STM32H733s in [Renode](https://github.com/renode/renode).
-This file is the fast path for an assistant entering a new session:
-operational, not architectural. For where the project is going, read
+ISC Racing Team's Formula Student firmware. It runs emulated ISC boards on the
+same images [IFS_HIL](https://github.com/isc-fs/IFS_HIL) flashes to the real
+ones, so HIL suites can run in CI without physical hardware. This file is the
+fast path for an assistant entering a new session: operational, not
+architectural. For where the project is going, read
 [`docs/vision.md`](docs/vision.md); for the Phase 0/1 design and findings,
 [`docs/proposal.md`](docs/proposal.md).
 
@@ -13,6 +13,18 @@ Author: Raul Moran (ISC Racing Team). Repo:
 [`isc-fs/IFS_vHIL`](https://github.com/isc-fs/IFS_vHIL), working branch
 `dev`. Work is tracked in issues: one per roadmap milestone (M1 #10, M2 #2,
 M3 #11 … M7 #15, plus #3 and #4), and bugs as they come.
+
+**Current backend and platforms.** More MCUs, SoCs and emulation backends
+are planned; today there is one of each:
+
+| Layer | Current | Where |
+|---|---|---|
+| Emulation backend | [Renode](https://github.com/renode/renode) 1.17.0 | `.repl` platforms, generated `.resc` scripts, C# models in `models/renode/` |
+| Platform | `stm32h733` | [`platforms/cpus/stm32h733.repl`](platforms/cpus/stm32h733.repl) |
+| Board | MainLite (`role:` ecu, ams or udv) | [`catalog/boards/mainlite.yaml`](catalog/boards/mainlite.yaml) |
+
+Where this file names Renode, the STM32H733 or the MainLite, the rule is
+specific to that backend, platform or board.
 
 ---
 
@@ -70,7 +82,7 @@ gives each its firmware source (at the catalogue's ref, or the board's
 `firmware_ref` / `bootloader_ref`), and wires them together. Every MainLite
 carries the CAN bootloader and is placed in a `role:` (ecu, ams or udv), whose
 node ID and flash bus come from the board's `roles` table
-(`catalog/boards/mainlite.yaml`). Renode scripts and
+(`catalog/boards/mainlite.yaml`). Emulator scripts (Renode `.resc` today) and
 the virtual broker's wiring are **generated** from it by `vhil/system.py`.
 Never hand-edit a generated script, and never put a car-specific name in the
 catalogue (`ecu`, not `ifs08-ecu`). Endpoints name the MainLite's own
@@ -92,58 +104,75 @@ co-simulation port its file declares (`port:`), in lock-step virtual time:
 
 ```
 IFS_HIL recipe ─▶ ECU08.elf / AMS.elf  (same image the physical bench flashes)
-        Renode: platforms/cpus/stm32h733.repl  +  scripts/<dut>.resc
+        emulator (Renode): platforms/cpus/stm32h733.repl  +  scripts/<dut>.resc
         FDCANn ─▶ CAN hub per bus ─▶ (Phase 1) SocketCAN vcan
         tests: tests/*.robot (Renode-native) · IFS_HIL pytest suites (Phase 1+)
 ```
 
 ## Hard invariants
 
-1. **Never build an emulator-only firmware.** The point is to test the
-   image the bench flashes. Build with IFS_HIL's recipe
-   (`configs/firmware/<dut>.yaml`), and model the hardware instead of
-   patching the firmware.
-2. **HSE is 24 MHz** on the MainLite (`rcc.hseFrequency` in the
-   platform). With Renode's 8 MHz default every FreeRTOS period runs 3× slow.
-3. **TIM23 is the HAL timebase.** Remove it and every HAL timeout spins
-   forever.
-4. **Every address and IRQ in `stm32h733.repl` comes from ST's
-   `stm32h733xx.h`.** Cite it; don't guess.
-5. **Every MainLite boots through its CAN bootloader**, as on the car: the
-   generated script loads the provisioned flash (bootloader in sector 0, app
-   at `0x08020000`, metadata, node-ID seed; `vhil/flash_image.py`) and the
-   bootloader sets VTOR when it jumps to the app (the ECU never sets it
-   itself). Never shortcut it: a power-on spends the bootloader's 2 s
-   auto-jump window first, and tests wait for the app with
-   `Sim.wait_for_app()` instead of assuming it starts at t = 0.
-6. **A virtual power-on writes `BASEPRI` = 0 after `machine Reset`.**
-   Renode 1.17's reset zeroes the register as read but not its masking, so a
-   cut inside a FreeRTOS critical section hangs the next boot (`vhil/broker.py`).
-   The bootloader in front doesn't change that: the stale mask survives the
-   reset into it, and the bootloader never writes BASEPRI before it jumps.
-   Don't remove it until upstream Renode fixes this.
-7. **Unmodelled hardware fails the run unless it is explained.** Renode drops
-   writes to unmodelled registers and returns 0 for reads. The plugin's
-   peripheral guard (`vhil/peripheral_guard.py`) fails a session on any such
-   access not in [`configs/peripherals.yaml`](configs/peripherals.yaml). Add an
-   entry only with a reason it can't change what a test sees; otherwise model
-   the hardware. A gap that is tracked but not yet modelled may be listed as
-   "KNOWN GAP #<issue>", and its entry goes when the issue closes.
-8. **SDMMC1 times out commands no card answers** (`Stm32H7Sdmmc.cs`, after
-   RM0468 60.5.4): CMDSENT without a response, CTIMEOUT with one, DTIMEOUT
-   for a read's data. Renode's own STM32 SDMMC never set CMDSENT with no card,
-   and the HAL's no-response command wait spun for seconds, starving every
-   other task (the AMS dropped AMS_OK). Keep that behaviour; a board may now go
-   without an `sd-card`, and `dead: true` / `Respond false` gives a dead one.
-9. **Neither bench is ground truth; the car is.** Model what the car's
-   hardware does (schematics, datasheets) and what the firmware intends,
-   not what the physical bench happens to do: it has its own artifacts
-   (stand-in DACs, the Pico LTC emulator, missing peers, state left by the
-   last run). When the two benches disagree, find out which one departs
-   from the car, a model gap or a bench artifact, and file an issue either
-   way. Don't tune a test or a model to agree with the other bench.
+All of these are hard rules. The general ones hold for every board, platform
+and backend; the platform- and backend-specific ones hold wherever that
+platform or backend is used. The numbers are stable IDs (code and docs cite
+them, e.g. "invariant 8"), so they are not in order.
+
+### General
+
+- (1) **Never build an emulator-only firmware.** The point is to test the
+  image the bench flashes. Build with IFS_HIL's recipe
+  (`configs/firmware/<dut>.yaml`), and model the hardware instead of
+  patching the firmware.
+- (10) **Every address and IRQ in a platform comes from the vendor's device
+  header.** Cite it; don't guess.
+- (7) **Unmodelled hardware fails the run unless it is explained.** The emulator
+  drops writes to unmodelled registers and returns 0 for reads. The plugin's
+  peripheral guard (`vhil/peripheral_guard.py`) fails a session on any such
+  access not in [`configs/peripherals.yaml`](configs/peripherals.yaml). Add an
+  entry only with a reason it can't change what a test sees; otherwise model
+  the hardware. A gap that is tracked but not yet modelled may be listed as
+  "KNOWN GAP #<issue>", and its entry goes when the issue closes.
+- (9) **Neither bench is ground truth; the car is.** Model what the car's
+  hardware does (schematics, datasheets) and what the firmware intends,
+  not what the physical bench happens to do: it has its own artifacts
+  (stand-in DACs, the Pico LTC emulator, missing peers, state left by the
+  last run). When the two benches disagree, find out which one departs
+  from the car, a model gap or a bench artifact, and file an issue either
+  way. Don't tune a test or a model to agree with the other bench.
+
+### MainLite board / `stm32h733` platform
+
+- (2) **HSE is 24 MHz** on the MainLite (`rcc.hseFrequency` in the
+  platform). With Renode's 8 MHz default every FreeRTOS period runs 3× slow.
+- (3) **TIM23 is the HAL timebase.** Remove it and every HAL timeout spins
+  forever.
+- (4) **Every address and IRQ in `stm32h733.repl` comes from ST's
+  `stm32h733xx.h`.** Cite it; don't guess.
+- (5) **Every MainLite boots through its CAN bootloader**, as on the car: the
+  generated script loads the provisioned flash (bootloader in sector 0, app
+  at `0x08020000`, metadata, node-ID seed; `vhil/flash_image.py`) and the
+  bootloader sets VTOR when it jumps to the app (the ECU never sets it
+  itself). Never shortcut it: a power-on spends the bootloader's 2 s
+  auto-jump window first, and tests wait for the app with
+  `Sim.wait_for_app()` instead of assuming it starts at t = 0.
+- (8) **SDMMC1 times out commands no card answers** (`Stm32H7Sdmmc.cs`, after
+  RM0468 60.5.4): CMDSENT without a response, CTIMEOUT with one, DTIMEOUT
+  for a read's data. Renode's own STM32 SDMMC never set CMDSENT with no card,
+  and the HAL's no-response command wait spun for seconds, starving every
+  other task (the AMS dropped AMS_OK). Keep that behaviour; a board may now go
+  without an `sd-card`, and `dead: true` / `Respond false` gives a dead one.
+
+### Renode backend
+
+- (6) **A virtual power-on writes `BASEPRI` = 0 after `machine Reset`.**
+  Renode 1.17's reset zeroes the register as read but not its masking, so a
+  cut inside a FreeRTOS critical section hangs the next boot (`vhil/broker.py`).
+  The bootloader in front doesn't change that: the stale mask survives the
+  reset into it, and the bootloader never writes BASEPRI before it jumps.
+  Don't remove it until upstream Renode fixes this.
 
 ## Run things (Linux / WSL2)
+
+The emulator commands below are the Renode backend's.
 
 ```sh
 python -m vhil.system validate systems/ecu.yaml                 # schema + catalogue
@@ -164,8 +193,8 @@ In Docker (any host, including macOS): `scripts/vhil-docker.sh
 vm|fw|unit|smoke <s>|sim|coverage|speed|ifs-hil [suite]|shell` runs the same jobs
 as CI ([`docs/development/setup.md`](docs/development/setup.md#docker-any-host-nothing-installed-natively)).
 
-Pinned versions: Renode **1.17.0**, Arm GNU **14.2.Rel1**. Bump deliberately,
-in their own PR.
+Pinned versions: Renode **1.17.0** (the current backend), Arm GNU
+**14.2.Rel1**. Bump deliberately, in their own PR.
 
 ## Style
 
