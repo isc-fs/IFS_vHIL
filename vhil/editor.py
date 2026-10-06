@@ -92,8 +92,10 @@ CANVAS_METADATA = {
                        "interfaceConnectionPattern": p} for t, (c, p) in _WIRES.items()},
     "styles": {cat: {"color": c, "icon": i, "pill": pill}
                for cat, (c, i, pill) in _CATEGORY_STYLES.items()},
-    # --bg-0, a 24 px grid and an 8 px snap (the 4 px spacing grid, doubled).
-    "backgroundColor": "#0f1115", "backgroundSize": 24, "movementStep": 8,
+    # --bg-0 (the token, so the canvas follows the theme; its dark value as
+    # the fallback), a 24 px grid and an 8 px snap (the 4 px spacing grid,
+    # doubled).
+    "backgroundColor": "var(--bg-0, #0f1115)", "backgroundSize": 24, "movementStep": 8,
     # A system is opened by the shell, never dropped in as a file, and node
     # types come from the catalogue: no welcome panel, no "new node type" or
     # "new graph" entries in the palette.

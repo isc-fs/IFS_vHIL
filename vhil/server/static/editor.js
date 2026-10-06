@@ -47,6 +47,16 @@ function rpcClient(frame, origin) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// The shell's theme, as the editor takes it (?theme= and vhil_set_theme,
+// editor/pipeline-manager/CHANGELOG-VHIL.md): what data-theme on <html> forces,
+// else "auto", which follows prefers-color-scheme as tokens.css does.
+const shellTheme = () => document.documentElement.dataset.theme || "auto";
+function themedUrl(url) {
+  const u = new URL(url, location.href);
+  u.searchParams.set("theme", shellTheme());
+  return u.href;
+}
+
 // What `vhil.system validate` warns of (a pin the role's backplane leaves
 // unconnected): shown, but it doesn't stop a save.
 const warningList = (warnings) => warnings?.length
@@ -73,7 +83,7 @@ export async function editorPage(view, initialId) {
       <span id="ed-state" class="muted"></span>
     </div>
     <div class="ed-grid">
-      <iframe id="ed-frame" title="System editor (Pipeline Manager)" src="${esc(editorUrl)}"></iframe>
+      <iframe id="ed-frame" title="System editor (Pipeline Manager)" src="${esc(themedUrl(editorUrl))}"></iframe>
       <aside>
         <section>
           <h3>Firmware <button id="ed-fw-refresh" type="button" class="link">refresh</button></h3>
@@ -110,6 +120,12 @@ export async function editorPage(view, initialId) {
   const rpc = rpcClient(frame, origin);
   const saveForm = $("#ed-save"), prForm = $("#ed-pr");
   const frameLoaded = new Promise((r) => frame.addEventListener("load", r, { once: true }));
+  // The editor switches theme with the shell. The observer ends with the page.
+  const themeObserver = new MutationObserver(() => {
+    if (!frame.isConnected) { themeObserver.disconnect(); return; }
+    rpc("vhil_set_theme", { theme: shellTheme() }).catch(() => {});
+  });
+  themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
 
   const show = (html, cls = "") => { $("#ed-msg").innerHTML = html ? `<div class="${cls}">${html}</div>` : ""; };
   const showErrors = (title, errors) => show(`<strong>${esc(title)}</strong><ul>${
