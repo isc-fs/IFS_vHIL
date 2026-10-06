@@ -170,8 +170,9 @@ moves, `dev`/`main` are never written, a branch checked out in the workspace
 is refused (`vhil/server/gitstore.py`). The file is validated first as
 `python -m vhil.system validate` would. A MainLite node has a `role` select
 (ECU, AMS or uDV), each choice shown with the node id it gives the bootloader
-(`ecu (node 0x1)`); saving writes `role: ecu`, and the bootloader it carries is
-a read-only `bootloader` property. The firmware picker sets a board's
+(`ecu (node 0x1)`); changing it relabels the node's pins live (the backend
+answers Pipeline Manager's `properties_on_change`), saving writes `role: ecu`,
+and the bootloader it carries is a read-only `bootloader` property. The firmware picker sets a board's
 `firmware_ref` (a branch or tag of the catalogue repo, listed with `git
 ls-remote`). Open PR pushes the branch and opens a PR to `dev`; it needs
 `VHIL_GITHUB_TOKEN` (or `VHIL_GITHUB_TOKEN_FILE`; contents + pull requests write) on the API until the
