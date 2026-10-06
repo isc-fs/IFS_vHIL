@@ -55,7 +55,7 @@ def test_the_board_has_every_pin_that_leaves_the_module(model):
     peripheral's (SPI1's PA5/PA6/PA7, USART10's PG11/PG12); nothing else is
     but the on-board SDMMC1 and I2C2."""
     board = _board()
-    names = [c for s in ("can", "spi", "sdmmc", "i2c", "gpio", "analog_in", "unwired")
+    names = [c for s in ("can", "spi", "uart", "sdmmc", "i2c", "gpio", "analog_in", "unwired")
              for c in board.get(s) or {}]
     ports = {p["port"] for n in names for p in model.pins_of(n)}
     backplane = {p["port"] for p in model.backplane_pins()}
@@ -94,21 +94,71 @@ def test_a_system_wires_only_pins_that_leave_the_mainlite(tmp_path, pin, message
         System(p)
 
 
+# The backplane pins the board once listed as `unwired`, now wired: each
+# resolves to its GPIO or ADC3 channel (catalog/boards/mainlite.yaml).
+WIRED_PINS = {
+    "PB6": ("gpio", {"port": "sysbus.gpioPortB", "pin": 6}),
+    "PB7": ("gpio", {"port": "sysbus.gpioPortB", "pin": 7}),
+    "PB8": ("gpio", {"port": "sysbus.gpioPortB", "pin": 8}),
+    "PD5": ("gpio", {"port": "sysbus.gpioPortD", "pin": 5}),
+    "PB0": ("gpio", {"port": "sysbus.gpioPortB", "pin": 0}),
+    "PC5": ("gpio", {"port": "sysbus.gpioPortC", "pin": 5}),
+    "PC4": ("gpio", {"port": "sysbus.gpioPortC", "pin": 4}),
+    "PF10": ("analog", {"adc": "sysbus.adc3_h73x", "channel": 6}),
+    "PC0": ("analog", {"adc": "sysbus.adc3_h73x", "channel": 10}),
+    "PC2_C": ("analog", {"adc": "sysbus.adc3_h73x", "channel": 0}),
+    "USART10": ("uart", "sysbus.usart10"),
+}
+# What a role makes of them: a digital line where the board has an ADC input.
+ROLE_KINDS = {"ams": {"PF10": ("gpio", {"port": "sysbus.gpioPortF", "pin": 10})},
+              "udv": {"PC2_C": ("gpio", {"port": "sysbus.gpioPortC", "pin": 2})}}
+
+
+@pytest.mark.parametrize("role", ["ecu", "ams", "udv"])
+def test_every_backplane_pin_is_emulated(tmp_path, role):
+    """No pin is left `unwired`: each resolves, in every role, to a GPIO or
+    an ADC3 channel (or USART10), as the role's backplane uses it."""
+    assert "unwired" not in _board()
+    catalog = tmp_path / "catalog"
+    shutil.copytree(REPO / "catalog", catalog)
+    if role == "udv":       # no udv firmware in the catalogue yet: lend it one
+        (catalog / "firmware" / "udv.yaml").write_text(
+            (catalog / "firmware" / "ecu.yaml").read_text().replace("id: ecu", "id: udv"))
+    board = System(_system(tmp_path, "", role), catalog).boards[role]
+    for pin, want in WIRED_PINS.items():
+        kind, target = board.endpoint(pin)
+        assert (kind, target) == ROLE_KINDS.get(role, {}).get(pin, want), (role, pin)
+
+
+def _unwire(tmp_path, pin="PB6"):
+    """A catalogue whose board lists `pin` as `unwired` again (the mechanism a
+    board with pins the emulator can't wire yet still uses)."""
+    catalog = tmp_path / "catalog"
+    shutil.copytree(REPO / "catalog", catalog)
+    f = catalog / "boards" / "mainlite.yaml"
+    line = f"  {pin}: {{port: sysbus.gpioPortB, pin: {pin[2:]}}}\n"
+    assert line in f.read_text()
+    f.write_text(f.read_text().replace(line, "", 1) + f"unwired:\n  {pin}: gpio\n")
+    return catalog
+
+
 @pytest.mark.parametrize("body", [
-    "devices:\n  i: {model: acs758lcb-050b, outputs: {out: ams.PF10}}\n",
     "port:\n  step_ms: 10\n  signals:\n    air_n: {gpio_out: ams.PB6}\n",
-    "devices:\n  isospi: {model: ltc6820, spi: ams.SPI1, cs: ams.PB7}\n"
+    "devices:\n  isospi: {model: ltc6820, spi: ams.SPI1, cs: ams.PB6}\n"
     "  cells: {model: ltc6811, attach: isospi}\n",
 ])
 def test_a_pin_the_emulator_does_not_wire_is_refused_as_not_emulated(tmp_path, body):
     with pytest.raises(SystemError, match="leaves the module but is not emulated yet"):
-        System(_system(tmp_path, body))
+        System(_system(tmp_path, body), _unwire(tmp_path))
 
 
 def test_the_not_emulated_error_names_the_header_pin(tmp_path):
     p = _system(tmp_path, "port:\n  step_ms: 10\n  signals:\n    d: {gpio_out: ams.PB6}\n")
     with pytest.raises(SystemError, match=r"PB6 \(J3\.8\) leaves the module"):
-        System(p)
+        System(p, _unwire(tmp_path))
+
+
+PD5 = "  PD5: {port: sysbus.gpioPortD, pin: 5}"
 
 
 @pytest.mark.parametrize("old, new, message", [
@@ -120,13 +170,13 @@ def test_the_not_emulated_error_names_the_header_pin(tmp_path):
     ("      PB9: SPARE_J3        # D6", "      PZ9: SPARE_J3        # D6",
      "role ecu labels 'PZ9', which its pin model v1.0 lacks"),
     # The board has every backplane pin of its model, and nothing else.
-    ("  PD5: gpio ", "  # PD5",
+    (PD5, "  # PD5",
      "routes PD5 \\(J3.3\\) to the backplane, but the board lacks them"),
-    ("  PD5: gpio ", "  PD5: gpio\n  PE2: gpio ",
+    (PD5, PD5 + "\n  PE2: {port: sysbus.gpioPortE, pin: 2}",
      "board mainlite: PE2 is not routed off the board \\(pin model v1.0: class nc"),
-    ("  PD5: gpio ", "  PD5: gpio\n  PE3: gpio ",
+    (PD5, PD5 + "\n  PE3: {port: sysbus.gpioPortE, pin: 3}",
      "PE3 is not routed off the board \\(pin model v1.0: class onboard, MICROSD_DET"),
-    ("  PD5: gpio ", "  PD5: gpio\n  USART3: uart ",
+    ("  USART10: sysbus.usart10", "  USART10: sysbus.usart10\n  USART3: sysbus.usart3",
      "USART3 is not a pin or peripheral of its pin model v1.0"),
     ("  I2C2: BMI088", "  I2C2: BMI088\n  SPI1: radio",
      "onboard SPI1 is not on the board only \\(pin model v1.0: class backplane"),

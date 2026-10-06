@@ -64,7 +64,7 @@ def test_pins_read_with_their_car_signal_in_each_role(spec, role):
     assert {pin_of(n): n.split(" · ")[1] for n in routed} == want
     assert names[:len(routed)] == routed            # unconnected ones last
     board = yaml.safe_load((REPO / "catalog" / "boards" / "mainlite.yaml").read_text())
-    every = {c for s in ("can", "spi", "sdmmc", "i2c", "gpio", "analog_in", "unwired")
+    every = {c for s in ("can", "spi", "uart", "sdmmc", "i2c", "gpio", "analog_in")
              for c in board[s]}
     assert {pin_of(n) for n in names} == every
 
@@ -76,12 +76,16 @@ def test_unrouted_interfaces_are_marked_not_connected(spec):
 
 
 def test_a_role_rekinds_its_pins_in_the_editor(spec):
-    """AMS PF9 is TSMS, a digital input; uDV PC1 a debug-LED output: GPIO
-    interfaces there, analog on the ECU."""
+    """AMS PF9 is TSMS and PF10 DASH_CHG, digital inputs; uDV PC1 and PC2_C
+    debug-LED outputs: GPIO interfaces there, analog on the ECU."""
     assert _ifaces(spec, "ams")["PF9 · TSMS"] == "gpio"
+    assert _ifaces(spec, "ams")["PF10 · RST_PIL"] == "gpio"
     assert _ifaces(spec, "udv")["PC1 · DEBUG_LED2"] == "gpio"
+    assert _ifaces(spec, "udv")["PC2_C · DEBUG_LED3"] == "gpio"
     assert _ifaces(spec, "ecu")["PF9 · APPS_2"] == "analog"
     assert _ifaces(spec, "ecu")["PC1 · SPARE_J3"] == "analog"
+    assert _ifaces(spec, "ecu")["PF10 · SPARE_J3"] == "analog"
+    assert _ifaces(spec, "ecu")["USART10 · GPS"] == "uart"
 
 
 def test_the_role_fixes_firmware_node_id_and_bootloader(spec):

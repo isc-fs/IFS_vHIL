@@ -10,9 +10,9 @@ platform: stm32h733
 # Which pins exist and leave the module comes from the MainLite's published pin
 # model (catalog/pin-models/, isc-fs/IFS08-ES-MainLite pin-model-v1.0; vendored
 # by scripts/update-pin-model.sh). Every pin it routes to the backplane headers
-# J3/J4 is a connector or pin of this board, below: the ones the emulator wires
-# (can, spi, gpio, analog_in) and the ones it doesn't yet (`unwired`). On-board
-# peripherals (`onboard`) are the only others a system may use.
+# J3/J4 is a connector or pin of this board, below, and the emulator wires
+# every one (can, spi, uart, gpio, analog_in). On-board peripherals (`onboard`)
+# are the only others a system may use.
 pin_model: mainlite.pins.yaml
 # Every MainLite carries the CAN bootloader in sector 0, burned at
 # provisioning: it boots first, then jumps to the application after its 2 s
@@ -87,9 +87,11 @@ roles:
       PB8: SPARE           # J1.20
       PB0: SPARE           # J1.21
       PC2_C: SPARE         # PC2, J1.22
-    # TSMS is a digital input on this backplane, not an ADC channel.
+    # TSMS and DASH_CHG are digital inputs on this backplane, not ADC
+    # channels (AMS.ioc: PF10.Signal=GPIO_Input, GPIO_PULLDOWN).
     gpio:
       PF9: {port: sysbus.gpioPortF, pin: 9}
+      PF10: {port: sysbus.gpioPortF, pin: 10}
   udv:
     node_id: 0x3
     flash_bus: FDCAN2
@@ -114,9 +116,14 @@ roles:
       PF10: SDC_SENSE      # /Sensor SDC micro (A4), from /SDC out, on board
       PC0: RES_IN          # /Lectura RES (A5), J6.29
       PC2_C: DEBUG_LED3    # PC2, /Debug 3, LED D28, on board
-    # PC1 drives a debug LED on this backplane: an output, not an ADC channel.
+    # PC1 and PC2 drive debug LEDs on this backplane: outputs, not ADC
+    # channels. PC2 is the digital side of the PC2_C pad, reaching it only
+    # with the SYSCFG_PMCR PC2SO analog switch closed (stm32h733xx.h:19269-19271,
+    # PC2SO bit 26; RM0468 SYSCFG_PMCR). The emulator does not model the
+    # switch: a GPIO endpoint on PC2_C is GPIOC pin 2 either way.
     gpio:
       PC1: {port: sysbus.gpioPortC, pin: 1}
+      PC2_C: {port: sysbus.gpioPortC, pin: 2}
 # No coin cell or supercap on VBAT, so a power cut wipes the backup domain:
 # the RTC backup registers (the AMS's sticky ErrorLatch, BKP1R) start clear.
 # Source: IFS08-CE-AMS app_init_task.cpp:78-80; the pin model agrees (VBAT,
@@ -133,6 +140,12 @@ can:
   FDCAN3: sysbus.fdcan3_h7
 spi:
   SPI1: sysbus.spi1
+uart:
+  # PG11 RX / PG12 TX, J3.4/J3.5: the ECU's GPS (ECU.ioc: PG11/PG12 USART10,
+  # Asynchronous). platforms/cpus/stm32h733.repl's usart10, an STM32F7_USART
+  # at USART10_BASE = D2_APB2PERIPH_BASE + 0x1C00 = 0x40011C00, USART10_IRQn =
+  # 156 (stm32h733xx.h:2353, 2194, 194).
+  USART10: sysbus.usart10
 sdmmc:
   SDMMC1: sysbus.sdmmc1
 i2c:
@@ -146,6 +159,22 @@ gpio:
   # PB4, START_Pin PB5).
   PB4: {port: sysbus.gpioPortB, pin: 4}
   PB5: {port: sysbus.gpioPortB, pin: 5}
+  # J3.8-J3.10, GPIO3-GPIO5: AMS AIR- and precharge relays (IFS08-CE-AMS
+  # main.h:80-83 RELAY_AIR_N / RELAY_PRECHARGE); ECU D3-D5, PB6 its DC-link
+  # discharge (IFS08-CE-ECU control_task.cpp:296-301); uDV debug LED, SDC
+  # relay, ASSI yellow (docs/backplanes/).
+  PB6: {port: sysbus.gpioPortB, pin: 6}
+  PB7: {port: sysbus.gpioPortB, pin: 7}
+  PB8: {port: sysbus.gpioPortB, pin: 8}
+  # J3.3 DS18B20_REFRI: 1-Wire, 4k7 pull-up R10 on the MainLite. A plain GPIO:
+  # no 1-Wire device is modelled, and no firmware drives it yet.
+  PD5: {port: sysbus.gpioPortD, pin: 5}
+  # J4.9-J4.11: the ECU's nRF24 chip select, CE and IRQ (ECU.ioc: PB0
+  # NRF24_CS out, PC5 NRF24_CE out, PC4 NRF24_IRQ in). Plain GPIOs: no radio
+  # is modelled.
+  PB0: {port: sysbus.gpioPortB, pin: 0}
+  PC5: {port: sysbus.gpioPortC, pin: 5}
+  PC4: {port: sysbus.gpioPortC, pin: 4}
 analog_in:
   # ADC3 inputs routed to the MainLite's connector (IFS_HIL vcu_profile.yaml).
   PF7: {adc: sysbus.adc3_h73x, channel: 3}
@@ -155,19 +184,17 @@ analog_in:
   # (docs/backplanes/ams.md), but AMS dev does not sample it, by design: no
   # DC-DC is fitted (IFS08-CE-AMS af07ec8; ams_config.hpp:607, :713-715).
   PC1: {adc: sysbus.adc3_h73x, channel: 11}
-# Backplane pins (pin model class backplane) the emulator does not wire yet,
-# with their kind: what the editor offers them as. A system that wires one is
-# refused ("not emulated yet") until it moves to gpio or analog_in above, with
-# its port or ADC channel. SPI1's pins (PA5/PA6/PA7) are SPI1.
-unwired:
-  PB6: gpio      # J3.8 GPIO3: ECU D3, AMS AIR-, uDV debug LED
-  PB7: gpio      # J3.9 GPIO4: ECU D4, AMS PRECHARGE, uDV SDC relay
-  PB8: gpio      # J3.10 GPIO5: ECU D5, uDV ASSI yellow
-  PF10: analog   # J3.15 GPIO10: ECU A4, uDV A4 (ADC3 INP6, docs/backplanes/udv.md)
-  PC0: analog    # J3.16 GPIO11: ECU A5, uDV A5 (ADC3 INP10, docs/backplanes/udv.md)
-  PC2_C: analog  # J3.18 GPIO13: the firmware's PC2, uDV A7 (main.h:76)
-  PD5: gpio      # J3.3 DS18B20_REFRI: 1-Wire, 4k7 pull-up R10 on the MainLite
-  PB0: gpio      # J4.9 NRF24_CS
-  PC5: gpio      # J4.10 NRF24_CE
-  PC4: gpio      # J4.11 NRF24_IRQ
-  USART10: uart  # PG11 RX J3.4, PG12 TX J3.5
+  # J3.15, J3.16, J3.18 (GPIO10, GPIO11, GPIO13). Channels from ST's pin data
+  # (STM32_open_pin_data 7d1f151 STM32H733ZGTx.xml, the pin model's source):
+  # PF10 ADC3_INP6, PC0 ADC1/2/3_INP10, PC2_C ADC3_INP0. Every firmware samples
+  # them on ADC3, the only ADC its .ioc enables (Mcu.IP0=ADC3), so that is the
+  # ADC here: ECU.ioc (dev) :233-237 PF10 ADC3_INP6 (A4), :204-207 + :420 PC0
+  # ADCx_INP10 = ADC3_INP10 (A5); uDV.ioc (dev) :288-292, :246-249 + :476 the
+  # same, and :254-258 PC2_C ADC3_INP0 (A7). The AMS reads PF10 as a GPIO
+  # (its role, above; AMS.ioc :266-270) and configures neither PC0 nor PC2_C.
+  # PC2_C is the analog pad, on ADC3 INP0 whatever the SYSCFG_PMCR PC2SO
+  # switch (which joins it to digital PC2; RM0468 SYSCFG_PMCR), which
+  # models/renode/Stm32H7Adc3.cs does not model: channel 0 reads its voltage.
+  PF10: {adc: sysbus.adc3_h73x, channel: 6}
+  PC0: {adc: sysbus.adc3_h73x, channel: 10}
+  PC2_C: {adc: sysbus.adc3_h73x, channel: 0}
