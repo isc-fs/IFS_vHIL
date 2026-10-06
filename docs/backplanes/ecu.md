@@ -46,6 +46,8 @@ pins:
 - `ecu.PB5` for START and `ecu.PB4` for RTDS, through the port.
 
 The other routed pins are not modelled yet: PB6, PD5, the GPS and the nRF24.
+The board lists them as `unwired` (from the MainLite's pin model): the editor
+shows them, and `validate` refuses them as not emulated yet.
 
 ## Known gotchas
 

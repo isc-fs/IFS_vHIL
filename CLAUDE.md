@@ -91,7 +91,9 @@ catalogue (`ecu`, not `ifs08-ecu`). Endpoints name the MainLite's own
 connectors and pins (`ams.PB9`, `ecu.FDCAN2`); which car signal each carries
 on its backplane is traced in [`docs/backplanes/`](docs/backplanes/), cited in
 a trailing comment on the endpoint and copied into the roles table as a
-label. Devices (`catalog/models/`) attach to a
+label. Which MainLite pins exist and leave the module is its published pin
+model (`catalog/pin-models/`, vendored by `scripts/update-pin-model.sh`), and
+`validate` refuses a pin that doesn't. Devices (`catalog/models/`) attach to a
 board's connectors or to another device's port: the LTC6811s sit on the
 LTC6820's isoSPI chain, one per IC, in chain order. Analog sources (models
 with backend `analog`, e.g. the AMS's current sensors) drive a board's

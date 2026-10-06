@@ -50,7 +50,8 @@ system placing it is refused. When one is added, its endpoints will name
 these MainLite pins (`udv.FDCAN2` for the ACU bus, and so on). The MainLite
 models PC1 as an analog input, but on MicroDV2 it is a debug LED output, so
 the udv role makes it a GPIO (`gpio: PC1`) and refuses an analog source on
-it.
+it. PB6–PB8, PF10, PC0 and PC2 (`PC2_C`) are `unwired` on the board: shown in
+the editor, refused by `validate` as not emulated yet.
 
 ## Known gotchas
 
