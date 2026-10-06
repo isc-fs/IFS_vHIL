@@ -24,3 +24,17 @@ jobs:
       - run: python -m pytest tests/unit -q
       - name: Every system validates
         run: for s in systems/*.yaml; do python -m vhil.system validate "$s"; done
+
+  pin-model:
+    # Warns, never fails, when the MainLite publishes a newer pin model than
+    # catalog/pin-models/ vendors (scripts/update-pin-model.sh <tag>).
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Newer pin model release?
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/update-pin-model.sh --check
