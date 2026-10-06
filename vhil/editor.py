@@ -10,7 +10,9 @@ The system file stays the source of truth (vision principle 1): the editor's
 graph is a view of it, translated both ways here. Catalogue entries become
 node types:
 
-  board     a node with one typed connector per CAN/SPI/SDMMC/I2C/GPIO/analog pin;
+  board     a node with one typed connector per CAN/SPI/SDMMC/I2C/GPIO/analog pin,
+            and per pin its pin model has leave the module that the emulator
+            doesn't wire yet (`unwired`: offered, refused by validate);
             a board with roles (the MainLite) is a node type per role
             ("mainlite · ecu"), which fixes its firmware and labels each pin
             with what the role's backplane carries on it ("PF8 · APPS_1",
@@ -105,21 +107,24 @@ def _property(name: str, value) -> dict:
 
 def _board_interfaces(board: dict, role: dict | None) -> list[dict]:
     """A board's connectors and pins as interfaces, typed by kind: the
-    role's GPIO re-kinds (AMS PF9 = TSMS) are GPIO. In a role that says what
-    its backplane routes, each reads "PF8 · APPS_1"; what it leaves
-    unconnected reads "FDCAN3 · n.c." and comes last."""
+    role's GPIO re-kinds (AMS PF9 = TSMS) are GPIO. The pins the emulator
+    doesn't wire yet (`unwired`: they leave the module, per its pin model)
+    follow, typed by their kind: offered here, refused by validate. In a role
+    that says what its backplane routes, each reads "PF8 · APPS_1"; what it
+    leaves unconnected reads "FDCAN3 · n.c." and comes last."""
     role = role or {}
     pins, onboard = role.get("pins"), board.get("onboard") or {}
     override = role.get("gpio") or {}
+    ports = [(pin, "gpio" if section == "analog_in" and pin in override else itype, side)
+             for section, itype, side in _BOARD_PORTS for pin in board.get(section, {})]
+    ports += [(pin, kind, "left") for pin, kind in (board.get("unwired") or {}).items()]
     routed, unrouted = [], []
-    for section, base_type, side in _BOARD_PORTS:
-        for pin in board.get(section, {}):
-            itype = "gpio" if section == "analog_in" and pin in override else base_type
-            label = (None if pins is None else
-                     pins.get(pin) or onboard.get(pin) or NOT_CONNECTED)
-            iface = {"name": pin if label is None else f"{pin}{ROLE_SEP}{label}", "type": itype,
-                     "direction": "inout", "side": side, "maxConnectionsCount": 1}
-            (unrouted if label == NOT_CONNECTED else routed).append(iface)
+    for pin, itype, side in ports:
+        label = (None if pins is None else
+                 pins.get(pin) or onboard.get(pin) or NOT_CONNECTED)
+        iface = {"name": pin if label is None else f"{pin}{ROLE_SEP}{label}", "type": itype,
+                 "direction": "inout", "side": side, "maxConnectionsCount": 1}
+        (unrouted if label == NOT_CONNECTED else routed).append(iface)
     return routed + unrouted
 
 

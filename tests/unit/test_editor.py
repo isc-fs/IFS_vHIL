@@ -64,7 +64,8 @@ def test_pins_read_with_their_car_signal_in_each_role(spec, role):
     assert {pin_of(n): n.split(" · ")[1] for n in routed} == want
     assert names[:len(routed)] == routed            # unconnected ones last
     board = yaml.safe_load((REPO / "catalog" / "boards" / "mainlite.yaml").read_text())
-    every = {c for s in ("can", "spi", "sdmmc", "i2c", "gpio", "analog_in") for c in board[s]}
+    every = {c for s in ("can", "spi", "sdmmc", "i2c", "gpio", "analog_in", "unwired")
+             for c in board[s]}
     assert {pin_of(n) for n in names} == every
 
 
@@ -78,7 +79,7 @@ def test_a_role_rekinds_its_pins_in_the_editor(spec):
     """AMS PF9 is TSMS, a digital input; uDV PC1 a debug-LED output: GPIO
     interfaces there, analog on the ECU."""
     assert _ifaces(spec, "ams")["PF9 · TSMS"] == "gpio"
-    assert _ifaces(spec, "udv")["PC1 · DEBUG_LED"] == "gpio"
+    assert _ifaces(spec, "udv")["PC1 · DEBUG_LED2"] == "gpio"
     assert _ifaces(spec, "ecu")["PF9 · APPS_2"] == "analog"
     assert _ifaces(spec, "ecu")["PC1 · SPARE_J3"] == "analog"
 
