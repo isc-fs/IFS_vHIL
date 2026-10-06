@@ -53,7 +53,16 @@ All JSON; times in microseconds of virtual time.
 - `GET /api/systems` → `[{id, path, ref}]` in the workspace
 - `GET /api/systems/{id}` → `{id, yaml, doc, ref}`;
   `PUT /api/systems/{id}` `{yaml, message, branch}` → validates
-  (`vhil.system validate`), commits on `branch`, returns `{ref}`
+  (`vhil.system validate`), commits on `branch`, returns `{ref, warnings}`.
+  Preview and open return `{errors, warnings}`: a warning (a pin the
+  board's role leaves unconnected on its backplane) never stops a save
+- `GET /api/firmware/{id}/refs` → the firmware repo's `branches` and `tags`,
+  each `{name, sha, built}` (`built`: the fw volume's `built.txt` has its
+  image, else the first run at that ref builds it), plus `default` (the
+  catalogue ref). `git ls-remote`, 15 s bound, cached 5 min; anonymous for
+  the public firmware repos, the GitHub App's read token (or
+  `VHIL_GITHUB_TOKEN`) when configured. `id` must be a catalogue id, and a
+  remote name or sha a system file couldn't hold is dropped
 - `POST /api/systems/{id}/pr` `{branch, title}` → PR URL (GitHub App)
 - `POST /api/runs` `{system, ref?, firmware: {board: ref?}, scenario}` →
   `{run_id}`. `ref` is any branch, tag or commit of the workspace (the
@@ -110,7 +119,12 @@ sent them; counted in the summary's `sent`, not `frames`),
    coverage, JUnit.
 4. **Editor + git**: the shell embeds Pipeline Manager; save writes the system
    file to a branch in the workspace; firmware picker (repo/ref) from the
-   boards' firmware sources; PR creation.
+   boards' firmware sources; PR creation. A MainLite is one node type per
+   role (`mainlite · ecu`): the role fixes its firmware, and its pins read
+   `PF8 · APPS_1` (`n.c.` where its backplane routes nothing). The shell's
+   firmware panel, not the node, picks each board's app branch/tag and
+   bootloader tag: Pipeline Manager's select values come from the
+   specification and can't list a remote's refs.
 5. **Auth**: GitHub OAuth + org check; GitHub App tokens for firmware and
    pushes; dev mode.
 6. **Deploy**: production compose, volumes, backups of the SQLite file,
