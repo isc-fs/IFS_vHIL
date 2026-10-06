@@ -25,11 +25,11 @@ reaches it.
 
 ## 2. Concepts
 
-| Concept | What it is | Example |
+| Concept | What it is | Example (today) |
 |---|---|---|
-| **Platform** | An emulatable MCU or SoC: its memory map and peripheral models. The only layer that knows about a CPU architecture. | `stm32h733` ([`platforms/cpus/stm32h733.repl`](../platforms/cpus/stm32h733.repl)) |
+| **Platform** | An emulatable MCU or SoC: its memory map and peripheral models. The only layer that knows about a CPU architecture. | `stm32h733`, the current platform ([`platforms/cpus/stm32h733.repl`](../platforms/cpus/stm32h733.repl)) |
 | **Chip model** | An external component on a board, behind a bus the platform exposes. | LTC6820 + LTC6811 chain on SPI1; BMI088 on I²C2 |
-| **Board** | A platform plus its chip models plus named pins and connectors. User-definable. | MainLite (STM32H733, 3× FDCAN, ADC3 inputs; AMS, ECU or uDV by backplane, whose routing is reference documentation in [`backplanes/`](backplanes/)) |
+| **Board** | A platform plus its chip models plus named pins and connectors. User-definable. | MainLite (`stm32h733` platform, 3× FDCAN, ADC3 inputs; AMS, ECU or uDV by backplane, whose routing is reference documentation in [`backplanes/`](backplanes/)) |
 | **Firmware source** | Repository + ref + build recipe for one board's image. Never an emulator-only build. | `isc-fs/IFS08-CE-ECU@dev`, IFS_HIL's `configs/firmware/ecu.yaml` |
 | **System** | Boards placed, each with its firmware, plus the nets between them: CAN buses, wires, analog lines. Stored in a git-versionable file. | ECU + AMS + uDV on a shared ACU bus |
 | **Plant** | Something outside the electronics that the system senses and drives, connected through a co-simulation port. | Scripted inverter, cell voltages; later MingoCIL |
@@ -42,7 +42,7 @@ testable on their own, and shared.
 ## 3. Principles
 
 1. **The system file is the source of truth, not the UI.** The web app edits
-   it, CI runs it, a PR can change it. Renode scripts are *generated* from it.
+   it, CI runs it, a PR can change it. Emulator scripts are *generated* from it.
    Today's hand-written `scripts/ecu.resc` and `configs/vbench.yaml` are the
    first things to generate.
 2. **Virtual time is the contract.** One Cortex-M7 runs at about real time on a
@@ -78,7 +78,7 @@ testable on their own, and shared.
         └───────────────────┬────────────┘        └──────────┬──────────────┘
                             │                                │
         ┌───────────────────▼────────────────────────────────▼──────────────┐
-        │ workers (Linux): Renode, one machine per board, CAN hubs, vcan,   │
+        │ workers (Linux): emulator, one machine per board, CAN hubs, vcan, │
         │ co-simulation port ◀──▶ plants (scripted now; MingoCIL later)     │
         └───────────────────────────────────────────────────────────────────┘
         catalogue: platforms · chip models · boards  (versioned, tested)
@@ -103,7 +103,7 @@ testable on their own, and shared.
 | **M4: runtime API, virtual-time tests** ([#12](https://github.com/isc-fs/IFS_vHIL/issues/12)) | Start, step, inject, observe over an API; a test library in virtual time | A scenario runs deterministically at any emulation speed |
 | **M5: shared web app** ([#13](https://github.com/isc-fs/IFS_vHIL/issues/13)) | Workers, GitHub App, system editor, live views | An engineer composes, runs and inspects a system from the browser |
 | **M6: co-simulation port** ([#14](https://github.com/isc-fs/IFS_vHIL/issues/14)) | Time-synchronised signal port for plants; scripted plants first | A scripted plant drives the ECU's pedals and inverter in closed loop; MingoCIL can attach |
-| **M7: beyond STM32** ([#15](https://github.com/isc-fs/IFS_vHIL/issues/15)) | Platform abstraction exercised by a second MCU family, then a Linux SoC spike | A non-STM32 board runs in a system next to the H733 boards |
+| **M7: beyond STM32** ([#15](https://github.com/isc-fs/IFS_vHIL/issues/15)) | Platform abstraction exercised by a second MCU family, then a Linux SoC spike | A non-STM32 board runs in a system next to the `stm32h733` boards |
 | IFS_HIL routing ([#3](https://github.com/isc-fs/IFS_vHIL/issues/3)) | Virtual bench descriptor in IFS_HIL | A firmware PR gets a virtual verdict without bench-01 (after M1) |
 | Depth ([#4](https://github.com/isc-fs/IFS_vHIL/issues/4)) | Bootloader emulation, fault injection, coverage | A-003 and Block D run virtually |
 
@@ -111,10 +111,11 @@ M1 comes first because everything else plugs into it. The AMS model (M2) is
 the first test of how cheaply the catalogue grows. M5 waits for M1–M4,
 because a UI built before the API under it would be rebuilt.
 
-## 6. Renode: upstream first, fork when it pays
+## 6. The emulation backend: upstream first, fork when it pays
 
-Renode is a dependency we pin (1.17.0) and extend, not code we own. Most
-growth needs no fork:
+The emulator is a dependency we pin and extend, not code we own. The current
+backend is Renode, pinned at 1.17.0, and the specifics below are Renode's.
+Most growth needs no fork:
 
 - **Chip and peripheral models** are C# files compiled at load time
   (`include @model.cs`) or `.repl` descriptions. They live in this repo's
