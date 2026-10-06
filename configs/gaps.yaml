@@ -63,6 +63,8 @@
   why: "flashes without --yes and can-flasher 3 cancels at its erase prompt (IFS_HIL#149)"
 - path: tests/hil/ams/test_block_d_bootloader.py::test_d052_jump_reason_in_pit_diag
   why: "flashes without --yes and can-flasher 3 cancels at its erase prompt (IFS_HIL#149)"
+- path: tests/hil/ams/test_block_a_boot.py::test_a012
+  why: "races its own acu_heartbeat: two standard 0x100 streams (100 V and 0 V) at once; fails on CI, passes locally (IFS_HIL#153)"
 
 - path: tests/hil/ams/test_block_i_current.py::test_i100_reported_current_tracks_injection
   why: "physical-only: analog accuracy. The firmware's current gain and zero (AMS #350) are commissioned on bench-01's own sensor front-end and VREF; the virtual ADC is ideal and reads -200 A as -218 A"
