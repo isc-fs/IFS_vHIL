@@ -313,8 +313,9 @@ jobs:
         with:
           python-version: '3.11'
 
+      # pytest-rerunfailures: see the rerun note on the run step.
       - name: Install IFS_HIL (core deps only, as off-bench)
-        run: pip install -q -e ifs_hil
+        run: pip install -q -e ifs_hil "pytest-rerunfailures==16.7"
 
       - name: Create vcan can0 / can1 / can2
         run: |
@@ -326,6 +327,13 @@ jobs:
           done
           nohup candump -L -t a can0 can1 can2 > candump.log 2>&1 &
 
+      # A failed case is run once more before it fails the job. IFS_HIL times
+      # the bench by the wall clock, and a virtual power-on runs slower than
+      # real time (#154): each CI run so far lost a different one or two cases
+      # to a sub-second window after a boot (C-039a, C-049, F-060, E-064,
+      # N-004, U-160), every one of them passing locally and in the other
+      # runs. A case that fails twice is a real failure. The reruns show in
+      # the report as RERUN.
       - name: Run IFS_HIL's AMS suite against the virtual AMS
         env:
           SUITE: ${{ inputs.ams_suite || 'full' }}
@@ -337,7 +345,7 @@ jobs:
           set +e
           scripts/run-ifs-hil.sh ifs_hil "$AMS_ELF" "$SUITE" \
             --vhil-log="$GITHUB_WORKSPACE/vhil-renode.log" \
-            --junitxml="$GITHUB_WORKSPACE/junit.xml" --durations=25 | tee pytest.txt
+            --junitxml="$GITHUB_WORKSPACE/junit.xml" --durations=25 --reruns 1 | tee pytest.txt
           rc=${PIPESTATUS[0]}
           if grep -q "SocketCAN interface .* not present" pytest.txt; then
             echo "::error::tests skipped for a missing SocketCAN interface"; exit 1
