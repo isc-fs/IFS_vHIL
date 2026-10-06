@@ -13,6 +13,30 @@ class _Fake:
     def tca_write_pin(self, addr, port, pin, value):
         pass
 
+    def tca_write_port(self, addr, port, value):
+        pass
+
+    def tca_write_all(self, addr, p0, p1):
+        pass
+
+    def tca_set_direction(self, addr, port, mask):
+        pass
+
+    def tca_set_all_inputs(self, addr):
+        pass
+
+    def tca_set_all_outputs(self, addr):
+        pass
+
+    def adc_read(self, idx, channel):
+        return 7
+
+    def adc_read_all(self, idx):
+        return [7] * 8
+
+    def adc_read_voltage(self, idx, channel):
+        return 0.5
+
     def dac_set_voltage(self, idx, channel, volts):
         self.dac[(idx, channel)] = volts
 
@@ -139,3 +163,82 @@ def test_a_healthy_boot_logs_nothing(caplog):
     with caplog.at_level("WARNING", logger="vhil.broker"):
         backend._check_boot("ams")
     assert not caplog.records
+
+
+# -- bench GPIO and ADC routes --------------------------------------------------
+
+ROUTES = {
+    "power": [{"machine": "ams", "relay": {"addr": 0x20, "port": 0, "pin": 1},
+               "ina_addr": 0x41, "current_A": 0.12, "can": {}, "vbat": False}],
+    "gpio_routes": [
+        {"tca": 0x21, "port": 1, "pin": 0, "machine": "ams",
+         "gpio_port": "sysbus.gpioPortF", "gpio_pin": 9},
+        {"tca": 0x21, "port": 1, "pin": 1, "machine": "ams",
+         "gpio_port": "sysbus.gpioPortF", "gpio_pin": 10}],
+    "adc_routes": [
+        {"adc": 2, "channel": 0, "machine": "ams", "gpio_port": "sysbus.gpioPortB", "gpio_pin": 4}],
+}
+
+
+class _LevelMonitor(_Monitor):
+    """Answers a probe's Level with the level set for it."""
+
+    def __init__(self, high=False):
+        super().__init__()
+        self.high = high
+
+    def execute(self, command):
+        super().execute(command)
+        if " Level " in command:
+            return "True" if self.high else "False"
+        return ""
+
+
+def _drives(monitor):
+    return [c for _, c in monitor.commands if " Drive " in c]
+
+
+def test_a_tca_pin_drives_its_gpio_only_as_an_output():
+    """The TCA9555 drives a line only while its direction bit is 0; as an
+    input the line floats to the board's pull-down (low)."""
+    monitor = _Monitor()
+    backend = make_backend(_Fake, monitor, ROUTES)
+    backend.tca_write_pin(0x21, 1, 0, True)            # still an input: nothing driven
+    assert _drives(monitor) == []
+    backend.tca_set_direction(0x21, 1, 0xFC)           # P10, P11 outputs
+    assert _drives(monitor) == ['vhil_gpio_ams Drive "sysbus.gpioPortF" 9 true']
+    monitor.commands.clear()
+    backend.tca_write_pin(0x21, 1, 0, True)            # unchanged: not driven again
+    backend.tca_write_pin(0x21, 0, 0, True)            # another port: not routed
+    assert _drives(monitor) == []
+    backend.tca_write_port(0x21, 1, 0x02)
+    assert _drives(monitor) == ['vhil_gpio_ams Drive "sysbus.gpioPortF" 9 false',
+                                'vhil_gpio_ams Drive "sysbus.gpioPortF" 10 true']
+    monitor.commands.clear()
+    backend.tca_set_all_inputs(0x21)
+    assert _drives(monitor) == ['vhil_gpio_ams Drive "sysbus.gpioPortF" 10 false']
+    assert {m for m, c in monitor.commands if " Drive " in c} == {"ams"}
+
+
+def test_a_routed_adc_channel_reads_the_pin_level_now():
+    monitor = _LevelMonitor(high=True)
+    backend = make_backend(_Fake, monitor, ROUTES)
+    assert backend.adc_read_voltage(2, 0) == 0.0       # unpowered: drives nothing
+    backend._powered["ams"] = True
+    assert backend.adc_read_voltage(2, 0) == 3.3
+    assert backend.adc_read(2, 0) == 4095
+    assert backend.adc_read_all(2)[:2] == [4095, 7]
+    assert ("ams", 'vhil_gpio_ams Level "sysbus.gpioPortB:4"') in monitor.commands
+    monitor.high = False
+    assert backend.adc_read_voltage(2, 0) == 0.0 and backend.adc_read(2, 0) == 0
+    assert backend.adc_read_voltage(2, 1) == 0.5       # unrouted: the fake's
+    assert backend.adc_read(1, 0) == 7
+
+
+def test_probe_commands_watch_each_routed_output():
+    from vhil.broker import probe_commands
+    cmds = probe_commands(ROUTES)
+    assert cmds[0].startswith("include ") and "VhilProbe.cs" in cmds[0]
+    assert 'emulation CreateVhilGpioProbe "vhil_gpio_ams" "ams"' in cmds
+    assert 'vhil_gpio_ams Watch "sysbus.gpioPortB" 4' in cmds
+    assert probe_commands({"power": [], "dac_routes": []}) == []

@@ -11,9 +11,13 @@ current monitors to its boards):
                                         Reset and back on the buses
   ina.current on a board's monitor   -> its nominal draw while powered, else 0
   dac.set_voltage on a routed channel -> `<adc> SetVoltage <uV> <ch>`
+  tca.* on a pin a gpio_route wires   -> the board's GPIO input driven with
+                                        the pin's level (low unless output)
+  adc.read* on an adc_route channel   -> the board's GPIO output level now,
+                                        0 or 3.3 V (0 V while unpowered)
 
-Everything else (PSU, health, unrouted DACs, other TCA pins) keeps the fake's
-behaviour, which is what an off-bench run already relies on.
+Everything else (PSU, health, unrouted DACs and ADC channels, other TCA pins)
+keeps the fake's behaviour, which is what an off-bench run already relies on.
 
   python -m vhil.broker --ifs-hil ../IFS_HIL --renode-port 1234 \
       --socket /tmp/hil-broker.sock [--system systems/ecu.yaml]
@@ -52,6 +56,38 @@ SCB_FAULT_REGS = (("ICSR", 0xE000ED04), ("SHCSR", 0xE000ED24), ("CFSR", 0xE000ED
                   ("HFSR", 0xE000ED2C), ("MMFAR", 0xE000ED34), ("BFAR", 0xE000ED38))
 
 
+# The bench's MCP3208s: 12-bit, VREF 3.3 V (IFS_HIL broker/fake_bus.py,
+# adc_read_voltage: counts * 3.3 / 4095).
+ADC_FULL_SCALE = 4095
+ADC_VREF_V = 3.3
+PROBE_SOURCE = REPO / "models" / "renode" / "VhilProbe.cs"
+
+
+def probe_name(machine: str) -> str:
+    """The GPIO probe of a board, as vhil.sim names it."""
+    return f"vhil_gpio_{rn.ident(machine)}"
+
+
+def probe_commands(config: dict) -> list[str]:
+    """Monitor commands, run once the system's script is loaded, that give
+    every board a routed GPIO touches its GPIO probe (models/renode/
+    VhilProbe.cs) and watch each output an ADC route reads. None for a
+    system without GPIO or ADC routes."""
+    routes = config.get("gpio_routes", []) + config.get("adc_routes", [])
+    if not routes:
+        return []
+    out = [f"include {rn.file_arg(PROBE_SOURCE)}"]
+    for machine in dict.fromkeys(r["machine"] for r in routes):
+        out += [f"mach set {rn.quote(rn.ident(machine))}",
+                f"emulation CreateVhilGpioProbe {rn.quote(probe_name(machine))} "
+                f"{rn.quote(machine)}"]
+        for r in config.get("adc_routes", []):
+            if r["machine"] == machine:
+                out.append(f"{probe_name(machine)} Watch {rn.quote(rn.path(r['gpio_port']))} "
+                           f"{int(r['gpio_pin'])}")
+    return out
+
+
 def power_on_commands(machine: str, vbat: bool) -> list[str]:
     """Monitor commands that power a board on, with its machine selected.
     Shared by the virtual broker and vhil.sim, so both mean the same thing.
@@ -85,6 +121,8 @@ def make_backend(fake_cls, monitor: RenodeMonitor, config: dict, boot_check: boo
     vbat = {c["machine"]: c.get("vbat", True) for c in config.get("power", [])}
     by_ina = {c["ina_addr"]: c for c in config.get("power", [])}
     routes = {(r["dac"], r["channel"]): r for r in config.get("dac_routes", [])}
+    gpio_routes = {(r["tca"], r["port"], r["pin"]): r for r in config.get("gpio_routes", [])}
+    adc_routes = {(r["adc"], r["channel"]): r for r in config.get("adc_routes", [])}
     # The broker server is threaded; `mach set` + the command must not interleave.
     lock = threading.Lock()
     can_of = {c["machine"]: c.get("can", {}) for c in config.get("power", [])}
@@ -114,13 +152,16 @@ def make_backend(fake_cls, monitor: RenodeMonitor, config: dict, boot_check: boo
         def __init__(self) -> None:
             super().__init__()
             self._powered = {c["machine"]: False for c in relays.values()}
+            self._tca_mirror: dict = {}     # (addr, port) -> output/direction registers
+            # (addr, port, pin) -> level on the line: undriven, the pull-down's
+            self._driven: dict = {key: False for key in gpio_routes}
 
         def _on(self, machine: str, command: str) -> str:
             with lock:
                 mach_set(machine)
                 return monitor.execute(command)
 
-        def tca_write_pin(self, addr, port, pin, value):
+        def _power_pin(self, addr, port, pin, value):
             super().tca_write_pin(addr, port, pin, value)
             entry = relays.get((addr, port, pin))
             if entry is None:
@@ -215,6 +256,99 @@ def make_backend(fake_cls, monitor: RenodeMonitor, config: dict, boot_check: boo
             self._on(route["machine"],
                      f"{rn.path(route['adc'])} SetVoltage {uv} {int(route['adc_channel'])}")
 
+        # -- TCA pins wired to GPIO inputs (bench gpio_routes) ---------------
+        # A TCA9555 pin drives its line only while its direction bit is 0
+        # (output); as an input it floats and the board's pull decides (the
+        # AMS's TSMS and DASH_CHG: GPIO_PULLDOWN, IFS08-CE-AMS main.c:722-725).
+        # Output and direction registers start as the fake's: 0 and all inputs.
+
+        def _tca_regs(self, addr, port):
+            return self._tca_mirror.setdefault((addr, port), {"out": 0, "dir": 0xFF})
+
+        def _drive_routes(self, addr, port):
+            if not gpio_routes:
+                return
+            regs = self._tca_regs(addr, port)
+            driven = self._driven
+            for (a, p, pin), route in gpio_routes.items():
+                if (a, p) != (addr, port):
+                    continue
+                level = bool(regs["out"] >> pin & 1) and not regs["dir"] >> pin & 1
+                if driven.get((a, p, pin)) == level:
+                    continue
+                self._on(route["machine"], f"{probe_name(route['machine'])} Drive "
+                         f"{rn.quote(rn.path(route['gpio_port']))} {int(route['gpio_pin'])} "
+                         f"{'true' if level else 'false'}")
+                driven[(a, p, pin)] = level
+
+        def tca_write_pin(self, addr, port, pin, value):
+            self._power_pin(addr, port, pin, value)
+            regs = self._tca_regs(addr, port)
+            regs["out"] = (regs["out"] | 1 << pin) if value else (regs["out"] & ~(1 << pin))
+            self._drive_routes(addr, port)
+
+        def tca_write_port(self, addr, port, value):
+            super().tca_write_port(addr, port, value)
+            self._tca_regs(addr, port)["out"] = int(value) & 0xFF
+            self._drive_routes(addr, port)
+
+        def tca_write_all(self, addr, p0, p1):
+            super().tca_write_all(addr, p0, p1)
+            for port, value in ((0, p0), (1, p1)):
+                self._tca_regs(addr, port)["out"] = int(value) & 0xFF
+                self._drive_routes(addr, port)
+
+        def tca_set_direction(self, addr, port, mask):
+            super().tca_set_direction(addr, port, mask)
+            self._tca_regs(addr, port)["dir"] = int(mask) & 0xFF
+            self._drive_routes(addr, port)
+
+        def tca_set_all_inputs(self, addr):
+            super().tca_set_all_inputs(addr)
+            for port in (0, 1):
+                self._tca_regs(addr, port)["dir"] = 0xFF
+                self._drive_routes(addr, port)
+
+        def tca_set_all_outputs(self, addr):
+            super().tca_set_all_outputs(addr)
+            for port in (0, 1):
+                self._tca_regs(addr, port)["dir"] = 0x00
+                self._drive_routes(addr, port)
+
+        # -- ADC channels tapping GPIO outputs (bench adc_routes) -------------
+        # The MCP3208 reads the pin's push-pull level, 0 or VDD (3.3 V), at
+        # the instant of the read: the probe's level of the pin now, in
+        # virtual time. An unpowered board drives nothing.
+
+        def _routed_volts(self, route) -> float:
+            machine = route["machine"]
+            if machine in self._powered and not self._powered[machine]:
+                return 0.0
+            pin = f"{route['gpio_port']}:{int(route['gpio_pin'])}"
+            reply = self._on(machine, f"{probe_name(machine)} Level {rn.quote(pin)}").strip()
+            return ADC_VREF_V if reply == "True" else 0.0
+
+        def adc_read_voltage(self, idx, channel):
+            route = adc_routes.get((idx, channel))
+            if route is None:
+                return super().adc_read_voltage(idx, channel)
+            self._tick()
+            return self._routed_volts(route)
+
+        def adc_read(self, idx, channel):
+            route = adc_routes.get((idx, channel))
+            if route is None:
+                return super().adc_read(idx, channel)
+            self._tick()
+            return ADC_FULL_SCALE if self._routed_volts(route) else 0
+
+        def adc_read_all(self, idx):
+            values = super().adc_read_all(idx)
+            for (i, channel), route in adc_routes.items():
+                if i == idx and channel < len(values):
+                    values[channel] = ADC_FULL_SCALE if self._routed_volts(route) else 0
+            return values
+
         def health(self):
             h = super().health()
             h["backend"] = "virtual"
@@ -283,6 +417,8 @@ def main(argv=None) -> int:
     from vhil.system import System
     config = System(args.system).bench_config()
     monitor = RenodeMonitor(args.renode_port)
+    for command in probe_commands(config):
+        monitor.execute(command)
     backend = make_backend(FakeHardwareManager, monitor, config, boot_check=True)
     threading.Thread(target=watch_pacing, args=(monitor, backend.monitor_lock),
                      name="pacing", daemon=True).start()

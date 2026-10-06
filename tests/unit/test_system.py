@@ -93,6 +93,16 @@ def test_ecu_ams_share_the_acu_bus_and_power_separately():
             if r["machine"] == "ams"} == {("ams", 3, 0, 3), ("ams", 3, 1, 7)}
 
 
+def test_gpio_and_adc_routes_resolve_to_the_pins(tmp_path):
+    cfg = System(_system(tmp_path, "bench:\n  gpio_routes:\n"
+                         "    - {tca: 0x22, port: 1, pin: 0, to: ecu.PB5}\n"
+                         "  adc_routes:\n    - {adc: 0, channel: 0, from: ecu.PB4}\n")).bench_config()
+    assert cfg["gpio_routes"] == [{"tca": 0x22, "port": 1, "pin": 0, "machine": "ecu",
+                                   "gpio_port": "sysbus.gpioPortB", "gpio_pin": 5}]
+    assert cfg["adc_routes"] == [{"adc": 0, "channel": 0, "machine": "ecu",
+                                  "gpio_port": "sysbus.gpioPortB", "gpio_pin": 4}]
+
+
 def test_gaps_name_systems_that_exist():
     ids = {yaml.safe_load(p.read_text())["id"] for p in SYSTEMS}
     for gap in yaml.safe_load((REPO / "configs" / "gaps.yaml").read_text()) or []:
@@ -112,6 +122,20 @@ def _system(tmp_path, body):
     ("buses:\n  a: {kind: can, nodes: [ecu.FDCAN1]}\n  b: {kind: can, nodes: [ecu.FDCAN1]}\n",
      "on both"),
     ("bench:\n  dac_routes:\n    - {dac: 0, channel: 0, to: ecu.FDCAN1}\n", "not an analog input"),
+    ("bench:\n  gpio_routes:\n    - {tca: 0x22, port: 1, pin: 0, to: ecu.PF7}\n",
+     "GPIO route to 'ecu.PF7': analog, not a GPIO"),
+    ("bench:\n  gpio_routes:\n    - {tca: 0x22, port: 1, pin: 0, to: ecu.PB5}\n"
+     "    - {tca: 0x22, port: 1, pin: 0, to: ecu.PB4}\n", "routed twice"),
+    ("bench:\n  power:\n    - {board: ecu, relay: {addr: 0x20, port: 0, pin: 3}, ina_addr: 0x45,"
+     " current_A: 0.1}\n  gpio_routes:\n    - {tca: 0x20, port: 0, pin: 3, to: ecu.PB5}\n",
+     "power relay"),
+    ("bench:\n  gpio_routes:\n    - {tca: 0x50, port: 1, pin: 0, to: ecu.PB5}\n", "not valid"),
+    ("bench:\n  gpio_routes:\n    - {tca: 0x22, port: 2, pin: 0, to: ecu.PB5}\n", "not valid"),
+    ("bench:\n  adc_routes:\n    - {adc: 0, channel: 0, from: ecu.FDCAN1}\n",
+     "ADC route from 'ecu.FDCAN1': can, not a GPIO"),
+    ("bench:\n  adc_routes:\n    - {adc: 0, channel: 0, from: ecu.PB4}\n"
+     "    - {adc: 0, channel: 0, from: ecu.PB5}\n", "routed twice"),
+    ("bench:\n  adc_routes:\n    - {adc: 0, channel: 8, from: ecu.PB4}\n", "not valid"),
 ])
 def test_bad_systems_are_rejected_with_a_reason(tmp_path, body, message):
     with pytest.raises(SystemError, match=message):

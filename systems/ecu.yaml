@@ -48,3 +48,6 @@ bench:
     - {dac: 0, channel: 0, to: ecu.PF7}  # S_BRAKE_FIL (docs/backplanes/ecu.md)
     - {dac: 0, channel: 1, to: ecu.PF8}  # APPS_1 (docs/backplanes/ecu.md)
     - {dac: 0, channel: 2, to: ecu.PF9}  # APPS_2 (docs/backplanes/ecu.md)
+  adc_routes:
+    # bench ADC1 (MCP3208 idx 0) ch0 taps the RTDS output (vcu_profile rtds_adc_*)
+    - {adc: 0, channel: 0, from: ecu.PB4}  # RTDS, J1.20 (docs/backplanes/ecu.md)
