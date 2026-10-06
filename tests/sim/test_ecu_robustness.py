@@ -77,7 +77,7 @@ WAIT_VDC, PRECHARGE, AMS_ERROR = 0, 1, 6
 # (0) whatever the reset. These passed only while the vHIL skipped the
 # bootloader.
 BL_CLEARS_RSR = pytest.mark.xfail(strict=True, reason=(
-    "stm32-can-bootloader v1.7.0 bl_health.c:59-63 clears RCC_RSR before the "
+    "stm32-can-bootloader#193: v1.7.0 bl_health.c:59-63 clears RCC_RSR before the "
     "jump: the app reads no reset flag and reports cause 0 (Unknown)"))
 # 0x700-0x70D but 0x704 (DiagTask's): one of each per pit-diag tick.
 PIT_DIAG_IDS = [i for i in range(0x700, 0x70E) if i != HEALTH]
