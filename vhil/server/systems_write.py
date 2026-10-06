@@ -2,7 +2,8 @@
 
     GET  /api/config                    editor URL, base branch, whether PRs can be opened
     GET  /api/firmware                  catalogue firmware sources (repo, default ref, recipe)
-    GET  /api/firmware/{id}/refs        that repo's branches and tags (ls-remote, cached)
+    GET  /api/firmware/{id}/refs        that repo's branches and tags with their commits, and
+                                        whether each is built (ls-remote, cached)
     GET  /api/systems/{id}/dataflow     a system as a Pipeline Manager graph (?branch=, ?new=)
     POST /api/systems/{id}/preview      {yaml | dataflow} -> {yaml, errors}, nothing saved
     PUT  /api/systems/{id}              {yaml | dataflow, message, branch} -> {ref, branch}
@@ -37,7 +38,7 @@ from vhil.server.githost import (CachedRefs, GitHost, GitHubHost, HostError, Hos
 from vhil.server.gitstore import (OWNER_TRAILER, TAKEOVER_TRAILER, BadBranch, Conflict, GitError,
                                   GitStore)
 from vhil.server.workspace import SYSTEM_ID
-from vhil.system import SCHEMA, System, SystemError
+from vhil.system import ID, SCHEMA, System, SystemError, built_images, image_path
 
 router = APIRouter()
 log = logging.getLogger("vhil.server.systems")
@@ -101,8 +102,12 @@ def _host(request: Request) -> GitHost:
 def _refs(request: Request) -> RefLister:
     st = request.app.state
     if getattr(st, "ref_lister", None) is None:
-        st.ref_lister = CachedRefs(LsRemote(env_secret("VHIL_GITHUB_TOKEN") or None),
-                                   float(os.environ.get("VHIL_REFS_TTL_S", "60")))
+        # The GitHub App's read-only token for the firmware repo when it is
+        # configured, else VHIL_GITHUB_TOKEN, else none: the repos are public.
+        app = getattr(st, "github_app", None)
+        token_for = (lambda repo: app.token_for(repo)) if app is not None else None
+        st.ref_lister = CachedRefs(LsRemote(env_secret("VHIL_GITHUB_TOKEN") or None, token_for),
+                                   float(os.environ.get("VHIL_REFS_TTL_S", "300")))
     return st.ref_lister
 
 
@@ -210,20 +215,28 @@ def _system_validator():
 def check(store: GitStore, commit: str, system_id: str, text: str) -> list[str]:
     """What `python -m vhil.system validate` would say about `text` as
     systems/<id>.yaml in `commit`'s tree ([] if valid)."""
+    return check_with_warnings(store, commit, system_id, text)[0]
+
+
+def check_with_warnings(store: GitStore, commit: str, system_id: str,
+                        text: str) -> tuple[list[str], list[str]]:
+    """(errors, warnings), as `python -m vhil.system validate` gives them:
+    a warning (a pin the role's backplane leaves unconnected) doesn't stop
+    a save."""
     try:
         doc = yaml.safe_load(text)
     except yaml.YAMLError as e:
-        return [f"not YAML: {e}"]
+        return [f"not YAML: {e}"], []
     if not isinstance(doc, dict):
-        return ["a system file is a YAML mapping (kind: system, id, boards, ...)"]
+        return ["a system file is a YAML mapping (kind: system, id, boards, ...)"], []
     if doc.get("id") != system_id:
-        return [f"id '{doc.get('id')}' does not match the file name '{system_id}'"]
+        return [f"id '{doc.get('id')}' does not match the file name '{system_id}'"], []
     # The schema's top level is oneOf(catalogue kinds, system): checked as a
     # system, each error names its place instead of "not valid under any".
     errors = sorted(_system_validator().iter_errors(doc), key=lambda e: list(e.absolute_path))
     if errors:
         return [f"{'.'.join(str(p) for p in e.absolute_path) or '(top)'}: {e.message}"
-                for e in errors[:10]]
+                for e in errors[:10]], []
     with tempfile.TemporaryDirectory(prefix="vhil-check-") as tmp:
         root = Path(tmp)
         store.extract(commit, ["catalog"], root)
@@ -231,10 +244,10 @@ def check(store: GitStore, commit: str, system_id: str, text: str) -> list[str]:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text)
         try:
-            System(path, catalog=root / "catalog")
+            system = System(path, catalog=root / "catalog")
         except SystemError as e:
-            return [str(e).replace(f"{path}: ", "")]
-    return []
+            return [str(e).replace(f"{path}: ", "")], []
+    return [], list(system.warnings)
 
 
 def _save(request: Request, system_id: str, body: Save, create: bool) -> dict:
@@ -249,7 +262,7 @@ def _save(request: Request, system_id: str, body: Save, create: bool) -> dict:
     parent = store.parent(body.branch)
     trailers = _owner_trailers(request, store, body, store.branch_tip(body.branch))
     text = _text(body, system_id, store.read(parent, _path(system_id)))
-    errors = check(store, parent, system_id, text)
+    errors, warnings = check_with_warnings(store, parent, system_id, text)
     if errors:
         raise HTTPException(422, {"errors": errors, "yaml": text})
     try:
@@ -259,7 +272,7 @@ def _save(request: Request, system_id: str, body: Save, create: bool) -> dict:
         raise HTTPException(409, str(e))
     except GitError as e:
         raise HTTPException(500, str(e))
-    return {"id": system_id, "path": _path(system_id), **out}
+    return {"id": system_id, "path": _path(system_id), "warnings": warnings, **out}
 
 
 # -- routes ---------------------------------------------------------------------------
@@ -286,8 +299,19 @@ def firmware(request: Request):
              "build": d["build"]} for d in _firmware_docs(request).values()]
 
 
+def _fw_dir(request: Request) -> Path:
+    from vhil.worker import DEFAULT_FW_DIR
+    return Path(getattr(request.app.state, "fw_dir", None) or DEFAULT_FW_DIR)
+
+
 @router.get("/api/firmware/{firmware_id}/refs")
 def firmware_refs(firmware_id: str, request: Request):
+    """The firmware's repo's branches and tags, each with its commit and
+    whether the firmware volume holds a build of it (`built`: else the first
+    run at that ref builds it). Names the remote gives that a system file
+    couldn't hold are left out (githost.parse_ls_remote)."""
+    if not ID.fullmatch(firmware_id):
+        raise HTTPException(422, {"errors": [f"{firmware_id!r} is not a catalogue id"]})
     doc = _firmware_docs(request).get(firmware_id)
     if doc is None:
         raise HTTPException(404, f"no firmware '{firmware_id}' in the catalogue")
@@ -295,7 +319,20 @@ def firmware_refs(firmware_id: str, request: Request):
         refs = _refs(request).refs(doc["repo"])
     except HostError as e:
         raise HTTPException(502, str(e))
-    return {"id": firmware_id, "repo": doc["repo"], "default": doc["ref"], **refs}
+    # The worker reuses a build listed in built.txt (vhil.worker.FirmwareResolver).
+    fw_dir = _fw_dir(request)
+    built = built_images(fw_dir)
+
+    def is_built(ref: str) -> bool:
+        try:
+            elf = image_path(fw_dir, doc, ref).resolve()
+        except (OSError, KeyError, TypeError):
+            return False
+        return elf in built and elf.is_file()
+    out = {kind: [{**r, "built": is_built(r["name"])} for r in refs[kind]]
+           for kind in ("branches", "tags")}
+    return {"id": firmware_id, "repo": doc["repo"], "default": doc["ref"],
+            "default_built": is_built(doc["ref"]), **out}
 
 
 def _template(system_id: str, request: Request) -> str:
@@ -303,13 +340,14 @@ def _template(system_id: str, request: Request) -> str:
     board = sorted(p.stem for p in (cat / "boards").glob("*.yaml"))[0]
     firmware = sorted(p.stem for p in (cat / "firmware").glob("*.yaml"))
     entry = {"board": board, "firmware": firmware[0]}
-    # A board with roles (the MainLite) needs one: its first, running the
-    # firmware of the same name when the catalogue has it.
-    roles = list((yaml.safe_load((cat / "boards" / f"{board}.yaml").read_text())
-                  .get("roles") or {}))
+    # A board with roles (the MainLite) needs one, which sets its firmware:
+    # the first whose firmware the catalogue has.
+    roles = (yaml.safe_load((cat / "boards" / f"{board}.yaml").read_text())
+             .get("roles") or {})
     if roles:
-        entry = {"board": board, "role": roles[0],
-                 "firmware": roles[0] if roles[0] in firmware else firmware[0]}
+        role = next((r for r, spec in roles.items() if spec.get("firmware") in firmware),
+                    next(iter(roles)))
+        entry = {"board": board, "role": role}
     return editor.dump_system({"kind": "system", "id": system_id,
                                "description": "A new system: place boards, wire their buses.",
                                "boards": {"board0": entry}})
@@ -339,8 +377,9 @@ def dataflow(system_id: str, request: Request, branch: str | None = None, new: b
         graph = editor.to_dataflow(doc, source=text)
     except (yaml.YAMLError, KeyError, TypeError) as e:
         raise HTTPException(422, {"errors": [f"the editor can't show this file: {e}"]})
+    errors, warnings = check_with_warnings(store, ref or store.base_commit(), system_id, text)
     return {"id": system_id, "branch": branch, "ref": ref, "exists": exists, "yaml": text,
-            "dataflow": graph, "errors": check(store, ref or store.base_commit(), system_id, text)}
+            "dataflow": graph, "errors": errors, "warnings": warnings}
 
 
 @router.post("/api/systems/{system_id}/preview")
@@ -349,7 +388,8 @@ def preview(system_id: str, body: Preview, request: Request, branch: str | None 
     store = _store(request)
     parent = store.parent(branch)
     text = _text(body, system_id, store.read(parent, _path(system_id)))
-    return {"id": system_id, "yaml": text, "errors": check(store, parent, system_id, text)}
+    errors, warnings = check_with_warnings(store, parent, system_id, text)
+    return {"id": system_id, "yaml": text, "errors": errors, "warnings": warnings}
 
 
 @router.put("/api/systems/{system_id}")

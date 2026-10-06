@@ -44,10 +44,13 @@ bus.
 
 ## In the vHIL
 
-No uDV system exists yet. When one is added, its endpoints will name these
-MainLite pins (`udv.FDCAN2` for the ACU bus, and so on). The MainLite
-catalogue entry models PC1 as an analog input, but on MicroDV2 it is a debug
-LED output, so nothing should attach an analog source to `udv.PC1`.
+No uDV system exists yet, and none can until the catalogue has the uDV's
+firmware: the udv role names `udv`, which `catalog/firmware/` lacks, so a
+system placing it is refused. When one is added, its endpoints will name
+these MainLite pins (`udv.FDCAN2` for the ACU bus, and so on). The MainLite
+models PC1 as an analog input, but on MicroDV2 it is a debug LED output, so
+the udv role makes it a GPIO (`gpio: PC1`) and refuses an analog source on
+it.
 
 ## Known gotchas
 

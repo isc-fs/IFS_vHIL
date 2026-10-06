@@ -17,8 +17,8 @@ from fastapi.testclient import TestClient  # noqa: E402
 from vhil import editor  # noqa: E402
 from vhil.server import create_app  # noqa: E402
 from vhil.server.config import Settings  # noqa: E402
-from vhil.server.githost import (CachedRefs, FakeGitHost, FakeRefLister, GitHubHost,  # noqa: E402
-                                 parse_ls_remote)
+from vhil.server.githost import (CachedRefs, FakeGitHost, FakeRefLister,  # noqa: E402
+                                 GitHubHost)
 from vhil.system import REPO  # noqa: E402
 
 
@@ -44,6 +44,11 @@ def remote(tmp_path):
     return ws, bare
 
 
+REFS = {"branches": [{"name": n, "sha": c * 40} for n, c in (("dev", "a"), ("feat/x", "b"),
+                                                              ("main", "c"))],
+        "tags": [{"name": "v1.0.0", "sha": "d" * 40}]}
+
+
 class Clock:
     t = 0.0
 
@@ -58,9 +63,9 @@ def env(remote, tmp_path):
                               auth="dev"))
     app.state.git_host = FakeGitHost()
     clock = Clock()
-    lister = FakeRefLister({"isc-fs/IFS08-CE-ECU": {"branches": ["dev", "feat/x", "main"],
-                                                   "tags": ["v1.0.0"]}})
+    lister = FakeRefLister({"isc-fs/IFS08-CE-ECU": REFS})
     app.state.ref_lister = CachedRefs(lister, ttl_s=60, clock=clock)
+    app.state.fw_dir = tmp_path / "fw"          # no builds, whatever the host has
     return type("Env", (), dict(client=TestClient(app), app=app, ws=ws, bare=bare,
                                 lister=lister, clock=clock))
 
@@ -129,14 +134,14 @@ def test_dev_mode_takes_the_author_from_the_request(env):
 @pytest.mark.parametrize("body, message", [
     ("kind: system\nid: ams\nboards: [unclosed\n", "not YAML"),
     ("- a\n- list\n", "YAML mapping"),
-    ("kind: system\nid: other\nboards:\n  a: {board: mainlite, role: ams, firmware: ams}\n",
+    ("kind: system\nid: other\nboards:\n  a: {board: mainlite, role: ams}\n",
      "does not match the file name"),
     ("kind: system\nid: ams\nboards: {}\n", "should be non-empty"),
-    ("kind: system\nid: ams\nwheels: 4\nboards:\n  a: {board: mainlite, role: ams, firmware: ams}\n",
+    ("kind: system\nid: ams\nwheels: 4\nboards:\n  a: {board: mainlite, role: ams}\n",
      "wheels"),
     ("kind: system\nid: ams\nboards:\n  a: {board: no-such-board, firmware: ams}\n",
      "no board 'no-such-board'"),
-    ("kind: system\nid: ams\nboards:\n  a: {board: mainlite, role: ams, firmware: ams}\n"
+    ("kind: system\nid: ams\nboards:\n  a: {board: mainlite, role: ams}\n"
      "buses:\n  b: {kind: can, nodes: [a.FDCAN9]}\n", "no connector or pin 'FDCAN9'"),
 ])
 def test_invalid_systems_are_422_with_the_reason_and_save_nothing(env, body, message):
@@ -250,6 +255,23 @@ def test_preview_translates_and_validates_without_saving(env):
     assert bad.json()["errors"]
 
 
+def test_an_unrouted_pin_warns_but_saves(env):
+    """Wiring a pin the role's backplane leaves unconnected is a warning:
+    Check shows it, and a save goes through with it."""
+    text = (env.ws / "systems" / "ams.yaml").read_text()
+    doc = yaml.safe_load(text)
+    doc["buses"]["can_x"] = {"kind": "can", "nodes": ["ams.FDCAN3"]}
+    text = editor.write_system(doc, text)
+    warning = "ams: FDCAN3 is not connected on the AMS backplane (docs/backplanes/ams.md)"
+    p = env.client.post("/api/systems/ams/preview", json={"yaml": text}).json()
+    assert p["errors"] == [] and p["warnings"] == [warning]
+    r = put(env, "ams", yaml=text, branch="feat/warned", message="feat(systems): fdcan3")
+    assert r.status_code == 200, r.text
+    assert r.json()["warnings"] == [warning]
+    d = env.client.get("/api/systems/ams/dataflow", params={"branch": "feat/warned"}).json()
+    assert d["errors"] == [] and d["warnings"] == [warning]
+
+
 def test_unknown_systems_are_404_unless_new(env):
     assert env.client.get("/api/systems/nope/dataflow").status_code == 404
     t = env.client.get("/api/systems/nope/dataflow", params={"new": True}).json()
@@ -323,7 +345,9 @@ def test_firmware_lists_the_catalogue_sources(env):
 def test_firmware_refs_come_from_ls_remote_cached(env):
     r = env.client.get("/api/firmware/ecu/refs").json()
     assert r == {"id": "ecu", "repo": "isc-fs/IFS08-CE-ECU", "default": "dev",
-                 "branches": ["dev", "feat/x", "main"], "tags": ["v1.0.0"]}
+                 "default_built": False,
+                 "branches": [{**b, "built": False} for b in REFS["branches"]],
+                 "tags": [{**t, "built": False} for t in REFS["tags"]]}
     env.client.get("/api/firmware/ecu/refs")
     assert env.lister.calls == ["isc-fs/IFS08-CE-ECU"]
     env.clock.t = 61
@@ -331,16 +355,31 @@ def test_firmware_refs_come_from_ls_remote_cached(env):
     assert len(env.lister.calls) == 2
 
 
+def test_firmware_refs_say_which_are_built(env, tmp_path):
+    """A ref is built when the firmware volume's built.txt lists its image
+    and the file is there: the worker reuses it (else the first run builds)."""
+    fw = tmp_path / "fw"
+    elf = fw / "ecu@feat_x" / "build" / "ECU08.elf"
+    elf.parent.mkdir(parents=True)
+    elf.write_bytes(b"\x7fELF")
+    (fw / "built.txt").write_text(f"ecu={elf}\necu={fw}/ecu@dev/build/ECU08.elf\n")
+    env.app.state.fw_dir = fw
+    r = env.client.get("/api/firmware/ecu/refs").json()
+    assert {b["name"]: b["built"] for b in r["branches"]} == {
+        "dev": False, "feat/x": True, "main": False}   # dev: listed, but no file
+    assert r["default_built"] is False
+
+
+@pytest.mark.parametrize("ident", ["..", "ECU", "a b", "-x", "ecu%2F..", "e" * 300])
+def test_firmware_refs_take_only_a_catalogue_id(env, ident):
+    r = env.client.get(f"/api/firmware/{ident}/refs")
+    assert r.status_code in (404, 422) and not env.lister.calls
+
+
 def test_firmware_refs_errors(env):
     assert env.client.get("/api/firmware/nope/refs").status_code == 404
     r = env.client.get("/api/firmware/ams/refs")     # not in the fake: ls-remote fails
     assert r.status_code == 502 and "IFS08-CE-AMS" in r.text
-
-
-def test_ls_remote_output_is_parsed():
-    out = ("a\trefs/heads/dev\nb\trefs/heads/feat/x\nc\trefs/tags/v1.0\n"
-           "d\trefs/tags/v1.0^{}\ne\trefs/tags/v1.1\nf\tHEAD\n")
-    assert parse_ls_remote(out) == {"branches": ["dev", "feat/x"], "tags": ["v1.1", "v1.0"]}
 
 
 def test_config_names_the_editor(env, monkeypatch):

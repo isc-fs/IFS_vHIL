@@ -51,9 +51,10 @@ pins:
 - `ams.PC1` for the DC-DC sensor, which the firmware ignores.
 
 The other routed pins are not modelled yet: PB4–PB7 (relay drivers), PF10,
-PC0 and the spare pins. The MainLite catalogue entry models PF9 as an analog
-input, but on the AMS it is the TSMS digital input. No AMS system uses it, so
-nothing should attach an analog source to `ams.PF9`.
+PC0 and the spare pins. The MainLite models PF9 as an analog input, but on
+the AMS it is the TSMS digital input, so the AMS role makes it a GPIO
+(`gpio: PF9` in its roles entry): `ams.PF9` takes a `gpio_in` port signal,
+and an analog source on it is refused. No AMS system uses it yet.
 
 ## Known gotchas
 
@@ -73,7 +74,7 @@ nothing should attach an analog source to `ams.PF9`.
   - With the ECU (MainLite R5), the bus sees 40 Ω. With the uDV as well
     (MainLite R5 + MicroDV2 R39), it sees 24 Ω, against ISO 11898-2's 60 Ω.
 - **PF9 is `TSMS_FIL`, a digital input** (`main.h:70` `TSMS_Pin`), not the
-  analog input the MainLite catalogue entry models.
+  analog input the MainLite board models; the AMS role makes it a GPIO.
 - **The DC-DC current (PC1) is routed but not read.** AMS `dev` dropped the
   measurement in af07ec8 (no DC-DC fitted). The 0x135 frame's DC-DC slot is
   sent as 0 (`ams_config.hpp:607`), and the DC-DC temperature is a stub

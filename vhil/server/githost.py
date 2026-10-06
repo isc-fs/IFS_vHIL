@@ -3,7 +3,7 @@
 Two seams, each with a GitHub implementation and a fake for tests:
 
   GitHost     push a workspace branch, open a PR against the base branch
-  RefLister   a firmware repo's branches and tags (git ls-remote)
+  RefLister   a firmware repo's branches and tags, with their commits (git ls-remote)
 
 GitHubHost pushes and opens PRs with the GitHub App's installation token for
 this repository when the App is configured (vhil.server.github_app, M5.5),
@@ -21,6 +21,8 @@ import time
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Callable, Union
+
+from vhil.system import REF
 
 # A token, or a function returning one when it is needed (an App installation
 # token is minted on use and renewed before it expires).
@@ -154,48 +156,109 @@ class FakeGitHost(GitHost):
 
 # -- firmware refs ------------------------------------------------------------------
 
+# A ref is {"name": <branch or tag>, "sha": <commit>}.
+Refs = dict[str, list[dict[str, str]]]
+# What a remote may answer with and still be shown: a commit id, and a name a
+# system file's firmware_ref / bootloader_ref could hold (vhil.system.REF).
+SHA = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
+MAX_REFS = 1000                  # per kind: a picker, not a mirror
+LS_REMOTE_TIMEOUT_S = 15
+REPO = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,99}/[A-Za-z0-9_][A-Za-z0-9_.-]{0,99}")  # owner/name
+
+
 class RefLister(ABC):
     @abstractmethod
-    def refs(self, repo: str) -> dict[str, list[str]]:
-        """{"branches": [...], "tags": [...]} of an owner/name repository."""
+    def refs(self, repo: str) -> Refs:
+        """{"branches": [{name, sha}...], "tags": [{name, sha}...]} of an
+        owner/name repository; a tag's sha is the commit it points at."""
 
 
-def parse_ls_remote(text: str) -> dict[str, list[str]]:
-    branches, tags = [], []
+def _version_key(name: str) -> list:
+    """v1.10.0 after v1.9.0 (digit runs compare as numbers), and v1.6.2 after
+    v1.6.2-rc1 (a "-" suffix is a pre-release)."""
+    key = [(0, int(p), "") if p.isdigit() else (1, 0 if p.startswith("-") else 2, p)
+           for p in re.split(r"(\d+)", name) if p]
+    return key + [(1, 1, "")]
+
+
+def parse_ls_remote(text: str) -> Refs:
+    """`git ls-remote --heads --tags` output as refs. The remote is not
+    trusted: a line whose sha or name isn't one a system file could hold
+    (vhil.system.REF) is dropped, and each kind is capped at MAX_REFS."""
+    heads, tags, peeled = {}, {}, {}
     for line in text.splitlines():
-        _, _, ref = line.partition("\t")
+        sha, _, ref = line.partition("\t")
+        if not SHA.fullmatch(sha):
+            continue
         if ref.startswith("refs/heads/"):
-            branches.append(ref.removeprefix("refs/heads/"))
-        elif ref.startswith("refs/tags/") and not ref.endswith("^{}"):
-            tags.append(ref.removeprefix("refs/tags/"))
-    return {"branches": sorted(branches), "tags": sorted(tags, reverse=True)}
+            name, into = ref.removeprefix("refs/heads/"), heads
+        elif ref.startswith("refs/tags/"):
+            name, into = ref.removeprefix("refs/tags/"), tags
+            if name.endswith("^{}"):              # an annotated tag's commit
+                name, into = name[:-3], peeled
+        else:
+            continue
+        if REF.fullmatch(name):
+            into[name] = sha
+    as_list = lambda d, names: [{"name": n, "sha": d[n]} for n in names][:MAX_REFS]
+    tags = {n: peeled.get(n, sha) for n, sha in tags.items()}
+    return {"branches": as_list(heads, sorted(heads)),
+            "tags": as_list(tags, sorted(tags, key=_version_key, reverse=True))}
 
 
 class LsRemote(RefLister):
-    """git ls-remote on github.com, with the token for private firmware repos."""
+    """git ls-remote on github.com, time-bounded. The firmware repos are
+    public, so it needs no credentials; with the GitHub App configured it
+    asks with a read-only token for that repo (`token_for`), else with
+    `token` (VHIL_GITHUB_TOKEN), for a private one. If the authenticated
+    call fails it tries once without: a public repo the App isn't installed
+    on still lists."""
 
-    def __init__(self, token: str | None = None):
-        self.token = token
+    def __init__(self, token: str | None = None,
+                 token_for: Callable[[str], str] | None = None):
+        self.token, self.token_for = token, token_for
 
-    def refs(self, repo: str) -> dict[str, list[str]]:
-        out = subprocess.run(["git", "-c", "credential.helper=", "ls-remote", "--heads", "--tags",
-                              f"https://github.com/{repo}.git"],
-                             capture_output=True, text=True, timeout=30,
-                             # Outside any checkout: needs none, and a broken
-                             # one in the cwd (a mounted worktree) makes git fail.
-                             cwd=tempfile.gettempdir(), env=git_auth_env(self.token))
+    def _token(self, repo: str) -> str | None:
+        if self.token_for is not None:
+            try:
+                return self.token_for(repo)
+            except Exception:  # noqa: BLE001 - not in the App's org, not installed
+                pass
+        return self.token
+
+    def _ls_remote(self, repo: str, token: str | None) -> subprocess.CompletedProcess:
+        try:
+            return subprocess.run(
+                ["git", "-c", "credential.helper=", "ls-remote", "--heads", "--tags",
+                 f"https://github.com/{repo}.git"],
+                capture_output=True, text=True, timeout=LS_REMOTE_TIMEOUT_S,
+                # Outside any checkout: needs none, and a broken one in the
+                # cwd (a mounted worktree) makes git fail.
+                cwd=tempfile.gettempdir(), env=git_auth_env(token))
+        except subprocess.TimeoutExpired:
+            raise HostError(f"ls-remote {repo} timed out after {LS_REMOTE_TIMEOUT_S} s")
+
+    def refs(self, repo: str) -> Refs:
+        if not REPO.fullmatch(repo) or ".." in repo:
+            raise HostError(f"{repo!r} is not an owner/name repository")
+        token = self._token(repo)
+        out = self._ls_remote(repo, token)
+        if out.returncode != 0 and token:
+            out, failed = self._ls_remote(repo, None), out
+            if out.returncode != 0:
+                out = failed
         if out.returncode != 0:
-            hint = "" if self.token else " (a private repo needs VHIL_GITHUB_TOKEN)"
+            hint = "" if token else " (a private repo needs the GitHub App or VHIL_GITHUB_TOKEN)"
             raise HostError(_scrub(f"ls-remote {repo} failed{hint}: {out.stderr.strip()}",
-                                   self.token))
+                                   token))
         return parse_ls_remote(out.stdout)
 
 
 class FakeRefLister(RefLister):
-    def __init__(self, refs: dict[str, dict[str, list[str]]]):
+    def __init__(self, refs: dict[str, Refs]):
         self._refs, self.calls = refs, []
 
-    def refs(self, repo: str) -> dict[str, list[str]]:
+    def refs(self, repo: str) -> Refs:
         self.calls.append(repo)
         if repo not in self._refs:
             raise HostError(f"ls-remote {repo} failed: not found")
@@ -205,11 +268,11 @@ class FakeRefLister(RefLister):
 class CachedRefs(RefLister):
     """Remembers each repo's refs for `ttl_s`: the picker asks on every open."""
 
-    def __init__(self, inner: RefLister, ttl_s: float = 60.0, clock=time.monotonic):
+    def __init__(self, inner: RefLister, ttl_s: float = 300.0, clock=time.monotonic):
         self.inner, self.ttl_s, self.clock = inner, ttl_s, clock
         self._cache: dict[str, tuple[float, dict]] = {}
 
-    def refs(self, repo: str) -> dict[str, list[str]]:
+    def refs(self, repo: str) -> Refs:
         hit = self._cache.get(repo)
         if hit and self.clock() - hit[0] < self.ttl_s:
             return hit[1]

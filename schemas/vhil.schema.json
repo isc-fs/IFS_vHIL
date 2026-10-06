@@ -20,6 +20,28 @@
       ],
       "description": "A role a board unit is provisioned for: the car's MainLite roles (catalog/boards/mainlite.yaml roles), and only these."
     },
+    "label": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_+-]{0,31}$(?![\\s\\S])",
+      "description": "A car signal's name as a display label (APPS_1, CAN_ACU): letters, digits and _ + -, at most 32. Never an endpoint."
+    },
+    "gpio_pin": {
+      "type": "object",
+      "required": [
+        "port",
+        "pin"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "port": {
+          "$ref": "#/$defs/peripheral"
+        },
+        "pin": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
     "peripheral": {
       "type": "string",
       "description": "A backend path to a peripheral, e.g. Renode's sysbus.fdcan1_h7.",
@@ -132,7 +154,8 @@
             "type": "object",
             "required": [
               "node_id",
-              "flash_bus"
+              "flash_bus",
+              "firmware"
             ],
             "additionalProperties": false,
             "properties": {
@@ -145,6 +168,49 @@
               "flash_bus": {
                 "$ref": "#/$defs/name",
                 "description": "The board CAN connector (its `can`) the app is flashed over in this role."
+              },
+              "firmware": {
+                "$ref": "#/$defs/id",
+                "description": "The firmware (catalog/firmware) a unit in this role runs: the role sets it, a system does not. It may name one the catalogue lacks yet; a system placing a board in that role is then refused."
+              },
+              "backplane": {
+                "type": "object",
+                "required": [
+                  "name",
+                  "doc"
+                ],
+                "additionalProperties": false,
+                "description": "The backplane a unit in this role is mounted on: its name and its reference page.",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9 _-]{0,31}$(?![\\s\\S])"
+                  },
+                  "doc": {
+                    "type": "string",
+                    "pattern": "^docs/backplanes/[a-z0-9-]+\\.md$(?![\\s\\S])"
+                  }
+                }
+              },
+              "pins": {
+                "type": "object",
+                "description": "The board connectors and pins this role's backplane routes, each with the car signal it carries: a display label, never an endpoint alias. Every other connector but the board's onboard ones is not connected in this role; a system wiring one gets a warning.",
+                "propertyNames": {
+                  "$ref": "#/$defs/name"
+                },
+                "additionalProperties": {
+                  "$ref": "#/$defs/label"
+                }
+              },
+              "gpio": {
+                "type": "object",
+                "description": "Pins the board models as analog inputs that this role's backplane uses as GPIO, with their GPIO port and pin: in this role they are GPIO endpoints.",
+                "propertyNames": {
+                  "$ref": "#/$defs/name"
+                },
+                "additionalProperties": {
+                  "$ref": "#/$defs/gpio_pin"
+                }
               }
             }
           }
@@ -152,6 +218,16 @@
         "vbat": {
           "type": "boolean",
           "description": "Whether the board backs the MCU's backup domain (VBAT). Without it a power cut wipes the RTC backup registers; default true, Renode's behaviour."
+        },
+        "onboard": {
+          "type": "object",
+          "description": "Connectors on the board itself, connected whatever its role's backplane routes, each with a display label (the MainLite's microSD and IMU).",
+          "propertyNames": {
+            "$ref": "#/$defs/name"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/label"
+          }
         },
         "can": {
           "type": "object",
@@ -192,21 +268,7 @@
           "type": "object",
           "description": "Pin name -> GPIO port and pin number.",
           "additionalProperties": {
-            "type": "object",
-            "required": [
-              "port",
-              "pin"
-            ],
-            "additionalProperties": false,
-            "properties": {
-              "port": {
-                "$ref": "#/$defs/peripheral"
-              },
-              "pin": {
-                "type": "integer",
-                "minimum": 0
-              }
-            }
+            "$ref": "#/$defs/gpio_pin"
           }
         },
         "sdmmc": {
@@ -358,8 +420,7 @@
           "additionalProperties": {
             "type": "object",
             "required": [
-              "board",
-              "firmware"
+              "board"
             ],
             "additionalProperties": false,
             "properties": {
@@ -368,10 +429,11 @@
               },
               "role": {
                 "$ref": "#/$defs/role",
-                "description": "The board's role, one of its catalogue entry's roles (a MainLite: ecu, ams or udv): it gives the bootloader's node ID and flash bus. Required for a board that has roles."
+                "description": "The board's role, one of its catalogue entry's roles (a MainLite: ecu, ams or udv): it gives the bootloader's node ID and flash bus, and the firmware the board runs. Required for a board that has roles."
               },
               "firmware": {
-                "$ref": "#/$defs/id"
+                "$ref": "#/$defs/id",
+                "description": "The firmware a board without roles runs. A board with roles runs its role's and takes none here."
               },
               "firmware_ref": {
                 "type": "string",

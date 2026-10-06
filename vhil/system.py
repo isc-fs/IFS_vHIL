@@ -45,6 +45,9 @@ NAME = rn.IDENT                                              # $defs/name
 ENDPOINT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z0-9_]+")   # $defs/endpoint
 NETDEV = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,14}")           # a Linux interface name
 REF = re.compile(r"(?![-/])(?!.*\.\.)(?!.*//)[A-Za-z0-9._/+-]{1,100}(?<![./])")  # git ref, as the schema
+# A pin's display label in a role (catalogue $defs/label): a car signal's name.
+LABEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9_+-]{0,31}")
+BACKPLANE_DOC = re.compile(r"docs/backplanes/[a-z0-9-]+\.md")  # a role's backplane page
 # A string device param without a declared format (catalogue param_formats).
 SAFE_PARAM = re.compile(r"[A-Za-z0-9_.+-]{0,128}")
 CARD_DIR_ENV = "VHIL_CARD_DIR"
@@ -62,6 +65,31 @@ def card_dirs() -> list[Path]:
 
 class SystemError(ValueError):
     pass
+
+
+# Where `vhil.system build --workdir <dir>` puts a firmware source at a ref,
+# and the list of what it built (scripts/vhil-docker.sh fw and the worker
+# append its board=elf lines to <dir>/built.txt).
+
+def source_dir(workdir: Path, fw: dict, ref: str) -> Path:
+    return Path(workdir) / f"{fw['id']}@{ref.replace('/', '_')}"
+
+
+def image_path(workdir: Path, fw: dict, ref: str) -> Path:
+    """The ELF a build of catalogue firmware `fw` at `ref` gives."""
+    return source_dir(workdir, fw, ref) / fw["build"]["elf"]
+
+
+def built_images(workdir: Path) -> dict[Path, str]:
+    """ELF (resolved) -> image key, for each line of <workdir>/built.txt."""
+    listing = Path(workdir) / "built.txt"
+    out = {}
+    if listing.is_file():
+        for line in listing.read_text().splitlines():
+            key, sep, path = line.partition("=")
+            if sep:
+                out[Path(path.strip()).resolve()] = key
+    return out
 
 
 def _validator():
@@ -106,6 +134,7 @@ class Board:
     bootloader_ref: str | None = None   # likewise for the bootloader
     role: str | None = None             # the board's role (catalogue board roles)
     flash_bus: str | None = None        # CAN connector the app is flashed over: the role's
+    role_spec: dict | None = None       # the role's catalogue entry (firmware, pins, gpio)
 
     def ref(self, image: str = "firmware") -> str:
         """The branch or tag to build: the system's, else the catalogue's."""
@@ -114,13 +143,26 @@ class Board:
 
     def endpoint(self, connector: str) -> tuple[str, object]:
         """(kind, target) for a connector or pin: ('can'|'spi'|'sdmmc'|'i2c',
-        peripheral), ('analog', {adc, channel}) or ('gpio', {port, pin})."""
+        peripheral), ('analog', {adc, channel}) or ('gpio', {port, pin}). A
+        pin the role re-kinds (its `gpio`) is a GPIO in that role."""
+        override = (self.role_spec or {}).get("gpio") or {}
+        if connector in override:
+            return "gpio", override[connector]
         for kind, section in (("can", "can"), ("spi", "spi"), ("sdmmc", "sdmmc"),
                               ("i2c", "i2c"), ("analog", "analog_in"), ("gpio", "gpio")):
             if connector in self.board.get(section, {}):
                 return kind, self.board[section][connector]
         raise SystemError(f"board '{self.name}' ({self.board['id']}) has no "
                           f"connector or pin '{connector}'")
+
+    def routed(self, connector: str) -> bool | None:
+        """Whether the role's backplane connects a connector or pin: one of
+        its `pins`, or on the board itself (`onboard`). None when the role
+        says nothing of its routing (or the board has no roles)."""
+        pins = (self.role_spec or {}).get("pins")
+        if pins is None:
+            return None
+        return connector in pins or connector in (self.board.get("onboard") or {})
 
 
 class System:
@@ -135,18 +177,21 @@ class System:
         self.boards: dict[str, Board] = {}
         for name, spec in self.doc["boards"].items():
             # The bootloader comes with the board (every MainLite carries
-            # one); its node ID and flash bus with the role the system gives
-            # it, from the catalogue board's roles.
+            # one); its node ID, flash bus and firmware with the role the
+            # system gives it, from the catalogue board's roles.
             board = _entry("board", spec["board"], catalog)
             role = spec.get("role")
-            self.boards[name] = Board(
-                name, board, _entry("platform", board["platform"], catalog),
-                _entry("firmware", spec["firmware"], catalog),
+            role_spec = (board.get("roles") or {}).get(role) if isinstance(role, str) else None
+            b = Board(
+                name, board, _entry("platform", board["platform"], catalog), {},
                 _entry("firmware", board["bootloader"], catalog) if "bootloader" in board else None,
-                (board.get("roles") or {}).get(role, {}).get("node_id"),
+                (role_spec or {}).get("node_id"),
                 list(spec.get("write_protect", [])),
                 spec.get("firmware_ref"), spec.get("bootloader_ref"),
-                role, (board.get("roles") or {}).get(role, {}).get("flash_bus"))
+                role, (role_spec or {}).get("flash_bus"), role_spec)
+            self._check_role(b)
+            b.firmware = self._firmware(b, spec, catalog)
+            self.boards[name] = b
         self.buses = self.doc.get("buses", {})
         self.bench = self.doc.get("bench", {})
         self.devices = {name: dict(spec, model_doc=_entry("model", spec["model"], catalog))
@@ -284,19 +329,76 @@ class System:
         self._check_params(name, dev, values)
         dev["params"] = {**dev.get("params", {}), **values}
 
+    @staticmethod
+    def _firmware(b: Board, spec: dict, catalog: Path) -> dict:
+        """The catalogue firmware a board runs: its role's, for a board with
+        roles (a system names none: an ECU runs the ECU firmware), else the
+        one the system names."""
+        if b.role_spec is not None:
+            ident = b.role_spec.get("firmware")
+            if "firmware" in spec:
+                raise SystemError(f"board '{b.name}': the {b.role} role sets the firmware "
+                                  f"({ident}); a system names none, so drop `firmware:`")
+            if not (catalog / "firmware" / f"{ident}.yaml").is_file():
+                raise SystemError(f"board '{b.name}': role {b.role} has no firmware in the "
+                                  f"catalogue yet (catalog/firmware/{ident}.yaml)")
+            return _entry("firmware", ident, catalog)
+        if "firmware" not in spec:
+            raise SystemError(f"board '{b.name}': {b.board['id']} has no roles, so it needs "
+                              f"a firmware")
+        return _entry("firmware", spec["firmware"], catalog)
+
+    @staticmethod
+    def check_board_roles(board: dict) -> None:
+        """The catalogue board's roles table: each role a known one, its flash
+        bus a CAN connector, its firmware a catalogue id, its pin labels on
+        connectors the board has, and its GPIO re-kinds on pins the board
+        models as analog inputs only. Labels are display text: plain words."""
+        sections = ("can", "spi", "sdmmc", "i2c", "gpio", "analog_in")
+        connectors = {c for s in sections for c in (board.get(s) or {})}
+        bid = board["id"]
+
+        def label(where: str, pin, text) -> None:
+            if pin not in connectors:
+                raise SystemError(f"board {bid}: {where} labels {pin!r}, which it lacks")
+            if not isinstance(text, str) or not LABEL.fullmatch(text):
+                raise SystemError(f"board {bid}: {where} label {text!r} of {pin} is not a "
+                                  f"plain word (letters, digits and _ + -, at most 32)")
+        for pin, text in (board.get("onboard") or {}).items():
+            label("onboard", pin, text)
+        for name, role in (board.get("roles") or {}).items():
+            if name not in ROLES:
+                raise SystemError(f"board {bid}: role {name!r} is not one of "
+                                  f"{', '.join(ROLES)}")
+            if role.get("flash_bus") not in board.get("can", {}):
+                raise SystemError(f"board {bid}: role {name}'s flash_bus "
+                                  f"{role.get('flash_bus')!r} is not one of its CAN connectors")
+            if not isinstance(role.get("firmware"), str) or not ID.fullmatch(role["firmware"]):
+                raise SystemError(f"board {bid}: role {name}'s firmware "
+                                  f"{role.get('firmware')!r} is not a catalogue id")
+            doc = (role.get("backplane") or {}).get("doc")
+            if doc is not None and (not isinstance(doc, str) or not BACKPLANE_DOC.fullmatch(doc)):
+                raise SystemError(f"board {bid}: role {name}'s backplane page {doc!r} is not "
+                                  f"a docs/backplanes/ page")
+            for pin, text in (role.get("pins") or {}).items():
+                label(f"role {name}", pin, text)
+            for pin, target in (role.get("gpio") or {}).items():
+                # Only a kind for a pin the board models, and only analog ->
+                # GPIO: the board says where the pin is, the role what it is.
+                if pin not in (board.get("analog_in") or {}) or pin in (board.get("gpio") or {}):
+                    raise SystemError(f"board {bid}: role {name} makes {pin!r} a GPIO, but "
+                                      f"the board models no analog input {pin!r} to re-kind")
+                if (not isinstance(target, dict) or not isinstance(target.get("port"), str)
+                        or not isinstance(target.get("pin"), int) or isinstance(target["pin"], bool)):
+                    raise SystemError(f"board {bid}: role {name}'s GPIO {pin} needs a port "
+                                      f"and a pin number")
+
     def _check_role(self, b: Board) -> None:
         """A board with roles (the MainLite: ECU, AMS, uDV) is placed in one of
-        them, which gives its bootloader's node ID and flash bus; each role's
-        flash bus is a CAN connector of the board. A board without roles
-        takes none."""
+        them, which gives its bootloader's node ID, flash bus and firmware.
+        A board without roles takes none."""
         roles = b.board.get("roles") or {}
-        for name, role in roles.items():
-            if name not in ROLES:
-                raise SystemError(f"board {b.board['id']}: role {name!r} is not one of "
-                                  f"{', '.join(ROLES)}")
-            if role.get("flash_bus") not in b.board.get("can", {}):
-                raise SystemError(f"board {b.board['id']}: role {name}'s flash_bus "
-                                  f"{role.get('flash_bus')!r} is not one of its CAN connectors")
+        self.check_board_roles(b.board)
         if not roles:
             if b.role is not None:
                 raise SystemError(f"board '{b.name}': {b.board['id']} has no roles, "
@@ -402,6 +504,33 @@ class System:
             _, kind, _ = self.resolve(r["to"])
             if kind != "analog":
                 raise SystemError(f"DAC route to '{r['to']}': not an analog input")
+        self.warnings = self._routing_warnings()
+
+    def endpoints(self) -> list[str]:
+        """Every board endpoint the system wires, once each, in file order."""
+        used = [node for spec in self.buses.values() for node in spec["nodes"]]
+        for dev in self.devices.values():
+            used += [dev[p] for p in ("spi", "cs", "sdmmc", "i2c") if p in dev]
+            used += list(dev.get("outputs", {}).values())
+        for spec in self.doc.get("port", {}).get("signals", {}).values():
+            used += [v for k, v in spec.items() if k not in ("can_rx", "can_tx")]
+        used += [r["to"] for r in self.bench.get("dac_routes", [])]
+        return list(dict.fromkeys(used))
+
+    def _routing_warnings(self) -> list[str]:
+        """What the system wires that its board's role leaves unconnected on
+        the backplane (the catalogue role's `pins`). A warning, not an error:
+        the emulated MCU has the pin either way, and a test may mean to."""
+        out = []
+        for endpoint in self.endpoints():
+            name, connector = endpoint.split(".", 1)
+            b = self.boards[name]
+            if b.routed(connector) is False:
+                bp = b.role_spec.get("backplane")
+                where = (f"the {bp['name']} backplane ({bp['doc']})" if bp
+                         else f"the {b.role} role's backplane")
+                out.append(f"{b.name}: {connector} is not connected on {where}")
+        return out
 
     def can_of(self, board: str) -> dict[str, str]:
         """CAN controller -> bus name, for one board instance."""
@@ -684,7 +813,7 @@ class System:
             ref = refs.get(name, default_ref)
             key = (fw["id"], fw["repo"], ref)
             if key not in by_source:
-                src = workdir / f"{fw['id']}@{ref.replace('/', '_')}"
+                src = source_dir(workdir, fw, ref)
                 if src.exists():
                     shutil.rmtree(src)
                 log(f"[{name}] cloning {fw['repo']}@{ref}")
@@ -735,6 +864,9 @@ def main(argv=None) -> int:
         system = System(args.system)
         if args.cmd == "validate":
             print(f"{args.system}: OK ({', '.join(system.boards)})")
+            # Warnings don't fail validation: the system runs as written.
+            for warning in system.warnings:
+                print(f"warning: {args.system}: {warning}", file=sys.stderr)
         elif args.cmd == "render":
             text = system.render_renode({k: Path(v) for k, v in _pairs(args.firmware).items()},
                                         socketcan=args.socketcan)

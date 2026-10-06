@@ -87,13 +87,80 @@ def test_a_failed_push_does_not_echo_the_token(tmp_path, monkeypatch):
     assert TOKEN not in str(e.value)
 
 
+SHA1 = "a" * 40
+
+
 def test_ls_remote_keeps_the_token_off_the_command_line(monkeypatch):
-    run = Recorder(stdout="abc\trefs/heads/dev\n")
+    run = Recorder(stdout=f"{SHA1}\trefs/heads/dev\n")
     monkeypatch.setattr(githost.subprocess, "run", run)
-    assert LsRemote(TOKEN).refs("isc-fs/IFS08-CE-ECU")["branches"] == ["dev"]
+    assert LsRemote(TOKEN).refs("isc-fs/IFS08-CE-ECU")["branches"] == [{"name": "dev", "sha": SHA1}]
     (cmd, env), = run.calls
     assert not leaks(cmd) and "https://github.com/isc-fs/IFS08-CE-ECU.git" in cmd
     assert HEADER in env.values()
+
+
+def test_ls_remote_asks_with_the_apps_read_token_for_that_repo(monkeypatch):
+    run = Recorder(stdout=f"{SHA1}\trefs/heads/dev\n")
+    monkeypatch.setattr(githost.subprocess, "run", run)
+    asked = []
+    LsRemote(None, token_for=lambda repo: asked.append(repo) or TOKEN).refs("isc-fs/IFS08-CE-ECU")
+    assert asked == ["isc-fs/IFS08-CE-ECU"] and HEADER in run.calls[0][1].values()
+
+
+def test_ls_remote_falls_back_to_anonymous_for_a_public_repo(monkeypatch):
+    """No App token (not installed there), or one the remote refuses: the
+    firmware repos are public, so it asks again without."""
+    def broken(repo):
+        raise RuntimeError("not installed on " + repo)
+    run = Recorder(stdout="")
+    monkeypatch.setattr(githost.subprocess, "run", run)
+    LsRemote(None, token_for=broken).refs("isc-fs/IFS08-CE-ECU")
+    assert not any("extraHeader" in str(v) for v in run.calls[0][1].values())
+
+    calls = []
+
+    def flaky(cmd, **kw):
+        calls.append(kw["env"])
+        authed = any("extraHeader" in str(v) for v in kw["env"].values())
+        return subprocess.CompletedProcess(cmd, 128 if authed else 0,
+                                           "" if authed else f"{SHA1}\trefs/tags/v1.7.0\n",
+                                           f"denied {TOKEN}" if authed else "")
+    monkeypatch.setattr(githost.subprocess, "run", flaky)
+    assert LsRemote(TOKEN).refs("isc-fs/stm32-can-bootloader")["tags"] == [
+        {"name": "v1.7.0", "sha": SHA1}]
+    assert len(calls) == 2
+
+
+def test_ls_remote_is_time_bounded(monkeypatch):
+    def slow(cmd, **kw):
+        assert kw["timeout"] <= 30
+        raise subprocess.TimeoutExpired(cmd, kw["timeout"])
+    monkeypatch.setattr(githost.subprocess, "run", slow)
+    with pytest.raises(HostError, match="timed out"):
+        LsRemote(None).refs("isc-fs/IFS08-CE-ECU")
+
+
+@pytest.mark.parametrize("repo", ["../x", "isc-fs/a b", "-u/x", "a/b/c", "isc-fs/..", ""])
+def test_ls_remote_takes_only_an_owner_name_repo(monkeypatch, repo):
+    monkeypatch.setattr(githost.subprocess, "run", Recorder())
+    with pytest.raises(HostError, match="not an owner/name"):
+        LsRemote(None).refs(repo)
+
+
+def test_ls_remote_output_is_parsed_and_untrusted():
+    """Annotated tags resolve to their commit; tags sort as versions; a
+    line whose sha or name a system file couldn't hold is dropped."""
+    from vhil.server.githost import parse_ls_remote
+    b, c, d, e, f = ("b" * 40, "c" * 40, "d" * 40, "e" * 40, "f" * 40)
+    out = (f"{SHA1}\trefs/heads/dev\n{b}\trefs/heads/feat/x\n{c}\trefs/tags/v1.9.0\n"
+           f"{d}\trefs/tags/v1.9.0^{{}}\n{e}\trefs/tags/v1.10.0\n{f}\tHEAD\n"
+           f"{b}\trefs/tags/v1.10.0-rc1\n"
+           f"{b}\trefs/heads/-upload-pack=x\n{b}\trefs/heads/a..b\n{b}\trefs/heads/x y\n"
+           f"zz\trefs/heads/badsha\n{b}\trefs/pull/1/head\n{b}\trefs/heads/ok\"<x>\n")
+    assert parse_ls_remote(out) == {
+        "branches": [{"name": "dev", "sha": SHA1}, {"name": "feat/x", "sha": b}],
+        "tags": [{"name": "v1.10.0", "sha": e}, {"name": "v1.10.0-rc1", "sha": b},
+                 {"name": "v1.9.0", "sha": d}]}
 
 
 def test_ls_remote_without_a_token_sends_no_header(monkeypatch):
