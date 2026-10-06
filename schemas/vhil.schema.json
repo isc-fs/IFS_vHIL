@@ -74,6 +74,13 @@
               },
               "description": "Monitor commands run on each machine after the platform loads."
             },
+            "reset": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Monitor commands the reset macro runs after every reset of the machine (power-on, software, watchdog), with the machine selected; {cpu} is the CPU's name."
+            },
             "sources": {
               "type": "array",
               "items": {

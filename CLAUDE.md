@@ -116,12 +116,17 @@ IFS_HIL recipe ─▶ ECU08.elf / AMS.elf  (same image the physical bench flashe
    itself). Never shortcut it: a power-on spends the bootloader's 2 s
    auto-jump window first, and tests wait for the app with
    `Sim.wait_for_app()` instead of assuming it starts at t = 0.
-6. **A virtual power-on writes `BASEPRI` = 0 after `machine Reset`.**
-   Renode 1.17's reset zeroes the register as read but not its masking, so a
-   cut inside a FreeRTOS critical section hangs the next boot (`vhil/broker.py`).
-   The bootloader in front doesn't change that: the stale mask survives the
-   reset into it, and the bootloader never writes BASEPRI before it jumps.
-   Don't remove it until upstream Renode fixes this.
+6. **Every reset writes `BASEPRI` = 0.** Renode 1.17's reset zeroes the
+   register as read but not its masking (renode/renode#1021), so a reset
+   taken with BASEPRI raised hangs the next boot: a power cut inside a
+   FreeRTOS critical section, or the IWDG firing while the AMS spins in its
+   stack-overflow hook (called from PendSV with BASEPRI raised). The stale
+   mask survives into the bootloader, which never writes BASEPRI: its HAL
+   tick never runs and it never auto-jumps. The platform's `renode.reset`
+   commands (`catalog/platforms/stm32h733.yaml`) run in each board's reset
+   macro, which Renode runs on every reset, the CPU's own included; the
+   broker's power-on writes it too (`vhil/broker.py`). Don't remove either
+   until upstream Renode fixes this.
 7. **Unmodelled hardware fails the run unless it is explained.** Renode drops
    writes to unmodelled registers and returns 0 for reads. The plugin's
    peripheral guard (`vhil/peripheral_guard.py`) fails a session on any such

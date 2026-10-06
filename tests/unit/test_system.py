@@ -52,6 +52,18 @@ def test_ecu_system_renders_the_bench_setup():
     assert "CreateSocketCANBridge" not in System(REPO / "systems" / "ecu.yaml").render_renode()
 
 
+@pytest.mark.parametrize("path", SYSTEMS, ids=lambda p: p.name)
+def test_every_reset_clears_basepri(path):
+    """Each board's reset macro, which Renode runs on every reset (watchdog
+    and software too, not only `machine Reset`), clears BASEPRI's stale mask
+    (renode/renode#1021; catalog/platforms/stm32h733.yaml)."""
+    s = System(path).render_renode()
+    macros = s.split("macro reset")[1:]
+    assert len(macros) == len(System(path).boards)
+    for macro in macros:
+        assert 'cpu SetRegister "BasePri" 0x0' in macro.split('"""')[1]
+
+
 def test_ecu_bench_wiring():
     cfg = System(REPO / "systems" / "ecu.yaml").bench_config()
     (entry,) = cfg["power"]

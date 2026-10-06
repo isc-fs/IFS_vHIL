@@ -66,7 +66,9 @@ def power_on_commands(machine: str, vbat: bool) -> list[str]:
     held, as on the chip.
     Renode 1.17: Reset zeroes BASEPRI as read, but not the masking it applies
     (renode/renode#1021); a cut inside a FreeRTOS critical section left the
-    next boot unable to take the TIM23 HAL tick, hanging in HAL_Delay.
+    next boot unable to take the TIM23 HAL tick, hanging in HAL_Delay. (The
+    board's reset macro clears it as well, on every reset, the watchdog's
+    included: catalog/platforms/stm32h733.yaml, renode.reset.)
     The reset-flag model is told the reset is a power-on, so RCC_RSR reads
     POR (models/renode/VhilResetFlags.cs)."""
     wipe = [] if vbat else ([f"sysbus WriteDoubleWord {addr:#x} 0x0" for addr in RTC_BKP]
