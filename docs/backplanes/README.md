@@ -57,7 +57,8 @@ What the roles table (`catalog/boards/mainlite.yaml`) takes from these pages
 is display and warnings only, never aliasing. Each role lists the pins its
 backplane routes, labelled with the car signal (`PF8: APPS_1`), and the board
 lists what is connected in every role (`onboard`: SDMMC1, I2C2). The editor
-shows the labels (`PF8 · APPS_1`, `FDCAN3 · n.c.`), and
+shows the labels of a MainLite node's role (`PF8 · APPS_1`; `FDCAN3 · n.c.`
+only when a system wires it), and
 `python -m vhil.system validate` warns, without failing, when a system wires
 a pin its role leaves unconnected:
 
