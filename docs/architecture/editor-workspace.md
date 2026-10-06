@@ -70,8 +70,9 @@ a new release.
   in `frontend/src/vhil/`:
   - `components/Home.vue`: VhilTopBar in place of NavBar, VhilRail,
     VhilInspector, and VhilDock wrapping TerminalPanel as its Log tab.
-  - `styles/_variables.scss`: each `$colour` becomes `var(--vhil-*, fallback)`
-    on `tokens.css`; `styles/style.scss` drops its Google Fonts `@import`.
+  - `styles/_variables.scss`: each `$colour` becomes `var(--<token>, fallback)`
+    on `tokens.css`, with its own names (`--bg-0`, `--fg`…), no `--vhil-`
+    alias layer; `styles/style.scss` drops its Google Fonts `@import`.
   - `custom/CustomNode.vue`: a template branch on `additionalData.vhil.kind`
     (board, bus, device) plus a badge slot; `:focus-visible` instead of the
     `outline: none` rules.
@@ -281,7 +282,7 @@ In the owner's order.
    Dockerfile building from the directory (multi-stage, `dist` and the
    Python package only); a CI job that builds the editor image and runs
    `vhil.editor check` when the editor's inputs change.
-4. **PM theme and accessibility base.** `_variables.scss` on `var(--vhil-*)`
+4. **PM theme and accessibility base.** `_variables.scss` on `var(--<token>)`
    from `tokens.css`; no Google Fonts; `:focus-visible` rings; `?theme=` and
    `vhil_set_theme`. Playwright baselines (dark/light × 1366×768/1920×1080)
    and an axe scan of shell and editor.
