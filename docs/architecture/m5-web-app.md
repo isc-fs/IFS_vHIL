@@ -119,11 +119,20 @@ sent them; counted in the summary's `sent`, not `frames`),
    coverage, JUnit.
 4. **Editor + git**: the shell embeds Pipeline Manager; save writes the system
    file to a branch in the workspace; firmware picker (repo/ref) from the
-   boards' firmware sources; PR creation. A MainLite is one node type per
-   role (`mainlite · ecu`): the role fixes its firmware, and its pins read
-   `PF8 · APPS_1` (`n.c.` where its backplane routes nothing). The node shows
-   every pin the MainLite's pin model routes off the module, also those the
-   emulator doesn't wire yet, which validate refuses. The shell's
+   boards' firmware sources; PR creation. A MainLite is one node type with
+   a `role` select (`ecu (node 0x1)`), which sets its firmware, and its pins
+   read `PF8 · APPS_1`, in two columns (devices' ports on the left, CAN and
+   digital lines on the right). A pin its role's backplane leaves unconnected
+   (`FDCAN3 · n.c.`) is hidden unless wired, which validate warns of. Each
+   reading is a Pipeline Manager interface group made of the pin, so a node
+   shows one per pin; on a role change (`properties_on_change`, with the
+   specification's `notifyWhenChanged`) the backend puts the graph back
+   (`graph_change`) with the node relabelled: wires keep their pin's
+   interface ID, and one whose pin changes kind is removed, with a notice.
+   The node offers every pin the MainLite's pin model routes off the module,
+   also those the emulator doesn't wire yet, which validate refuses. A
+   board's `write_protect` (test-only option-byte state) is a hidden
+   property: kept, never shown. The shell's
    firmware panel, not the node, picks each board's app branch/tag and
    bootloader tag: Pipeline Manager's select values come from the
    specification and can't list a remote's refs.
