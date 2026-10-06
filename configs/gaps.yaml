@@ -9,6 +9,10 @@
 #          firmware issue when the test and the firmware disagree; or
 #          "physical-only" and why only real hardware can answer it
 # systems: (optional) the system ids it applies to; default every system
+# replaced_by: (optional) the native tests (tests/sim/<file>::<test>[<param
+#          id>]) that cover the case's firmware behaviour instead, when the
+#          vHIL won't run the IFS_HIL case itself (its bench stimulus is not
+#          modelled, by decision). tests/unit/test_system.py checks each exists.
 #
 # Last full runs (IFS_HIL dev fa11a25; AMS main df1c961, ECU dev 544b651),
 # AMS `full` on systems/ams.yaml and ECU `full` on systems/ecu.yaml. The tail
@@ -81,43 +85,132 @@
 - path: tests/hil/ams/test_block_k_encoders.py::test_k103
   why: "the AMS takes an IWDG reset ~98 s after boot on the virtual bench (#151)"
 
-# The Pico LTC emulator's injections (pico_emu): no virtual Pico yet (#150).
+# The Pico LTC emulator's injections (pico_emu). The virtual bench has no Pico
+# and won't get one (#150, closed as not planned): the LTC6811 chain model is
+# the cell source, later fed by the Simscape battery stacks (M9). Each case's
+# behaviour is a native test in tests/sim instead (replaced_by), driving the
+# chain model directly. A comment notes where IFS_HIL's expectation and AMS
+# main disagree; the native test asserts what the firmware intends.
 - path: tests/hil/ams/test_block_b_safety.py::test_b022_bms_stale_trips_error
-  why: "needs pico_emu (STOP_REPLY): no virtual Pico LTC emulator yet (#150)"
-- path: tests/hil/ams/test_block_b_safety.py::test_b026_
-  why: "needs pico_emu (cell/temp injection): no virtual Pico LTC emulator yet (#150)"
-- path: tests/hil/ams/test_block_b_safety.py::test_b028_
-  why: "needs pico_emu (cell injection): no virtual Pico LTC emulator yet (#150)"
-- path: tests/hil/ams/test_block_b_safety.py::test_b029_cell_
-  why: "needs pico_emu (cell/temp injection): no virtual Pico LTC emulator yet (#150)"
+  replaced_by:
+    - tests/sim/test_ams_chain.py::test_a_silent_chip_takes_its_module_offline_in_time[all]
+  why: "pico_emu: the bench's Pico LTC emulator injects it; the vHIL covers the behaviour natively on the LTC6811 chain model (#150, not planned)"
+- path: tests/hil/ams/test_block_b_safety.py::test_b026_cell_overvoltage
+  replaced_by:
+    - tests/sim/test_ams_cells.py::test_cell_limits_and_reason[4210]
+  why: "pico_emu: the bench's Pico LTC emulator injects it; the vHIL covers the behaviour natively on the LTC6811 chain model (#150, not planned)"
+- path: tests/hil/ams/test_block_b_safety.py::test_b026_cell_undervoltage
+  replaced_by:
+    - tests/sim/test_ams_cells.py::test_cell_limits_and_reason[2790]
+  why: "pico_emu: the bench's Pico LTC emulator injects it; the vHIL covers the behaviour natively on the LTC6811 chain model (#150, not planned)"
+# B-026: IFS_HIL expects Error; AMS main has TempFaultsTrusted = false, so over-temperature is no fault.
+- path: tests/hil/ams/test_block_b_safety.py::test_b026_cell_overtemperature
+  replaced_by:
+    - tests/sim/test_ams_temps.py::test_out_of_range_temperatures_are_not_faults_while_untrusted
+  why: "pico_emu: the bench's Pico LTC emulator injects it; the vHIL covers the behaviour natively on the LTC6811 chain model (#150, not planned)"
+- path: tests/hil/ams/test_block_b_safety.py::test_b028_transient_dip_does_not_latch
+  replaced_by:
+    - tests/sim/test_ams_cells.py::test_a_dip_shorter_than_a_poll_does_not_latch
+  why: "pico_emu: the bench's Pico LTC emulator injects it; the vHIL covers the behaviour natively on the LTC6811 chain model (#150, not planned)"
+- path: tests/hil/ams/test_block_b_safety.py::test_b028_sustained_dip_latches
+  replaced_by:
+    - tests/sim/test_ams_cells.py::test_a_sustained_dip_latches
+  why: "pico_emu: the bench's Pico LTC emulator injects it; the vHIL covers the behaviour natively on the LTC6811 chain model (#150, not planned)"
+- path: tests/hil/ams/test_block_b_safety.py::test_b029_cell_undervoltage_reason
+  replaced_by:
+    - tests/sim/test_ams_cells.py::test_cell_limits_and_reason[2790]
+  why: "pico_emu: the bench's Pico LTC emulator injects it; the vHIL covers the behaviour natively on the LTC6811 chain model (#150, not planned)"
+- path: tests/hil/ams/test_block_b_safety.py::test_b029_cell_overvoltage_reason
+  replaced_by:
+    - tests/sim/test_ams_cells.py::test_cell_limits_and_reason[4210]
+  why: "pico_emu: the bench's Pico LTC emulator injects it; the vHIL covers the behaviour natively on the LTC6811 chain model (#150, not planned)"
+# B-029: IFS_HIL expects reason 7; AMS main has TempFaultsTrusted = false.
+- path: tests/hil/ams/test_block_b_safety.py::test_b029_cell_overtemp_reason
+  replaced_by:
+    - tests/sim/test_ams_temps.py::test_out_of_range_temperatures_are_not_faults_while_untrusted
+  why: "pico_emu: the bench's Pico LTC emulator injects it; the vHIL covers the behaviour natively on the LTC6811 chain model (#150, not planned)"
+# B-029: IFS_HIL expects reason 3 (BmsStale); BmsModuleOffline (2) is checked first.
 - path: tests/hil/ams/test_block_b_safety.py::test_b029_bms_stale_reason
-  why: "needs pico_emu (STOP_REPLY): no virtual Pico LTC emulator yet (#150)"
-- path: tests/hil/ams/test_block_bal.py
-  why: "needs pico_emu (cell spread): no virtual Pico LTC emulator yet (#150)"
+  replaced_by:
+    - tests/sim/test_ams_chain.py::test_a_silent_chip_takes_its_module_offline_in_time[all]
+  why: "pico_emu: the bench's Pico LTC emulator injects it; the vHIL covers the behaviour natively on the LTC6811 chain model (#150, not planned)"
+# BAL B-01: IFS_HIL expects Auto with no 0x103; AMS main falls back to Off.
+- path: tests/hil/ams/test_block_bal.py::test_b01_
+  replaced_by:
+    - tests/sim/test_ams_balancing_modes.py::test_auto_balances_in_charge
+  why: "pico_emu: the bench's Pico LTC emulator injects it; the vHIL covers the behaviour natively on the LTC6811 chain model (#150, not planned)"
+- path: tests/hil/ams/test_block_bal.py::test_b02_
+  replaced_by:
+    - tests/sim/test_ams_balancing_modes.py::test_balo_suppresses_and_balx_resumes_in_charge
+  why: "pico_emu: the bench's Pico LTC emulator injects it; the vHIL covers the behaviour natively on the LTC6811 chain model (#150, not planned)"
+- path: tests/hil/ams/test_block_bal.py::test_b03_
+  replaced_by:
+    - tests/sim/test_ams_balancing_modes.py::test_balo_suppresses_and_balx_resumes_in_charge
+  why: "pico_emu: the bench's Pico LTC emulator injects it; the vHIL covers the behaviour natively on the LTC6811 chain model (#150, not planned)"
+# BAL B-04: IFS_HIL expects a stale override to revert to Auto; AMS main falls back to Off.
+- path: tests/hil/ams/test_block_bal.py::test_b04_
+  replaced_by:
+    - tests/sim/test_ams_balancing_modes.py::test_a_silent_override_falls_back_to_off_in_charge
+  why: "pico_emu: the bench's Pico LTC emulator injects it; the vHIL covers the behaviour natively on the LTC6811 chain model (#150, not planned)"
+- path: tests/hil/ams/test_block_bal.py::test_b05_
+  replaced_by:
+    - tests/sim/test_ams_balancing.py::test_balo_stops_and_wrong_magic_keeps_the_command
+  why: "pico_emu: the bench's Pico LTC emulator injects it; the vHIL covers the behaviour natively on the LTC6811 chain model (#150, not planned)"
+- path: tests/hil/ams/test_block_bal.py::test_b06_
+  replaced_by:
+    - tests/sim/test_ams_balancing_modes.py::test_balo_in_run_changes_nothing_else
+  why: "pico_emu: the bench's Pico LTC emulator injects it; the vHIL covers the behaviour natively on the LTC6811 chain model (#150, not planned)"
 - path: tests/hil/ams/test_block_c_fsm.py::test_c042_cockpit_byte_per_state
-  why: "needs pico_emu (fault injection for Error): no virtual Pico LTC emulator yet (#150)"
+  replaced_by:
+    - tests/sim/test_ams_fsm_car.py::test_status_and_cockpit_frames_follow_the_state
+  why: "pico_emu: the bench's Pico LTC emulator injects it; the vHIL covers the behaviour natively on the LTC6811 chain model (#150, not planned)"
 - path: tests/hil/ams/test_block_c_fsm.py::test_c048_ams_ok_drops_on_error
-  why: "needs pico_emu (fault injection for Error): no virtual Pico LTC emulator yet (#150)"
+  replaced_by:
+    - tests/sim/test_ams_contactors.py::test_error_opens_everything_and_drops_ams_ok_in_one_tick[undervoltage]
+    - tests/sim/test_ams_contactors.py::test_ams_ok_stays_low_while_error_is_latched
+  why: "pico_emu: the bench's Pico LTC emulator injects it; the vHIL covers the behaviour natively on the LTC6811 chain model (#150, not planned)"
 - path: tests/hil/ams/test_block_d_bootloader.py::test_d051b_trigger_works_from_error
-  why: "needs pico_emu (fault injection for Error): no virtual Pico LTC emulator yet (#150)"
+  replaced_by:
+    - tests/sim/test_ams_reset.py::test_error_latch_survives_a_warm_reset
+  why: "pico_emu: the bench's Pico LTC emulator injects it; the vHIL covers the behaviour natively on the LTC6811 chain model (#150, not planned)"
 - path: tests/hil/ams/test_block_e_ltc.py::test_e065
-  why: "needs pico_emu (STOP_REPLY): no virtual Pico LTC emulator yet (#150)"
+  replaced_by:
+    - tests/sim/test_ams_chain.py::test_a_silent_chip_takes_its_module_offline_in_time[all]
+  why: "pico_emu: the bench's Pico LTC emulator injects it; the vHIL covers the behaviour natively on the LTC6811 chain model (#150, not planned)"
 - path: tests/hil/ams/test_block_e_ltc.py::test_e066_module2_only
-  why: "needs pico_emu (STOP_REPLY): no virtual Pico LTC emulator yet (#150)"
+  replaced_by:
+    - tests/sim/test_ams_chain.py::test_a_silent_chip_takes_its_module_offline_in_time[module2]
+  why: "pico_emu: the bench's Pico LTC emulator injects it; the vHIL covers the behaviour natively on the LTC6811 chain model (#150, not planned)"
 - path: tests/hil/ams/test_block_e_ltc.py::test_e067_pec_localisation
-  why: "needs pico_emu: no virtual Pico LTC emulator yet (#150)"
+  replaced_by:
+    - tests/sim/test_ams_chain.py::test_a_silent_module_counts_pec_errors_on_its_own_chips[module2]
+  why: "pico_emu: the bench's Pico LTC emulator injects it; the vHIL covers the behaviour natively on the LTC6811 chain model (#150, not planned)"
 - path: tests/hil/ams/test_block_f_relays.py::test_f063
-  why: "needs pico_emu (fault injection for Error): no virtual Pico LTC emulator yet (#150)"
+  replaced_by:
+    - tests/sim/test_ams_contactors.py::test_start_has_every_contactor_open_and_ams_ok_high
+    - tests/sim/test_ams_contactors.py::test_error_opens_everything_and_drops_ams_ok_in_one_tick[undervoltage]
+  why: "pico_emu: the bench's Pico LTC emulator injects it; the vHIL covers the behaviour natively on the LTC6811 chain model (#150, not planned)"
 - path: tests/hil/ams/test_block_f_relays.py::test_f066
-  why: "needs pico_emu (cell-UV injection for Error): no virtual Pico LTC emulator yet (#150)"
+  replaced_by:
+    - tests/sim/test_ams_contactors.py::test_error_opens_everything_and_drops_ams_ok_in_one_tick[undervoltage]
+  why: "pico_emu: the bench's Pico LTC emulator injects it; the vHIL covers the behaviour natively on the LTC6811 chain model (#150, not planned)"
 - path: tests/hil/ams/test_block_g_soak.py::test_g102_pec_localisation
-  why: "needs pico_emu: no virtual Pico LTC emulator yet (#150)"
+  replaced_by:
+    - tests/sim/test_ams_chain.py::test_a_silent_module_counts_pec_errors_on_its_own_chips[module1]
+  why: "pico_emu: the bench's Pico LTC emulator injects it; the vHIL covers the behaviour natively on the LTC6811 chain model (#150, not planned)"
+# K-100: IFS_HIL trips Error by over-temperature, no fault on AMS main (TempFaultsTrusted = false); the native test uses a cell under-voltage.
 - path: tests/hil/ams/test_block_k_encoders.py::test_k100
-  why: "needs pico_emu (fault injection for Error): no virtual Pico LTC emulator yet (#150)"
+  replaced_by:
+    - tests/sim/test_ams_fsm_car.py::test_status_and_cockpit_frames_follow_the_state
+  why: "pico_emu: the bench's Pico LTC emulator injects it; the vHIL covers the behaviour natively on the LTC6811 chain model (#150, not planned)"
 - path: tests/hil/ams/test_block_r_relays.py::test_r111_ams_ok_bit_tracks_pit_diag
-  why: "needs pico_emu (fault injection for Error): no virtual Pico LTC emulator yet (#150)"
+  replaced_by:
+    - tests/sim/test_ams_contactors.py::test_the_ams_ok_bit_tracks_the_pit_diag_readback
+  why: "pico_emu: the bench's Pico LTC emulator injects it; the vHIL covers the behaviour natively on the LTC6811 chain model (#150, not planned)"
 - path: tests/hil/ams/test_block_r_relays.py::test_r115_error_opens_all_contactors
-  why: "needs pico_emu (fault injection for Error): no virtual Pico LTC emulator yet (#150)"
+  replaced_by:
+    - tests/sim/test_ams_contactors.py::test_error_opens_everything_and_drops_ams_ok_in_one_tick[undervoltage]
+  why: "pico_emu: the bench's Pico LTC emulator injects it; the vHIL covers the behaviour natively on the LTC6811 chain model (#150, not planned)"
 
 # Skipped on bench-01 too unless an operator does a step by hand; the virtual
 # bench could do the step itself (#152).

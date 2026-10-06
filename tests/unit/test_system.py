@@ -109,6 +109,33 @@ def test_gaps_name_systems_that_exist():
         assert set(gap.get("systems", [])) <= ids, gap["path"]
 
 
+def test_gaps_replaced_by_native_tests_that_exist():
+    """Every replaced_by names a test in tests/sim: a top-level test function
+    of that file, and, with a [param id], one of its parametrize ids."""
+    import ast
+    import re
+
+    from vhil.pytest_plugin import gap_reason
+
+    gaps = yaml.safe_load((REPO / "configs" / "gaps.yaml").read_text()) or []
+    replaced = [g for g in gaps if "replaced_by" in g]
+    assert replaced, "no gap names a native replacement"
+    for gap in replaced:
+        assert gap["replaced_by"] and gap["why"], gap["path"]
+        for ref in gap["replaced_by"]:
+            m = re.fullmatch(r"(tests/sim/test_\w+\.py)::(test_\w+)(?:\[([\w.-]+)\])?", ref)
+            assert m, f"{gap['path']}: malformed {ref}"
+            path, name, param = m.groups()
+            source = (REPO / path).read_text()
+            tests = {n.name: n for n in ast.parse(source).body if isinstance(n, ast.FunctionDef)}
+            assert name in tests, f"{gap['path']}: no {name} in {path}"
+            if param is not None:
+                marks = ast.get_source_segment(source, tests[name].decorator_list[0]) \
+                    if tests[name].decorator_list else ""
+                assert f'"{param}"' in marks, f"{gap['path']}: {name} has no param id {param}"
+        assert all(r in gap_reason(gap) for r in gap["replaced_by"])
+
+
 def _system(tmp_path, body):
     p = tmp_path / "s.yaml"
     p.write_text("kind: system\nid: t\nboards:\n  ecu: {board: mainlite, role: ecu}\n" + body)

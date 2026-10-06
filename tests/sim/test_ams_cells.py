@@ -55,8 +55,10 @@ def test_a_healthy_pack_reads_no_fault(ams):
     (2810, (START, 0)), (2790, (ERROR, UNDER)),
 ], ids=["4190", "4210", "2810", "2790"])
 def test_cell_limits_and_reason(ams, mv, expected):
-    """B-026a/b, B-029: just inside the limit is healthy, just past it faults
-    with its reason and the module in the detail byte (chip 6 = module 3)."""
+    """Replaces IFS_HIL B-026 (over/undervoltage) and B-029 (cell_under/
+    overvoltage_reason): just inside the limit is healthy, just past it
+    faults with its reason and the module in the detail byte (chip 6 =
+    module 3)."""
     _chip(ams, 6, f"SetCell 4 {mv}")
     state, reason, detail = _fsm(ams)
     assert (state, reason) == expected
@@ -65,8 +67,8 @@ def test_cell_limits_and_reason(ams, mv, expected):
 
 
 def test_a_dip_shorter_than_a_poll_does_not_latch(ams):
-    """B-028: under-voltage seen by at most one 200 ms poll stays below the
-    ~250 ms confirmation."""
+    """Replaces IFS_HIL B-028 (transient dip): under-voltage seen by at most
+    one 200 ms poll stays below the ~250 ms confirmation."""
     _chip(ams, 2, "SetCell 1 2600")
     ams.run_for(ms=150)
     _chip(ams, 2, "SetCell 1 3700")
@@ -74,6 +76,7 @@ def test_a_dip_shorter_than_a_poll_does_not_latch(ams):
 
 
 def test_a_sustained_dip_latches(ams):
+    """Replaces IFS_HIL B-028 (sustained dip)."""
     _chip(ams, 2, "SetCell 1 2600")
     ams.run_for(ms=600)                                   # three polls
     _chip(ams, 2, "SetCell 1 3700")

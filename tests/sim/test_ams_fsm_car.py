@@ -224,23 +224,36 @@ def test_error_is_sticky(car):
 
 
 def test_status_and_cockpit_frames_follow_the_state(car):
-    """C-042, K-100: 0x4A0[0] and the 0x4A2[5] cockpit byte through Start,
-    Precharge, Run and Error (via a cell under-voltage)."""
+    """Replaces IFS_HIL C-042 and K-100: through Start, Precharge, Run and
+    Error (via a cell under-voltage set on the chain model), 0x4A0 decodes
+    consistently (state, AMS_OK, all five modules online, the pack's min and
+    max cell) and the 0x4A2[5] cockpit byte carries the sentinel, the mode
+    lock and TSMS; DASH_CHG (bit 0) is the live level, so holding the button
+    in a latched Error reads back though no transition consumes the edge
+    (safety_task.cpp:386-395)."""
     can = car.can
+    cells_mv, low_mv = 3700, 2700
+    car.sim.monitor(f"sysbus.spi1.isospi SetAllCells {cells_mv}", board="ams")
 
     def frames():
         car.sim.run_for(ms=600)
-        return can.last(STATUS).data[0], can.last(TEMPS).data[5]
+        s = can.last(STATUS).data
+        status = (s[0], s[1], s[2], int.from_bytes(s[4:6], "big"), int.from_bytes(s[6:8], "big"))
+        return status, can.last(TEMPS).data[5]
 
     car.vcu(0)
-    assert frames() == (START, 0x80)
+    assert frames() == ((START, 1, 0x1F, cells_mv, cells_mv), 0x80)
     car.tsms(True)
-    assert frames() == (START, 0x82)
+    assert frames() == ((START, 1, 0x1F, cells_mv, cells_mv), 0x82)
     car.press()
-    assert frames() == (PRECHARGE, 0x86)
+    assert frames() == ((PRECHARGE, 1, 0x1F, cells_mv, cells_mv), 0x86)
     car.vcu(round(PACK_V))
-    assert frames() == (RUN, 0x86)
-    car.sim.monitor("sysbus.spi1.isospi.cells0 SetCell 0 2700", board="ams")
+    assert frames() == ((RUN, 1, 0x1F, cells_mv, cells_mv), 0x86)
+    car.sim.monitor(f"sysbus.spi1.isospi.cells0 SetCell 0 {low_mv}", board="ams")
     car.sim.run_for(ms=500)
-    assert frames() == (ERROR, 0x86)
+    assert frames() == ((ERROR, 0, 0x1F, low_mv, cells_mv), 0x86)
     assert car.reason() == UNDERVOLTAGE
+    car.dash(True)
+    assert frames()[1] == 0x87, "DASH_CHG held in Error not read back"
+    car.dash(False)
+    assert frames() == ((ERROR, 0, 0x1F, low_mv, cells_mv), 0x86)
