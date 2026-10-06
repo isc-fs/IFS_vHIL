@@ -70,7 +70,7 @@ vm() {
 build_images() {
     "${docker[@]}" build -t "$base_image" "$repo/docker"
     "${docker[@]}" build -t "$editor_image" --build-arg BASE="$base_image" \
-        -f "$repo/docker/editor.Dockerfile" "$repo/docker"
+        -f "$repo/docker/editor.Dockerfile" "$repo"
 }
 
 ensure_image() {

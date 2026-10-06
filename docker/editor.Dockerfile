@@ -1,25 +1,27 @@
 # The system editor (M5, #13) on top of the vHIL image: Antmicro's Pipeline
 # Manager (UI on :5000) and the backend library vhil.editor serves through.
+# Built from the repository root, which the editor's sources live in
+# (editor.Dockerfile.dockerignore sends only those):
 #
-#   docker build -t ifs-vhil-editor --build-arg BASE=ifs-vhil -f docker/editor.Dockerfile docker/
+#   docker build -t ifs-vhil-editor --build-arg BASE=ifs-vhil -f docker/editor.Dockerfile .
 #
-# Pipeline Manager is pinned to a release whose specification/dataflow
-# format matches vhil/editor.py's FORMAT_VERSION; bump them together. The
-# release is pinned by its commit (PM_COMMIT, what tag PM_REF points at),
-# so a moved tag fails the build instead of changing the editor.
+# Pipeline Manager is vendored in editor/pipeline-manager/ (README-VHIL.md
+# there: upstream v0.5.2, 04613679; CHANGELOG-VHIL.md: our changes), at a
+# release whose specification/dataflow format matches vhil/editor.py's
+# FORMAT_VERSION; bump them together.
 #
 # Node's tarball is checked against the SHA-256 in nodejs.org's published
 # https://nodejs.org/dist/v<ver>/SHASUMS256.txt (re-fetch when bumping).
 # In production BASE is the base image by digest (docs/deploy.md, "Images").
 ARG BASE=ifs-vhil
-FROM ${BASE}
 
+# --- build: Node, the frontend (npm ci on the lockfile) and the venv ---------
+FROM ${BASE} AS build
 ARG TARGETARCH
 ARG NODE_VERSION=22.23.3
 ARG NODE_SHA256_AMD64=df450af89261115ef9f9e3830c3eeb2cc9213b63c720b1af623cb5dcbe2e02de
 ARG NODE_SHA256_ARM64=a44aeb94849a299b22df10b9e622ec2f605c2183501bc40590705131de7c740f
-ARG PM_REF=v0.5.2
-ARG PM_COMMIT=04613679deecea5eab0de43c7229b8075e4da912
+ARG PM_VERSION=0.5.2
 ARG PM_COMM_REF=e26894d9bdd97da49ad4d04f1ffd00c8de9024ca
 
 RUN case "$TARGETARCH" in \
@@ -34,25 +36,55 @@ RUN case "$TARGETARCH" in \
     && mv "/opt/node-v${NODE_VERSION}-linux-${a}" /opt/node
 ENV PATH=/opt/node/bin:$PATH
 
-# Pipeline Manager in its own venv: it pins old dependency versions. Our
-# patches (docker/pm/) go on before the frontend is built:
-#   bus-per-instance  every node of a type shared one `bus` object, so a
-#                     graph with two CAN buses lost all but the last bus's
-#                     stubs on load ("Missing dst s:<bus>:0"). Not fixed
-#                     upstream as of v0.5.2 / main.
-COPY pm/ /tmp/pm-patches/
-RUN git clone -q --depth 1 -b "$PM_REF" https://github.com/antmicro/kenning-pipeline-manager /opt/pm \
-    && test "$(git -C /opt/pm rev-parse HEAD)" = "$PM_COMMIT" \
-    && git -C /opt/pm apply /tmp/pm-patches/*.patch \
-    && python -m venv /opt/pm-venv \
-    && /opt/pm-venv/bin/pip install --no-cache-dir -e /opt/pm \
-    && cd /opt/pm && PATH=/opt/pm-venv/bin:$PATH ./build server-app
+# The frontend's dependencies first, from the lockfile alone, so a source
+# change doesn't refetch them. postinstall runs patch-package on patches/.
+COPY editor/pipeline-manager/pipeline_manager/frontend/package.json \
+     editor/pipeline-manager/pipeline_manager/frontend/package-lock.json \
+     /opt/pm/pipeline_manager/frontend/
+COPY editor/pipeline-manager/pipeline_manager/frontend/patches/ \
+     /opt/pm/pipeline_manager/frontend/patches/
+RUN cd /opt/pm/pipeline_manager/frontend && npm ci --no-audit --no-fund \
+    && npm cache clean --force
 
-# The JSON-RPC library both ends use: Pipeline Manager's server and
-# vhil.editor (in the image's Python, next to vhil).
-RUN for py in /opt/pm-venv/bin/pip pip; do $py install --no-cache-dir \
-        "git+https://github.com/antmicro/kenning-pipeline-manager-backend-communication.git@${PM_COMM_REF}"; \
-    done
+# Pipeline Manager in its own venv: it pins old dependency versions. Its
+# version comes from setuptools-scm, which has no git history here. The
+# frontend is built by ./build below, not by pip.
+COPY editor/pipeline-manager/ /opt/pm/
+RUN python -m venv /opt/pm-venv \
+    && SETUPTOOLS_SCM_PRETEND_VERSION_FOR_PIPELINE_MANAGER="$PM_VERSION" \
+       PIPELINE_MANAGER_SKIP_FRONTEND_BUILD=1 \
+       /opt/pm-venv/bin/pip install --no-cache-dir -e /opt/pm \
+    && /opt/pm-venv/bin/pip install --no-cache-dir \
+        "git+https://github.com/antmicro/kenning-pipeline-manager-backend-communication.git@${PM_COMM_REF}" \
+    && cd /opt/pm && PATH=/opt/pm-venv/bin:$PATH ./build server-app --skip-install-deps
+
+# What runs: the Python package with the built UI (frontend/dist) and what
+# ./validate loads the frontend's code with (src, node_modules, Node; the
+# lockfile and patches/ too, so a ./validate without --skip-install-deps
+# finds nothing to install). Not the tests, the upstream tooling or the
+# npm cache.
+RUN mkdir -p /out/pm/pipeline_manager/frontend \
+    && cd /opt/pm && cp -a run validate pyproject.toml setup.py LICENSE \
+        README.md README-VHIL.md CHANGELOG-VHIL.md /out/pm/ \
+    && tar -C /opt/pm -cf - --exclude=pipeline_manager/frontend \
+        --exclude=pipeline_manager/tests --exclude=__pycache__ pipeline_manager \
+        | tar -C /out/pm -xf - \
+    && cd pipeline_manager/frontend && cp -a dist src node_modules patches validator.js \
+        package.json package-lock.json tsconfig.json __init__.py \
+        /out/pm/pipeline_manager/frontend/
+
+# --- the editor image -------------------------------------------------------
+FROM ${BASE}
+ARG PM_COMM_REF=e26894d9bdd97da49ad4d04f1ffd00c8de9024ca
+COPY --from=build /opt/node /opt/node
+COPY --from=build /opt/pm-venv /opt/pm-venv
+COPY --from=build /out/pm /opt/pm
+ENV PATH=/opt/node/bin:$PATH
+
+# The JSON-RPC library both ends use: Pipeline Manager's server (in its venv,
+# above) and vhil.editor (in the image's Python, next to vhil).
+RUN pip install --no-cache-dir \
+        "git+https://github.com/antmicro/kenning-pipeline-manager-backend-communication.git@${PM_COMM_REF}"
 
 ENV PM_DIR=/opt/pm PM_VENV=/opt/pm-venv NODE_DIR=/opt/node LOG_DIR=/vhil/editor
 EXPOSE 5000
