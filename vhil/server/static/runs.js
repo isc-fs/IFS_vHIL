@@ -33,8 +33,8 @@ export async function renderRuns(view, { api, esc }) {
       <label>State <select name="state"><option value="">all</option>${
         STATES.map((s) => `<option>${s}</option>`).join("")}</select></label>
     </form>
-    <div class="scroll-x"><table id="runs"><thead><tr><th>Run</th><th>State</th><th>System</th><th>Owner</th><th>Scenario</th>
-      <th>Virtual</th><th>Wall</th><th>Frames / tests</th><th>Created</th><th></th></tr></thead><tbody></tbody></table></div>`;
+    <div class="scroll-x"><table id="runs"><thead><tr><th class="num">Run</th><th>State</th><th>System</th><th>Owner</th><th>Scenario</th>
+      <th class="num">Virtual</th><th class="num">Wall</th><th class="num">Frames / tests</th><th>Created</th><th></th></tr></thead><tbody></tbody></table></div>`;
   const table = view.querySelector("#runs tbody");
   const msg = view.querySelector("#run-msg");
   const mounted = () => document.body.contains(table);
@@ -136,12 +136,12 @@ export async function renderRuns(view, { api, esc }) {
     const runs = await api(`/api/runs?${q}`);
     if (!mounted()) return;
     table.innerHTML = runs.map((r) => `<tr>
-      <td><a href="#/runs/${r.id}">${r.id}</a></td><td><span class="badge state-${esc(r.state)}">${esc(r.state)}</span></td>
+      <td class="num"><a href="#/runs/${r.id}">${r.id}</a></td><td><span class="badge state-${esc(r.state)}">${esc(r.state)}</span></td>
       <td>${esc(r.system)}${r.ref_name ? ` <span class="muted">@ ${esc(r.ref_name)}</span>` : ""}</td>
       <td>${esc(r.owner || "")}</td>
       <td class="muted">${esc(r.scenario.kind === "run" ? `run ${r.scenario.virtual_ms} ms` : `pytest ${r.scenario.select}`)}</td>
-      <td>${(r.virtual_us / 1000).toFixed(0)} ms</td><td>${duration(wallSeconds(r))}</td>
-      <td data-frames="${r.id}">${counts(r)}</td>
+      <td class="num">${(r.virtual_us / 1000).toFixed(0)} ms</td><td class="num">${duration(wallSeconds(r))}</td>
+      <td class="num" data-frames="${r.id}">${counts(r)}</td>
       <td class="muted">${esc((r.created || "").replace("T", " ").slice(0, 19))}</td>
       <td>${TERMINAL.has(r.state) ? (r.summary?.error ? `<span class="error">${esc(r.summary.error)}</span>` : "")
              : r.can_cancel ? `<button data-cancel="${r.id}">Cancel</button>` : ""}</td></tr>`).join("");
