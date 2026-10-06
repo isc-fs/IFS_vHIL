@@ -1,0 +1,315 @@
+{
+    "version": "20250623.14",
+    "graphs": [
+        {
+            "name": "Test subgraph #1",
+            "nodes": [
+                {
+                    "id": "1212de63-daad-4ace-bc4b-df562b3a6b0e",
+                    "position": {
+                        "x": 600,
+                        "y": 500
+                    },
+                    "width": 200,
+                    "twoColumn": false,
+                    "interfaces": [
+                        {
+                            "id": "9db11824-0058-4213-a719-27af7c18a71d",
+                            "name": "Interface 1",
+                            "direction": "inout"
+                        }
+                    ],
+                    "properties": [
+                        {"id": "87f8deeb-aa44-4f45-ba4b-d947a4857d4d", "name": "Property 1", "value": "1"},
+                        {"id": "af99eed2-c9e5-49b7-8573-2f40eafe9312", "name": "Property 2", "value": "2"}
+                    ],
+                    "enabledInterfaceGroups": [],
+                    "name": "Test Node",
+                    "instanceName": "Foo"
+                }
+            ],
+            "connections": []
+        }
+    ],
+    "nodes": [
+        {
+            "name": "Test Node",
+            "category": "Test Category",
+            "interfaces": [{"name": "Interface 1", "direction": "inout"}],
+            "properties": [
+                {"name": "Property 1", "type": "text", "default": ""},
+                {"name": "Property 2", "type": "text", "default": ""}
+            ],
+            "contextMenuActions": [
+                {
+                    "name": "Test Node info",
+                    "iconName": "Cogwheel",
+                    "procedureName": "custom_test_node_info",
+                    "requireResponse": true
+                },
+                {
+                    "name": "Test Node Download",
+                    "iconName": "Cogwheel",
+                    "procedureName": "custom_download_test_node",
+                    "requireResponse": true
+                }
+            ]
+        },
+        {
+            "name": "TerminalStressTest",
+            "category": "API",
+            "properties": [
+                {
+                    "name": "TerminalName",
+                    "type": "text",
+                    "default": "Stress test"
+                },
+                {
+                    "name": "MessageLength",
+                    "type": "integer",
+                    "default": 10
+                },
+                {
+                    "name": "AddMessageID",
+                    "type": "bool",
+                    "default": false
+                },
+                {
+                    "name": "MessagesPerSecond",
+                    "type": "number",
+                    "min": 0.0001,
+                    "max": 2000,
+                    "default": 20
+                }
+            ],
+            "interfaces": [
+                {
+                    "name": "Effect",
+                    "type": "Effect",
+                    "direction": "output"
+                }
+            ]
+        },
+        {
+            "name": "RunBehaviour",
+            "category": "Descriptions",
+            "properties": [
+                {
+                    "name": "Duration",
+                    "type": "slider",
+                    "min": 0,
+                    "max": 5,
+                    "default": 5
+                },
+                {
+                    "name": "Disconnect",
+                    "type": "bool",
+                    "default": false
+                },
+                {
+                    "name": "MessageType",
+                    "type": "select",
+                    "values": ["ERROR", "OK"],
+                    "default": "OK"
+                },
+                {
+                    "name": "ProgressMessages",
+                    "type": "integer",
+                    "default": 5
+                },
+                {
+                    "name": "Message",
+                    "type": "text",
+                    "default": "Everything went fine!"
+                }
+            ],
+            "interfaces": [
+                {
+                    "name": "Effect",
+                    "type": "Effect",
+                    "direction": "output"
+                }
+            ]
+        },
+        {
+            "name": "StopBehaviour",
+            "category": "Descriptions",
+            "properties": [
+                {
+                    "name": "MessageType",
+                    "type": "select",
+                    "values": ["ERROR", "OK"],
+                    "default": "OK"
+                },
+                {
+                    "name": "Message",
+                    "type": "text",
+                    "default": "Everything went fine!"
+                }
+            ]
+        },
+        {
+            "name": "ValidationBehaviour",
+            "category": "Descriptions",
+            "properties": [
+                {
+                    "name": "Duration",
+                    "type": "slider",
+                    "min": 0,
+                    "max": 5,
+                    "default": 0
+                },
+                {
+                    "name": "Disconnect",
+                    "type": "bool",
+                    "default": false
+                },
+                {
+                    "name": "MessageType",
+                    "type": "select",
+                    "values": ["ERROR", "OK"],
+                    "default": "OK"
+                },
+                {
+                    "name": "Message",
+                    "type": "text",
+                    "default": "Everything went fine!"
+                }
+            ],
+            "interfaces": [
+                {
+                    "name": "Effect",
+                    "type": "Effect",
+                    "direction": "output"
+                }
+            ]
+        },
+        {
+            "name": "ExportBehaviour",
+            "category": "Descriptions",
+            "properties": [
+                {
+                    "name": "Duration",
+                    "type": "slider",
+                    "min": 0,
+                    "max": 5,
+                    "default": 0
+                },
+                {
+                    "name": "Disconnect",
+                    "type": "bool",
+                    "default": false
+                },
+                {
+                    "name": "MessageType",
+                    "type": "select",
+                    "values": ["ERROR", "OK"],
+                    "default": "OK"
+                },
+                {
+                    "name": "Message",
+                    "type": "text",
+                    "default": "Everything went fine!"
+                },
+                {
+                    "name": "DefaultFilename",
+                    "type": "text",
+                    "default": "pipeline.json"
+                }
+            ],
+            "interfaces": []
+        },
+        {
+            "name": "ButtonClick",
+            "category": "API",
+            "properties": [
+                {
+                    "name": "Message",
+                    "type": "text",
+                    "default": "Everything went fine!"
+                },
+                {
+                    "name": "Click",
+                    "type": "button-api",
+                    "default": null
+                }
+            ]
+        },
+        {
+            "name": "Disconnect",
+            "category": "Effects",
+            "properties": [
+                {
+                    "name": "Time offset",
+                    "type": "slider",
+                    "min": 0,
+                    "max": 10,
+                    "default": 0
+                },
+                {
+                    "name": "Should disconnect",
+                    "type": "bool",
+                    "default": false
+                }
+            ],
+            "interfaces": [
+                {
+                    "name": "Effect",
+                    "type": "Effect",
+                    "direction": "input"
+                }
+            ]
+        },
+        {
+            "name": "SendRequestToFrontend",
+            "category": "API",
+            "properties": [
+                {
+                    "name": "Method",
+                    "type": "text",
+                    "default": "progress_change"
+                },
+                {
+                    "name": "Params",
+                    "type": "text",
+                    "default": "{\"progress\": 50.0, \"method\": \"custom_api_test\"}"
+                },
+                {
+                    "name": "Disconnect",
+                    "type": "bool",
+                    "default": false
+                }
+            ],
+            "interfaces": [
+                {
+                    "name": "Effect",
+                    "type": "Effect",
+                    "direction": "output"
+                }
+            ]
+        }
+    ],
+    "metadata": {
+        "interfaces": {
+            "Effect": {
+                "interfaceColor": "#FF0000"
+            }
+        },
+        "contextMenuActions": [
+            {
+                "name": "Show node info",
+                "iconName": "Magnifier",
+                "procedureName": "custom_node_info",
+                "requireResponse": true
+            }
+        ],
+        "subgraphContextMenuActions": [
+            {
+                "name": "Subgraph Node Info",
+                "iconName": "Magnifier",
+                "procedureName": "custom_subgraph_node_info",
+                "requireResponse": true
+            }
+        ]
+    }
+}
