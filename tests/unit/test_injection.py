@@ -127,6 +127,10 @@ MUTATIONS = {
         "output key": lambda d, v: _rename(d["devices"]["dcdc_current"]["outputs"], "out", v),
         "output endpoint": _set("devices", "dcdc_current", "outputs", "out"),
         "bench power": lambda d, v: d["bench"]["power"][0].update(board=v),
+        "gpio route": lambda d, v: d["bench"]["gpio_routes"][0].update(to=v),
+        "gpio route tca": lambda d, v: d["bench"]["gpio_routes"][0].update(tca=v),
+        "adc route": lambda d, v: d["bench"]["adc_routes"][0].update(**{"from": v}),
+        "adc route channel": lambda d, v: d["bench"]["adc_routes"][0].update(channel=v),
         "quantum_s": _set("time", "quantum_s"),
     },
     ECU_AMS: {
@@ -595,3 +599,24 @@ def test_a_remote_ref_name_reaches_nothing_unless_a_system_could_hold_it(value):
 def test_a_hostile_remote_sha_is_dropped(value):
     from vhil.server.githost import parse_ls_remote
     assert parse_ls_remote(f"{value}\trefs/heads/dev\n") == {"branches": [], "tags": []}
+
+
+ROUTE_FIELDS = {
+    "gpio to": lambda d, v: d["bench"]["gpio_routes"][0].update(to=v),
+    "gpio tca": lambda d, v: d["bench"]["gpio_routes"][0].update(tca=v),
+    "gpio pin": lambda d, v: d["bench"]["gpio_routes"][0].update(pin=v),
+    "adc from": lambda d, v: d["bench"]["adc_routes"][0].update(**{"from": v}),
+    "adc channel": lambda d, v: d["bench"]["adc_routes"][0].update(channel=v),
+}
+
+
+@pytest.mark.parametrize("field", ROUTE_FIELDS)
+@pytest.mark.parametrize("value", HOSTILE)
+def test_a_hostile_bench_route_never_reaches_the_monitor(tmp_path, field, value):
+    """The broker turns gpio_routes and adc_routes into monitor commands
+    (the probe's Drive, Watch and Level): a hostile value is refused by the
+    system, never sent."""
+    doc = yaml.safe_load(AMS.read_text())
+    ROUTE_FIELDS[field](doc, value)
+    with pytest.raises(SystemError):
+        System(_write(tmp_path, doc))

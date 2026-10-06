@@ -47,3 +47,17 @@ bench:
     # pack_current sensor's output.
     - {dac: 3, channel: 0, to: ams.PF7}  # S_CURRENT_P (docs/backplanes/ams.md)
     - {dac: 3, channel: 1, to: ams.PF8}  # S_CURRENT_N (docs/backplanes/ams.md)
+  gpio_routes:
+    # IOEXP2 (TCA 0x21) port 1 -> the AMS's cockpit inputs (IFS_HIL
+    # bench-01.yaml routing.tsms / routing.dash_chg).
+    - {tca: 0x21, port: 1, pin: 0, to: ams.PF9}    # P10 -> TSMS_FIL (docs/backplanes/ams.md)
+    - {tca: 0x21, port: 1, pin: 1, to: ams.PF10}   # P11 -> RST_PIL_FIL, DASH_CHG (docs/backplanes/ams.md)
+  adc_routes:
+    # bench ADC1 (MCP3208 idx 0) ch0 taps the RTDS output (vcu_profile rtds_adc_*)
+    - {adc: 0, channel: 0, from: ecu.PB4}  # RTDS, J1.20 (docs/backplanes/ecu.md)
+    # bench ADC3 (MCP3208 idx 2) ch0-3 tap the AMS's relay drivers (IFS_HIL
+    # bench-01.yaml routing.relay_readback).
+    - {adc: 2, channel: 0, from: ams.PB4}  # AMS_OK (docs/backplanes/ams.md)
+    - {adc: 2, channel: 1, from: ams.PB5}  # AIR+ (docs/backplanes/ams.md)
+    - {adc: 2, channel: 2, from: ams.PB6}  # AIR- (docs/backplanes/ams.md)
+    - {adc: 2, channel: 3, from: ams.PB7}  # PRECHARGE (docs/backplanes/ams.md)
