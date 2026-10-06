@@ -5,11 +5,20 @@ name: Native tests (virtual time)
 # Sharded by suite so the whole set doesn't serialise every PR; the `sim`
 # job (the required check) passes only when every shard did.
 
+# Heavy CI runs only in special cases (owner, 2026-10-06): a pull request
+# labelled `full-ci`, a release pull request into main, the nightly run on
+# dev, or a manual dispatch. Otherwise the jobs are skipped, which counts as
+# passing for required checks; unit tests (unit.yml) run on every pull request.
 on:
   pull_request:
-  push:
-    branches: [dev]
+    types: [opened, synchronize, reopened, labeled]
+  schedule:
+    - cron: '30 2 * * *'   # nightly, on dev (see the checkout ref)
   workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -23,6 +32,7 @@ env:
 jobs:
   shard:
     name: sim (${{ matrix.shard }})
+    if: github.event_name != 'pull_request' || github.base_ref == 'main' || contains(github.event.pull_request.labels.*.name, 'full-ci')
     runs-on: ubuntu-latest
     timeout-minutes: 45
     strategy:
@@ -42,6 +52,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          ref: ${{ github.event_name == 'schedule' && 'dev' || '' }}
           persist-credentials: false
 
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
@@ -125,4 +136,5 @@ jobs:
       - name: Every shard passed
         env:
           RESULT: ${{ needs.shard.result }}
-        run: test "$RESULT" = success
+        # skipped when this run is not one of the special cases above
+        run: test "$RESULT" = success || test "$RESULT" = skipped
