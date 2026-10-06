@@ -745,6 +745,9 @@ class System:
                 vtor = b.firmware.get("load", {}).get("vector_table")
             if vtor is not None:
                 out.append(f"    {cpu} VectorTableOffset 0x{vtor:08X}")
+            # Renode runs the macro on every reset, the CPU's own (watchdog,
+            # SYSRESETREQ) as well as `machine Reset`.
+            out += [f"    {line.format(cpu=cpu)}" for line in platform.get("reset", [])]
             out += ['"""', "runMacro $reset", ""]
         if socketcan:
             bridged = [(bus, spec) for bus, spec in self.buses.items() if spec.get("host_netdev")]

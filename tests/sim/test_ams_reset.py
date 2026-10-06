@@ -14,6 +14,7 @@ Firmware facts (IFS08-CE-AMS):
 """
 import pytest
 
+from vhil import elf
 from vhil.sim import Sim
 from vhil.can_bootloader import CanBootloader
 from vhil.system import REPO
@@ -148,3 +149,29 @@ def test_the_trigger_is_refused_while_energised(ams):
     assert status.data[0] == PRECHARGE and status.data[2] & 0x08, \
         f"0x6C0 {status.data.hex()}: refusal not reported, or left Precharge"
     assert _bkp0r(ams) != BL_BOOT_REQ_MAGIC and ams.in_app("ams"), "rebooted while energised"
+
+
+# -- a watchdog reset out of a masked context -----------------------------------
+#
+# freertos.c:77-98: vApplicationStackOverflowHook latches Error (BKP1R) and
+# spins for the IWDG (~100 ms, main.c MX_IWDG1_Init). The scheduler calls it
+# from vTaskSwitchContext (tasks.c:3112), inside PendSV with BASEPRI =
+# configMAX_SYSCALL_INTERRUPT_PRIORITY (ARM_CM4F port.c:480-484;
+# FreeRTOSConfig.h:149,156: 5 << 4), so that reset comes with BASEPRI raised.
+
+MAX_SYSCALL_BASEPRI = 0x50
+
+
+def test_a_watchdog_reset_from_the_overflow_hook_boots_back_in_error(ams):
+    """On the chip the reset clears BASEPRI, the bootloader auto-jumps after
+    its 2 s window and the app comes up in Error from the latch. Renode 1.17
+    kept the mask (renode/renode#1021): the bootloader's HAL tick never ran and
+    the board stayed in it for good. Every reset now clears it
+    (catalog/platforms/stm32h733.yaml, renode.reset)."""
+    hook, _ = elf.symbol(ams.firmware["ams"], "vApplicationStackOverflowHook")
+    ams.monitor(f'cpu SetRegister "BasePri" {MAX_SYSCALL_BASEPRI:#x}', board="ams")
+    ams.monitor(f"cpu PC {hook & ~1:#x}", board="ams")      # Thumb bit off
+    ams.run_until(lambda: not ams.in_app("ams"), timeout_ms=500)
+    ams.wait_for_app("ams", timeout_ms=AUTO_JUMP_MS + 1000)
+    status, _ = _arm_and_read(ams)
+    assert status.data[0] == ERROR, f"AMS state {status.data[0]} after the watchdog reset"

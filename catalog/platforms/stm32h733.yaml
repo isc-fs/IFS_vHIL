@@ -34,6 +34,16 @@ renode:
   setup:
     - emulation CreateVhilResetFlags "vhil_reset_{board}" "{board}"
     - emulation CreateVhilRccResets "vhil_rcc_{board}" "{board}"
+  # In the reset macro, after every reset: power-on, software and watchdog.
+  # Renode 1.17's CPU reset zeroes BASEPRI as read but not the masking it
+  # applies (renode/renode#1021). An IWDG reset taken while the firmware
+  # held BASEPRI (a FreeRTOS critical section, or the AMS's stack-overflow
+  # hook, called from the scheduler with BASEPRI raised) left the bootloader
+  # with its HAL tick (priority 15) masked: its 2 s auto-jump deadline never
+  # came and the board stayed in the bootloader for good. On the chip every
+  # reset clears it (ARMv7-M ARM B1.5.5, TakeReset: BASEPRI = 0).
+  reset:
+    - '{cpu} SetRegister "BasePri" 0x0'
   # A board's write_protect (systems/*.yaml): its option bytes as burned
   # before the first power-on (models/renode/Stm32H7Flash.cs).
   write_protect: "sysbus.flashController_h7 WriteProtectedSectors {mask:#04x}"
