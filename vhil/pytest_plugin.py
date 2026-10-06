@@ -119,8 +119,17 @@ def pytest_collection_modifyitems(config, items):
             if "systems" in gap and _bench.system.id not in gap["systems"]:
                 continue
             if (path + "::" + item.name).startswith(gap["path"]):
-                item.add_marker(pytest.mark.skip(reason=f"vhil gap: {gap['why']}"))
+                item.add_marker(pytest.mark.skip(reason=gap_reason(gap)))
                 break
+
+
+def gap_reason(gap: dict) -> str:
+    """The skip reason for a configs/gaps.yaml entry: its why, and the native
+    tests that cover the case instead, if any."""
+    reason = f"vhil gap: {gap['why']}"
+    if gap.get("replaced_by"):
+        reason += "; native: " + ", ".join(gap["replaced_by"])
+    return reason
 
 
 def pytest_sessionfinish(session, exitstatus):

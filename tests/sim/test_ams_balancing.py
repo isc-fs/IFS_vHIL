@@ -120,8 +120,9 @@ def test_a_hot_pack_locks_balancing_out(ams):
 
 
 def test_balo_stops_and_wrong_magic_keeps_the_command(ams):
-    """BAL-02, BAL-05: BALO clears every switch; an unknown payload changes
-    nothing, so BALN stays in force after it."""
+    """Replaces IFS_HIL BAL B-05 (wrong magic); BAL-02: BALO clears every
+    switch; an unknown payload changes nothing, so BALN stays in force
+    after it."""
     _chip(ams, 2, "SetCell 4 3800")
     _command(ams, b"BALN")
     ams.run_for(ms=UPDATE_MS)

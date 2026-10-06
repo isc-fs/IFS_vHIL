@@ -14,6 +14,11 @@ AMS facts (IFS08-CE-AMS bms_service.cpp, safety_predicates.hpp, ams_config.hpp):
   index = 4 * (id - 0x680) + slot, module = index / 19); 0x6C0 byte 0 state,
   6 reason, 7 detail; 0x6C1 bytes 0-1 / 2-3 last / max voltage-poll ms (BE);
   0x6C7 / 0x6C8 per-IC PEC counts (saturating u8, ICs 0..7 / 8..9).
+  0x4A0 (500 ms, ungated) byte 2: module_online_mask (ams_status.def).
+
+The chain model stands in for the bench's Pico LTC emulator: Respond false
+on a chip, or StopReply <chip mask> on the bridge, is the Pico's STOP_REPLY
+(IFS_HIL B-022, B-029, E-065..E-067, G-102).
 """
 import pytest
 
@@ -21,6 +26,7 @@ from vhil.sim import Sim
 from vhil.system import REPO
 
 PIT_ARM, PIT_CELLS, PIT_FSM, PIT_TIMING, PEC_A, PEC_B = 0x7F0, 0x680, 0x6C0, 0x6C1, 0x6C7, 0x6C8
+STATUS = 0x4A0
 START, ERROR = 0, 5
 OFFLINE = 2
 
@@ -77,24 +83,27 @@ def test_a_healthy_chain_polls_clean_and_fast(ams):
 
 
 @pytest.mark.parametrize("chips, online", [
-    ([4], 0x1B),            # B-029-stale: one chip of module 2
+    ([4], 0x1B),            # one chip of module 2
     ([4, 5], 0x1B),         # E-066: the whole module
     ([9], 0x0F),            # the far end of the chain
-], ids=["chip4", "module2", "chip9"])
+    (list(range(10)), 0),   # B-022, B-029-stale, E-065: every chip
+], ids=["chip4", "module2", "chip9", "all"])
 def test_a_silent_chip_takes_its_module_offline_in_time(ams, chips, online):
-    """B-022, E-065, E-066: reason 2 (never BmsStale: offline is checked
-    first) with the online mask, inside the FS 500 ms. IFS_HIL asserts
-    reason 3 for B-029-stale: drift."""
-    for k in chips:
-        _chip(ams, k, "Respond false")
+    """Replaces IFS_HIL B-022, B-029 (bms_stale), E-065 ("all") and E-066
+    ("module2"): reason 2 (never BmsStale: offline is checked first) with the
+    online mask, inside the FS 500 ms, and the same mask on 0x4A0[2]. The
+    silence goes in through the bridge's StopReply, the Pico's STOP_REPLY.
+    IFS_HIL asserts reason 3 for B-029 (bms_stale): drift."""
+    ams.monitor(f"sysbus.spi1.isospi StopReply {sum(1 << k for k in chips):#x}", board="ams")
     elapsed = _ms_to_error(ams)
     assert elapsed is not None, "no Error within 500 ms of the module going silent"
     assert ams.read_symbol("ams", "g_fault_reason_telemetry") == OFFLINE
     assert _fsm(ams) == (ERROR, OFFLINE, online)
+    assert ams.can("can_acu").last(STATUS).data[2] == online, "0x4A0 module_online_mask"
 
 
 def test_a_cut_link_silences_everything_beyond_it(ams):
-    """G-102: cutting the cable after chip 5 loses modules 3 and 4; chip 5
+    """Cutting the cable after chip 5 loses modules 3 and 4; chip 5
     itself still answers, so module 2 stays online."""
     _chip(ams, 5, "BreakDownstream true")
     assert _ms_to_error(ams) is not None, "no Error within 500 ms of the cut"
@@ -125,6 +134,20 @@ def test_pec_errors_are_counted_on_the_faulty_chip_only(ams):
     assert [c for i, c in enumerate(counts) if i != 7] == [0] * 9, f"PEC errors leaked: {counts}"
     assert _fsm(ams)[:2] == (ERROR, OFFLINE)
     assert _fsm(ams)[2] == 0x1F & ~(1 << 3)
+
+
+@pytest.mark.parametrize("module", [1, 2], ids=["module1", "module2"])
+def test_a_silent_module_counts_pec_errors_on_its_own_chips(ams, module):
+    """Replaces IFS_HIL G-102 ("module1") and E-067 ("module2"): a module whose
+    two chips answer 0xFF fails PEC on exactly those two ICs (0x6C7 / 0x6C8),
+    every other IC stays clean, and the module goes offline alone."""
+    chips = {2 * module, 2 * module + 1}
+    ams.monitor(f"sysbus.spi1.isospi StopReply {sum(1 << k for k in chips):#x}", board="ams")
+    ams.run_for(ms=2000)
+    counts = _pec_counts(ams)
+    assert all(counts[k] > 0 for k in chips), f"no PEC errors on chips {sorted(chips)}: {counts}"
+    assert [c for i, c in enumerate(counts) if i not in chips] == [0] * 8, f"PEC errors leaked: {counts}"
+    assert _fsm(ams) == (ERROR, OFFLINE, 0x1F & ~(1 << module))
 
 
 def test_a_transient_pec_burst_is_absorbed_by_the_retries(ams):

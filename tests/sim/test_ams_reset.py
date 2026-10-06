@@ -64,7 +64,10 @@ def _back_to_the_app(sim):
 
 def test_error_latch_survives_a_warm_reset(latched):
     """F-076 (flight build): the boot trigger's warm reset keeps BKP1R, so
-    the AMS comes back in Error though the cell is healthy again."""
+    the AMS comes back in Error though the cell is healthy again. Replaces
+    IFS_HIL D-051b too: the trigger, sent while the AMS is latched in Error
+    (a cell over-voltage set on the chain model), parks it in the
+    bootloader (_back_to_the_app)."""
     latched.can("can_acu").send(*BOOT_TRIGGER)
     _back_to_the_app(latched)
     status, boot = _arm_and_read(latched)
