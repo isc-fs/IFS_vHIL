@@ -607,6 +607,8 @@ ROUTE_FIELDS = {
     "gpio pin": lambda d, v: d["bench"]["gpio_routes"][0].update(pin=v),
     "adc from": lambda d, v: d["bench"]["adc_routes"][0].update(**{"from": v}),
     "adc channel": lambda d, v: d["bench"]["adc_routes"][0].update(channel=v),
+    "cell source device": lambda d, v: d["bench"]["cell_stimulus"].update(device=v),
+    "cell source mV": lambda d, v: d["bench"]["cell_stimulus"].update(cell_mV=v),
 }
 
 

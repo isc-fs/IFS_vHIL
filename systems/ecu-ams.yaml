@@ -48,6 +48,9 @@ bench:
     - {dac: 3, channel: 0, to: ams.PF7}  # S_CURRENT_P (docs/backplanes/ams.md)
     - {dac: 3, channel: 1, to: ams.PF8}  # S_CURRENT_N (docs/backplanes/ams.md)
   gpio_routes:
+    # IOEXP3 (TCA 0x22) P10 -> the ECU's START (vcu_profile start_btn_tca_*).
+    # Used when the profile sets start_btn_via_can: false (IFS_HIL#150).
+    - {tca: 0x22, port: 1, pin: 0, to: ecu.PB5}    # START_FIL <- J1.19 (docs/backplanes/ecu.md)
     # IOEXP2 (TCA 0x21) port 1 -> the AMS's cockpit inputs (IFS_HIL
     # bench-01.yaml routing.tsms / routing.dash_chg).
     - {tca: 0x21, port: 1, pin: 0, to: ams.PF9}    # P10 -> TSMS_FIL (docs/backplanes/ams.md)
@@ -61,3 +64,8 @@ bench:
     - {adc: 2, channel: 1, from: ams.PB5}  # AIR+ (docs/backplanes/ams.md)
     - {adc: 2, channel: 2, from: ams.PB6}  # AIR- (docs/backplanes/ams.md)
     - {adc: 2, channel: 3, from: ams.PB7}  # PRECHARGE (docs/backplanes/ams.md)
+  # bench-01's Pico LTC emulator seed, which it holds from its own cold boot
+  # across the AMS's power cycles: 3750 mV cells, 25.0 C (IFS_HIL
+  # tools/pico_ltc_emulator/firmware/src/cell_state.h DEFAULT_CELL_MV, README
+  # "Default state on cold boot"). The model's own default stays 3700 mV.
+  cell_stimulus: {device: isospi, cell_mV: 3750, temp_dC: 250}

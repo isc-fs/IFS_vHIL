@@ -88,6 +88,19 @@ def probe_commands(config: dict) -> list[str]:
     return out
 
 
+def seed_commands(cells: dict | None, machine: str) -> list[str]:
+    """After a board's power-on reset: the bench's cell source (bench-01's
+    Pico LTC emulator) is powered on its own and keeps holding its cells and
+    temperatures, but the reset put the board's LTC6811 models back to their
+    defaults (models/renode/IsoSpi.cs, Ltc6811.Reset). Re-apply the source's
+    levels to the whole chain, before the firmware runs again."""
+    if not cells or cells["machine"] != machine:
+        return []
+    bridge = rn.path(cells["bridge"])
+    return [f"{bridge} SetAllCells {int(cells['cell_mV'])}",
+            f"{bridge} SetAllTemperatures {int(cells['temp_dC'])}"]
+
+
 def power_on_commands(machine: str, vbat: bool) -> list[str]:
     """Monitor commands that power a board on, with its machine selected.
     Shared by the virtual broker and vhil.sim, so both mean the same thing.
@@ -126,6 +139,7 @@ def make_backend(fake_cls, monitor: RenodeMonitor, config: dict, boot_check: boo
     # The broker server is threaded; `mach set` + the command must not interleave.
     lock = threading.Lock()
     can_of = {c["machine"]: c.get("can", {}) for c in config.get("power", [])}
+    cells = config.get("cell_stimulus")
 
     def checked(command: str) -> str:
         """Run a power-path command and log anything Renode says back: these
@@ -199,6 +213,8 @@ def make_backend(fake_cls, monitor: RenodeMonitor, config: dict, boot_check: boo
                         for controller, hub in can_of[machine].items():
                             checked(connector("Connect", controller, hub))
                         for command in power_on_commands(machine, vbat[machine]):
+                            checked(command)
+                        for command in seed_commands(cells, machine):
                             checked(command)
                     finally:
                         checked("machine Start")

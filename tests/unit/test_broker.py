@@ -235,6 +235,21 @@ def test_a_routed_adc_channel_reads_the_pin_level_now():
     assert backend.adc_read(1, 0) == 7
 
 
+def test_the_bench_cell_source_is_reapplied_after_each_power_on():
+    """bench-01's Pico keeps its seed while the AMS is off; the AMS's reset
+    put the LTC6811 models back to their default, so the seed follows the
+    reset, before the firmware runs."""
+    backend, monitor = _backend("ams.yaml")
+    monitor.commands.clear()
+    backend.tca_write_pin(0x20, 0, 1, True)
+    cmds = [c for m, c in monitor.commands if m == "ams"]
+    assert cmds.index("machine Reset") < cmds.index("sysbus.spi1.isospi SetAllCells 3750") \
+        < cmds.index("sysbus.spi1.isospi SetAllTemperatures 250") < cmds.index("machine Start")
+    backend, monitor = _backend("ecu.yaml")                 # no chain, no seed
+    backend.tca_write_pin(0x20, 0, 3, True)
+    assert not any("SetAll" in c for _, c in monitor.commands)
+
+
 def test_probe_commands_watch_each_routed_output():
     from vhil.broker import probe_commands
     cmds = probe_commands(ROUTES)
