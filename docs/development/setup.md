@@ -28,9 +28,10 @@ its container `--privileged --network host` (it creates `can0..can2`); every
 other job runs unprivileged on Docker's default network (`VHIL_DOCKER_VCAN=1`
 gives `shell`/`run` vcan too), and `server`/`editor` publish on 127.0.0.1.
 
-### Renode's monitor, card images and what a system file may say
+### Emulator monitor, card images and what a system file may say
 
-Renode 1.17's `-P <port>` monitor listens on every interface with no
+These notes are for the current emulation backend, Renode 1.17. Its
+`-P <port>` monitor listens on every interface with no
 authentication, and has no option to bind one address. `vhil.sim` and
 `vhil.bench` start Renode with `-P -1` instead and serve the monitor
 themselves on `127.0.0.1` only ([`models/renode/VhilMonitor.cs`](../../models/renode/VhilMonitor.cs),
@@ -45,8 +46,8 @@ image is looked up in the first; `..`, absolute paths elsewhere and symlinks
 out are refused. A test passes its own temp directory with
 `Sim(..., card_dirs=[tmp])`.
 
-Everything a system file or a run scenario names reaches Renode only through
-`vhil.renode`'s encoders, behind the schema and `System`'s checks: names are
+Everything a system file or a run scenario names reaches the emulator only
+through `vhil.renode`'s encoders, behind the schema and `System`'s checks: names are
 identifiers, device params have their model's type (a string param its
 `param_formats` format, else a plain word), and a value that could end a
 string, a line or a command is refused.
@@ -77,8 +78,8 @@ scripts/vhil-docker.sh sim -k heartbeat_only --vhil-trace     # results/sim-logs
 ### Firmware coverage
 
 `--vhil-coverage DIR` records which code of each image ran
-([`vhil/coverage.py`](../../vhil/coverage.py)): Renode logs every block it
-translates, and a block is translated the first time it runs. The cost is
+([`vhil/coverage.py`](../../vhil/coverage.py)): the emulator (Renode) logs
+every block it translates, and a block is translated the first time it runs. The cost is
 5% on a plain ECU boot and about 25% over a mix of suites with power cycles
 (a reset flushes the translation cache, so the code is logged again), which
 is why CI doesn't turn it on. At the end of the session DIR holds, per image, `<image>.info`
@@ -95,12 +96,13 @@ genhtml results/coverage/ECU08.info -o results/coverage/html  # lcov's HTML, if 
 
 ## Environment
 
-Linux, or WSL2 on Windows. The Renode SocketCAN bridge used from Phase 1 is
-Linux-only.
+Linux, or WSL2 on Windows. The SocketCAN bridge used from Phase 1 (Renode's,
+for the current backend) is Linux-only. The table pins the current emulation
+backend and toolchain.
 
 | Tool | Version | Where |
 |---|---|---|
-| Renode | 1.17.0 portable | `renode-1.17.0.linux-portable.tar.gz` from the [Renode releases](https://github.com/renode/renode/releases) |
+| Renode (emulation backend) | 1.17.0 portable | `renode-1.17.0.linux-portable.tar.gz` from the [Renode releases](https://github.com/renode/renode/releases) |
 | Arm GNU Toolchain | 14.2.Rel1 | developer.arm.com (pinned by IFS_HIL's recipes) |
 | Python | ≥ 3.10 | venv with `robotframework==6.1 robotframework-retryfailed==0.2.0 psutil==5.9.4 "pyyaml==6.0.*" "telnetlib3==2.0.*"` (Renode 1.17's own `tests/requirements.txt`) |
 | CMake | ≥ 3.22 | distro package |
