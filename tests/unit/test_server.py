@@ -1,4 +1,5 @@
 """vhil.server (M5.1): the API over this checkout's systems and catalogue."""
+import hashlib
 import logging
 import re
 from dataclasses import replace
@@ -155,6 +156,25 @@ def test_the_shell_has_no_inline_script_or_style(path):
     assert not re.search(r"""\sstyle\s*=\s*["'`$]""", text), "style attribute in markup"
     assert not re.search(r"""<[a-z][^>]*\son[a-z]+\s*=\s*["']""", text, re.I), "on*= handler"
     assert "eval(" not in text and "new Function" not in text
+
+
+def test_the_stylesheets_load_nothing_remote():
+    """font-src and style-src are 'self': every url() and @import is a file
+    of the shell's own, and the fonts are what fonts/SHA256SUMS pins."""
+    for css in STATIC.glob("*.css"):
+        text = css.read_text()
+        assert "@import" not in text, css.name
+        for url in re.findall(r"""url\(\s*["']?([^"')]+)""", text):
+            assert "//" not in url and (css.parent / url).is_file(), f"{css.name}: {url}"
+    fonts = STATIC / "fonts"
+    for line in (fonts / "SHA256SUMS").read_text().splitlines():
+        digest, name = line.split()
+        assert hashlib.sha256((fonts / name).read_bytes()).hexdigest() == digest, name
+
+
+def test_fonts_are_served_as_fonts(client):
+    r = client.get("/static/fonts/Inter-Regular.woff2")
+    assert r.status_code == 200 and r.headers["content-type"] == "font/woff2"
 
 
 def test_vendored_uplot_needs_no_eval_or_inline_markup():

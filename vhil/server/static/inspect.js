@@ -613,13 +613,13 @@ export function junitTable(cases, snapDirs, esc) {
   if (!cases.length) return `<p class="muted">junit.xml has no test cases.</p>`;
   const n = (o) => cases.filter((c) => c.outcome === o).length;
   return `<h3>Tests <span class="muted">${n("passed")} passed · ${n("failed")} failed · ${n("error")} errors · ${n("skipped")} skipped</span></h3>
-    <table class="junit-table"><tr><th></th><th>test</th><th>time</th></tr>${cases.map((c) => {
+    <table class="junit-table"><tr><th></th><th>test</th><th class="num">time</th></tr>${cases.map((c) => {
       const snaps = c.outcome === "failed" || c.outcome === "error" ? snapFor(c, snapDirs) : [];
       return `<tr class="${c.outcome}"><td><span class="badge state-${c.outcome === "passed" ? "passed" : c.outcome === "skipped" ? "cancelled" : "failed"}">${c.outcome}</span></td>
         <td><span class="muted">${esc(c.classname)}</span>::${esc(c.name)}
           ${c.message || c.text ? `<details><summary>${esc(c.message.slice(0, 200) || "details")}</summary><pre>${esc(c.text)}</pre></details>` : ""}
           ${snaps.map((d) => `<a href="" data-snap="${esc(d)}">snapshot</a>`).join(" ")}</td>
-        <td>${c.time.toFixed(2)} s</td></tr>`;
+        <td class="num">${c.time.toFixed(2)} s</td></tr>`;
     }).join("")}</table>`;
 }
 

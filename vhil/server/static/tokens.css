@@ -1,0 +1,119 @@
+/* Design tokens: docs/architecture/editor-workspace.md, "Tokens".
+   Dark first; the light theme follows prefers-color-scheme: light, and
+   data-theme="dark"/"light" on <html> forces either. Every component reads
+   these, never a literal colour. tests/js/tokens.test.mjs holds each theme to
+   WCAG AA: 4.5:1 for text tokens, 3:1 for control borders, focus and plot
+   series, on the surfaces they sit on.
+
+   Fonts are self-hosted (the CSP has font-src 'self', and the track has no
+   network): Inter 4.1 (rsms/inter, Inter-4.1.zip web/) and JetBrains Mono
+   2.304 (JetBrains/JetBrainsMono, JetBrainsMono-2.304.zip fonts/webfonts/),
+   both under the SIL OFL 1.1 (fonts/*-LICENSE.txt, fonts/*-OFL.txt). Each
+   file matched the same path in its project's tagged tree; fonts/SHA256SUMS
+   pins them. */
+
+@font-face { font-family: "Inter"; font-style: normal; font-weight: 400; font-display: swap;
+             src: url("fonts/Inter-Regular.woff2") format("woff2"); }
+@font-face { font-family: "Inter"; font-style: normal; font-weight: 600; font-display: swap;
+             src: url("fonts/Inter-SemiBold.woff2") format("woff2"); }
+@font-face { font-family: "JetBrains Mono"; font-style: normal; font-weight: 400; font-display: swap;
+             src: url("fonts/JetBrainsMono-Regular.woff2") format("woff2"); }
+
+/* Theme-independent: type, spacing, radii, chrome. */
+:root {
+  --font-ui: "Inter", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --fs-base: 13px; --fs-dense: 12px; --fs-small: 11px; --fs-title: 15px; --fs-state: 18px;
+  /* the 4 px grid */
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 24px; --sp-6: 32px;
+  --r-control: 4px; --r-panel: 6px; --r-card: 10px; --r-pill: 999px;
+  --row-dense: 22px; --row-comfortable: 26px;
+}
+
+/* Dark (default). */
+:root {
+  color-scheme: dark;
+  /* surfaces */
+  --bg-0: #0f1115;          /* canvas, page */
+  --bg-1: #161a20;          /* panels, docks, sidebar */
+  --bg-2: #1d222a;          /* raised: node body, code */
+  --bg-3: #262c36;          /* hover, node header */
+  --line: #2a3038;          /* dividers */
+  --border-control: #5f6876; /* inputs and buttons: >= 3:1 on bg-1 */
+  /* text */
+  --fg: #e6e9ee;
+  --fg-muted: #9aa3b1;
+  --fg-faint: #6b7380;      /* non-text only */
+  /* brand, accent, focus: three jobs, three tokens */
+  --brand: #e5243b;         /* fills only: the mark, primary buttons, active tab bar */
+  --on-brand: #ffffff;
+  --brand-text: #ff6b7f;    /* red text, if ever needed */
+  --accent: #7aa7ff;        /* links, interactive text */
+  --focus: #4c8dff;         /* focus ring, selection outline */
+  --sel-bg: color-mix(in srgb, #4c8dff 18%, #161a20);
+  /* status: never colour alone (text and a glyph go with it) */
+  --status-queued: #959ca6;
+  --status-building: #b197fc;
+  --status-running: #4dabf7;
+  --status-ok: #40c057;      /* passed, nominal, contactor closed */
+  --status-warn: #fcc419;    /* transitional, paused */
+  --status-failed: #ff6b6b;  /* a test failed, a latched fault */
+  --status-error: #ff922b;   /* the infrastructure failed, not the test */
+  --status-cancelled: #9aa3b1;
+  --status-stale: #959ca6;
+  --status-replay: #7aa7ff;
+  --tint-failed: color-mix(in srgb, #ff6b6b 14%, transparent);
+  --tint-error: color-mix(in srgb, #ff922b 14%, transparent);
+  /* wires, by interface type (vhil/editor.py CANVAS_METADATA) */
+  --wire-can: #f59f00; --wire-spi: #4dabf7; --wire-i2c: #3bc9db; --wire-sdmmc: #9775fa;
+  --wire-uart: #e599f7; --wire-gpio: #adb5bd; --wire-analog: #20c997;
+  --can-1: #f59f00; --can-2: #f783ac; --can-3: #63e6be; --can-4: #ffd43b;
+  /* board roles */
+  --role-ecu: #e5243b; --role-ams: #fab005; --role-udv: #4dabf7;
+  /* plot series */
+  --s1: #4dabf7; --s2: #ff922b; --s3: #69db7c; --s4: #e599f7; --s5: #ffd43b; --s6: #3bc9db;
+}
+
+/* Light. */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    color-scheme: light;
+    --bg-0: #f6f7f9; --bg-1: #ffffff; --bg-2: #ffffff; --bg-3: #eef0f4;
+    --line: #dde1e7; --border-control: #80878f;
+    --fg: #15181d; --fg-muted: #5b6270; --fg-faint: #8a919c;
+    --brand: #c8102e; --on-brand: #ffffff; --brand-text: #b00e28;
+    --accent: #2457c5; --focus: #2f6fe0;
+    --sel-bg: color-mix(in srgb, #2f6fe0 14%, #ffffff);
+    --status-queued: #5b6270; --status-building: #6741d9; --status-running: #1864ab;
+    --status-ok: #237032; --status-warn: #8a6500; --status-failed: #c92a2a;
+    --status-error: #b8400d; --status-cancelled: #5b6270; --status-stale: #5b6270;
+    --status-replay: #2457c5;
+    --tint-failed: color-mix(in srgb, #c92a2a 10%, transparent);
+    --tint-error: color-mix(in srgb, #b8400d 10%, transparent);
+    --wire-can: #c77c00; --wire-spi: #1c7ed6; --wire-i2c: #0c8599; --wire-sdmmc: #7048e8;
+    --wire-uart: #ae3ec9; --wire-gpio: #868e96; --wire-analog: #099268;
+    --can-1: #c77c00; --can-2: #c2255c; --can-3: #099268; --can-4: #8a6500;
+    --role-ecu: #c8102e; --role-ams: #b08800; --role-udv: #1c7ed6;
+    --s1: #1c7ed6; --s2: #b8400d; --s3: #237032; --s4: #ae3ec9; --s5: #b08800; --s6: #0c8599;
+  }
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg-0: #f6f7f9; --bg-1: #ffffff; --bg-2: #ffffff; --bg-3: #eef0f4;
+  --line: #dde1e7; --border-control: #80878f;
+  --fg: #15181d; --fg-muted: #5b6270; --fg-faint: #8a919c;
+  --brand: #c8102e; --on-brand: #ffffff; --brand-text: #b00e28;
+  --accent: #2457c5; --focus: #2f6fe0;
+  --sel-bg: color-mix(in srgb, #2f6fe0 14%, #ffffff);
+  --status-queued: #5b6270; --status-building: #6741d9; --status-running: #1864ab;
+  --status-ok: #237032; --status-warn: #8a6500; --status-failed: #c92a2a;
+  --status-error: #b8400d; --status-cancelled: #5b6270; --status-stale: #5b6270;
+  --status-replay: #2457c5;
+  --tint-failed: color-mix(in srgb, #c92a2a 10%, transparent);
+  --tint-error: color-mix(in srgb, #b8400d 10%, transparent);
+  --wire-can: #c77c00; --wire-spi: #1c7ed6; --wire-i2c: #0c8599; --wire-sdmmc: #7048e8;
+  --wire-uart: #ae3ec9; --wire-gpio: #868e96; --wire-analog: #099268;
+  --can-1: #c77c00; --can-2: #c2255c; --can-3: #099268; --can-4: #8a6500;
+  --role-ecu: #c8102e; --role-ams: #b08800; --role-udv: #1c7ed6;
+  --s1: #1c7ed6; --s2: #b8400d; --s3: #237032; --s4: #ae3ec9; --s5: #b08800; --s6: #0c8599;
+}
