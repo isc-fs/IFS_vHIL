@@ -63,7 +63,7 @@ export class PlotGroup {
   add(el, { label, unit = "", x, y, stepped = true, color = palette()[0], height = 140 }) {
     loadCss();
     const group = this;
-    const fg = token("--fg", "#222"), muted = token("--muted", "#888"), line = token("--line", "#ddd");
+    const fg = token("--fg", "#222"), muted = token("--fg-muted", "#888"), line = token("--line", "#ddd");
     const axis = { stroke: muted, grid: { stroke: line, width: 1 }, ticks: { stroke: line } };
     const marker = {
       hooks: {
@@ -73,7 +73,7 @@ export class PlotGroup {
           if (px < u.bbox.left || px > u.bbox.left + u.bbox.width) return;
           const ctx = u.ctx;
           ctx.save();
-          ctx.strokeStyle = token("--accent", "#c8102e");
+          ctx.strokeStyle = token("--focus", "#4c8dff");
           ctx.lineWidth = 1.5 * devicePixelRatio;
           ctx.beginPath();
           ctx.moveTo(px, u.bbox.top);
