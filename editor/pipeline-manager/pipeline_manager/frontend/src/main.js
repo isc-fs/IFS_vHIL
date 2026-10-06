@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import './vhil';
 import Toast, { POSITION } from 'vue-toastification';
 import vClickOutside from 'click-outside-vue3';
 

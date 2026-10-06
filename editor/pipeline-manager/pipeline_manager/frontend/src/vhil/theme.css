@@ -1,0 +1,20 @@
+/* vHIL: theme fix-ups for upstream markup that hard-codes a dark-theme colour
+   (CHANGELOG-VHIL.md). The light theme is defined now and polished later
+   (docs/architecture/editor-workspace.md, "Owner decisions"); this keeps the
+   icons readable on it. */
+
+:root[data-theme="light"] svg [fill="white" i],
+:root[data-theme="light"] svg [fill="#ffffff" i],
+:root[data-theme="light"] svg [fill="#e5e5e5" i] { fill: var(--fg); }
+:root[data-theme="light"] svg [stroke="white" i],
+:root[data-theme="light"] svg [stroke="#ffffff" i],
+:root[data-theme="light"] svg [stroke="#e5e5e5" i] { stroke: var(--fg); }
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) svg [fill="white" i],
+  :root:not([data-theme="dark"]) svg [fill="#ffffff" i],
+  :root:not([data-theme="dark"]) svg [fill="#e5e5e5" i] { fill: var(--fg); }
+  :root:not([data-theme="dark"]) svg [stroke="white" i],
+  :root:not([data-theme="dark"]) svg [stroke="#ffffff" i],
+  :root:not([data-theme="dark"]) svg [stroke="#e5e5e5" i] { stroke: var(--fg); }
+}
