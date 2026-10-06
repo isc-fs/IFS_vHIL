@@ -220,14 +220,14 @@ export default defineComponent({
     min-height: 200px;
     border: 2px dashed $gray-500;
     border-radius: $spacing-s;
-    background: rgba($gray-500, 0.2);
+    background: color-mix(in srgb, #{$gray-500} 20%, transparent);
     transition: all 0.3s ease;
     padding: $spacing-xxl $spacing-xl;
     text-align: center;
 
     &.dragging {
         border-color: $green;
-        background: rgba($green, 0.05);
+        background: color-mix(in srgb, #{$green} 5%, transparent);
     }
 
     h3 {
@@ -287,7 +287,7 @@ export default defineComponent({
     margin-bottom: $spacing-l;
 
     &:hover {
-        background: rgba($green, 0.8);
+        background: color-mix(in srgb, #{$green} 80%, transparent);
     }
 }
 
@@ -312,7 +312,7 @@ export default defineComponent({
 
     &:hover {
         color: $green;
-        background: rgba($green, 0.05);
+        background: color-mix(in srgb, #{$green} 5%, transparent);
 
         svg {
             opacity: 1;

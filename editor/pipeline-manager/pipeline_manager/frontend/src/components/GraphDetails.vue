@@ -115,7 +115,7 @@ export default {
     width: $settings-width;
     max-width: $settings-maxwidth;
 
-    background-color: #{$gray-600}E6;
+    background-color: color-mix(in srgb, #{$gray-600} 90%, transparent);
     color: white;
 
     z-index: 4;

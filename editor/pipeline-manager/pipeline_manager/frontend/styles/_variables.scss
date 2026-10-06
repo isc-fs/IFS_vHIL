@@ -7,25 +7,31 @@
 $navbar-height: 60px;
 $terminal-container-height: 35px;
 
-/* Colors */
-$white: #ffffff;
-$gray-100: #999999;
-$gray-200: #6f6f6f;
-$gray-300: #606060;
-$gray-400: #4a4a4a;
-$gray-500: #343434;
-$gray-600: #1d1d1d;
-$gray-700: #151515;
-$black: #0f0f0f;
-$gold: #cca747;
-$red: #cc4747;
-$red-dark: hsl(0, 57%, 40%);
-$green: #00E58D;
+/* Colors: the vHIL design tokens (vhil/server/static/tokens.css, copied to
+   src/vhil/shell/ by the image build), so a theme switch at run time
+   recolours the editor. Each fallback is the token's dark value
+   (tests/unit/test_editor_theme.py holds them equal). Upstream's
+   compile-time values: CHANGELOG-VHIL.md. */
+$white: var(--fg, #e6e9ee);
+$gray-100: var(--fg-muted, #9aa3b1);
+$gray-200: var(--border-control, #5f6876);
+$gray-300: var(--fg-faint, #6b7380);
+$gray-400: color-mix(in srgb, var(--fg, #e6e9ee) 12%, var(--bg-3, #262c36));
+$gray-500: var(--line, #2a3038);
+$gray-600: var(--bg-2, #1d222a);
+$gray-700: var(--bg-1, #161a20);
+$black: var(--bg-0, #0f1115);
+$gold: var(--status-warn, #fcc419);
+$red: var(--status-failed, #ff6b6b);
+$red-dark: var(--status-failed, #ff6b6b);
+$green: var(--accent, #7aa7ff);
+$focus: var(--focus, #4c8dff);
 
-/* Fonts */
-$montserrat: 'Montserrat', sans-serif;
-$roboto: 'Roboto', sans-serif;
-$roboto-mono: 'Roboto Mono', monospace;
+/* Fonts: self-hosted Inter and JetBrains Mono (tokens.css), no Google Fonts.
+   The upstream names stay so the rules using them don't change. */
+$montserrat: var(--font-ui, 'Inter', system-ui, sans-serif);
+$roboto: var(--font-ui, 'Inter', system-ui, sans-serif);
+$roboto-mono: var(--font-mono, 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace);
 
 /* Font sizes */
 $fs-tiny: 10px;

@@ -377,7 +377,7 @@ export default {
     $settings-width: 435px;
     $settings-maxwidth: calc(100vw - 2 * $spacing-l);
 
-    background-color: #{$gray-600}E6;
+    background-color: color-mix(in srgb, #{$gray-600} 90%, transparent);
     position: absolute;
     padding: $spacing-l;
     color: white;
