@@ -865,13 +865,16 @@ def test_a_first_attempt_sets_aside_results_left_by_a_rolled_back_run(settings, 
 
 
 def test_a_live_worker_keeps_its_run_while_another_polls(settings, store):
-    """Worker A runs a slow run, beating every 20 ms; worker B polls with a
-    0.3 s reclaim timeout the whole time and never takes it."""
-    run_id = store.create("ecu", "", {}, {"kind": "run", "virtual_ms": 400, "slice_ms": 10})
+    """Worker A runs a slow run (about 3 s), beating every 20 ms; worker B
+    polls with a 1 s reclaim timeout the whole time and never takes it. The
+    run outlasts the timeout three times over, so a missing heartbeat would
+    be caught; the timeout leaves room for a loaded CI runner delaying a
+    beat's SQLite write (0.3 s did not)."""
+    run_id = store.create("ecu", "", {}, {"kind": "run", "virtual_ms": 1500, "slice_ms": 10})
     a = Worker(settings, worker_id="a", sim_factory=lambda *x: SlowSim(0.02),
-               resolver=FixedResolver(), heartbeat_s=0.02, reclaim_after_s=0.3)
+               resolver=FixedResolver(), heartbeat_s=0.02, reclaim_after_s=1.0)
     b = Worker(settings, worker_id="b", sim_factory=lambda *x: FakeSim(),
-               resolver=FixedResolver(), heartbeat_s=0.02, reclaim_after_s=0.3)
+               resolver=FixedResolver(), heartbeat_s=0.02, reclaim_after_s=1.0)
     t = threading.Thread(target=a.run_once)
     t.start()
     while store.get(run_id)["state"] == "queued":
@@ -888,20 +891,22 @@ def test_a_live_worker_keeps_its_run_while_another_polls(settings, store):
 
 
 def test_the_heartbeat_thread_keeps_a_run_with_no_slices_claimed(settings, store):
-    """A firmware build (no slices) longer than the reclaim timeout."""
+    """A firmware build (no slices) longer than the reclaim timeout: 2.5 s
+    against 0.8 s, which leaves room for a loaded CI runner delaying a beat
+    (0.5 s against 0.2 s did not)."""
     run_id = store.create("ecu", "", {}, RUN)
 
     class SlowBuild(FixedResolver):
         def resolve(self, system, refs):
-            time.sleep(0.5)
+            time.sleep(2.5)
             return super().resolve(system, refs)
 
     a = Worker(settings, worker_id="a", sim_factory=lambda *x: FakeSim(), resolver=SlowBuild(),
-               heartbeat_s=0.02, reclaim_after_s=0.2)
+               heartbeat_s=0.02, reclaim_after_s=0.8)
     t = threading.Thread(target=a.run_once)
     t.start()
     while t.is_alive():
-        assert store.reclaim(0.2) == []
+        assert store.reclaim(0.8) == []
         time.sleep(0.02)
     t.join()
     assert store.get(run_id)["state"] == "passed"
