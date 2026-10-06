@@ -1,95 +1,83 @@
 # IFS_vHIL — virtual hardware-in-the-loop
 
-Runs the same firmware images [IFS_HIL](https://github.com/isc-fs/IFS_HIL)
-flashes to the real MainLite boards (AMS, ECU), on emulated STM32H733s in
-[Renode](https://github.com/renode/renode). The goal is HIL-style testing on
-every push, in parallel, with no hardware attached. Physical-only work stays
-on the physical bench: analog accuracy, real power, flash wear and bus physics.
+Virtual hardware-in-the-loop bench: runs emulated ISC boards so HIL suites can
+run in CI without physical hardware.
 
-**Where it's going:** a shared web app where engineers compose whole systems,
-defining their own boards, connecting ECUs over buses and wires, and pointing
-each one at its firmware repository. Hardware combinations are bounded by what
-is modelled, not by a PCB. See [`docs/vision.md`](docs/vision.md).
+The emulated boards run the same firmware images
+[IFS_HIL](https://github.com/isc-fs/IFS_HIL) flashes to the real ones,
+bootloader included. A test that passes here has run the car's software, not a
+special build. Every push gets HIL-style testing, in parallel, with no hardware
+attached. Work that needs real physics stays on the physical bench: analog
+accuracy, real power, flash wear and bus electrics.
 
-**Status: Phase 1 done.** IFS_HIL's own ECU smoke suite runs unmodified
-against the virtual ECU, in CI and locally: 14 passed, 7 skipped, each skip
-with a stated reason ([#1](https://github.com/isc-fs/IFS_vHIL/issues/1)).
-Next is M1, the system description. The roadmap and its issues are in
-[`docs/vision.md`](docs/vision.md#5-roadmap). The Phase 0/1 design and
-findings are in [`docs/proposal.md`](docs/proposal.md).
+**What it does today**
+
+- **Systems as data.** A system file places boards, gives each its role and
+  firmware, and wires them together over CAN buses and pins.
+- **Tests in virtual time.** Native test suites, plus IFS_HIL's own suites run
+  unmodified against the virtual boards.
+- **A web app.** Compose a system in the editor, save it to a branch, run it,
+  and inspect the result: decoded CAN frames, plots, logs and artifacts.
+
+**Where it's going:** a shared tool where engineers compose whole cars from the
+team's boards, point each one at a branch of its firmware, and test the result
+before it reaches a bench. Hardware combinations are bounded by what is
+modelled, not by a PCB. See [`docs/vision.md`](docs/vision.md) for the roadmap.
 
 **Contributing:** `dev` is the trunk and `main` is release-only. Branch
 `feat/` `fix/` `docs/` `chore/` `test/` off `dev` and open a PR back into it.
 See [`docs/development/setup.md`](docs/development/setup.md), and
 [`CLAUDE.md`](CLAUDE.md) for the operating model.
 
-## Layout
+## Try it
 
-```
-systems/                        Systems as data: boards, their firmware, the buses between them
-catalog/platforms/              Emulatable MCUs (stm32h733)
-catalog/boards/                 Boards: a platform plus named connectors and pins (mainlite)
-catalog/firmware/               Firmware sources: repo, ref, build recipe, load address (ecu, ams)
-catalog/models/                 Device models: ltc6820 isoSPI bridge, ltc6811 battery monitor, sd-card
-models/renode/IsoSpi.cs         The LTC6820 + LTC6811 isoSPI models (C#, compiled by Renode at load)
-schemas/vhil.schema.json        Schema every catalogue entry and system is validated against
-platforms/cpus/stm32h733.repl   STM32H733 Renode platform (Renode ships only H743/H753/H747)
-vhil/system.py                  Generator: validate / render / bench / build a system
-scripts/explore.sh, probe.sh    Headless boot + log / monitor-command helpers
-scripts/run-ifs-hil.sh          Run an IFS_HIL suite against the virtual bench (CI and local)
-vhil/                           Virtual broker, Renode monitor client, pytest plugin
-configs/gaps.yaml               IFS_HIL tests the virtual bench can't pass yet, and why
-configs/peripherals.yaml        Unmodelled hardware the firmware may touch, and why (peripheral guard)
-tests/ecu_smoke.robot           ECU smoke: heartbeat, buses, 0x704 health
-tests/ams_smoke.robot           AMS smoke: what the AMS reports about its modelled battery, faults included
-tests/unit/                     Host-only checks of the catalogue, systems and generator
-CLAUDE.md                       Operating model: branch/commit/PR policy, invariants
-docs/proposal.md                Design, spike results, coverage, phases, risks
-docs/development/setup.md       Toolchain, branching, issues, PRs, releases
-docs/backplanes/                Reference: what each car backplane routes to its MainLite (ams, ecu, udv)
-.github/workflows/              CI: unit, smoke per system (Robot), IFS_HIL ECU suite
-```
-
-## Try it (Linux or WSL2)
-
-Requirements: Renode 1.17.0 (portable Linux build) and Arm GNU Toolchain
-14.2.Rel1, the toolchain pinned by IFS_HIL's recipes.
+Everything runs in Docker; nothing is installed on the host. On macOS the
+wrapper starts a small VM for it.
 
 ```sh
-export RENODE=~/renode_1.17.0-portable/renode     # and the Arm toolchain on PATH
-
-# build every board's firmware from the source its system declares: the app
-# and the CAN bootloader every MainLite boots through (prints ecu=<elf>,
-# ecu.bootloader=<elf>)
-python -m vhil.system build systems/ecu.yaml --workdir build/fw
-export VHIL_CAN_BOOTLOADER_ELF=$PWD/build/fw/can-bootloader@v1.7.0/build/Release/CAN_BL.elf
-
-# 5 virtual seconds (2 in the bootloader's auto-jump window, then the app),
-# logging every CAN frame the ECU queues
-scripts/explore.sh systems/ecu.yaml build/fw/ecu@dev/build/ECU08.elf 5
-
-# automated smoke checks (the Renode script is generated from the system,
-# with the provisioned flash image it builds from both ELFs)
-python -m vhil.system render systems/ecu.yaml --firmware ecu=build/fw/ecu@dev/build/ECU08.elf \
-    --firmware ecu.bootloader=$VHIL_CAN_BOOTLOADER_ELF -o build/ecu.resc
-$RENODE-test tests/ecu_smoke.robot --variable ELF:$PWD/build/fw/ecu@dev/build/ECU08.elf --variable RESC:$PWD/build/ecu.resc
-
-# IFS_HIL's own ECU suite, unmodified, against the virtual ECU (needs vcan
-# can0..can2; on WSL2 run scripts/wsl-vcan.sh --load first)
-VHIL_FIRMWARE="ecu.bootloader=$VHIL_CAN_BOOTLOADER_ELF" \
-    scripts/run-ifs-hil.sh ~/IFS_HIL build/fw/ecu@dev/build/ECU08.elf smoke
+scripts/vhil-docker.sh vm            # once, on macOS: the VM
+scripts/vhil-docker.sh image         # once: the images
+scripts/vhil-docker.sh fw ecu ams    # build the firmware each system declares
+scripts/vhil-docker.sh unit          # host-only checks; validates every system
+scripts/vhil-docker.sh smoke ecu     # boot a board and check what it says on CAN
+scripts/vhil-docker.sh sim           # the native test suites, in virtual time
+scripts/vhil-docker.sh ifs-hil       # IFS_HIL's own suite against the virtual boards
+scripts/vhil-docker.sh server        # the web app on http://localhost:8080
 ```
 
-A system file is the source of truth: edit `systems/*.yaml`, never a
-generated script. `python -m vhil.system validate <system>` checks one against
-the schema and the catalogue.
+Pinned tool versions, running without Docker, and every job the wrapper runs
+are in [`docs/development/setup.md`](docs/development/setup.md). Deploying the
+web app for the team is in [`docs/deploy.md`](docs/deploy.md).
+
+A system file is the source of truth: edit `systems/*.yaml`, never a generated
+script. `python -m vhil.system validate <system>` checks one against the schema
+and the catalogue.
 
 Tests the virtual bench can't pass yet are listed in
 [`configs/gaps.yaml`](configs/gaps.yaml) with the reason and issue; they are
-reported as skips, never silently dropped. If the firmware touches hardware
-the bench doesn't model and that isn't explained in
-[`configs/peripherals.yaml`](configs/peripherals.yaml), the run fails even
-when every test passed.
+reported as skips, never silently dropped. If the firmware touches hardware the
+bench doesn't model, and that isn't explained in
+[`configs/peripherals.yaml`](configs/peripherals.yaml), the run fails even when
+every test passed.
 
-`renode-test` needs Renode's Python test requirements (`robotframework==6.1`,
-`psutil`, `pyyaml`, `telnetlib3`, `robotframework-retryfailed`).
+## Layout
+
+```
+systems/                  Systems as data: boards, their roles and firmware, the buses between them
+catalog/platforms/        Emulated MCUs
+catalog/boards/           Boards: a platform, its connectors and pins, and the roles it can take
+catalog/firmware/         Firmware sources: repo, default ref, build recipe
+catalog/models/           Devices that attach to a board: battery monitors, sensors, SD cards
+schemas/                  The schema every catalogue entry and system is validated against
+platforms/, models/       The emulator-side descriptions of those MCUs and devices
+vhil/                     Generator, simulation API, virtual broker, web app server and worker
+tests/unit/               Host-only checks of the catalogue, systems, generator and web app
+tests/sim/                Native test suites, run in virtual time
+tests/*_smoke.robot       Smoke checks per system
+configs/gaps.yaml         IFS_HIL tests the virtual bench can't pass yet, and why
+configs/peripherals.yaml  Hardware the firmware may touch that isn't modelled, and why
+scripts/                  Docker wrapper and helpers
+docker/, deploy/          Images, local stack, and the deployment of the web app
+docs/                     Vision, design, development, deployment, backplane references
+.github/workflows/        CI: unit, smoke, native suites, IFS_HIL suites
+```
