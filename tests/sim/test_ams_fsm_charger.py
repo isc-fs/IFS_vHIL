@@ -13,15 +13,20 @@ AMS facts (IFS08-CE-AMS state_machine.hpp, safety_task.cpp, vehicle_service.cpp)
     (1000). ChargerTsmsOpen (15): a TSMS drop in a Charger-mode energised
     state LATCHES Error (the car's TSMS drop doesn't).
   Charge ignores DASH_CHG.
+  DASH_CHG is PF10, a GPIO input with a pull-down (AMS.ioc), read every 10 ms;
+    its rising edge is the press, its live level goes out on 0x4A2[5] bit 0
+    (safety_task.cpp:189-195, :386-395).
 """
 import pytest
 
 from ams_car import (AIR_N, AIR_P, CHARGE, Car, ERROR, GPIOB, PRECHARGE, PRECHARGE_RELAY,
                      START)
+from vhil.cosim import Port
 from vhil.sim import Sim
 from vhil.system import REPO
 
 VCU_STALE, CHARGER_STALE, CHARGER_TSMS_OPEN = 11, 14, 15
+TEMPS = 0x4A2
 BOOT_MS = 3000
 
 
@@ -51,6 +56,28 @@ def test_a_charger_with_no_vcu_locks_charger_and_charges(car):
     assert car.mode() == 2
     assert car.io.level(car.pins["air_n"]) and car.io.level(car.pins["air_p"])
     assert [e for e in car.io.edges(car.pins["pre"]) if e.level] == [], "PRE closed"
+
+
+def test_the_dashboard_button_on_pf10_requests_the_charge(car):
+    """PF10 driven through the system's port (dash_chg = ams.PF10, the AMS
+    role's GPIO): held, it reads back on 0x4A2[5] bit 0; its rising edge,
+    with the charger's 0x101 fresh and no VCU, locks Charger and closes AIR-
+    (safety_task.cpp:285-303, state_machine.hpp:274-284); released, the
+    readback clears and the charge goes on."""
+    port = Port(car.sim)
+    car.charger()
+    port.set_level("tsms", True)
+    car.sim.run_for(ms=1100)
+    t = car.sim.now_us()
+    port.set_level("dash_chg", True)
+    car.sim.run_for(ms=600)
+    assert car.can.last(TEMPS, since_us=t).data[5] & 0x01, "PF10 HIGH not read back"
+    assert car.mode() == 2 and car.io.level(car.pins["air_n"])
+    t = car.sim.now_us()
+    port.set_level("dash_chg", False)
+    car.sim.run_for(ms=600)
+    assert not car.can.last(TEMPS, since_us=t).data[5] & 0x01, "PF10 LOW not read back"
+    assert car.state() == CHARGE
 
 
 def test_a_stray_request_with_the_vcu_live_locks_car(car):

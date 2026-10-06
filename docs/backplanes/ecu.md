@@ -43,11 +43,16 @@ pins:
   `can_dash`;
 - `ecu.PF7` / `PF8` / `PF9` for brake, APPS_1 and APPS_2, through the
   co-simulation port and the bench DAC1 routes;
-- `ecu.PB5` for START and `ecu.PB4` for RTDS, through the port.
+- `ecu.PB5` for START and `ecu.PB4` for RTDS, through the port;
+- `ecu.PB6`, the DC-link discharge output, through the port (`discharge` in
+  `ecu.yaml`; `tests/sim/test_ecu_discharge.py`).
 
-The other routed pins are not modelled yet: PB6, PD5, the GPS and the nRF24.
-The board lists them as `unwired` (from the MainLite's pin model): the editor
-shows them, and `validate` refuses them as not emulated yet.
+Every other routed pin is emulated too, as the board models it: PD5 and the
+nRF24's PB0/PC5/PC4 are plain GPIOs (no 1-Wire sensor or radio is modelled),
+PB7/PB8 GPIOs, PF10/PC0/PC2_C ADC3 INP6/INP10/INP0 (what `ECU.ioc` configures
+for A4/A5), and `ecu.USART10` the platform's USART10 (no GPS is modelled).
+A test drives or watches one with `Sim.io("ecu").gpio("PB6")` or
+`set_voltage("PF10", v)`.
 
 ## Known gotchas
 

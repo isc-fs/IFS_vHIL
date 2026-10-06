@@ -1,7 +1,12 @@
-"""Host-only checks of the Sim helpers: probe output parsing and assertions."""
+"""Host-only checks of the Sim helpers: probe output parsing, assertions and
+pin lookup."""
+from types import SimpleNamespace
+
 import pytest
 
-from vhil.sim import Edge, Frame, assert_period, intervals_us, parse_edges, parse_frames
+from vhil.sim import (BoardIO, Edge, Frame, assert_period, intervals_us, parse_edges,
+                      parse_frames)
+from vhil.system import REPO, System
 
 
 def test_parse_frames_reads_probe_lines():
@@ -38,3 +43,21 @@ def test_assert_period_names_the_first_bad_interval():
 def test_assert_period_needs_enough_items():
     with pytest.raises(AssertionError, match="only 2 items"):
         assert_period(_frames([0, 10_000]), period_us=10_000, tolerance_us=0)
+
+
+@pytest.mark.parametrize("system, board, pin, want", [
+    ("ams", "ams", "PB6", ("sysbus.gpioPortB", 6)),       # AIR-
+    ("ams", "ams", "PB7", ("sysbus.gpioPortB", 7)),       # precharge
+    ("ams", "ams", "PF10", ("sysbus.gpioPortF", 10)),     # DASH_CHG: the role's GPIO
+    ("ecu", "ecu", "PB6", ("sysbus.gpioPortB", 6)),       # DC-link discharge
+    ("ecu", "ecu", "PB5", ("sysbus.gpioPortB", 5)),
+])
+def test_gpio_resolves_a_pin_through_the_catalogue(system, board, pin, want):
+    io = BoardIO(SimpleNamespace(system=System(REPO / "systems" / f"{system}.yaml")), board)
+    assert io.gpio(pin) == want
+
+
+def test_gpio_refuses_an_analog_input():
+    io = BoardIO(SimpleNamespace(system=System(REPO / "systems" / "ecu.yaml")), "ecu")
+    with pytest.raises(ValueError, match="ecu.PF10 is analog, not a GPIO"):
+        io.gpio("PF10")

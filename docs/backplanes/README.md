@@ -21,15 +21,16 @@ vHIL vendors a pinned release in
 [`catalog/pin-models/mainlite.pins.yaml`](../../catalog/pin-models/mainlite.pins.yaml)
 (`scripts/update-pin-model.sh <tag>` replaces it and checks its sha256), and
 the board (`pin_model:` in `catalog/boards/mainlite.yaml`) has every
-connector and pin that leaves the module: the ones the emulator wires, and
-the rest as `unwired`, with their kind. `python -m vhil.system validate`
-checks against it:
+connector and pin that leaves the module, and the emulator wires every one:
+a GPIO, an ADC3 channel, a CAN, SPI or UART controller. A pin it could not
+wire yet would be listed as `unwired`, with its kind; since pin-model v1.0
+none is. `python -m vhil.system validate` checks against it:
 
 - a pin a system wires must leave the module, or be an on-board peripheral
   the board models (SDMMC1, I2C2); anything else is an error:
   `PF3 is not routed off the MainLite (pin model v1.0: class nc)`;
-- an `unwired` pin is refused as not emulated yet, until the board gives it
-  a port or an ADC channel;
+- an `unwired` pin (none on the MainLite today) is refused as not emulated
+  yet, until the board gives it a port or an ADC channel;
 - every pin a role names must leave the module; a role that routes an
   on-board or unconnected pin is a catalogue error.
 

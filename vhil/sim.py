@@ -212,6 +212,16 @@ class BoardIO:
     def __init__(self, sim: "Sim", board: str):
         self.sim, self.board, self.probe = sim, board, f"vhil_gpio_{rn.ident(board)}"
 
+    def gpio(self, pin: str) -> tuple[str, int]:
+        """A board pin's GPIO port and number, as the catalogue wires it (the
+        board's `gpio`, or its role's re-kind of an analog input), e.g.
+        gpio("PB6") -> ("sysbus.gpioPortB", 6). For watch and set_input:
+        io.watch(*io.gpio("PB6")), io.set_input(*io.gpio("PF10"), True)."""
+        _, kind, target = self.sim.system.resolve(f"{self.board}.{pin}")
+        if kind != "gpio":
+            raise ValueError(f"{self.board}.{pin} is {kind}, not a GPIO")
+        return target["port"], int(target["pin"])
+
     def set_input(self, port: str, pin: int, level: bool) -> None:
         """Drive an input from outside the MCU, e.g. set_input("sysbus.gpioPortB",
         5, True). The level holds across the board's resets, as a switch or a

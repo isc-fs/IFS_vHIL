@@ -1,11 +1,21 @@
 """ams-contactors (#32): AIR-, AIR+, precharge and AMS_OK as GPIO edge traces,
-watched from reset, through a whole Car arm, Run and Error.
+watched from reset at the pins systems/ams.yaml wires (its port: air_n
+ams.PB6, air_p ams.PB5, precharge ams.PB7, ams_ok ams.PB4), through a whole
+Car arm, Run and Error.
 
-AMS facts (IFS08-CE-AMS main.h, state_machine.hpp, safety_task.cpp):
-  PB6 AIR-, PB5 AIR+, PB7 precharge, PB4 AMS_OK.
-  Start -> Precharge closes AIR- and PRE (Car); Charger closes AIR- only.
+AMS facts (IFS08-CE-AMS main, main.h:76-83, state_machine.hpp,
+safety_task.cpp, relay_driver.cpp):
+  PB6 AIR-, PB5 AIR+, PB7 precharge, PB4 AMS_OK; HIGH = closed / OK
+  (relay_driver.cpp:46-64).
+  Start -> Precharge closes AIR- and PRE (Car); Charger closes AIR- only
+  (state_machine.hpp:274-284).
   Precharge -> Transition closes AIR+ and opens PRE in one action set
-  (apply_relay_actions); Run holds both AIRs.
+  (state_machine.hpp:325-329, apply_relay_actions safety_task.cpp:109-116);
+  Run holds both AIRs; a TSMS drop opens all three without latching
+  (state_machine.hpp:221-240).
+  Precharge held past PrechargeMaxMs = 5000 (the resistor's thermal limit,
+  ams_config.hpp:185) latches Error and opens all three
+  (state_machine.hpp:288-305).
   A latched fault opens all three and drops AMS_OK in the same SafetyTask
   tick (latch_error_, safety_task.cpp:83-88). AMS_OK is HIGH past the 2 s
   grace unless Error is latched (ams_ok_asserted).
@@ -14,8 +24,7 @@ AMS facts (IFS08-CE-AMS main.h, state_machine.hpp, safety_task.cpp):
 """
 import pytest
 
-from ams_car import (AIR_N, AIR_P, AMS_OK, Car, ERROR, GPIOB, PRECHARGE, PRECHARGE_RELAY,
-                     RUN, START)
+from ams_car import Car, ERROR, PACK_V, PRECHARGE, RUN, START
 from vhil.sim import Sim
 from vhil.system import REPO
 
@@ -23,12 +32,23 @@ RELAYS = 0x4A4
 TICK_US = 10_000
 
 
+# Trace name -> the system's port signal (systems/ams.yaml).
+SIGNALS = {"air_n": "air_n", "air_p": "air_p", "pre": "precharge", "ok": "ams_ok"}
+PRECHARGE_MAX_MS = 5000
+
+
 class Trace:
+    """The AMS's relay outputs at the pins its system wires to them."""
+
     def __init__(self, sim):
         io = sim.io("ams")
         self.io = io
-        self.pins = {n: io.watch(GPIOB, p) for n, p in
-                     {"air_n": AIR_N, "air_p": AIR_P, "pre": PRECHARGE_RELAY, "ok": AMS_OK}.items()}
+        signals = sim.system.doc["port"]["signals"]
+        self.pins = {}
+        for name, signal in SIGNALS.items():
+            board, pin = signals[signal]["gpio_out"].split(".", 1)
+            assert board == "ams", signals[signal]
+            self.pins[name] = io.watch(*io.gpio(pin))
 
     def edges(self, name, since_us=0):
         return self.io.edges(self.pins[name], since_us=since_us)
@@ -73,6 +93,46 @@ def test_car_arm_closes_air_minus_and_precharge_together(rig):
     assert abs(air_n[0].t_us - pre[0].t_us) < TICK_US, (air_n, pre)
     assert trace.edges("air_p", t) == []
     assert _relay_bits(car) == {"air_n": True, "air_p": False, "pre": True, "ok": True}
+
+
+def test_a_car_precharge_drives_air_minus_and_precharge_through_the_sequence(rig):
+    """At PB6 and PB7 over one whole cycle: both close on the arm and hold
+    while the link is short of 95 %; PRE alone opens at the swap; AIR- opens
+    on the TSMS drop. Exactly one close and one open each, in that order."""
+    car, trace = rig
+    t = car.sim.now_us()
+    car.arm()
+    car.vcu(round(PACK_V * 0.5))                     # charging, short of 95 %
+    car.sim.run_for(ms=500)
+    assert trace.level("air_n") and trace.level("pre") and not trace.level("air_p")
+    car.vcu(round(PACK_V))
+    assert car.wait_for(RUN, 200) is not None
+    car.sim.run_for(ms=100)
+    car.tsms(False)
+    assert car.wait_for(START, 100) is not None
+    air_n, pre = trace.edges("air_n", t), trace.edges("pre", t)
+    assert [e.level for e in air_n] == [True, False], air_n
+    assert [e.level for e in pre] == [True, False], pre
+    assert abs(air_n[0].t_us - pre[0].t_us) < TICK_US, (air_n, pre)
+    assert pre[1].t_us - pre[0].t_us >= 500_000, "PRE opened before the link was up"
+    assert pre[1].t_us < air_n[1].t_us, "AIR- opened before PRE"
+    assert trace.levels() == {"air_n": False, "air_p": False, "pre": False, "ok": True}
+
+
+def test_a_stuck_precharge_opens_the_resistor_path_at_the_timeout(rig):
+    """A link that never rises: PRE and AIR- open together PrechargeMaxMs
+    after they closed (the resistor's thermal limit), into Error."""
+    car, trace = rig
+    t = car.sim.now_us()
+    car.arm()
+    assert car.wait_for(ERROR, PRECHARGE_MAX_MS + 200, step_ms=10) is not None
+    air_n, pre = trace.edges("air_n", t), trace.edges("pre", t)
+    assert [e.level for e in air_n] == [True, False], air_n
+    assert [e.level for e in pre] == [True, False], pre
+    held_ms = (pre[1].t_us - pre[0].t_us) / 1000
+    assert PRECHARGE_MAX_MS - 10 <= held_ms <= PRECHARGE_MAX_MS + 60, f"PRE held {held_ms} ms"
+    assert abs(air_n[1].t_us - pre[1].t_us) < TICK_US, (air_n, pre)
+    assert trace.edges("air_p", t) == []
 
 
 def test_the_swap_closes_air_plus_and_opens_precharge_at_once(rig):

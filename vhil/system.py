@@ -55,7 +55,7 @@ CARD_DIR_ENV = "VHIL_CARD_DIR"
 # A board's pin model, in catalog/pin-models/ (catalogue $defs/board pin_model).
 PIN_MODEL_FILE = re.compile(r"[a-z0-9][a-z0-9-]*\.pins\.yaml")
 # The board sections whose connectors and pins the emulator wires.
-WIRED = ("can", "spi", "sdmmc", "i2c", "gpio", "analog_in")
+WIRED = ("can", "spi", "uart", "sdmmc", "i2c", "gpio", "analog_in")
 
 
 def card_dirs() -> list[Path]:
@@ -163,14 +163,15 @@ class Board:
         return (self.firmware_ref if image == "firmware" else self.bootloader_ref) or fw["ref"]
 
     def endpoint(self, connector: str) -> tuple[str, object]:
-        """(kind, target) for a connector or pin: ('can'|'spi'|'sdmmc'|'i2c',
+        """(kind, target) for a connector or pin: ('can'|'spi'|'uart'|'sdmmc'|'i2c',
         peripheral), ('analog', {adc, channel}) or ('gpio', {port, pin}). A
         pin the role re-kinds (its `gpio`) is a GPIO in that role."""
         override = (self.role_spec or {}).get("gpio") or {}
         if connector in override:
             return "gpio", override[connector]
-        for kind, section in (("can", "can"), ("spi", "spi"), ("sdmmc", "sdmmc"),
-                              ("i2c", "i2c"), ("analog", "analog_in"), ("gpio", "gpio")):
+        for kind, section in (("can", "can"), ("spi", "spi"), ("uart", "uart"),
+                              ("sdmmc", "sdmmc"), ("i2c", "i2c"), ("analog", "analog_in"),
+                              ("gpio", "gpio")):
             if connector in self.board.get(section, {}):
                 return kind, self.board[section][connector]
         where = f"board '{self.name}' ({self.board['id']})"

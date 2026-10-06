@@ -64,8 +64,9 @@ BUS_SIZE, BUS_PITCH = 120, 40
 BUS_NODE_HEIGHT = 200
 
 # Board catalogue section -> interface type and side.
-_BOARD_PORTS = (("can", "can", "right"), ("spi", "spi", "left"), ("sdmmc", "sdmmc", "left"),
-                ("i2c", "i2c", "left"), ("gpio", "gpio", "left"), ("analog_in", "analog", "left"))
+_BOARD_PORTS = (("can", "can", "right"), ("spi", "spi", "left"), ("uart", "uart", "left"),
+                ("sdmmc", "sdmmc", "left"), ("i2c", "i2c", "left"), ("gpio", "gpio", "left"),
+                ("analog_in", "analog", "left"))
 # Model host-side ports: system device field -> interface type.
 _MODEL_HOST_PORTS = (("spi", "spi"), ("cs", "gpio"), ("sdmmc", "sdmmc"), ("i2c", "i2c"))
 # Field order in a written system file.

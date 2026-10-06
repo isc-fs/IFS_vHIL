@@ -32,7 +32,7 @@ and the ACU bus.
 | PF7 (GPIO7), ADC3 INP3 | `S_CURRENT_P`: pack current sensor OUTP | J4.3 | R10 100 Ω series | `main.h:66` `S_CURRENT_P_Pin` (ADC3 INP3/INN3 differential) |
 | PF8 (GPIO8), ADC3 INN3 | `S_CURRENT_N`: pack current sensor OUTN | J4.2 | R11 100 Ω series | `main.h:68` `S_CURRENT_N_Pin` |
 | PF9 | `TSMS_FIL`: TSMS, a **digital input** | not traced | not traced | `main.h:70` `TSMS_Pin` |
-| PF10 | `RST_PIL_FIL` | not traced | not traced | `main.h:72` `DASH_CHG_Pin` |
+| PF10 | `RST_PIL_FIL`: DASH_CHG, a **digital input** | not traced | not traced | `main.h:72` `DASH_CHG_Pin` |
 | PC0 | `S_TEMP_DCDC` | J3.7 | not traced | none |
 | PC1 (GPIO12), ADC3 INP11 | `S_CURRENT_DCDC`: the DC-DC's ACS758 | J3.5 | not traced | **not sampled on `dev`**, by design: no DC-DC is fitted (af07ec8; `ams_config.hpp:607`, `:713-715`) |
 | PB8, PB0, PC2 | spare | J1.20, J1.21, J1.22 | — | — |
@@ -48,15 +48,19 @@ pins:
 - `ams.FDCAN1` on `can_acu`;
 - `ams.SPI1` with `cs: ams.PB9` for the LTC6820 and its LTC6811 chain;
 - `ams.PF7` / `ams.PF8` for the pack current pair;
-- `ams.PC1` for the DC-DC sensor, which the firmware ignores.
+- `ams.PC1` for the DC-DC sensor, which the firmware ignores;
+- in `ams.yaml`'s co-simulation port, the cockpit inputs `ams.PF9` (TSMS)
+  and `ams.PF10` (DASH_CHG), and the relay drivers `ams.PB4` (AMS_OK),
+  `ams.PB5` (AIR+), `ams.PB6` (AIR-) and `ams.PB7` (precharge).
+  `tests/sim/test_ams_contactors.py` watches the relays at those pins, and
+  `test_ams_fsm_charger.py` presses DASH_CHG through the port.
 
-The other routed pins are not modelled yet: PB4–PB7 (relay drivers), PF10,
-PC0 and the spare pins. The ones the board doesn't wire (PB6, PB7, PB8, PB0,
-PF10, PC0, PC2_C) are `unwired` in it, from the MainLite's pin model: the
-editor shows them, and `validate` refuses them as not emulated yet. The MainLite models PF9 as an analog input, but on
-the AMS it is the TSMS digital input, so the AMS role makes it a GPIO
-(`gpio: PF9` in its roles entry): `ams.PF9` takes a `gpio_in` port signal,
-and an analog source on it is refused. No AMS system uses it yet.
+The MainLite models PF9 and PF10 as analog inputs (ADC3 INP2, INP6), but on
+the AMS they are the TSMS and DASH_CHG digital inputs, so the AMS role makes
+them GPIOs (`gpio:` in its roles entry): they take `gpio_in` port signals,
+and an analog source on either is refused. PC0 (ADC3 INP10) and the spares
+(PB8, PB0 GPIOs; PC2_C, ADC3 INP0) are emulated as the board models them;
+the firmware uses none of them.
 
 ## Known gotchas
 
@@ -75,8 +79,9 @@ and an analog source on it is refused. No AMS system uses it yet.
   - Backplane R35 and the MainLite's fixed R1 put 60 Ω at the AMS node alone.
   - With the ECU (MainLite R5), the bus sees 40 Ω. With the uDV as well
     (MainLite R5 + MicroDV2 R39), it sees 24 Ω, against ISO 11898-2's 60 Ω.
-- **PF9 is `TSMS_FIL`, a digital input** (`main.h:70` `TSMS_Pin`), not the
-  analog input the MainLite board models; the AMS role makes it a GPIO.
+- **PF9 is `TSMS_FIL` and PF10 `RST_PIL_FIL` (DASH_CHG), digital inputs**
+  (`main.h:70` `TSMS_Pin`, `:72` `DASH_CHG_Pin`), not the analog inputs the
+  MainLite board models; the AMS role makes them GPIOs.
 - **The DC-DC current (PC1) is routed but not read.** AMS `dev` dropped the
   measurement in af07ec8 (no DC-DC fitted). The 0x135 frame's DC-DC slot is
   sent as 0 (`ams_config.hpp:607`), and the DC-DC temperature is a stub

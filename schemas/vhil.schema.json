@@ -279,6 +279,13 @@
             "$ref": "#/$defs/peripheral"
           }
         },
+        "uart": {
+          "type": "object",
+          "description": "Connector name -> UART/USART controller.",
+          "additionalProperties": {
+            "$ref": "#/$defs/peripheral"
+          }
+        },
         "gpio": {
           "type": "object",
           "description": "Pin name -> GPIO port and pin number.",

@@ -30,6 +30,20 @@ devices:
   # firmware takes for a disconnected sensor.
   pack_current: {model: ssa-2-250a, outputs: {out_p: ams.PF7, out_n: ams.PF8}}  # S_CURRENT_P/N -> J4.3/J4.2 (docs/backplanes/ams.md)
   dcdc_current: {model: acs758lcb-050b, outputs: {out: ams.PC1}}  # S_CURRENT_DCDC -> J3.5, not sampled on AMS dev (docs/backplanes/ams.md)
+port:
+  # The co-simulation port (vhil/cosim.py): the cockpit and the contactors
+  # around the AMS. TSMS and DASH_CHG are inputs the driver works; AIR-,
+  # AIR+, precharge and AMS_OK are the relay drivers the AMS commands
+  # (IFS08-CE-AMS main.h:70-83, relay_driver.cpp). SafetyTask samples and
+  # drives them every 10 ms (ams_config.hpp:193 SafetyPeriodMs).
+  step_ms: 10
+  signals:
+    tsms:      {gpio_in: ams.PF9}    # TSMS_FIL, a digital input (docs/backplanes/ams.md)
+    dash_chg:  {gpio_in: ams.PF10}   # RST_PIL_FIL, the firmware's DASH_CHG (docs/backplanes/ams.md)
+    ams_ok:    {gpio_out: ams.PB4}   # AMS_OK -> K5, J1.4 (docs/backplanes/ams.md)
+    air_p:     {gpio_out: ams.PB5}   # AIR+ coil low side, J11.6 (docs/backplanes/ams.md)
+    air_n:     {gpio_out: ams.PB6}   # AIR-, J11.5 (docs/backplanes/ams.md)
+    precharge: {gpio_out: ams.PB7}   # PRECHARGE, J11.4 (docs/backplanes/ams.md)
 bench:
   power:
     # Slot 2: relay = TCA 0x20 port 0 pin 1, current monitor INA 0x41
