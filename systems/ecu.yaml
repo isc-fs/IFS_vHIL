@@ -31,6 +31,7 @@ port:
     brake:      {analog: ecu.PF7}  # S_BRAKE_FIL <- J1.18 (docs/backplanes/ecu.md)
     start:      {gpio_in: ecu.PB5}  # START_FIL <- J1.19 (docs/backplanes/ecu.md)
     rtds:       {gpio_out: ecu.PB4}  # RTDS -> J1.20 (docs/backplanes/ecu.md)
+    discharge:  {gpio_out: ecu.PB6}  # DC-link discharge coil-interrupt, header J3.18 only (docs/backplanes/ecu.md)
     inv_cmd:    {can_rx: {bus: can_inv, id: 0x360}}
     inv_torque: {can_rx: {bus: can_inv, id: 0x362}}
     inv_state:  {can_tx: {bus: can_inv, id: 0x461}}
