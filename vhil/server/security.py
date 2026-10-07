@@ -9,10 +9,12 @@ policy can be strict:
     frame-ancestors 'self'; object-src 'none'; base-uri 'none'; form-action 'self'
 
 plus X-Frame-Options, X-Content-Type-Options and Referrer-Policy. The editor
-the Editor page embeds is on this origin, under /editor/ (the proxy routes
-it to Pipeline Manager: deploy/Caddyfile), so frame-src needs no other
-origin. A response that already carries a Content-Security-Policy keeps its
-own: run artifacts set `sandbox` (vhil/server/runs.py). FastAPI's /docs and
+is on this origin, under /editor/ (the proxy routes it to Pipeline Manager:
+deploy/Caddyfile), and no shell page embeds it any more: it is the vHIL
+workspace, a page of its own, which the shell's Editor route redirects to
+(static/editor.js). frame-src 'self' names no other origin. A response that
+already carries a Content-Security-Policy keeps its own: run artifacts set
+`sandbox` (vhil/server/runs.py). FastAPI's /docs and
 /redoc pages load Swagger UI from a CDN with inline script, so they get only
 the frame and sniffing headers.
 

@@ -4,24 +4,38 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+// vHIL: a wire's width follows its interface type (docs/architecture/
+// editor-workspace.md, "Tokens": CAN 3 px, the backbone; SPI, I2C, SDMMC,
+// UART and analog 2 px; GPIO 1.5 px dotted), set as --w from the class
+// custom/connection/ConnectionView.vue gives it (--t-<type>). Hovered, it
+// thickens in its own colour (upstream: 5 px, 6 px green).
 .baklava-connection {
     pointer-events: visibleStroke;
 
+    --w: 2px;
     stroke: var(--color);
-    stroke-width: 5px;
+    stroke-width: var(--w);
+
+    &.--t-can {
+        --w: 3px;
+    }
+
+    &.--t-gpio {
+        --w: 1.5px;
+    }
 
     &.--hover {
-        stroke-width: 6px;
-        stroke: $green;
+        stroke-width: calc(var(--w) + 1.5px);
     }
 
     &.--dashed {
-        stroke-dasharray: 10 4;
+        stroke-dasharray: 8 4;
         stroke-dashoffset: 0;
     }
 
     &.--dotted {
-        stroke-dasharray: 3 3;
+        stroke-dasharray: 1.5 3;
+        stroke-linecap: round;
     }
 }
 

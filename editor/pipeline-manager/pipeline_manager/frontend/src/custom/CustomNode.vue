@@ -39,11 +39,26 @@ from moving or deleting the nodes.
         >
             <img
                 class="__title-icon"
-                v-if="iconPath !== undefined"
+                v-if="!vhil && iconPath !== undefined"
                 :src="iconPath"
             >
+            <!-- vHIL: a board's, bus's or device's own head (src/vhil/shapes.js) -->
+            <div v-if="vhil && !renaming" ref="titleTextRef" class="vhil-node-head">
+                <div class="vhil-node-line">
+                    <span class="vhil-node-name">{{ node.title || node.type }}</span>
+                    <span v-if="vhil.role" class="vhil-node-role">{{ vhil.role }}</span>
+                    <span
+                        v-if="vhil.count !== null"
+                        class="vhil-node-count"
+                        :title="`${vhil.count} in a row on the port`"
+                    >×{{ vhil.count }}</span>
+                    <!-- The board's live state (step 15 of the workspace plan) -->
+                    <span v-if="vhil.kind === 'board'" class="vhil-node-state" />
+                </div>
+                <div class="vhil-node-sub">{{ vhil.sub }}</div>
+            </div>
             <div
-                v-if="!renaming"
+                v-else-if="!renaming"
                 class="__title-label" v-html="DOMPurify.sanitize(nodeTitle)"
                 ref="titleTextRef"
                 :style="nodeTitleLabelStyle"
@@ -60,7 +75,7 @@ from moving or deleting the nodes.
                 @keydown="(ev) => ev.stopPropagation()"
                 @keydown.enter="doneRenaming"
             />
-            <template v-if="nodeStyle.name !== undefined &&
+            <template v-if="!vhil && nodeStyle.name !== undefined &&
             nodeStyle.name !== null">
                 <component
                     v-if="nodeStyle.icon !== undefined"
@@ -80,7 +95,7 @@ from moving or deleting the nodes.
                 v-if="isGraphNode || nodeHasRelatedGraphs"
             />
             <div
-                v-if="pillText !== undefined"
+                v-if="!vhil && pillText !== undefined"
                 class="pill"
                 :style="nodePillStyle"
                 v-html="DOMPurify.sanitize(pillText)"
@@ -138,6 +153,12 @@ from moving or deleting the nodes.
                         @pointerdown.right.exact="openContextMenuProperty(input, $event)"
                     />
                 </div>
+            </div>
+            <!-- vHIL: the rail's name and bitrate, along it -->
+            <div v-if="vhil?.kind === 'bus'" class="vhil-bus-label">{{ vhil.rail }}</div>
+            <!-- vHIL: a board's pins, grouped by side -->
+            <div v-if="vhil?.kind === 'board'" class="vhil-pin-groups" aria-hidden="true">
+                <span>devices · analog</span><span>CAN · digital</span>
             </div>
 
             <div class="__interfaces">
@@ -217,7 +238,10 @@ import {
 } from '../core/NodeFactory.js';
 
 import notifyEvents from './notifyEvents.js';
-import { vhilKind } from '../vhil/graph.js';
+import {
+    bitrateText, boardSubline, busTint, roleOf, vhilOf,
+} from '../vhil/shapes.js';
+import '../vhil/nodes.css';
 
 import { checkForUnsavedEditorChangesWithToast } from './node_editor/NodeSpecEditorUtils.js';
 
@@ -301,9 +325,35 @@ const sidebarProperties = computed(() => [...Object.values((props.node.inputs))
     .filter((intf) => !intf.port),
 ...bigBuses.value],
 );
-// vHIL: a board's properties (role, firmware, refs) are in the workspace's
-// inspector, not on its node (CHANGELOG-VHIL.md).
-const inInspector = vhilKind(props.node.type) === 'board';
+// vHIL: the node shapes (CHANGELOG-VHIL.md, src/vhil/shapes.js). A board,
+// bus or device draws its own head, and its properties (a board's role,
+// firmware and refs, a bus's netdev, a device's count and parameters) are
+// in the workspace's inspector, not on its node.
+const vhilType = vhilOf(props.node.type);
+const inInspector = vhilType !== null;
+const DEVICE_WIDTH = 232;
+const vhil = computed(() => {
+    if (!vhilType) return null;
+    const n = props.node;
+    const { kind } = vhilType;
+    const shape = {
+        kind, role: null, roleId: null, count: null, tint: null, sub: n.type, rail: '',
+    };
+    if (kind === 'board') {
+        shape.roleId = roleOf(n);
+        shape.role = shape.roleId?.toUpperCase() ?? null;
+        shape.sub = boardSubline(n);
+    } else if (kind === 'bus') {
+        const rate = bitrateText(vhilType.bitrate);
+        const netdev = n.inputs?.property_host_netdev?.value;
+        shape.tint = busTint(n, graph.value);
+        shape.sub = [rate, netdev && `host ${netdev}`].filter(Boolean).join(' · ');
+        shape.rail = [n.title || n.type, rate].filter(Boolean).join(' · ');
+    } else if (n.inputs?.property_count) {
+        shape.count = n.inputs.property_count.value;
+    }
+    return shape;
+});
 const displayedProperties = computed(() => {
     if (inInspector) return bigBuses.value;
     if (editorManager.baklavaView.settings.showHiddenProperties) {
@@ -871,6 +921,11 @@ const classes = computed(() => ({
     '--shaped': customShape.value !== undefined,
     '--clean': nodeClean.value,
     __readonly: viewModel.value.editor.readonly,
+    // vHIL: the node shapes (src/vhil/nodes.css)
+    'vhil-node': vhil.value !== null,
+    [`--vhil-${vhil.value?.kind}`]: vhil.value !== null,
+    [`--role-${vhil.value?.roleId}`]: Boolean(vhil.value?.roleId),
+    [`--can-${vhil.value?.tint}`]: Boolean(vhil.value?.tint),
 }));
 
 const subgraphStyle = computed(() => {
@@ -1107,6 +1162,9 @@ const width = computed(() => {
         }
         return `${props.node.width}px`;
     }
+    // vHIL: a bus is as wide as its rail and label, a device compact.
+    if (vhil.value?.kind === 'bus') return 'auto';
+    if (vhil.value?.kind === 'model') return `${DEVICE_WIDTH}px`;
     if (nodeMinimal.value || nodeClean.value) {
         return 'auto';
     }
@@ -1254,6 +1312,12 @@ const nodeTitleStyle = computed(() => {
             style.position = 'relative';
         }
         style.zIndex = '1';
+    }
+
+    // vHIL: a shaped node's head takes its colours from nodes.css (tokens).
+    if (vhil.value) {
+        delete style.backgroundColor;
+        delete style.color;
     }
 
     if (!viewModel.value.editor.readonly) {

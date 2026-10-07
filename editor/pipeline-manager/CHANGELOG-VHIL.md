@@ -176,6 +176,48 @@ from `git archive 04613679` except as listed below.
     - **Layout CSS** is `src/vhil/workspace.css`, on the tokens. Script sets
       only the grid's sizes, as custom properties through the CSSOM (Vue's
       `:style` objects), which `style-src 'self'` allows.
+13. **Node shapes and wires** (step 8 of the editor workspace plan).
+    - `custom/CustomNode.vue`: a node whose type's `additionalData.vhil.kind`
+      is `board`, `bus` or `model` draws its own head (`src/vhil/shapes.js`
+      says what it reads, `src/vhil/nodes.css` draws it, on the tokens) in
+      place of the title label, header icon and pill, and takes the classes
+      `vhil-node --vhil-<kind>` plus `--role-<role>` or `--can-<n>`. A board
+      is a card with a 4 px band and a chip in its role's colour (the role as
+      text), a mono sub-line from the specification's `role_info` ("node 0x2
+      · FDCAN1"), its pin columns captioned (devices and analog left, CAN and
+      digital right) and an empty `vhil-node-state` slot for the live state
+      pill (step 15); a bus is a thin pill-ended rail (8 px, width `auto`) in
+      its tint, `--can-1..4` by its place among the graph's buses, with its
+      name and bitrate written along it (`bitrate` from the specification);
+      a device is a compact (232 px) dashed card with a count pill (`×10`).
+      The role select relabels the card as it relabels the pins. Every vHIL
+      kind keeps its properties in the inspector (step 7 did so for boards):
+      a bus's netdev, a device's count and parameters.
+    - `custom/connection/ConnectionView.vue`: a wire is classed `--t-<type>`
+      by its interface type, a CAN wire on a bus takes the bus's tint
+      (`--color: var(--can-<n>, …)`), and hovering one shows a tooltip, one
+      element placed through the CSSOM (`src/vhil/shapes.js`): "can_acu ·
+      500 kbit/s · 2 nodes", or the type and both ends ("SPI · ams.SPI1 ↔
+      isospi.spi"). `styles/_connection.scss`: width by type (CAN 3 px; SPI,
+      I2C, SDMMC, UART, analog 2 px; GPIO 1.5 px, round dots) where upstream
+      drew every wire 5 px; hovered, a wire thickens in its own colour
+      (upstream: 6 px green).
+    - `icons/Plus.vue`, `Minus.vue`, `Crosshair.vue` (the zoom buttons) stroke
+      `$white` (`--fg`) instead of a scoped `#ffffff`, white on the light
+      theme's buttons.
+    - `core/communication/ExternalApplicationManager.js` no longer asks the
+      backend for its app capabilities (navbar buttons): nothing shows them,
+      and `vhil.editor` offers none now (its `Validate system` went; Check
+      validates). An empty list can't be returned anyway: the backend
+      library's `send_jsonrpc_message_with_sid` replaces a falsy result with
+      `{}`, which fails the `navbar_items` schema.
+    - `src/vhil/workspace.css`: the node sidebar (`custom/CustomSidebar.vue`)
+      is pinned to the canvas's right edge and hidden while closed; on a wide
+      canvas (the inspector hidden) the closed sidebar showed as an empty
+      panel.
+    - The specification's wire, port, header and pill colours
+      (`vhil/editor.py` `CANVAS_METADATA`) are token `var()`s with the dark
+      value as fallback, so the light theme recolours them.
 14. **Runs, REPLAY and the Bus tab** (step 9 of the editor workspace plan).
     All in `src/vhil/` but for the image build; no Pipeline Manager file
     changes.
@@ -224,9 +266,8 @@ from `git archive 04613679` except as listed below.
   About twenty components hard-code `white` in their styles (`fill: white`,
   `color: white`: the sidebar tabs, several icons, the terminal), unreadable
   on the light surfaces; `src/vhil/theme.css` covers only SVG attributes.
-  The wire, header and pill colours in the specification's metadata
-  (`vhil/editor.py`) are the dark theme's hex values (its canvas
-  `backgroundColor` is `var(--bg-0, #0f1115)` and follows the theme).
+  (The canvas itself follows the theme since step 8: nodes, wires and the
+  zoom buttons are on the tokens.)
 - **HTML from the specification** (node titles and pills in
   `custom/CustomNode.vue`, palette entries: `v-html` through DOMPurify): a
   `style` attribute in it is refused by the CSP. vHIL's specification puts

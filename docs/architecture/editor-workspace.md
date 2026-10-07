@@ -135,8 +135,9 @@ a link, a selection or an error.
 `error` (the run broke) and `failed` (the test said no) are different colours
 on purpose.
 
-**Wires** by interface type (set on the canvas through
-`specification.metadata.interfaces` in `vhil/editor.py`):
+**Wires** by interface type (colours set on the canvas through
+`specification.metadata.interfaces` in `vhil/editor.py`, as the `--wire-*`
+tokens; widths by `styles/_connection.scss` in the vendored PM):
 
 | Type | Colour (dark) | Pattern |
 |---|---|---|
@@ -149,9 +150,9 @@ on purpose.
 | analog | `#20c997` teal | dashed, 2 px (not "ok" green) |
 
 With more than one CAN bus, each takes `--can-1..4` (`#f59f00 #f783ac #63e6be
-#ffd43b`) in system order, and its name is always written on the rail.
-Widths, hover tooltips ("can_acu · 500 kbit/s · 3 nodes") and the LIVE dash
-march need PM changes (step 8).
+#ffd43b`) in system order, its rail and its wires alike, and its name and
+bitrate are always written on the rail. Hovering a wire names it ("can_acu ·
+500 kbit/s · 3 nodes"; step 8). The LIVE dash march comes with step 15.
 
 **Roles:** a 4 px band on the board node and a role chip, always with the
 role as text: ECU `#e5243b`, AMS `#fab005`, uDV `#4dabf7`.
