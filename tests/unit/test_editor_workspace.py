@@ -51,9 +51,51 @@ def test_commit_builds_a_new_branch_on_the_opened_commit():
     assert "ws.base = out.ref;" in workspace
 
 
-def test_board_properties_live_in_the_inspector():
+def test_shaped_nodes_keep_their_properties_in_the_inspector():
+    """A board's, bus's and device's properties are edited in the
+    inspector, not on the node (step 8: every vHIL kind is a shape)."""
     node = (FRONTEND / "src/custom/CustomNode.vue").read_text()
-    assert "vhilKind(props.node.type) === 'board'" in node
+    assert "const inInspector = vhilType !== null;" in node
+    assert "if (inInspector) return bigBuses.value;" in node
+
+
+def test_node_shapes():
+    """Step 8: a board card with a role band and sub-line, a bus rail with
+    its name and bitrate, a device card with a count pill, an empty slot for
+    the live state; the classes nodes.css draws them from."""
+    node = (FRONTEND / "src/custom/CustomNode.vue").read_text()
+    template = node.split("<script setup>")[0]
+    for part in ('class="vhil-node-head"', 'class="vhil-node-role"', 'class="vhil-node-count"',
+                 'class="vhil-node-state"', 'class="vhil-node-sub"', 'class="vhil-bus-label"',
+                 'class="vhil-pin-groups"'):
+        assert part in template, part
+    assert "import '../vhil/nodes.css';" in node
+    css = (VHIL / "nodes.css").read_text()
+    for rule in (".--vhil-board", ".--vhil-bus", ".--vhil-model", "border: 1px dashed",
+                 ".vhil-node.--role-ams { --vhil-role: var(--role-ams); }",
+                 *(f".vhil-node.--can-{i} {{ --vhil-tint: var(--can-{i}); }}" for i in range(1, 5))):
+        assert rule in css, rule
+    # On the tokens only: no literal colour.
+    assert not re.search(r"#[0-9a-fA-F]{3,8}\b|rgba?\(", css)
+
+
+def test_wires_by_type_bus_tint_and_tooltip():
+    view = (FRONTEND / "src/custom/connection/ConnectionView.vue").read_text()
+    assert "[`--t-${type}`]" in view and "var(--can-${tint.value}" in view
+    assert '@pointermove="showTip"' in view and '@pointerleave="hideWireTip"' in view
+    scss = (FRONTEND / "styles/_connection.scss").read_text()
+    for width in ("--w: 2px;", "&.--t-can {\n        --w: 3px;", "&.--t-gpio {\n        --w: 1.5px;"):
+        assert width in scss, width
+    shapes = (VHIL / "shapes.js").read_text()
+    # The tooltip is placed through the CSSOM, never a style attribute.
+    assert "tip.style.transform" in shapes and "setAttribute('style'" not in shapes
+    assert "innerHTML" not in shapes
+
+
+def test_zoom_icons_follow_the_theme():
+    for icon in ("Plus", "Minus", "Crosshair"):
+        text = (FRONTEND / f"src/icons/{icon}.vue").read_text()
+        assert "#ffffff" not in text and "stroke: $white;" in text, icon
 
 
 def test_the_shells_editor_route_redirects_to_the_workspace():

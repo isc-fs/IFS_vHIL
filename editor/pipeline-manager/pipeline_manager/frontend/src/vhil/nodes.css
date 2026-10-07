@@ -1,0 +1,103 @@
+/* vHIL: the node shapes (step 8 of docs/architecture/editor-workspace.md;
+   CHANGELOG-VHIL.md), on the shell's tokens. custom/CustomNode.vue gives a
+   board, bus or device node the class vhil-node, --vhil-<kind>, and
+   --role-<role> or --can-<n>; src/vhil/shapes.js says what they read.
+   Pipeline Manager's own rules are outranked by the doubled class. */
+
+/* -- every shaped node -------------------------------------------------- */
+
+.baklava-node.vhil-node { color: var(--fg); font-family: var(--font-ui); }
+.baklava-node.vhil-node:hover { box-shadow: 0 0 0 calc(1px / var(--scale)) var(--border-control); }
+.baklava-node.vhil-node.--selected,
+.baklava-node.vhil-node.--dragging { box-shadow: 0 0 0 calc(2px / var(--scale)) var(--focus); }
+.baklava-node.vhil-node > .__title {
+  height: auto; min-height: 40px; box-sizing: border-box; padding: 6px 12px; gap: 8px;
+  color: var(--fg); background: var(--bg-3); white-space: nowrap;
+}
+.vhil-node-head { display: flex; flex-direction: column; gap: 1px; flex: 1; min-width: 0; }
+.vhil-node-line { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.vhil-node-name { font-size: var(--fs-base); font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
+.vhil-node-sub {
+  overflow: hidden; text-overflow: ellipsis; color: var(--fg-muted);
+  font-family: var(--font-mono); font-size: var(--fs-small); font-variant-numeric: tabular-nums;
+}
+.vhil-node-role, .vhil-node-count {
+  flex: none; padding: 0 6px; border-radius: var(--r-pill);
+  font-size: var(--fs-small); font-weight: 600; line-height: 16px;
+}
+/* The role as text in a chip edged in its colour (never colour alone). */
+.vhil-node-role { border: 1px solid var(--vhil-role, var(--border-control)); letter-spacing: 0.04em; }
+.vhil-node-count {
+  border: 1px solid var(--border-control); background: var(--bg-2);
+  font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+}
+/* The live state pill's place (filled in LIVE, step 15). */
+.vhil-node-state { margin-left: auto; }
+.vhil-node-state:empty { display: none; }
+
+/* -- board: a card with a role band -------------------------------------- */
+
+.vhil-node.--role-ecu { --vhil-role: var(--role-ecu); }
+.vhil-node.--role-ams { --vhil-role: var(--role-ams); }
+.vhil-node.--role-udv { --vhil-role: var(--role-udv); }
+.baklava-node.vhil-node.--vhil-board {
+  background: var(--bg-2); border: 1px solid var(--line);
+  border-top: 4px solid var(--vhil-role, var(--border-control)); border-radius: var(--r-panel);
+}
+.baklava-node.vhil-node.--vhil-board > .__title { border-radius: 0; }
+.vhil-pin-groups {
+  display: grid; grid-template-columns: 1fr 1fr; padding: 6px 12px 0;
+  color: var(--fg-muted); font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase;
+}
+.vhil-pin-groups > span:last-child { text-align: right; }
+
+/* -- bus: a thin rail, tinted per bus, its name and bitrate on it -------- */
+
+.vhil-node.--can-1 { --vhil-tint: var(--can-1); }
+.vhil-node.--can-2 { --vhil-tint: var(--can-2); }
+.vhil-node.--can-3 { --vhil-tint: var(--can-3); }
+.vhil-node.--can-4 { --vhil-tint: var(--can-4); }
+.baklava-node.vhil-node.--vhil-bus {
+  min-width: 0; background: transparent; border: 0; border-radius: var(--r-control);
+}
+.baklava-node.vhil-node.--vhil-bus:hover { box-shadow: none; }
+.baklava-node.vhil-node.--vhil-bus.--selected { box-shadow: 0 0 0 calc(2px / var(--scale)) var(--focus); }
+.baklava-node.vhil-node.--vhil-bus > .__title { min-height: 0; padding: 0 0 6px; background: transparent; }
+.vhil-node.--vhil-bus .vhil-node-name { font-family: var(--font-mono); color: var(--vhil-tint, var(--wire-can)); }
+.baklava-node.vhil-node.--vhil-bus > .__content { display: flex; align-items: stretch; gap: 6px; }
+.baklava-node.vhil-node.--vhil-bus > .__content > .__interfaces { display: none; }
+.vhil-node.--vhil-bus .baklava-node-interface { padding: 0; }
+.vhil-node.--vhil-bus .__port-bus.__big-bus {
+  width: 8px !important; margin: 0 0 0 4px !important; box-sizing: border-box;
+  border: 0; border-radius: var(--r-pill); background: var(--vhil-tint, var(--wire-can));
+}
+.vhil-node.--vhil-bus .__port-bus-name { display: none; }
+/* The stubs (one per node on the bus) in the rail's tint. */
+.vhil-node.--vhil-bus .__port-bus .__port { background-color: var(--vhil-tint, var(--wire-can)) !important; }
+.vhil-bus-label {
+  padding: 12px 0; writing-mode: vertical-rl; white-space: nowrap;
+  color: var(--fg-muted); font-family: var(--font-mono); font-size: var(--fs-small);
+  pointer-events: none;
+}
+
+/* -- device: a compact dashed card ---------------------------------------- */
+
+.baklava-node.vhil-node.--vhil-model {
+  min-width: 0; background: var(--bg-1);
+  border: 1px dashed var(--border-control); border-radius: var(--r-card);
+}
+.baklava-node.vhil-node.--vhil-model > .__title {
+  background: transparent; border-bottom: 1px dashed var(--line);
+  border-radius: var(--r-card) var(--r-card) 0 0;
+}
+
+/* -- wires: the hover tooltip (src/vhil/shapes.js), placed by the CSSOM ---- */
+
+.vhil-wire-tip {
+  position: fixed; left: 0; top: 0; z-index: 30; visibility: hidden; pointer-events: none;
+  padding: 2px 8px; color: var(--fg); background: var(--bg-1);
+  border: 1px solid var(--border-control); border-radius: var(--r-control);
+  box-shadow: 0 4px 12px color-mix(in srgb, var(--bg-0) 60%, transparent);
+  font-family: var(--font-mono); font-size: var(--fs-dense); white-space: nowrap;
+}
+.vhil-wire-tip.--shown { visibility: visible; }
