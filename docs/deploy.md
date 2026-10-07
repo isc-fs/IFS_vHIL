@@ -444,7 +444,10 @@ $dc start api worker
 after the snapshot are gone; their result directories stay in `runs`. When a
 new run reuses one of their ids, the worker moves the old directory to
 `/data/runs/.orphaned/<id>-<time>` first, so the new run starts empty; delete
-`.orphaned` when you no longer need them.
+`.orphaned` when you no longer need them. Until then (the run is queued) the
+API serves nothing from that directory: each run's trace starts with a header
+carrying the run's own random token, and the API serves a trace, its live
+view and the run's artifacts only when the header matches.
 
 **Restore saved branches** (after losing the `workspace` volume, or one
 branch):

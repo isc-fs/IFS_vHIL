@@ -32,7 +32,10 @@ writing a final state. A run's next attempt starts a fresh trace; the last
 one is kept as trace.attempt<N>.jsonl. A first attempt that finds its results
 directory already there (a database restored to a snapshot hands out the ids
 of runs it rolled back, whose results stay on the runs volume) moves it to
-`<results>/.orphaned/<id>-<time>` instead of appending to it.
+`<results>/.orphaned/<id>-<time>` instead of appending to it. Every trace
+starts with a header carrying the run's token (vhil/server/runs.py,
+trace_header): until it is there, the API serves nothing at the run's path, so
+a client that opens a queued run never sees the stale trace it replaces.
 """
 from __future__ import annotations
 
@@ -55,7 +58,7 @@ from typing import Callable, Optional
 
 from vhil.server.config import Settings
 from vhil.server.runs import (HEARTBEAT_S, MAX_ATTEMPTS, RECLAIM_AFTER_S, TRACE, Limits,
-                              RunStore, code_changes, materialise_system)
+                              RunStore, code_changes, materialise_system, trace_header)
 from vhil.server.workspace import Workspace
 from vhil.system import System, built_images, image_path
 
@@ -127,15 +130,24 @@ class TraceWriter:
     With `max_bytes`, a batch that would take the file past it is dropped,
     a log record says so, and TraceLimit is raised: a run can't fill the
     shared results volume (a fast periodic sender or symbol watch over a long
-    run). After that only log records (the run's own end) are written."""
+    run). After that only log records (the run's own end) are written.
 
-    def __init__(self, path: Path, max_bytes: Optional[int] = None):
+    With `header`, a new file starts with it as its first line (the run's
+    token, vhil/server/runs.py trace_header)."""
+
+    def __init__(self, path: Path, max_bytes: Optional[int] = None,
+                 header: Optional[dict] = None):
         path.parent.mkdir(parents=True, exist_ok=True)
         self.path = path
         self.max_bytes = max_bytes
         self._f = open(path, "a")
         self._size = self._f.tell()
         self.full = False
+        if header is not None and self._size == 0:
+            line = json.dumps(header, separators=(",", ":")) + "\n"
+            self._f.write(line)
+            self._f.flush()
+            self._size += len(line)
 
     def write(self, records: list[dict]) -> None:
         records.sort(key=lambda r: r["t_us"])   # stable: same-time order kept
@@ -480,7 +492,8 @@ class Worker:
                   f"restore?) moved to {orphan}", flush=True)
         if run["attempts"] > 1 and (run_dir / TRACE).is_file():
             (run_dir / TRACE).rename(run_dir / f"trace.attempt{run['attempts'] - 1}.jsonl")
-        trace = TraceWriter(run_dir / TRACE, max_bytes=self.limits.max_trace_bytes)
+        trace = TraceWriter(run_dir / TRACE, max_bytes=self.limits.max_trace_bytes,
+                            header=trace_header(run))
         with Heartbeat(self.store, run["id"], self.id, self.heartbeat_s):
             return self._execute(run, run_dir, trace)
 
