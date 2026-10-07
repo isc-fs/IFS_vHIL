@@ -288,7 +288,7 @@ export async function editorPage(view, initialId) {
 
   // Run's state, in the editor's terminal and notifications and next to
   // the button, with a link to the run's page.
-  const term = (line) => rpc("terminal_write", { name: "Terminal", message: `${line}\r\n` }).catch(() => {});
+  const term = (line) => rpc("terminal_write", { name: "Terminal", message: line }).catch(() => {});
   const notify = (type, title, details) =>
     rpc("notification_send", { type, title, details }).catch(() => {});
   const runState = (html) => { $("#ed-run-state").innerHTML = html; };
