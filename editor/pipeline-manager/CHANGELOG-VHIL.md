@@ -326,6 +326,18 @@ from `git archive 04613679` except as listed below.
       with its last run's state and expects (passed, failed); opening one
       selects it and replays that run on the Scenario tab, ▶ runs it.
 
+17. **State sources in the Scenario tab** (step 12 of the editor workspace
+    plan; [state view](../../docs/state-view.md)). All in `src/vhil/`; no
+    Pipeline Manager file changes.
+    - **Enum labels** (`VhilScenarioRow.vue`): an expect's value is a select
+      of labels for a symbol too, from the contract's `labels` (the image's
+      DWARF enum or the state view's table), with a field's value table
+      over them: `symbol:ams.g_state_telemetry == Precharge`.
+    - **The `watch` stimulus** (`scenario.js`, `timeline.js`,
+      `VhilScenarioRow.vue`): a watch that starts mid-run is a timed row
+      (a symbol or a pin, as the `watch` rows), a diamond on its board's
+      lane.
+
 ## Left for later
 
 - **Light theme polish** (owner decision: defined now, polished later).

@@ -6,7 +6,8 @@ a bit as false/true, a scalar as a number with its unit, range and step,
 with the hex in sync (the shell's decode.js, one copy); with no contract,
 raw hex. An expect's signal is built from its source (a frame's field, a
 frame, a symbol, a pin), owner and item; its value is a select of the
-field's labels where it has a value table. Every edit is the row's item,
+field's labels where it has a value table, or of the symbol's enum (the
+contract's `labels`: DWARF or the state view's table). Every edit is the row's item,
 edited in place, then checked on the server (scenarios.js edited).
 -->
 
@@ -116,7 +117,7 @@ edited in place, then checked on the server (scenarios.js edited).
 
             <template v-if="isPinRow">
                 <label v-if="row.action === 'watch'">Watch
-                    <select v-model="it.kind" class="vhil-input" @change="watchKind">
+                    <select :value="watchWhat" class="vhil-input" @change="watchKind">
                         <option value="symbol">symbol (sampled)</option>
                         <option value="pin">pin (edges)</option>
                     </select>
@@ -126,7 +127,7 @@ edited in place, then checked on the server (scenarios.js edited).
                         <option v-for="b in boards" :key="b" :value="b">{{ b }}</option>
                     </select>
                 </label>
-                <label v-if="row.action !== 'watch' || it.kind === 'pin'">Pin
+                <label v-if="row.action !== 'watch' || watchWhat === 'pin'">Pin
                     <input
                         v-model.trim="it.pin" class="vhil-input mono" placeholder="PF9"
                         @input="edited"
@@ -144,10 +145,10 @@ edited in place, then checked on the server (scenarios.js edited).
                         class="vhil-input mono" @input="edited"
                     />
                 </label>
-                <template v-if="row.action === 'watch' && it.kind === 'symbol'">
+                <template v-if="row.action === 'watch' && watchWhat === 'symbol'">
                     <label>Symbol
                         <input
-                            v-model.trim="it.name" class="vhil-input mono"
+                            v-model.trim="it[symbolKey]" class="vhil-input mono"
                             placeholder="g_state_telemetry" @input="edited"
                         />
                     </label>
@@ -242,12 +243,12 @@ edited in place, then checked on the server (scenarios.js edited).
                             Value<span class="muted">{{ sigField ? unitOf(sigField) : '' }}</span>
                         </span>
                         <select
-                            v-if="sigField?.values" class="vhil-input mono"
+                            v-if="sigLabels" class="vhil-input mono"
                             :value="String(it.value)"
                             @change="(ev) => setValue(ev.target.value, true)"
                         >
                             <option
-                                v-for="(label, raw) in sigField.values" :key="raw" :value="label"
+                                v-for="(label, raw) in sigLabels" :key="raw" :value="label"
                             >{{ label }} ({{ raw }})</option>
                             <option v-if="!isLabel" :value="String(it.value)">
                                 {{ it.value }}
@@ -407,14 +408,24 @@ export default defineComponent({
             });
             edited();
         };
-        const watchKind = () => {
+        // A `watch` row (a symbol or a pin, from power-on), or a mid-run
+        // watch op among the stimuli (kind watch, with a symbol or a pin).
+        const isWatchOp = computed(() => props.row.list === 'stimuli');
+        const watchWhat = computed(() => {
+            if (!isWatchOp.value) return it.value.kind;
+            return it.value.pin !== undefined ? 'pin' : 'symbol';
+        });
+        const symbolKey = computed(() => (isWatchOp.value ? 'symbol' : 'name'));
+        const watchKind = (ev) => {
             const item = it.value;
-            if (item.kind === 'pin') {
-                ['name', 'size', 'period_ms'].forEach((k) => delete item[k]);
+            const what = ev.target.value;
+            if (!isWatchOp.value) item.kind = what;
+            if (what === 'pin') {
+                ['name', 'symbol', 'size', 'period_ms'].forEach((k) => delete item[k]);
                 item.pin = item.pin || '';
             } else {
                 delete item.pin;
-                Object.assign(item, { name: '', size: 1, period_ms: 10 });
+                Object.assign(item, { [symbolKey.value]: '', size: 1, period_ms: 10 });
             }
             edited();
         };
@@ -436,7 +447,19 @@ export default defineComponent({
         const sigField = computed(() => sigMsg.value?.fields
             .find((f) => f.name === sig.value.field) || null);
         const sigRange = computed(() => (sigField.value ? dec.fieldRange(sigField.value) : null));
-        const isLabel = computed(() => Object.values(sigField.value?.values || {})
+        // The value's labels: a field's value table (CAN_VAL), or a symbol's
+        // enum (the contract's `labels`: its DWARF enum or its state view's
+        // table, vhil/stateview.py), the field's own over a view's.
+        const sigLabels = computed(() => {
+            scen.version; // eslint-disable-line no-unused-expressions
+            if (sig.value.kind === 'pin') return null;
+            const out = {
+                ...(scen.contract?.labels?.[signalText(sig.value)] || {}),
+                ...(sigField.value?.values || {}),
+            };
+            return Object.keys(out).length ? out : null;
+        });
+        const isLabel = computed(() => Object.values(sigLabels.value || {})
             .includes(String(it.value.value)));
         const setSig = (patch) => {
             const next = { ...sig.value, ...patch };
@@ -494,6 +517,8 @@ export default defineComponent({
             setId,
             pickMessage,
             watchKind,
+            watchWhat,
+            symbolKey,
             valueCheck,
             sig,
             owners,
@@ -502,6 +527,7 @@ export default defineComponent({
             sigMsg,
             sigField,
             sigRange,
+            sigLabels,
             isLabel,
             setSig,
             setValue,

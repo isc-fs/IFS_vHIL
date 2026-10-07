@@ -4,8 +4,9 @@
  * no DOM, no Vue: tests/js/scenario.test.mjs runs it under node.
  *
  * A scenario is the rows of a run (vhil/server/runs.py RunScenario): its
- * `stimuli` (can_send, can_periodic, stop_periodic, gpio, analog), `watch`
- * (symbol, pin) and `expect` lists, plus its description and virtual time.
+ * `stimuli` (can_send, can_periodic, stop_periodic, gpio, analog, and
+ * watch: a watch that starts mid-run), `watch` (symbol, pin, from power-on)
+ * and `expect` lists, plus its description and virtual time.
  * The table shows them as one list of rows sorted by time, each pointing at
  * its item; editing a row edits the item in place, so the lists stay what
  * the server checks and the file holds.
@@ -197,7 +198,8 @@ export function targetOf(row, contract) {
         case 'stop': return it.periodic || '–';
         case 'gpio':
         case 'analog': return `${it.board}.${it.pin}`;
-        case 'watch': return it.kind === 'pin' ? `pin ${it.board}.${it.pin}` : `${it.board}.${it.name}`;
+        case 'watch': return it.pin !== undefined ? `pin ${it.board}.${it.pin}`
+            : `${it.board}.${it.name ?? it.symbol}`;
         case 'expect': return it.signal;
         default: return '';
     }
@@ -232,7 +234,8 @@ export function valueOf(row) {
         case 'stop': return 'stop';
         case 'gpio': return it.level ? 'HIGH' : 'LOW';
         case 'analog': return `${it.volts} V`;
-        case 'watch': return it.kind === 'pin' ? 'edges' : `${it.size} B every ${ms(it.period_ms)}`;
+        case 'watch': return it.pin !== undefined ? 'edges'
+            : `${it.size ? `${it.size} B ` : ''}every ${ms(it.period_ms ?? 10)}`;
         case 'expect': return expectText(it);
         default: return '';
     }
