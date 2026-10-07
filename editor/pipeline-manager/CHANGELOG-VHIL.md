@@ -338,6 +338,39 @@ from `git archive 04613679` except as listed below.
       (a symbol or a pin, as the `watch` rows), a diamond on its board's
       lane.
 
+18. **The state panel** (step 13 of the editor workspace plan;
+    [state view](../../docs/state-view.md)).
+    - **The model** (`state.js`, pure; `tests/js/state.test.mjs` under node):
+      `StateTrace` keeps each state-view signal's observations as a time
+      series of raw values, fed record by record (samples, edges, frames
+      decoded with the shell's `decode.js`): a replayed run's trace now, a
+      live session's stream later. `cardAt(board, t)` is a board's FSM state
+      (label, for how long, the one before, its transitions), relays,
+      active and latched-cleared faults with reason and age, key values,
+      and staleness (a source silent for three periods); `pillAt` the
+      canvas pill; `lanesOf` the history lanes.
+    - **REPLAY** (`replay.js`) loads the trace's `sample` records too and
+      builds the run's `StateTrace` once its contract (with each board's
+      state view) and trace are in.
+    - **The State tab** (`VhilState.vue`, `VhilStateCard.vue`, `state.css`;
+      `VhilDock.vue` renders it): a 340 px card per board at the scrubber's
+      time: the FSM state at 18 px with "for N ms" and the previous state;
+      contactors and relays as square pills with text (■ closed, filled;
+      □ open); active faults as ✕ pills with reason and age, cleared ones
+      outlined (○); key values with units; "stale" and a dashed card when
+      the state went silent; the history: the FSM state's lane (its states
+      written on it) and each relay's digital lane over the run, and the
+      transitions; a click on either moves the scrubber. Segment positions
+      are set through the CSSOM (`:style` objects). The FSM and digital
+      lanes live here until the Signals tab exists.
+    - **The inspector** (`VhilInspector.vue`): in REPLAY, the selected
+      board's card (without the history) above its properties.
+    - **The node pill** (`custom/CustomNode.vue`, the board's
+      `vhil-node-state` slot from step 8: `VhilNodeState.vue`; `nodes.css`):
+      "AMS · Precharge" at the scrubber's time; while a fault is active it
+      reads "✕ fault" and is ringed, and so is the board's card (`:has()`);
+      "stale" and dashed when its state went silent.
+
 ## Left for later
 
 - **Light theme polish** (owner decision: defined now, polished later).

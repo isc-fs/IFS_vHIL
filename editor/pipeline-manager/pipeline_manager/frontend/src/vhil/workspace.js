@@ -48,9 +48,11 @@ function store(key, value) {
 export const DOCK_TABS = [
     // id, label, the step that fills it (none: here now)
     { id: 'scenario', label: 'Scenario' },
-    { id: 'state', label: 'State', step: 13 },
+    { id: 'state', label: 'State' },
     { id: 'bus', label: 'Bus' },
-    { id: 'signals', label: 'Signals', step: 13 },
+    // The FSM and digital lanes are in the State tab's history for now
+    // (step 13); the uPlot plots have no step yet.
+    { id: 'signals', label: 'Signals', step: 'later' },
     { id: 'log', label: 'Log' },
     { id: 'debug', label: 'Debug', step: 17 },
     { id: 'problems', label: 'Problems' },
