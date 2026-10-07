@@ -15,12 +15,6 @@ edited in place, then checked on the server (scenarios.js edited).
         <h3 class="vhil-form-title">
             {{ row.action }} <span class="muted mono">{{ row.key }}</span>
         </h3>
-        <ul v-if="messages.length" class="vhil-scen-msgs">
-            <li v-for="m in messages" :key="m">{{ m }}</li>
-        </ul>
-        <p v-if="result" class="vhil-scen-msg" :class="result.passed ? '--ok' : '--error'">
-            {{ result.passed ? '✓ passed' : '✕ failed' }}: {{ result.detail }}
-        </p>
 
         <div class="vhil-scen-grid">
             <label v-if="row.t !== null">t (ms)
@@ -309,6 +303,12 @@ edited in place, then checked on the server (scenarios.js edited).
                 <p class="vhil-note --wide mono">{{ it.signal }}</p>
             </template>
         </div>
+        <p v-if="result" class="vhil-scen-msg" :class="result.passed ? '--ok' : '--error'">
+            {{ result.passed ? '✓ passed' : '✕ failed' }}: {{ result.detail }}
+        </p>
+        <ul v-if="messages.length" class="vhil-scen-msgs" aria-live="polite">
+            <li v-for="m in messages" :key="m">{{ m }}</li>
+        </ul>
     </form>
 </template>
 
@@ -317,7 +317,7 @@ import { computed, defineComponent, ref } from 'vue';
 // eslint-disable-next-line import/no-unresolved, import/extensions -- copied by the build
 import * as dec from './shell/decode.js';
 import {
-    CHECKS, OPS, VALUE_CHECKS, findMessage, messageOf, parseSignal, signalText,
+    CHECKS, OPS, VALUE_CHECKS, findMessage, looseSignal, messageOf, parseSignal, signalText,
 } from './scenario.js';
 import { edited, scen } from './scenarios.js';
 
@@ -421,7 +421,8 @@ export default defineComponent({
 
         // -- expects --------------------------------------------------------
         const valueCheck = computed(() => VALUE_CHECKS.includes(it.value.check));
-        const sig = computed(() => parseSignal(it.value.signal) || {
+        // Loosely: a signal being built ("pin:ams.") keeps its source.
+        const sig = computed(() => looseSignal(it.value.signal) || {
             kind: 'frame', owner: props.buses[0] || '', item: '', field: '',
         });
         const owners = computed(() => (sig.value.kind === 'frame' ? props.buses : props.boards));

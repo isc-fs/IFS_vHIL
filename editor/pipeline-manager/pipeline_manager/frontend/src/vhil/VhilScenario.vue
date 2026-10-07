@@ -48,7 +48,7 @@ each expect row shows its result and evidence.
                 </label>
                 <label class="vhil-bus-field">
                     <span class="vhil-visually-hidden">Add a row</span>
-                    <select v-model="adding" class="vhil-input" @change="add">
+                    <select class="vhil-input" @change="add">
                         <option value="" disabled>+ Add row…</option>
                         <option v-for="a in ACTIONS" :key="a.action" :value="a.action">
                             {{ a.label }}
@@ -207,10 +207,11 @@ export default defineComponent({
             ? [...(byRow.value.errors.get(sel.value.key) || []),
                 ...(byRow.value.warnings.get(sel.value.key) || [])] : []));
 
-        const adding = ref('');
-        const add = () => {
-            const action = adding.value;
-            adding.value = '';
+        // A one-shot select: back to its placeholder once a row is added.
+        const add = (ev) => {
+            const select = ev.target;
+            const action = select.value;
+            select.selectedIndex = 0;
             if (!action) return;
             scen.selected = addRow(scen.doc, action, {
                 t: sel.value?.t ?? 0,
@@ -272,7 +273,6 @@ export default defineComponent({
             periodics,
             sel,
             selMessages,
-            adding,
             add,
             remove,
             targetOf,

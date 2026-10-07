@@ -171,6 +171,14 @@ export function parseSignal(text) {
     };
 }
 
+/** A signal as typed so far ("pin:ams.", "frame:can_acu.AMS_status."), or null. */
+export function looseSignal(text) {
+    const m = /^(frame|symbol|pin):([^.]*)(?:\.([^.]*))?(?:\.(.*))?$/.exec(text || '');
+    return m ? {
+        kind: m[1], owner: m[2], item: m[3] || '', field: m[4] || '',
+    } : null;
+}
+
 export function signalText({
     kind, owner, item, field,
 }) {

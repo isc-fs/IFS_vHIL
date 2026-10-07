@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
-  addRow, emptyScenario, expectText, findMessage, messagesByRow, moveItem, parseSignal,
+  addRow, emptyScenario, expectText, findMessage, looseSignal, messagesByRow, moveItem, parseSignal,
   periodicNames, removeRow, resultsByRow, rowsOf, signalText, snap, targetOf, valueOf,
 } from "../../editor/pipeline-manager/pipeline_manager/frontend/src/vhil/scenario.js";
 
@@ -66,6 +66,11 @@ test("signals parse and print as the server's grammar", () => {
                    { kind: "frame", owner: "can_acu", item: "0x4A0", field: "fsm_state" });
   assert.equal(parseSignal("pin:ams.PB5.x"), null);
   assert.equal(parseSignal("nope"), null);
+  // One being built keeps its source and owner.
+  assert.deepEqual(looseSignal("pin:ams."), { kind: "pin", owner: "ams", item: "", field: "" });
+  assert.deepEqual(looseSignal("frame:can_acu.AMS_status."),
+                   { kind: "frame", owner: "can_acu", item: "AMS_status", field: "" });
+  assert.equal(looseSignal("wire:x"), null);
   assert.equal(signalText({ kind: "pin", owner: "ams", item: "PB5", field: "" }), "pin:ams.PB5");
   assert.equal(findMessage(CONTRACT, "can_acu", "0x4A0").name, "AMS_status");
   assert.equal(findMessage(CONTRACT, "can_acu", "VCU_heartbeat").id, 256);
