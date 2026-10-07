@@ -326,6 +326,22 @@ def test_pacing_holds_virtual_time_to_wall_time():
     assert slept == [pytest.approx(0.05)] * 3 and s._base == (100_000, 1.0)
 
 
+def test_the_clock_reads_the_emulations_speed_when_it_cannot_keep_up():
+    """At a tenth of real time every boundary forgives the deficit; the
+    real-time factor still reads 0.1, not 0."""
+    t = [0.0]
+    s = LiveSession(store=None, run_id=1, limits=Limits(), clock=lambda: t[0],
+                    wall=lambda: t[0], sleep=lambda d: None)
+    s.idle_left = lambda: 1800
+    s.rebase(0)
+    rtf = []
+    for k in range(1, 30):
+        t[0] = k * 0.5                       # 50 ms of virtual time per 0.5 s
+        rtf.append(s.clock(k * 50_000)["rtf"])
+        s.pace(k * 50_000, (k + 1) * 50_000)
+    assert rtf[-1] == pytest.approx(0.1)
+
+
 # -- the channel ----------------------------------------------------------------------------
 
 def live_run(client, **kw):

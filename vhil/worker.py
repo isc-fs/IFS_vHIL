@@ -229,15 +229,19 @@ class LiveSession:
     def wait(self) -> None:
         self.sleep(self.poll_s)
 
-    def rebase(self, now_us: int) -> None:
+    def rebase(self, now_us: int, window: bool = True) -> None:
+        """Pace from now on; `window`: measure the real-time factor afresh
+        too (a pause or a resume; not a forgiven deficit, after which the
+        factor is what it was)."""
         self._base = (now_us, self.clock_fn())
-        self._window.clear()
+        if window:
+            self._window.clear()
 
     def pace(self, now_us: int, until_us: int) -> None:
         """At virtual time now_us, before running the slice to until_us."""
         v0, w0 = self._base
         if (self.clock_fn() - w0) - (now_us - v0) / 1e6 / self.rtf > self.max_lag_s:
-            self.rebase(now_us)        # behind: forgive, never sprint to catch up
+            self.rebase(now_us, window=False)   # behind: forgive, never sprint to catch up
             v0, w0 = self._base
         wait = (until_us - v0) / 1e6 / self.rtf - (self.clock_fn() - w0)
         if wait >= 0.001:
