@@ -85,6 +85,7 @@ export async function loadGraph(dataflow, { timeoutMs = 30000 } = {}) {
     const want = entryGraph(dataflow).nodes.length;
     const got = liveNodes().length;
     if (got !== want) throw new Error(`the editor took ${got} of ${want} nodes`);
+    manager.baklavaView.editor.centerZoom();
 }
 
 /** Selects one node (or none) on the canvas. */
