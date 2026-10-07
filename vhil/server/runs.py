@@ -58,6 +58,11 @@ TRACE = "trace.jsonl"
 HEARTBEAT_S = 10.0
 RECLAIM_AFTER_S = 60.0
 MAX_ATTEMPTS = 2
+# A `run` scenario's virtual time when the request names none, and what the
+# Runs page and the editor offer: every run counts from power-on, and each
+# MainLite spends its CAN bootloader's 2 s auto-jump window before its app
+# starts (CLAUDE.md invariant 5), so less than 3 s shows little of the app.
+DEFAULT_VIRTUAL_MS = 3000
 
 
 def _env_int(name: str, default: int) -> int:
@@ -181,7 +186,7 @@ Watch = Annotated[Union[SymbolWatch, PinWatch], Field(discriminator="kind")]
 
 class RunScenario(_Model):
     kind: Literal["run"]
-    virtual_ms: int = Field(ge=1, le=600_000)
+    virtual_ms: int = Field(DEFAULT_VIRTUAL_MS, ge=1, le=600_000)
     # Virtual time per slice: the trace is flushed and cancellation checked
     # after each one.
     slice_ms: int = Field(100, ge=10, le=1000)

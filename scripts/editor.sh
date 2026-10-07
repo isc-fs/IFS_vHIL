@@ -11,7 +11,6 @@
 #   NODE_DIR  Node.js >= 20.18 (default ~/vhil-tools/node)
 #   PM_HOST   address the UI listens on (default 127.0.0.1; 0.0.0.0 in Docker)
 #   EDITOR_URL  where the UI is reached from the browser (default http://localhost:5000)
-#   VHIL_<FIRMWARE>_ELF  images Run uses, e.g. VHIL_ECU_ELF, VHIL_AMS_ELF
 # Logs: $LOG_DIR/pm.log and $LOG_DIR/backend.log (default ~/vhil/editor).
 set -euo pipefail
 here=$(cd "$(dirname "$0")/.." && pwd)

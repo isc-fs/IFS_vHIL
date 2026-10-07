@@ -150,7 +150,6 @@ def test_a_pytest_scenario_is_accepted(client):
 
 @pytest.mark.parametrize("body, needle", [
     ({"system": "nope", "scenario": RUN}, "no system"),
-    ({"system": "ecu", "scenario": {"kind": "run"}}, "virtual_ms"),
     ({"system": "ecu", "scenario": {"kind": "run", "virtual_ms": 0}}, "virtual_ms"),
     ({"system": "ecu", "scenario": {"kind": "bogus"}}, "kind"),
     ({"system": "ecu", "scenario": {**RUN, "extra": 1}}, "extra"),

@@ -74,7 +74,10 @@ All JSON; times in microseconds of virtual time.
   run differently from CI; a saved branch only ever changes a system file.
   A pytest scenario reads the checked-out tests and systems: HEAD only.
   Board `firmware_ref`s of the system as saved pick the images. A scenario is either
-  `{"kind": "run", "virtual_ms": N, "stimuli": [...]}` (stimuli: CAN
+  `{"kind": "run", "virtual_ms": N, "stimuli": [...]}` (`virtual_ms`
+  defaults to 3000, `DEFAULT_VIRTUAL_MS` in `vhil/server/runs.py`, which
+  `GET /api/config` gives the Runs and Editor pages as `run_virtual_ms`;
+  stimuli: CAN
   send / periodic, GPIO set, analog set at virtual times from power-on, so
   the first 2 s are each MainLite's bootloader window, before its app runs) or
   `{"kind": "pytest", "select": "tests/sim/test_x.py::test_y"}`.
