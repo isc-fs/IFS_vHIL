@@ -4,7 +4,10 @@ vHIL: the activity rail (44 px) and its sidebar (260 px, Ctrl+B)
 #vhil-palette-host from the canvas, whose drag-and-drop it keeps), Systems
 (open one onto the canvas) and Runs (the open system's history, or every
 system's with none open: opening one enters REPLAY, step 9; its shell page,
-with the signals, log and artifacts REPLAY doesn't show yet, is a link).
+with the signals, log and artifacts REPLAY doesn't show yet, is a link) and
+Tests (step 11: the open system's scenarios, or every system's, with their
+last run's state and expects; opening one selects it and replays that run on
+the Scenario tab, ▶ runs it).
 -->
 
 <template>
@@ -91,6 +94,44 @@ with the signals, log and artifacts REPLAY doesn't show yet, is a link).
             </form>
         </div>
 
+        <div v-if="layout.view === 'tests'" class="vhil-runs vhil-tests">
+            <div class="vhil-runs-head">
+                <span class="muted">
+                    {{ ws.id || 'every system' }}: {{ tests.length }} scenario{{
+                        tests.length === 1 ? '' : 's' }}
+                </span>
+                <button type="button" class="vhil-btn --small" @click="loadTests">
+                    Refresh
+                </button>
+            </div>
+            <p v-if="!tests.length" class="muted">
+                No scenarios yet: the Scenario tab's + New makes one, and its expects make it
+                a test.
+            </p>
+            <ul class="vhil-list" aria-label="Scenario tests">
+                <li v-for="t in tests" :key="`${t.system}/${t.name}`" class="vhil-run-item">
+                    <button
+                        type="button" class="vhil-list-item vhil-run-row"
+                        :class="{ '--current': t.system === ws.id && t.name === scen.name }"
+                        :title="t.description || t.name"
+                        @click="openTest(t)"
+                    >
+                        <span class="mono vhil-test-name">
+                            {{ ws.id ? '' : `${t.system}/` }}{{ t.name }}
+                        </span>
+                        <StateBadge v-if="t.last_run" :state="t.last_run.state" />
+                        <span v-else class="vhil-list-sub muted">not run</span>
+                        <span class="vhil-list-sub muted mono">{{ expectsText(t) }}</span>
+                    </button>
+                    <button
+                        type="button" class="vhil-run-page"
+                        :aria-label="`Run ${t.name}`" :title="`Run ${t.name} (F5)`"
+                        @click="runTest(t)"
+                    >▶</button>
+                </li>
+            </ul>
+        </div>
+
         <div v-if="layout.view === 'runs'" class="vhil-runs">
             <div class="vhil-runs-head">
                 <span class="muted">{{ ws.id || 'every system' }}: last {{ ws.runs.length }}</span>
@@ -132,9 +173,10 @@ import {
     computed, defineComponent, ref, watch,
 } from 'vue';
 import {
-    ws, loadRuns, newSystem, open, openRun,
+    ws, loadRuns, newSystem, open, openRun, pickScenario, runNow,
 } from './workspace.js';
-import { runPage } from './api.js';
+import { call, runPage } from './api.js';
+import { loadScenarios, scen } from './scenarios.js';
 import { replay } from './replay.js';
 import StateBadge from './VhilStateBadge.vue';
 
@@ -147,6 +189,9 @@ const VIEWS = [
     },
     {
         id: 'runs', label: 'Runs', short: 'Runs', glyph: '↻',
+    },
+    {
+        id: 'tests', label: 'Tests', short: 'Tests', glyph: '✓',
     },
 ];
 
@@ -161,6 +206,8 @@ export default defineComponent({
             if (ws.layout.sidebar && ws.layout.view === id) ws.layout.sidebar = false;
             else Object.assign(ws.layout, { sidebar: true, view: id });
             if (id === 'runs') loadRuns();
+            // eslint-disable-next-line no-use-before-define
+            if (id === 'tests') loadTests();
         };
         const fromId = ref('');
         // The open system, else the first, once they are known.
@@ -172,6 +219,44 @@ export default defineComponent({
         const openSystem = (id, branch = '') => (id ? open(id, { branch }) : undefined);
         const openFrom = () => openSystem(fromId.value || ws.id, fromBranch.value.trim());
         const create = () => { if (newId.value) newSystem(newId.value.trim()); };
+        // Tests: the open system's scenarios (scenarios.js keeps them), or
+        // every system's.
+        const every = ref([]);
+        const tests = computed(() => (ws.id ? scen.list.filter((s) => !s.unsaved)
+            .map((s) => ({ ...s, system: ws.id })) : every.value));
+        const loadTests = async () => {
+            if (ws.id) {
+                await loadScenarios();
+                return;
+            }
+            try { every.value = await call('GET', '/api/scenarios'); } catch { every.value = []; }
+        };
+        const expectsText = (t) => {
+            const r = t.last_run;
+            if (r && r.expects_passed !== null && r.expects_passed !== undefined) {
+                return `✓ ${r.expects_passed} ✕ ${r.expects_failed} · run ${r.id}`;
+            }
+            return `${t.expects} expect${t.expects === 1 ? '' : 's'}`;
+        };
+        const select = async (t) => {
+            if (t.system !== ws.id) await open(t.system, { scenario: t.name });
+            else if (scen.name !== t.name) await pickScenario(t.name);
+        };
+        const openTest = async (t) => {
+            await select(t);
+            if (t.last_run) {
+                await openRun(t.last_run.id, { tab: 'scenario' });
+            } else {
+                ws.layout.dock = true;
+                ws.layout.dockTab = 'scenario';
+            }
+        };
+        const runTest = async (t) => {
+            await select(t);
+            ws.layout.dock = true;
+            ws.layout.dockTab = 'scenario';
+            runNow();
+        };
         const when = (r) => {
             const at = (r.created || '').replace('T', ' ').slice(5, 16);
             return r.ref_name ? `${at} @ ${r.ref_name}` : at;
@@ -193,6 +278,12 @@ export default defineComponent({
             replay,
             runPage,
             when,
+            scen,
+            tests,
+            loadTests,
+            expectsText,
+            openTest,
+            runTest,
         };
     },
 });

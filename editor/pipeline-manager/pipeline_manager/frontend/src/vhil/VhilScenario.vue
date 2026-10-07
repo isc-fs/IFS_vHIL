@@ -2,9 +2,10 @@
 vHIL: the dock's Scenario tab (step 10 of docs/architecture/editor-workspace.md;
 CHANGELOG-VHIL.md): the selected scenario of the open system as a table of
 rows, t | action | target | value | result, and an editor for the selected
-row (VhilScenarioRow.vue). Every edit is checked on the server
-(scenarios.js checkScenario), and its messages mark the rows; after a run
-each expect row shows its result and evidence.
+row (VhilScenarioRow.vue), under its timeline (VhilTimeline.vue, step 11).
+Every edit is checked on the server (scenarios.js checkScenario), and its
+messages mark the rows; after a run each expect row shows its result and
+evidence, and the timeline lays them over what the run did.
 -->
 
 <template>
@@ -49,7 +50,7 @@ each expect row shows its result and evidence.
                 <label class="vhil-bus-field">
                     <span class="vhil-visually-hidden">Add a row</span>
                     <select class="vhil-input" @change="add">
-                        <option value="" disabled>+ Add row…</option>
+                        <option value="" disabled selected>+ Add row…</option>
                         <option v-for="a in ACTIONS" :key="a.action" :value="a.action">
                             {{ a.label }}
                         </option>
@@ -80,6 +81,7 @@ each expect row shows its result and evidence.
         <template v-else>
             <p v-if="scen.contractNote" class="vhil-bus-note muted">{{ scen.contractNote }}</p>
             <p v-for="m in docMessages" :key="m" class="vhil-scen-msg --error">✕ {{ m }}</p>
+            <VhilTimeline :buses="buses" :boards="boardNames" />
             <div class="vhil-scen-body">
                 <div class="vhil-scen-table" role="table" aria-label="Scenario rows">
                     <div class="vhil-scen-row vhil-rt-head" role="row">
@@ -157,10 +159,11 @@ import {
     boards, liveNodes, nodeName, vhilKind,
 } from './graph.js';
 import VhilScenarioRow from './VhilScenarioRow.vue';
+import VhilTimeline from './VhilTimeline.vue';
 import './scenario.css';
 
 export default defineComponent({
-    components: { VhilScenarioRow },
+    components: { VhilScenarioRow, VhilTimeline },
     setup() {
         const newName = ref('');
         const create = () => {

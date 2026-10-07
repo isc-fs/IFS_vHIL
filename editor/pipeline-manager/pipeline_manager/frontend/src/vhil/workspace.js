@@ -471,7 +471,7 @@ export function loadRuns() {
  * another is open, loads its trace and shows its frames in the Bus tab;
  * the top bar's clock scrubs its virtual time.
  */
-export function openRun(id) {
+export function openRun(id, { tab = 'bus' } = {}) {
     return guarded(`could not open run ${id}`, async () => {
         const run = await runRecord(id);
         if (run.system !== ws.id) {
@@ -479,7 +479,13 @@ export function openRun(id) {
         }
         ws.mode = 'REPLAY';
         ws.layout.dock = true;
-        ws.layout.dockTab = 'bus';
+        ws.layout.dockTab = tab;
+        // A scenario's run: the scenario selected, its expect results on it.
+        const name = run.scenario?.name;
+        if (name && scen.name !== name && scen.list.some((s) => s.name === name)) {
+            await pickScenario(name);
+        }
+        if (name) setResults(run);
         say(`Replaying run ${id}: loading its trace…`);
         const loaded = loadRun(run);
         remember();
@@ -560,16 +566,13 @@ async function scenarioRunEnded(id) {
         const run = await runRecord(id);
         setResults(run);
         loadScenarios();
+        if (ws.mode !== 'REPLAY') openRun(id, { tab: 'scenario' });
         const s = run.summary || {};
         if (s.expects) {
             const failed = s.expects_failed || 0;
             log(`run ${id}: ${s.expects_passed} expect(s) passed, ${failed} failed`);
             s.expects.forEach((r) => log(`  ${r.passed ? '✓ pass' : '✕ FAIL'}  ${r.name || r.check} `
                 + `${r.signal}: ${r.detail}`));
-            if (failed) {
-                ws.layout.dock = true;
-                ws.layout.dockTab = 'problems';
-            }
         }
     } catch (e) {
         say(`Run ${id}: no results (${e.message})`, 'warning');

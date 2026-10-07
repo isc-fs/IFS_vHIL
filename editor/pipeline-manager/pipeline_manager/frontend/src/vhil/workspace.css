@@ -340,6 +340,10 @@ select.vhil-input option { padding: 2px var(--sp-2); }
 .vhil-commit-part > span { display: inline-flex; gap: var(--sp-1); align-items: center; flex-wrap: wrap; }
 .vhil-commit-part .mono { color: var(--fg-muted); }
 
+/* Tests (step 11): the scenario's name on its own line, its result under it. */
+.vhil-tests .vhil-run-row { flex-wrap: wrap; }
+.vhil-tests .vhil-test-name { flex: 1 0 100%; overflow: hidden; text-overflow: ellipsis; }
+
 /* The top bar's scenario pick (step 10). */
 .vhil-top-scen { display: flex; align-items: center; gap: var(--sp-1); flex: none; font-size: var(--fs-dense); }
 .vhil-top-scen select {

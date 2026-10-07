@@ -300,6 +300,32 @@ from `git archive 04613679` except as listed below.
       check (errors, warnings) and its last run's failed expects with the
       system's; a click shows the row.
 
+16. **Timeline and the Tests view** (step 11 of the editor workspace plan).
+    All in `src/vhil/`; no Pipeline Manager file changes.
+    - **The timeline** (`VhilTimeline.vue`, laid out by `timeline.js`, pure,
+      `tests/js/timeline.test.mjs`; drawn in `scenario.css`), above the
+      Scenario tab's table, on the virtual-time axis REPLAY's scrubber uses:
+      a lane per bus and per board (and per bus or board a row names that the
+      system lacks), a diamond per `can_send`, a hatched bar per
+      `can_periodic` to its stop, a step per gpio/analog set, a bracket per
+      expect over its window; the watches are the gutter below. A mark is
+      dragged with a 1, 5 or 10 ms snap (checked on the server when it is
+      dropped), or moved with ←/→ when focused; Ctrl+wheel zooms around the
+      pointer, − / fit / + by buttons. SVG geometry is attributes and colour
+      classes, so `style-src 'self'` holds.
+    - **Expected against actual.** When a scenario's run ends, the workspace
+      replays it on the Scenario tab (`workspace.js` `openRun(id, {tab})`;
+      opening any run that ran a scenario selects it): each expect's result
+      sits on its lane at its evidence time, ✓ or ✕ (a click moves the
+      scrubber there, replaying the run first if needed), behind the marks
+      the frames and pin edges the scenario names (REPLAY now loads `edge`
+      records too: `replay.js` `replay.edges`), and the scrubber's time is a
+      line; clicking the axis scrubs.
+    - **Tests** (`VhilRail.vue`): a sidebar view of the open system's
+      scenarios (every system's with none open: `GET /api/scenarios`), each
+      with its last run's state and expects (passed, failed); opening one
+      selects it and replays that run on the Scenario tab, ▶ runs it.
+
 ## Left for later
 
 - **Light theme polish** (owner decision: defined now, polished later).
