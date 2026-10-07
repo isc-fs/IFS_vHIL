@@ -82,7 +82,8 @@
 }
 .vhil-tl-label.--bus { border-left-color: var(--wire-can); }
 .vhil-tl-label.--board { border-left-color: var(--wire-gpio); }
-.vhil-tl-scroll { flex: 1; min-width: 0; overflow-x: auto; overflow-y: hidden; }
+/* Room under the lanes for the horizontal scrollbar, so it covers no lane. */
+.vhil-tl-scroll { flex: 1; min-width: 0; overflow-x: auto; overflow-y: hidden; padding-bottom: 10px; }
 .vhil-tl-svg { display: block; user-select: none; }
 
 .vhil-tl-axis { fill: var(--bg-1); cursor: pointer; }
@@ -102,8 +103,9 @@
 .vhil-tl-bracket { fill: none; stroke: var(--accent); stroke-width: 1.5; }
 .vhil-tl-text { fill: var(--fg); font-family: var(--font-mono); font-size: 10px; pointer-events: none; }
 /* Selected or focused: a focus-coloured stroke (and the ring the browser draws). */
-.vhil-tl-mark.--selected > :not(text):not(title),
-.vhil-tl-mark:focus-visible > :not(text):not(title) { stroke: var(--focus); stroke-width: 2.5; }
+.vhil-tl-hit { fill: transparent; }
+.vhil-tl-mark.--selected > :not(text):not(title):not(.vhil-tl-hit),
+.vhil-tl-mark:focus-visible > :not(text):not(title):not(.vhil-tl-hit) { stroke: var(--focus); stroke-width: 2.5; }
 .vhil-tl-mark.--error .vhil-tl-text { fill: var(--status-failed); text-decoration: underline; }
 
 .vhil-tl-result { cursor: pointer; }

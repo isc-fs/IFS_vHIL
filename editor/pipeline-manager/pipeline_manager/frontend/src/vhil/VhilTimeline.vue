@@ -100,6 +100,11 @@ colour is classes (scenario.css): nothing goes through style attributes.
                         @focus="scen.selected = m.key"
                     >
                         <title>{{ m.key }} · {{ m.label }} · {{ m.t0 }} ms</title>
+                        <!-- what the pointer grabs: a step's or a bracket's lines are thin -->
+                        <rect
+                            class="vhil-tl-hit" x="-9" y="1" :width="hitWidth(m)"
+                            :height="LANE_H - 2"
+                        />
                         <polygon
                             v-if="m.shape === 'diamond'" class="vhil-tl-diamond"
                             :points="`0,${mid - 6} 6,${mid} 0,${mid + 6} -6,${mid}`"
@@ -201,7 +206,10 @@ export default defineComponent({
         const laneY = (id) => AXIS_H + (laneIndex.value.get(id) ?? 0) * LANE_H;
         const marks = computed(() => {
             scen.version; // eslint-disable-line no-unused-expressions
-            return marksOf(scen.doc, endMs.value).filter((m) => m.lane);
+            // Expect windows first, under the stimuli they span.
+            const all = marksOf(scen.doc, endMs.value).filter((m) => m.lane);
+            return [...all.filter((m) => m.list === 'expect'),
+                ...all.filter((m) => m.list !== 'expect')];
         });
         const width = computed(() => Math.ceil(endMs.value * scale.value) + 40);
         const height = computed(() => AXIS_H + Math.max(1, lanes.value.length) * LANE_H);
@@ -365,8 +373,9 @@ export default defineComponent({
         const fit = () => {
             scale.value = fitScale(endMs.value, (scrollEl.value?.clientWidth || 800) - 40);
         };
-        // Fit a newly selected scenario.
-        watch(() => scen.name, () => requestAnimationFrame(fit), { immediate: true });
+        // Fit a newly selected scenario, or a new run length.
+        const refit = () => requestAnimationFrame(fit);
+        watch(() => [scen.name, endMs.value], refit, { immediate: true });
 
         const markClass = (m) => ({
             [`--${m.shape}`]: true,
@@ -377,6 +386,9 @@ export default defineComponent({
             : `M-8,${mid - 6} H0 V${mid + 6} H8`);
         const resultLabel = (r) => `${r.key} ${r.passed ? 'passed' : 'failed'} at ${r.t} ms: `
             + 'replay there';
+        // A mark is grabbed at its start: a window's whole width would cover
+        // the stimuli inside it.
+        const hitWidth = () => 18;
         const bracket = (m) => {
             const w = Math.max(2, (m.t1 - m.t0) * scale.value);
             return `M0,4V${LANE_H - 4}M0,${mid}H${w}M${w},4V${LANE_H - 4}`;
@@ -414,6 +426,7 @@ export default defineComponent({
             fit,
             markClass,
             bracket,
+            hitWidth,
             step,
             resultLabel,
         };

@@ -50,7 +50,7 @@ evidence, and the timeline lays them over what the run did.
                 <label class="vhil-bus-field">
                     <span class="vhil-visually-hidden">Add a row</span>
                     <select class="vhil-input" @change="add">
-                        <option value="" disabled>+ Add row…</option>
+                        <option value="" disabled selected>+ Add row…</option>
                         <option v-for="a in ACTIONS" :key="a.action" :value="a.action">
                             {{ a.label }}
                         </option>
