@@ -206,6 +206,12 @@ select.vhil-input option { padding: 2px var(--sp-2); }
 .vhil-ws .vhil-canvas .zoom-container.zoom-container {
   position: absolute; right: var(--sp-3); bottom: var(--sp-3);
 }
+/* PM's node sidebar (custom/CustomSidebar.vue) slides in from the canvas's
+   right edge. Its rules place it for PM's navbar and terminal and leave its
+   left edge where it falls, so on a wide canvas the closed sidebar showed
+   as an empty panel: pin it to the canvas, and hide it while closed. */
+.vhil-ws .vhil-canvas .baklava-sidebar { top: 0; right: 0; height: 100%; }
+.vhil-ws .vhil-canvas .baklava-sidebar:not(.--open) { visibility: hidden; }
 @media (max-width: 1399px) {
   .vhil-ws:not(.--no-inspector) .vhil-canvas .zoom-container.zoom-container {
     right: calc(min(var(--vhil-inspector-w, 320px), 100%) + var(--sp-3));
