@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from vhil.server import create_app  # noqa: E402
 from vhil.server.config import Settings  # noqa: E402
-from vhil.server.runs import RunStore, read_trace  # noqa: E402
+from vhil.server.runs import RunStore, read_trace, trace_header  # noqa: E402
 from vhil.sim import Edge, Frame  # noqa: E402
 from vhil.system import REPO, System  # noqa: E402
 from vhil.worker import (Cancelled, FirmwareResolver, TraceWriter, Worker,  # noqa: E402
@@ -200,10 +200,16 @@ TRACE_RECORDS = [
 ]
 
 
-def write_trace(settings, run_id, records=TRACE_RECORDS):
+def write_trace(settings, run_id, records=TRACE_RECORDS, header=True):
+    """Append records to a run's trace as the worker does: a new file starts
+    with the run's header (trace_header), unless header=False."""
     d = settings.results / str(run_id)
     d.mkdir(parents=True, exist_ok=True)
     with open(d / "trace.jsonl", "a") as f:
+        if header and f.tell() == 0:
+            run = RunStore(settings.db).get(run_id)
+            if run is not None:
+                f.write(json.dumps(trace_header(run)) + "\n")
         for rec in records:
             f.write(json.dumps(rec) + "\n")
 
@@ -273,12 +279,15 @@ def test_a_bad_trace_cursor_is_422(client, settings):
         assert r.status_code == 422 and needle in r.text, (bad, r.text)
 
 
-def big_trace(path, n):
-    """n frame records, 10 per virtual ms; returns the records."""
+def big_trace(path, n, header=None):
+    """n frame records, 10 per virtual ms, after `header` if given; returns
+    the records."""
     path.parent.mkdir(parents=True, exist_ok=True)
     recs = [{"kind": "frame", "t_us": i * 100, "bus": "can_acu", "id": 0x100 + i % 7, "ext": False,
              "data": f"{i % 65536:04x}0000"} for i in range(n)]
     with open(path, "w") as f:
+        if header is not None:
+            f.write(json.dumps(header) + "\n")
         f.writelines(json.dumps(r, separators=(",", ":")) + "\n" for r in recs)
     return recs
 
@@ -303,7 +312,8 @@ def test_paging_a_large_trace_is_exact_and_each_page_costs_its_size(client, sett
     exactly the file."""
     run_id = post(client).json()["run_id"]
     n, limit = 300_000, 50_000
-    recs = big_trace(settings.results / str(run_id) / "trace.jsonl", n)
+    recs = big_trace(settings.results / str(run_id) / "trace.jsonl", n,
+                     trace_header(RunStore(settings.db).get(run_id)))
     times, got, cursor = [], [], ""
     while True:
         t0 = time.perf_counter()
@@ -979,6 +989,130 @@ def test_live_restarts_when_a_new_attempt_replaces_the_trace(client, settings, s
     assert got == TRACE_RECORDS + TRACE_RECORDS[:1]
 
 
+# -- a reused id's stale results (a database restored to a snapshot, #136) ----------
+
+STALE = [{"kind": "frame", "t_us": 1, "bus": "can_acu", "id": 0x666, "ext": False, "data": "ff"},
+         {"kind": "log", "t_us": 2, "text": "rolled back run"}]
+
+
+def stale_results(settings, run_id, token="0" * 32):
+    """What a rolled-back run with this id left: a trace (with its own run's
+    header, or with none, from before headers) and an artifact."""
+    d = settings.results / str(run_id)
+    d.mkdir(parents=True)
+    with open(d / "trace.jsonl", "w") as f:
+        if token is not None:
+            f.write(json.dumps({"kind": "run", "t_us": 0, "run": run_id, "token": token,
+                                "attempt": 1}) + "\n")
+        f.writelines(json.dumps(r) + "\n" for r in STALE)
+    (d / "old.log").write_text("old run")
+    return d
+
+
+def test_each_run_gets_its_own_token(store):
+    a, b = store.create("ecu", "", {}, RUN), store.create("ecu", "", {}, RUN)
+    ta, tb = store.get(a)["token"], store.get(b)["token"]
+    assert len(ta) == 32 and ta != tb
+
+
+def test_an_old_database_gets_the_token_column(tmp_path):
+    db = sqlite3.connect(tmp_path / "old.db")
+    db.execute("CREATE TABLE runs (id INTEGER PRIMARY KEY AUTOINCREMENT, state TEXT NOT NULL, "
+               "system TEXT NOT NULL, ref TEXT NOT NULL DEFAULT '', firmware TEXT NOT NULL "
+               "DEFAULT '{}', scenario TEXT NOT NULL, created TEXT NOT NULL, started TEXT, "
+               "finished TEXT, virtual_us INTEGER NOT NULL DEFAULT 0, summary TEXT NOT NULL "
+               "DEFAULT '{}', worker TEXT)")
+    db.execute("INSERT INTO runs (state, system, scenario, created) VALUES "
+               "('passed', 'ecu', '{}', 'x')")
+    db.commit()
+    db.close()
+    store = RunStore(tmp_path / "old.db")
+    assert store.get(1)["token"] == ""
+    assert store.get(store.create("ecu", "", {}, RUN))["token"]
+
+
+@pytest.mark.parametrize("token", ["0" * 32, None], ids=["other-runs-header", "no-header"])
+def test_a_reused_ids_stale_trace_is_never_served(client, settings, token):
+    run_id = post(client).json()["run_id"]
+    stale_results(settings, run_id, token)
+    r = client.get(f"/api/runs/{run_id}/trace")
+    assert r.json() == [] and r.headers["x-trace-cursor"] == "0"
+    assert client.get(f"/api/runs/{run_id}/artifacts").json() == []
+    assert client.get(f"/api/runs/{run_id}/artifacts/old.log").status_code == 404
+
+
+def test_a_runs_own_trace_is_served_without_its_header(client, settings):
+    run_id = post(client).json()["run_id"]
+    write_trace(settings, run_id)
+    path = settings.results / str(run_id) / "trace.jsonl"
+    assert json.loads(path.read_text().splitlines()[0])["kind"] == "run"
+    assert client.get(f"/api/runs/{run_id}/trace").json() == TRACE_RECORDS
+    assert read_trace(path) == TRACE_RECORDS
+
+
+def test_a_run_from_before_tokens_is_served_as_before(client, settings, store):
+    run_id = post(client).json()["run_id"]
+    db = store._connect()
+    db.execute("UPDATE runs SET token = '' WHERE id = ?", (run_id,))
+    db.close()
+    write_trace(settings, run_id, header=False)
+    assert client.get(f"/api/runs/{run_id}/trace").json() == TRACE_RECORDS
+    assert client.get(f"/api/runs/{run_id}/artifacts").json() == ["trace.jsonl"]
+
+
+def test_a_client_tailing_a_queued_run_never_sees_the_stale_trace(client, settings, store):
+    """The run page or the editor opens /live while the run is queued, with a
+    rolled-back run's trace still at its path. The client gets nothing of it:
+    only the run's own records, once the worker has set the stale directory
+    aside and started its trace."""
+    run_id = store.create("ecu", "", {}, {"kind": "run", "virtual_ms": 200, "slice_ms": 100})
+    stale_results(settings, run_id)
+    worker = Worker(settings, worker_id="w1", sim_factory=lambda *a: FakeSim(),
+                    resolver=FixedResolver())
+
+    def claim_later():
+        time.sleep(0.6)          # several of the live loop's polls on the stale trace
+        assert worker.run_once() == run_id
+
+    t = threading.Thread(target=claim_later)
+    t.start()
+    with client.websocket_connect(f"/api/runs/{run_id}/live") as ws:
+        got = []
+        while (rec := ws.receive_json())["kind"] != "end":
+            got.append(rec)
+    t.join()
+    assert rec == {"kind": "end", "state": "passed"}
+    assert got and not any(r in STALE for r in got), got
+    assert all(r["kind"] != "run" for r in got)
+    assert sum(r["kind"] == "frame" and r["bus"] == "can_acu" for r in got) == 20
+    assert got == client.get(f"/api/runs/{run_id}/trace").json()
+    # The stale results are kept aside; the run's directory is its own.
+    [orphan] = (settings.results / ".orphaned").iterdir()
+    assert read_trace(orphan / "trace.jsonl") == STALE
+    assert "old.log" not in client.get(f"/api/runs/{run_id}/artifacts").json()
+
+
+def test_a_queued_run_cancelled_before_its_claim_shows_nothing_stale(client, settings, store):
+    run_id = post(client).json()["run_id"]
+    stale_results(settings, run_id)
+    store.cancel(run_id)
+    with client.websocket_connect(f"/api/runs/{run_id}/live") as ws:
+        assert ws.receive_json() == {"kind": "end", "state": "cancelled"}
+
+
+def test_the_worker_writes_the_runs_header_first(settings, store):
+    run_id = store.create("ecu", "", {}, {"kind": "run", "virtual_ms": 200, "slice_ms": 100})
+    worker = Worker(settings, worker_id="w1", sim_factory=lambda *a: FakeSim(),
+                    resolver=FixedResolver())
+    assert worker.run_once() == run_id
+    path = settings.results / str(run_id) / "trace.jsonl"
+    token = store.get(run_id)["token"]
+    header = json.loads(path.read_text().splitlines()[0])
+    assert header == {"kind": "run", "t_us": 0, "run": run_id, "token": token, "attempt": 1}
+    assert read_trace(path, token=token) == read_trace(path) != []
+    assert read_trace(path, token="f" * 32) == []
+
+
 # -- ownership ------------------------------------------------------------------------
 
 def github_app(settings, monkeypatch, admins=()):
@@ -1060,7 +1194,7 @@ def test_refs_are_plain_ascii(client, ref):
 def test_artifacts_are_plain_text_or_attachments_never_markup(client, settings):
     run_id = post(client).json()["run_id"]
     d = settings.results / str(run_id)
-    d.mkdir(parents=True)
+    write_trace(settings, run_id, [])      # the run's own directory
     (d / "x.html").write_text("<script>alert(1)</script>")
     (d / "x.svg").write_text('<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"/>')
     (d / "blob.bin").write_bytes(b"\x00\x01<html>\xff")

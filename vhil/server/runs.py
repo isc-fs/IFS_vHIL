@@ -20,6 +20,14 @@ worker's next poll reclaims it (RunStore.reclaim) back to `queued`, or to
 `error` once it has been attempted MAX_ATTEMPTS times. The heartbeat says
 the worker process is alive, not that the run makes progress: a run that
 hangs is bounded by its own limits (virtual_ms, a pytest timeout_s).
+
+Each run gets a random `token` when it is created, and the worker writes it
+in its trace's first line (a `run` header, never served). The API serves a
+trace, its live stream and the run's artifacts only once that header carries
+the run's token. A database restored to a snapshot hands out the ids of runs
+it rolled back, whose results stay on the runs volume, read-only to the API;
+until the worker sets them aside (vhil/worker.py, set_aside), a client of the
+new run sees nothing of them.
 """
 from __future__ import annotations
 
@@ -34,6 +42,7 @@ import tempfile
 import sys
 import threading
 import time
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -52,6 +61,8 @@ STATES = ("queued", "running", "passed", "failed", "error", "cancelled")
 TERMINAL = frozenset({"passed", "failed", "error", "cancelled"})
 TRACE_KINDS = frozenset({"frame", "edge", "sample", "log"})
 TRACE = "trace.jsonl"
+# The kind of a trace's first line, which says whose trace it is (trace_header).
+HEADER_KIND = "run"
 # A held run's heartbeat period, how stale it may get before another worker
 # reclaims the run, and how many times a run is started before a lost worker
 # ends it as error instead.
@@ -301,14 +312,16 @@ CREATE TABLE IF NOT EXISTS runs (
     heartbeat  REAL,
     attempts   INTEGER NOT NULL DEFAULT 0,
     ref_name   TEXT NOT NULL DEFAULT '',
-    owner      TEXT NOT NULL DEFAULT ''
+    owner      TEXT NOT NULL DEFAULT '',
+    token      TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS runs_state ON runs (state, id);
 """
 # Columns added after the first release: a database created before them
 # gets them on open.
 _ADDED = {"heartbeat": "REAL", "attempts": "INTEGER NOT NULL DEFAULT 0",
-          "ref_name": "TEXT NOT NULL DEFAULT ''", "owner": "TEXT NOT NULL DEFAULT ''"}
+          "ref_name": "TEXT NOT NULL DEFAULT ''", "owner": "TEXT NOT NULL DEFAULT ''",
+          "token": "TEXT NOT NULL DEFAULT ''"}
 
 
 class RunStore:
@@ -363,7 +376,9 @@ class RunStore:
                max_active_per_user: Optional[int] = None) -> int:
         """A queued run. `ref`: the workspace commit its system file is read
         at ("" outside git); `ref_name`: the branch/tag/commit it was asked as;
-        `owner`: the login of who started it ("dev" in dev mode). Raises QueueFull when the active runs
+        `owner`: the login of who started it ("dev" in dev mode). Each run gets
+        a random token, which its trace's header must carry for the API to
+        serve the trace (trace_header). Raises QueueFull when the active runs
         (queued or running) already number `max_active`, or `max_active_per_user`
         of `owner`'s: counted and inserted under one write lock, so
         concurrent requests can't overshoot."""
@@ -383,9 +398,9 @@ class RunStore:
                                     "queued or running runs: wait for one to finish or cancel one")
                 row = db.execute(
                     "INSERT INTO runs (state, system, ref, firmware, scenario, created, ref_name, "
-                    "owner) VALUES ('queued', ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+                    "owner, token) VALUES ('queued', ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
                     (system, ref, json.dumps(firmware), json.dumps(scenario), now_iso(), ref_name,
-                     owner)).fetchone()
+                     owner, uuid.uuid4().hex)).fetchone()
                 db.execute("COMMIT")
             except BaseException:
                 db.execute("ROLLBACK")
@@ -529,18 +544,50 @@ def _row(row: sqlite3.Row) -> dict:
 CURSOR_HEADER = "X-Trace-Cursor"
 
 
+def trace_header(run: dict) -> dict:
+    """The first line the worker writes in a run's trace. It carries the
+    run's token, so the API can tell the run's own trace from one left at
+    its path by an earlier run with the same id."""
+    return {"kind": HEADER_KIND, "t_us": 0, "run": run["id"], "token": run.get("token") or "",
+            "attempt": run.get("attempts", 0)}
+
+
+def trace_start(f, token: Optional[str] = None) -> Optional[int]:
+    """Where the records start in the open trace `f` (binary): past its
+    header, if it has one. With `token`, None unless the first line is a
+    whole header carrying that token: the file is not (yet) that run's."""
+    f.seek(0)
+    first = f.readline()
+    header = None
+    if first.endswith(b"\n"):
+        try:
+            rec = json.loads(first)
+        except ValueError:
+            rec = None
+        if isinstance(rec, dict) and rec.get("kind") == HEADER_KIND:
+            header = rec
+    if token and (header is None or header.get("token") != token):
+        return None
+    return len(first) if header is not None else 0
+
+
 def trace_page(path: Path, cursor: int = 0, since_us: int = 0, kinds: Optional[set] = None,
-               limit: Optional[int] = None) -> tuple[list[bytes], int]:
+               limit: Optional[int] = None, token: Optional[str] = None) -> tuple[list[bytes], int]:
     """(the matching records as their JSON lines, the cursor after them),
     reading from byte offset `cursor`. Records before since_us or of other
-    kinds are skipped (and consumed). A line the worker is still writing is
-    left for the next page, so a cursor also resumes a live trace."""
+    kinds are skipped (and consumed); the header is never returned. A line
+    the worker is still writing is left for the next page, so a cursor also
+    resumes a live trace. With `token` (the run's), a trace whose header
+    doesn't carry it is another run's: no records, cursor 0."""
     out: list[bytes] = []
     if not path.is_file():
-        return out, cursor
-    pos = cursor
+        return out, 0 if token else cursor
     with open(path, "rb") as f:
-        f.seek(cursor)
+        start = trace_start(f, token)
+        if start is None:
+            return out, 0
+        pos = max(cursor, start)
+        f.seek(pos)
         for line in f:
             if not line.endswith(b"\n"):
                 break                     # a line the worker is still writing
@@ -555,8 +602,21 @@ def trace_page(path: Path, cursor: int = 0, since_us: int = 0, kinds: Optional[s
 
 
 def read_trace(path: Path, since_us: int = 0, kinds: Optional[set] = None,
-               limit: Optional[int] = None) -> list[dict]:
-    return [json.loads(line) for line in trace_page(path, 0, since_us, kinds, limit)[0]]
+               limit: Optional[int] = None, token: Optional[str] = None) -> list[dict]:
+    return [json.loads(line) for line in trace_page(path, 0, since_us, kinds, limit, token)[0]]
+
+
+def owns_results(results: Path, run: dict) -> bool:
+    """Whether <results>/<id> is this run's: its trace's header carries the
+    run's token. Any directory is a run's from before tokens."""
+    token = run.get("token") or ""
+    if not token:
+        return True
+    path = results / str(run["id"]) / TRACE
+    if not path.is_file():
+        return False
+    with open(path, "rb") as f:
+        return trace_start(f, token) is not None
 
 
 def parse_cursor(text: Optional[str], path: Path) -> int:
@@ -891,27 +951,29 @@ def router(settings, workspace, limits: Optional[Limits] = None) -> APIRouter:
         """A page of trace records (a JSON list); the X-Trace-Cursor header
         is the cursor of the next page. Each page costs what it returns:
         pass the cursor back instead of moving since_us."""
-        run_or_404(run_id)
+        run = run_or_404(run_id)
         path = results / str(run_id) / TRACE
-        lines, nxt = trace_page(path, parse_cursor(cursor, path), since_us, _kinds(kinds), limit)
+        lines, nxt = trace_page(path, parse_cursor(cursor, path), since_us, _kinds(kinds), limit,
+                                token=run.get("token") or None)
         # The lines are already JSON: no parse-and-re-encode of the page.
         return Response(b"[" + b",".join(lines) + b"]", media_type="application/json",
                         headers={CURSOR_HEADER: str(nxt)})
 
     @r.get("/{run_id}/artifacts")
     def artifacts(run_id: int):
-        run_or_404(run_id)
+        run = run_or_404(run_id)
         root = results / str(run_id)
-        if not root.is_dir():
+        if not root.is_dir() or not owns_results(results, run):
             return []
         return sorted(str(p.relative_to(root)) for p in root.rglob("*") if p.is_file())
 
     @r.get("/{run_id}/artifacts/{name:path}")
     def artifact(run_id: int, name: str):
-        run_or_404(run_id)
+        run = run_or_404(run_id)
         root = (results / str(run_id)).resolve()
         path = (root / name).resolve()
-        if name.startswith("/") or not path.is_relative_to(root) or not path.is_file():
+        if name.startswith("/") or not path.is_relative_to(root) or not path.is_file() \
+                or not owns_results(results, run):
             raise HTTPException(404, f"no artifact '{name}'")
         return artifact_response(path)
 
@@ -928,29 +990,54 @@ def router(settings, workspace, limits: Optional[Limits] = None) -> APIRouter:
             await ws.close(code=4404, reason=f"no run {run_id}")
             return
         path = results / str(run_id) / TRACE
-        offset, pending = 0, ""
+        token = run.get("token") or None
+        # offset: where the next read starts in the file `inode`; None until
+        # that file is this run's (trace_start). A stale trace left at a
+        # reused id's path is never read, however long the run stays queued.
+        tail = {"offset": None, "inode": None}
+
+        def read_more() -> tuple[bool, bytes]:
+            """(whether the file was replaced, what it gained since the last read)."""
+            try:
+                f = open(path, "rb")
+            except FileNotFoundError:
+                return False, b""
+            with f:
+                st = os.fstat(f.fileno())
+                new = st.st_ino != tail["inode"] or (tail["offset"] is not None
+                                                     and st.st_size < tail["offset"])
+                if new:
+                    # The worker set a stale trace aside, or a reclaimed
+                    # run's next attempt started a new one (the last is kept
+                    # as trace.attempt<N>.jsonl).
+                    tail.update(offset=None, inode=st.st_ino)
+                if tail["offset"] is None:
+                    tail["offset"] = trace_start(f, token)
+                    if tail["offset"] is None:
+                        return new, b""
+                f.seek(tail["offset"])
+                chunk = f.read()
+                tail["offset"] = f.tell()
+            return new, chunk
+
+        pending = b""
         try:
             while True:
                 # Read the state before the file: once it is final, the
                 # worker has written everything, so one more read drains it.
                 state = await asyncio.to_thread(store.state, run_id)
-                if path.is_file():
-                    if path.stat().st_size < offset:
-                        # A reclaimed run's next attempt starts a new file
-                        # (the last one is kept as trace.attempt<N>.jsonl).
-                        offset, pending = 0, ""
-                    with open(path) as f:
-                        f.seek(offset)
-                        chunk = f.read()
-                        offset = f.tell()
+                new, chunk = await asyncio.to_thread(read_more)
+                if new:
+                    pending = b""
+                if chunk:
                     pending += chunk
-                    *lines, pending = pending.split("\n")
+                    *lines, pending = pending.split(b"\n")
                     for line in lines:
                         if not line:
                             continue
                         if wanted and json.loads(line).get("kind") not in wanted:
                             continue
-                        await ws.send_text(line)
+                        await ws.send_text(line.decode())
                 if state in TERMINAL or state is None:
                     await ws.send_json({"kind": "end", "state": state})
                     await ws.close()
