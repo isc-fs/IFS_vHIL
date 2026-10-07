@@ -493,12 +493,21 @@ def test_the_sim_sends_plain_commands_as_before(sim):
     sim.can("can_acu").send_periodic("hb", 0x100, b"\x01", 10, start_us=5)
     sim.io("ecu").set_input("sysbus.gpioPortB", 5, True)
     sim.call("sysbus.gpioPortB", "Respond", False, 3, "x")
+    # The board's machine is selected once, not before every command.
     assert sim._monitor.sent == [
         'mach set "ecu"', 'vhil_probe_can_acu Send 256 "0102" false',
-        'mach set "ecu"', 'vhil_probe_can_acu SendPeriodic "hb" 256 "01" 10000 5 false',
-        'mach set "ecu"', 'vhil_gpio_ecu Drive "sysbus.gpioPortB" 5 true',
-        'mach set "ecu"', 'sysbus.gpioPortB Respond false 3 "x"',
+        'vhil_probe_can_acu SendPeriodic "hb" 256 "01" 10000 5 false',
+        'vhil_gpio_ecu Drive "sysbus.gpioPortB" 5 true',
+        'sysbus.gpioPortB Respond false 3 "x"',
     ]
+
+
+def test_the_sim_selects_the_machine_again_after_a_command_that_may_change_it(sim):
+    sim.monitor("cpu PC", board="ecu")
+    sim.monitor("include @/tmp/x.resc", board="ecu")
+    sim.monitor("cpu PC", board="ecu")
+    assert sim._monitor.sent == ['mach set "ecu"', "cpu PC", "include @/tmp/x.resc",
+                                 'mach set "ecu"', "cpu PC"]
 
 
 def test_the_editor_names_its_temp_file_only_by_a_valid_id(tmp_path, monkeypatch):

@@ -580,9 +580,13 @@ class Sim:
         if board is None and len(self.system.boards) == 1:
             board = next(iter(self.system.boards))
         self.last_activity = next(_activity)
-        if board is not None:
+        # Select the board's machine only when it isn't selected already: a
+        # `mach set` is a round trip as dear as the command.
+        if board is not None and board != self._mach:
             self._monitor.execute(f"mach set {rn.quote(rn.ident(board))}")
             self._mach = board
+        if command.startswith(("mach ", "include ")):
+            self._mach = None    # may select another machine
         return self._monitor.execute(command)
 
 
