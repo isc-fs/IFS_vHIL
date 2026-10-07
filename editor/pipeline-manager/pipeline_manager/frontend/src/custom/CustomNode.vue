@@ -52,8 +52,10 @@ from moving or deleting the nodes.
                         class="vhil-node-count"
                         :title="`${vhil.count} in a row on the port`"
                     >×{{ vhil.count }}</span>
-                    <!-- The board's live state (step 15 of the workspace plan) -->
-                    <span v-if="vhil.kind === 'board'" class="vhil-node-state" />
+                    <!-- The board's state pill (step 13 of the workspace plan) -->
+                    <span v-if="vhil.kind === 'board'" class="vhil-node-state">
+                        <VhilNodeState :board="node.title || node.type" />
+                    </span>
                 </div>
                 <div class="vhil-node-sub">{{ vhil.sub }}</div>
             </div>
@@ -242,6 +244,7 @@ import {
     bitrateText, boardSubline, busTint, roleOf, vhilOf,
 } from '../vhil/shapes.js';
 import '../vhil/nodes.css';
+import VhilNodeState from '../vhil/VhilNodeState.vue';
 
 import { checkForUnsavedEditorChangesWithToast } from './node_editor/NodeSpecEditorUtils.js';
 

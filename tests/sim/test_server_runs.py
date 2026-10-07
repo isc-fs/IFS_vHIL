@@ -79,7 +79,10 @@ def test_a_queued_run_streams_its_trace_and_passes(tmp_path, images):
 
     samples = client.get(f"/api/runs/{run_id}/trace?kinds=sample").json()
     assert len(samples) >= 100
-    assert {s["name"] for s in samples} == {"g_last_ctrl_state"}
+    # The scenario's watch, and the ECU's state view (vhil/stateview.py),
+    # which every web-app run records.
+    names = {s["name"] for s in samples}
+    assert "g_last_ctrl_state" in names and {"g_last_t11_8_9", "g_last_torque_pct"} <= names
     assert all(isinstance(s["value"], int) for s in samples)
 
     # The live socket of a finished run replays the same file, then ends.

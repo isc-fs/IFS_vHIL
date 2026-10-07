@@ -42,7 +42,7 @@ from vhil.server.gitstore import (OWNER_TRAILER, TAKEOVER_TRAILER, BadBranch, Co
                                   GitStore)
 from vhil.server.runs import DEFAULT_VIRTUAL_MS
 from vhil.server.workspace import SYSTEM_ID
-from vhil.system import ID, SCHEMA, System, SystemError, built_images, image_path
+from vhil.system import ID, REF, SCHEMA, System, SystemError, built_images, image_path
 
 router = APIRouter()
 EDITOR_PATH = "/editor/"
@@ -355,6 +355,27 @@ def firmware_refs(firmware_id: str, request: Request):
            for kind in ("branches", "tags")}
     return {"id": firmware_id, "repo": doc["repo"], "default": doc["ref"],
             "default_built": is_built(doc["ref"]), **out}
+
+
+@router.get("/api/firmware/{firmware_id}/enums")
+def firmware_enums(firmware_id: str, request: Request, ref: str | None = None):
+    """The enumerations of the firmware's image at `ref` (default: the
+    catalogue's), from its DWARF (vhil/elf.py, vhil/stateview.py): what labels
+    a state such as the AMS's ams::fsm::State, and which globals are typed with
+    which. No image built here, or one without DWARF, gives none and says why
+    (`note`); the state panel then shows raw values."""
+    if not ID.fullmatch(firmware_id):
+        raise HTTPException(422, {"errors": [f"{firmware_id!r} is not a catalogue id"]})
+    if ref is not None and not REF.fullmatch(ref):
+        raise HTTPException(422, {"errors": [f"ref {ref!r} is not a plain git ref"]})
+    doc = _firmware_docs(request).get(firmware_id)
+    if doc is None:
+        raise HTTPException(404, f"no firmware '{firmware_id}' in the catalogue")
+    from vhil import stateview
+    ref = ref or doc["ref"]
+    elf = image_path(_fw_dir(request), doc, ref)
+    return {"id": firmware_id, "ref": ref, "built": elf.is_file(),
+            **stateview.enums_of(elf)}
 
 
 def _template(system_id: str, request: Request) -> str:

@@ -78,11 +78,13 @@ All JSON; times in microseconds of virtual time.
   defaults to 3000, `DEFAULT_VIRTUAL_MS` in `vhil/server/runs.py`, which
   `GET /api/config` gives the Runs and Editor pages as `run_virtual_ms`;
   stimuli: CAN
-  send / periodic, GPIO set, analog set at virtual times from power-on, so
-  the first 2 s are each MainLite's bootloader window, before its app runs) or
+  send / periodic / stop of a named periodic, GPIO set, analog set at virtual
+  times from power-on, so the first 2 s are each MainLite's bootloader window,
+  before its app runs; `expect` rows the worker checks against the trace, a
+  failed one failing the run: [`docs/scenarios.md`](../scenarios.md)) or
   `{"kind": "pytest", "select": "tests/sim/test_x.py::test_y"}`.
   Limits ([`docs/deploy.md`](../deploy.md#limits)): a run over the
-  server's virtual time, stimuli or watch limit is 422; with too many
+  server's virtual time, stimuli, watch or expect limit is 422; with too many
   active (queued + running) runs, the user's or everyone's, 429
 - `GET /api/tests` → `{root, files, tests, error?}`: the test files and
   node ids under `tests/sim` a pytest scenario can select (`pytest
@@ -108,7 +110,8 @@ All JSON; times in microseconds of virtual time.
 Trace record kinds: `frame {t_us, bus, id, ext, data, src?}` (`src:
 "stimulus"` on the frames the scenario itself sent, stamped when the probe
 sent them; counted in the summary's `sent`, not `frames`),
-`edge {t_us, board, pin, level}`, `sample {t_us, board, name, value}`
+`edge {t_us, board, pin, level, initial?}` (`initial`: a pin an expect reads,
+its level when the run starts), `sample {t_us, board, name, value}`
 (read_symbol / analog values the scenario asks to watch), `log {t_us, text}`.
 
 ## Delivery (sub-issues)

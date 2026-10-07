@@ -10,13 +10,21 @@
  *
  * The frames live in a FrameStore (typed arrays), outside Vue's reactivity;
  * `replay.version` says when they changed. Live data never goes through
- * Pipeline Manager's RPC. The worker's `bus_load` records (one per bus and
+ * Pipeline Manager's RPC.
+ *
+ * Step 13: the trace's samples and edges too, and, once the contract (with
+ * each board's state view) and the trace are both in, `replay.stateTrace`
+ * (state.js): what the State tab, the inspector and the node pills show at
+ * the scrubber's time. The worker's `bus_load` records (one per bus and
  * slice, vhil/worker.py; #174) come with them, for the Bus tab's load.
  */
 
 import { markRaw, reactive } from 'vue';
 import { call, tracePage } from './api.js';
 import { FrameStore } from './frames.js';
+import { StateTrace } from './state.js';
+// eslint-disable-next-line import/no-unresolved, import/extensions -- copied by the build
+import { rawValue } from './shell/decode.js';
 
 const PAGE = 50000;
 
@@ -33,7 +41,10 @@ export const replay = reactive({
     contract: null, // {buses: {bus: {id: message}}} (raw, not reactive)
     contractNote: '',
     logs: [], // the run's log records
-    loads: [], // the run's bus_load records, in time order
+    edges: [], // its pin edges (the scenario timeline's actual levels; step 11)
+    samples: [], // its symbol samples (step 13)
+    stateTrace: null, // the boards' state over the run (state.js; raw), once all is in
+    loads: [], // the run's bus_load records, in time order (#174)
     version: 0, // bumped when the frames change
 });
 
@@ -52,9 +63,23 @@ function reset() {
         contract: null,
         contractNote: '',
         logs: [],
+        edges: [],
+        samples: [],
+        stateTrace: null,
         loads: [],
         version: replay.version + 1,
     });
+}
+
+/** The boards' state over the run, once its contract and trace are in. */
+function buildState() {
+    if (replay.state !== 'ready' || !replay.contract || replay.stateTrace) return;
+    const tr = new StateTrace(replay.contract, { rawOf: rawValue });
+    replay.samples.forEach((r) => tr.add(r));
+    replay.edges.forEach((r) => tr.add(r));
+    tr.addFrames(store);
+    tr.end = Math.max(tr.end, replay.end);
+    replay.stateTrace = markRaw(tr);
 }
 
 /** Leaves REPLAY: no run, no frames (and a load in flight is dropped). */
@@ -89,6 +114,7 @@ export async function loadRun(run) {
         if (mine !== loading) return;
         replay.contract = markRaw(c);
         replay.contractNote = noteOf(c);
+        buildState();
         replay.version += 1;
     }).catch((e) => {
         if (mine === loading) replay.contractNote = `no contract: ${e.message}`;
@@ -97,17 +123,19 @@ export async function loadRun(run) {
     // the last page stopped, so each costs what it returns).
     const frames = [];
     const logs = [];
+    const edges = [];
+    const samples = [];
     const loads = [];
-    const sink = { log: logs, bus_load: loads };
+    const into = { log: logs, edge: edges, sample: samples, bus_load: loads };
     let cursor = '';
     try {
         for (;;) {
-            const q = new URLSearchParams({ kinds: 'frame,log,bus_load', limit: String(PAGE) });
+            const q = new URLSearchParams({ kinds: 'frame,log,edge,sample,bus_load', limit: String(PAGE) });
             if (cursor) q.set('cursor', cursor);
             // eslint-disable-next-line no-await-in-loop
             const page = await tracePage(`/api/runs/${run.id}/trace?${q}`);
             if (mine !== loading) return;
-            page.data.forEach((r) => (sink[r.kind] ?? frames).push(r));
+            page.data.forEach((r) => (into[r.kind] || frames).push(r));
             replay.loaded = frames.length;
             if (page.data.length < PAGE || !page.cursor || page.cursor === cursor) break;
             cursor = page.cursor;
@@ -126,9 +154,12 @@ export async function loadRun(run) {
         end: Math.max(replay.end, last),
         t: Math.max(replay.end, last),
         logs: markRaw(logs),
+        edges: markRaw(edges),
+        samples: markRaw(samples),
         loads: markRaw(loads),
-        version: replay.version + 1,
     });
+    buildState();
+    replay.version += 1;
 }
 
 /**

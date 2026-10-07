@@ -10,6 +10,8 @@
 #   scripts/vhil-docker.sh unit                  tests/unit + validate every system
 #   scripts/vhil-docker.sh smoke <ecu|ams>       tests/<s>_smoke.robot
 #   scripts/vhil-docker.sh sim [pytest args]     tests/sim in virtual time
+#   scripts/vhil-docker.sh scenarios [pytest args]
+#                                                every committed scenario (tests/scenarios)
 #   scripts/vhil-docker.sh coverage [glob] [pytest args]
 #                                                firmware coverage of tests/sim/<glob>.py
 #                                                (default test_*) into results/coverage
@@ -134,6 +136,12 @@ sim)
         need_elf ecu; need_elf ams
         VHIL_ECU_ELF=$(elf ecu) VHIL_AMS_ELF=$(elf ams) VHIL_CAN_BOOTLOADER_ELF=$(elf ecu.bootloader) \
             python -m pytest tests/sim -v --sim-log-dir results/sim-logs "$@"' "$@" ;;
+scenarios)
+    in_container "$prelude"'
+        need_elf ecu; need_elf ams
+        VHIL_ECU_ELF=$(elf ecu) VHIL_AMS_ELF=$(elf ams) VHIL_CAN_BOOTLOADER_ELF=$(elf ecu.bootloader) \
+            python -m pytest tests/scenarios -v --sim-log-dir results/sim-logs \
+                -o junit_family=xunit1 --junitxml=results/scenarios.xml "$@"' "$@" ;;
 coverage)
     in_container "$prelude"'
         need_elf ecu; need_elf ams
@@ -204,5 +212,5 @@ worker)
     in_container 'export VHIL_DATA=/vhil/server VHIL_FW_DIR=/vhil/fw; exec python -m vhil.worker "$@"' "$@" ;;
 shell) in_container 'exec bash' ;;
 run) in_container 'exec "$@"' "$@" ;;
-*) sed -n '2,33p' "$0" | sed 's/^# \{0,1\}//'; [ "$cmd" = help ] ;;
+*) sed -n '2,35p' "$0" | sed 's/^# \{0,1\}//'; [ "$cmd" = help ] ;;
 esac

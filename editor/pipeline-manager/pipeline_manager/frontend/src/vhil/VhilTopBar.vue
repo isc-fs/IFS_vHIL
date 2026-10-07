@@ -2,9 +2,10 @@
 vHIL: the workspace's top bar, 40 px (step 7 of
 docs/architecture/editor-workspace.md; CHANGELOG-VHIL.md), in place of
 Pipeline Manager's NavBar: the mark, what is open, one firmware chip per
-board (opens the ref picker), the run's duration, Run and Stop, the mode,
-Commit… and Open PR (dialogs), and the theme. In REPLAY (step 9) the
-duration gives way to the run's clock, a scrubber over its virtual time.
+board (opens the ref picker), the scenario Run runs and its duration (step
+10: a scenario's own), Run and Stop, the mode, Commit… and Open PR
+(dialogs), and the theme. In REPLAY (step 9) the scenario and duration give
+way to the run's clock, a scrubber over its virtual time.
 -->
 
 <template>
@@ -69,13 +70,28 @@ duration gives way to the run's clock, a scrubber over its virtual time.
             >✕ Exit</button>
         </div>
         <label
-            v-else
+            v-if="ws.mode !== 'REPLAY'" class="vhil-top-scen"
+            title="The scenario Run runs: its stimuli, watches and expects (the Scenario tab)"
+        >
+            <span class="vhil-visually-hidden">Scenario</span>
+            <select
+                :value="scen.name" :disabled="!ws.id" aria-label="Scenario for Run"
+                @change="(ev) => pickScenario(ev.target.value)"
+            >
+                <option value="">no scenario</option>
+                <option v-for="s in scen.list" :key="s.name" :value="s.name">
+                    ▸ {{ s.name }}{{ s.unsaved ? ' (new)' : '' }}
+                </option>
+            </select>
+        </label>
+        <label
+            v-if="ws.mode !== 'REPLAY'"
             class="vhil-duration"
             title="Virtual time from power-on; each board spends its bootloader's 2 s first"
         >
             <span>Run for</span>
             <input
-                v-model.number="ws.virtualMs"
+                v-model.number="duration"
                 type="number" min="1" max="600000" step="100"
                 class="mono" aria-label="Run duration, virtual ms"
             />
@@ -122,8 +138,9 @@ duration gives way to the run's clock, a scrubber over its virtual time.
 <script>
 import { computed, defineComponent } from 'vue';
 import {
-    ws, boardFirmware, cycleTheme, exitReplay, runActive, runNow, stopRun,
+    ws, boardFirmware, cycleTheme, exitReplay, pickScenario, runActive, runNow, stopRun,
 } from './workspace.js';
+import { edited, scen } from './scenarios.js';
 import { boards, nodeName } from './graph.js';
 import { replay, seconds } from './replay.js';
 import { runPage } from './api.js';
@@ -162,6 +179,17 @@ export default defineComponent({
                 : { nodeId, x: r.left, y: r.bottom + 4 };
         };
         // 100 µs a step, coarser over a long run (at most ~20000 steps).
+        // The selected scenario's own virtual time, else the run's.
+        const duration = computed({
+            get: () => (scen.doc ? scen.doc.virtual_ms : ws.virtualMs),
+            set: (v) => {
+                ws.virtualMs = v;
+                if (scen.doc) {
+                    scen.doc.virtual_ms = v;
+                    edited();
+                }
+            },
+        });
         const step = computed(() => Math.max(100, Math.ceil(replay.end / 20000 / 100) * 100));
         return {
             ws,
@@ -178,6 +206,9 @@ export default defineComponent({
             step,
             exitReplay,
             runPage,
+            scen,
+            pickScenario,
+            duration,
         };
     },
 });

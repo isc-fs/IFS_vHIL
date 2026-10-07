@@ -1,0 +1,129 @@
+/* vHIL: the State tab (VhilState.vue) and a board's state card
+   (VhilStateCard.vue, in the tab and the inspector), on the tokens (step 13
+   of docs/architecture/editor-workspace.md). Status is text and a glyph,
+   never colour alone: relays read ■/□ with their name, faults ✕ or ○ with
+   their reason, staleness "stale" with a dashed edge. */
+
+.vhil-state { display: flex; flex-direction: column; height: 100%; min-height: 0; overflow: auto; }
+.vhil-state-cards {
+  display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--sp-3); padding: var(--sp-3);
+}
+
+.vhil-state-card {
+  box-sizing: border-box; width: 340px; flex: none; display: flex; flex-direction: column;
+  gap: var(--sp-2); padding: var(--sp-3); background: var(--bg-2);
+  border: 1px solid var(--line); border-left: 3px solid var(--line); border-radius: var(--r-panel);
+}
+.vhil-state-card.--compact { width: auto; margin: var(--sp-2) 0 var(--sp-3); }
+.vhil-state-card.--faulted { border-left-color: var(--status-failed); }
+.vhil-state-card.--stale { border-style: dashed; }
+.vhil-state-card.--stale .vhil-state-fsm,
+.vhil-state-card.--stale .vhil-state-values { opacity: 0.6; }
+
+.vhil-state-head { display: flex; align-items: center; gap: var(--sp-2); min-width: 0; }
+.vhil-state-board { margin: 0; font-size: var(--fs-title); font-weight: 600; }
+.vhil-state-fw {
+  padding: 0 6px; border: 1px solid var(--border-control); border-radius: var(--r-pill);
+  color: var(--fg-muted); font-size: var(--fs-small);
+}
+.vhil-state-stalebadge {
+  margin-left: auto; padding: 0 6px; border: 1px dashed var(--status-stale);
+  border-radius: var(--r-pill); color: var(--status-stale); font-size: var(--fs-small);
+}
+
+.vhil-state-fsm { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.vhil-state-key { font-size: var(--fs-small); letter-spacing: 0.04em; text-transform: uppercase; }
+.vhil-state-now {
+  font-size: var(--fs-state); font-weight: 600; line-height: 1.25;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.vhil-state-now.--none { color: var(--fg-muted); font-weight: 400; }
+.vhil-state-since { font-size: var(--fs-dense); }
+.vhil-state-hint { font-size: var(--fs-small); font-weight: 400; }
+
+/* Contactors and relays: square pills with text, filled when closed. (The
+   editor's global ul is a column with a 20 px gap: these lists say their own.) */
+.vhil-state-pills {
+  display: flex; flex-direction: row; flex-wrap: wrap; gap: var(--sp-1);
+  margin: 0; padding: 0; list-style: none;
+}
+.vhil-relay {
+  display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 8px;
+  border: 1px solid var(--border-control); border-radius: 3px;
+  font-family: var(--font-mono); font-size: var(--fs-dense); font-weight: 600;
+}
+.vhil-relay.--on { background: var(--status-ok); border-color: var(--status-ok); color: var(--bg-0); }
+.vhil-relay.--off { color: var(--fg); }
+.vhil-relay.--unknown { border-style: dashed; color: var(--fg-muted); font-weight: 400; }
+
+/* Faults: active ones filled with the failed tint, cleared ones outlined. */
+.vhil-state-faults { display: flex; flex-wrap: wrap; gap: var(--sp-1); font-size: var(--fs-dense); }
+.vhil-state-ok { color: var(--status-ok); }
+.vhil-fault {
+  display: inline-flex; align-items: center; gap: 4px; min-height: 22px; padding: 0 8px;
+  border: 1px solid var(--status-failed); border-radius: var(--r-pill);
+}
+.vhil-fault.--active { background: var(--tint-failed); color: var(--fg); font-weight: 600; }
+.vhil-fault.--active > [aria-hidden="true"] { color: var(--status-failed); }
+.vhil-fault.--cleared { color: var(--fg-muted); }
+
+.vhil-state-values {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2px var(--sp-3);
+  margin: 0; font-size: var(--fs-dense);
+}
+.vhil-state-card.--compact .vhil-state-values { grid-template-columns: minmax(0, 1fr); }
+.vhil-state-value {
+  display: flex; justify-content: space-between; gap: var(--sp-2); min-width: 0;
+  border-bottom: 1px solid var(--line);
+}
+.vhil-state-value dt { overflow: hidden; color: var(--fg-muted); text-overflow: ellipsis; white-space: nowrap; }
+.vhil-state-value dd { margin: 0; text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.vhil-state-value.--stale dd,
+.vhil-state-value.--none dd { color: var(--fg-muted); }
+.vhil-state-unit { margin-left: 0.3em; color: var(--fg-muted); }
+
+/* History: the FSM's and each relay's lanes over the run, then the
+   transitions; a click on either moves the scrubber. */
+.vhil-state-history {
+  display: flex; flex-direction: column; gap: var(--sp-2);
+  padding-top: var(--sp-2); border-top: 1px solid var(--line);
+}
+.vhil-lanes { display: flex; flex-direction: column; gap: 3px; }
+.vhil-lane { display: grid; grid-template-columns: 4.5rem minmax(0, 1fr); align-items: center; gap: var(--sp-1); height: 14px; }
+.vhil-lane.--state { height: 20px; }
+.vhil-lane-label { overflow: hidden; color: var(--fg-muted); font-size: var(--fs-small); text-overflow: ellipsis; white-space: nowrap; }
+.vhil-lane-track {
+  position: relative; height: 100%; overflow: hidden; cursor: pointer;
+  background: var(--bg-1); border: 1px solid var(--line); border-radius: 2px;
+}
+.vhil-lane-seg {
+  position: absolute; top: 0; bottom: 0; box-sizing: border-box; overflow: hidden;
+  padding-left: 2px; border-right: 1px solid var(--bg-1);
+  color: var(--bg-0); font-size: 10px; font-weight: 600; line-height: 18px; white-space: nowrap;
+}
+.vhil-lane-seg.--s1 { background: var(--s1); }
+.vhil-lane-seg.--s2 { background: var(--s2); }
+.vhil-lane-seg.--s3 { background: var(--s3); }
+.vhil-lane-seg.--s4 { background: var(--s4); }
+.vhil-lane-seg.--s5 { background: var(--s5); }
+.vhil-lane-seg.--s6 { background: var(--s6); }
+/* A digital lane: high fills the lane, low is a line along its foot. */
+.vhil-lane-seg.--on { top: 2px; bottom: 2px; background: var(--status-ok); border-right: 0; }
+.vhil-lane-seg.--off { top: auto; bottom: 2px; height: 2px; padding: 0; background: var(--fg-faint); border-right: 0; }
+.vhil-lane-cursor {
+  position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px;
+  background: var(--focus); pointer-events: none;
+}
+
+.vhil-transitions {
+  display: block; max-height: 7.5rem; margin: 0; padding: 0; overflow: auto;
+  list-style: none; font-size: var(--fs-dense);
+}
+.vhil-transition {
+  display: flex; gap: var(--sp-2); width: 100%; padding: 1px var(--sp-1);
+  border: 0; border-left: 3px solid transparent; background: none;
+  color: var(--fg); font: inherit; text-align: left; cursor: pointer;
+}
+.vhil-transition:hover { background: var(--bg-3); }
+.vhil-transition.--current { background: var(--sel-bg); border-left-color: var(--focus); font-weight: 600; }
+.vhil-transition.--future { color: var(--fg-muted); }

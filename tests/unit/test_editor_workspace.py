@@ -129,7 +129,8 @@ def test_replay():
     """Opening a run enters REPLAY: the mode, the cursor-paged trace, the
     scrubber in the top bar, the Bus tab."""
     workspace = (VHIL / "workspace.js").read_text()
-    assert "ws.mode = 'REPLAY';" in workspace and "ws.layout.dockTab = 'bus';" in workspace
+    assert "ws.mode = 'REPLAY';" in workspace and "ws.layout.dockTab = tab;" in workspace
+    assert "export function openRun(id, { tab = 'bus' } = {}) {" in workspace
     assert "{ id: 'bus', label: 'Bus' }," in workspace
     replay = (VHIL / "replay.js").read_text()
     assert "/api/runs/${run.id}/trace?" in replay and "q.set('cursor', cursor)" in replay
@@ -166,3 +167,67 @@ def test_the_bus_tables_stay_fast_and_csp_clean():
     assert "requestAnimationFrame(draw)" in bus and "decoded.get(i)" in bus
     frames = (VHIL / "frames.js").read_text()
     assert "new Float64Array(capacity)" in frames and "this.dropped += 1;" in frames
+
+
+def test_the_scenario_tab():
+    """Step 10: the Scenario tab edits the selected scenario's rows, frames
+    through the shell's decode.js (one copy, which encodes too), checked on
+    the server on each edit; Run sends its rows; Commit… commits it."""
+    assert "<VhilScenario v-else-if=\"tab.id === 'scenario'\" />" in (
+        VHIL / "VhilDock.vue").read_text()
+    tab = (VHIL / "VhilScenario.vue").read_text() + (VHIL / "VhilScenarioRow.vue").read_text()
+    assert "from './shell/decode.js'" in tab and "dec.encodeField(" in tab
+    assert "v-html" not in tab and "innerHTML" not in tab
+    scenarios = (VHIL / "scenarios.js").read_text()
+    assert "/preview${query(c)}" in scenarios and "/contract${query(c)}" in scenarios
+    assert "from './workspace.js'" not in scenarios      # bound, not imported (no cycle)
+    workspace = (VHIL / "workspace.js").read_text()
+    assert "system: ws.id, ref: ws.runRef, dataflow, virtualMs, scenario," in workspace
+    assert "await commitScenario({" in workspace
+    run = (STATIC / "editor-run.js").read_text()
+    assert "Object.assign(run, { name: scenario.name, stimuli, watch, expect });" in run
+    assert "export function encodeField(" in (STATIC / "decode.js").read_text()
+
+
+def test_the_timeline_and_the_tests_view():
+    """Step 11: the timeline draws the scenario on REPLAY's time axis (SVG
+    attributes and classes, no style attribute), drags with a snap, zooms
+    with Ctrl+wheel and lays the run's results over its lanes; a scenario's
+    run is replayed on the Scenario tab when it ends; Tests lists them."""
+    assert "<VhilTimeline :buses=\"buses\" :boards=\"boardNames\" />" in (
+        VHIL / "VhilScenario.vue").read_text()
+    tl = (VHIL / "VhilTimeline.vue").read_text()
+    template = tl.split("<script>")[0]
+    assert " style=" not in template and ":style" not in template and "v-html" not in template
+    assert "snap(drag.t0 + (ev.clientX - drag.x0) / scale.value, snapMs.value)" in tl
+    assert "if (!ev.ctrlKey && !ev.metaKey) return;" in tl
+    assert "replay.t = Math.min(replay.end, r.tUs);" in tl
+    assert "kinds: 'frame,log,edge,sample,bus_load'" in (VHIL / "replay.js").read_text()
+    workspace = (VHIL / "workspace.js").read_text()
+    assert "openRun(id, { tab: 'scenario' });" in workspace
+    rail = (VHIL / "VhilRail.vue").read_text()
+    assert "id: 'tests', label: 'Tests'" in rail and "call('GET', '/api/scenarios')" in rail
+
+
+def test_the_state_tab_inspector_card_and_node_pill():
+    """Step 13: a card per board in the State tab (with its history), the
+    selected board's in the inspector and a pill on its node, all from the
+    run's trace (samples too) through state.js; status as text and glyphs;
+    positions through the CSSOM (:style objects), never a style attribute."""
+    dock = (VHIL / "VhilDock.vue").read_text()
+    assert "<VhilState v-else-if=\"tab.id === 'state'\" />" in dock
+    assert "{ id: 'state', label: 'State' }," in (VHIL / "workspace.js").read_text()
+    replay = (VHIL / "replay.js").read_text()
+    assert "new StateTrace(replay.contract, { rawOf: rawValue })" in replay
+    assert "from './shell/decode.js'" in replay
+    card = (VHIL / "VhilStateCard.vue").read_text()
+    template = card.split("<script>")[0]
+    assert " style=" not in template and "v-html" not in template
+    for text in ("no active faults", "'■'", "'□'", "✕", "○", "stale", "for {{ duration("):
+        assert text in card, text
+    assert "<VhilStateCard" in (VHIL / "VhilInspector.vue").read_text()
+    node = (FRONTEND / "src/custom/CustomNode.vue").read_text()
+    assert '<VhilNodeState :board="node.title || node.type" />' in node
+    assert "✕ fault" in (VHIL / "VhilNodeState.vue").read_text()
+    for css in ("state.css", "nodes.css"):
+        assert not re.search(r"#[0-9a-fA-F]{3,8}\b|rgba?\(", (VHIL / css).read_text()), css

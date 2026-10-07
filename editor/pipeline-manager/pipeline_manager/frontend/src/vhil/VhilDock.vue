@@ -2,9 +2,12 @@
 vHIL: the bottom dock (Ctrl+J; Ctrl+1..7 or Alt+1..7 picks a tab;
 CHANGELOG-VHIL.md). Log is Pipeline Manager's terminal (the plain log view,
 src/vhil/LogView.vue), moved here from its own panel; Problems lists Check's
-errors and warnings, and a click selects the node one is about; Bus shows a
-replayed run's frames (VhilBus.vue, step 9). Scenario, State, Signals and
-Debug are slots the later steps of the plan fill.
+errors and warnings, and a click selects the node one is about (or the
+scenario row: its check's messages and its run's failed expects, step 10);
+Bus shows a replayed run's frames (VhilBus.vue, step 9); Scenario the
+selected scenario's rows (VhilScenario.vue, step 10); State each board's
+state card (VhilState.vue, step 13). Signals and Debug are slots the later
+steps of the plan fill.
 Collapsed, it is its tab strip, which still shows the problem count.
 -->
 
@@ -42,7 +45,7 @@ Collapsed, it is its tab strip, which still shows the problem count.
                     @keydown.left.prevent="step(-1)"
                 >
                     {{ tab.label }}
-                    <span v-if="tab.id === 'problems' && ws.problems.length" class="vhil-count">
+                    <span v-if="tab.id === 'problems' && problems.length" class="vhil-count">
                         <span v-if="errors" class="vhil-count-error">✕ {{ errors }}</span>
                         <span v-if="warnings" class="vhil-count-warn">▲ {{ warnings }}</span>
                     </span>
@@ -73,20 +76,23 @@ Collapsed, it is its tab strip, which still shows the problem count.
         >
             <Terminal v-if="tab.id === 'log'" :terminalInstance="logName" />
             <VhilBus v-else-if="tab.id === 'bus'" />
+            <VhilState v-else-if="tab.id === 'state'" />
+            <VhilScenario v-else-if="tab.id === 'scenario'" />
             <div v-else-if="tab.id === 'problems'" class="vhil-problems">
-                <p v-if="!ws.problems.length" class="muted">
+                <p v-if="!problems.length" class="muted">
                     {{ ws.checked ? 'No problems: the system is valid.'
                         : 'Check (in the inspector) lists them here.' }}
                 </p>
                 <ul v-else class="vhil-list">
-                    <li v-for="(p, i) in ws.problems" :key="i">
+                    <li v-for="(p, i) in problems" :key="i">
                         <button
                             type="button"
                             class="vhil-problem"
                             :class="`--${p.severity}`"
-                            :disabled="!p.nodeId"
-                            :title="p.nodeId ? 'Select its node' : ''"
-                            @click="select(p.nodeId, { center: true })"
+                            :disabled="!p.nodeId && p.rowKey === undefined"
+                            :title="p.rowKey !== undefined ? 'Show its scenario row'
+                                : (p.nodeId ? 'Select its node' : '')"
+                            @click="goTo(p)"
                         >
                             <span class="vhil-problem-sev">
                                 {{ p.severity === 'error' ? '✕ error' : '▲ warning' }}
@@ -96,6 +102,10 @@ Collapsed, it is its tab strip, which still shows the problem count.
                     </li>
                 </ul>
             </div>
+            <p v-else-if="tab.id === 'signals'" class="vhil-placeholder muted">
+                Signals: the FSM state and digital lanes are in the State tab's history
+                for now; analog and value plots come later.
+            </p>
             <p v-else class="vhil-placeholder muted">
                 {{ tab.label }}: comes with step {{ tab.step }} of the workspace plan.
             </p>
@@ -107,16 +117,30 @@ Collapsed, it is its tab strip, which still shows the problem count.
 import { computed, defineComponent, onMounted } from 'vue';
 import Terminal from '../components/Terminal.vue';
 import VhilBus from './VhilBus.vue';
+import VhilScenario from './VhilScenario.vue';
+import VhilState from './VhilState.vue';
+import { scen } from './scenarios.js';
 import { terminalStore, MAIN_TERMINAL } from '../core/stores.js';
 import {
-    ws, DOCK_TABS, problemCount, select,
+    ws, DOCK_TABS, allProblems, problemCount, select,
 } from './workspace.js';
 
 export default defineComponent({
-    components: { Terminal, VhilBus },
+    components: {
+        Terminal, VhilBus, VhilScenario, VhilState,
+    },
     setup() {
         const errors = computed(() => problemCount('error'));
         const warnings = computed(() => problemCount('warning'));
+        const problems = computed(() => allProblems());
+        const goTo = (p) => {
+            if (p.rowKey !== undefined) {
+                scen.selected = p.rowKey;
+                ws.layout.dockTab = 'scenario';
+            } else if (p.nodeId) {
+                select(p.nodeId, { center: true });
+            }
+        };
         const pick = (id) => {
             if (ws.layout.dock && ws.layout.dockTab === id) {
                 ws.layout.dock = false;
@@ -169,6 +193,8 @@ export default defineComponent({
             DOCK_TABS,
             errors,
             warnings,
+            problems,
+            goTo,
             pick,
             step,
             logName,
