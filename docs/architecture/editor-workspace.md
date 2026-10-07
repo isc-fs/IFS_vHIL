@@ -373,6 +373,16 @@ In the owner's order.
     in the Scenario tab. A second tab on the run watches.
 16. **GDB plumbing** (feature 4a). Renode GDB server per machine on demand,
     an MI proxy per board, lockstep pause in the clock heartbeat and top bar.
+    Done: [`docs/debugger.md`](../debugger.md). Renode's own GDB stub per
+    board on 127.0.0.1 with a read-only packet set (no `qRcmd`, no memory
+    or register writes; `models/renode/VhilGdb.cs`), and the pinned
+    toolchain's GDB in MI mode in the worker (`vhil/gdb.py`), driven by
+    `debug` ops on the session channel: the ops go through `session_ops`
+    like every other, so the API never reaches a worker (#134 unchanged),
+    and their results come back in the table's `result` and the `ack`. A
+    halted CPU holds Renode's time source, so a breakpoint holds every
+    board; the stop is a `debug` record in the trace (stack, locals,
+    registers, watches) and a paused `clock` record with where.
 17. **Debug tab** (feature 4b). Source, breakpoints, stepping, inspector
     registers/locals/stack, shared watches, frozen-bus banner, list of
     would-have-fired timeouts.
