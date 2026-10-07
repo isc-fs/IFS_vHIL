@@ -340,7 +340,12 @@ In the owner's order.
     the Scenario tab accept (`== Precharge`); the worker records every
     view's symbols and pins in each web-app run; `watch` is a stimulus kind.
 13. **State UI** (feature 2b). State cards, inspector card, node pill and
-    fault ring; FSM and digital lanes in `plot.js`.
+    fault ring; FSM and digital lanes in `plot.js`. Done in REPLAY: the
+    State tab's cards, the inspector's and the node pill read one model
+    (`state.js` `StateTrace`, fed record by record, so LIVE feeds it the
+    same way); with no Signals tab yet, the FSM and digital lanes are the
+    State tab's history (HTML lanes, not `plot.js`), and they move to
+    Signals with it.
 14. **Session channel** (feature 3a). `/runs/{id}/session`, acks echoed into
     the trace, slice-boundary application, clock heartbeat, 50 ms poll; tests
     for mid-run ops and the determinism of a recorded session.

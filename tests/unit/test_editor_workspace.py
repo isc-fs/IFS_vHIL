@@ -202,8 +202,32 @@ def test_the_timeline_and_the_tests_view():
     assert "snap(drag.t0 + (ev.clientX - drag.x0) / scale.value, snapMs.value)" in tl
     assert "if (!ev.ctrlKey && !ev.metaKey) return;" in tl
     assert "replay.t = Math.min(replay.end, r.tUs);" in tl
-    assert "kinds: 'frame,log,edge'" in (VHIL / "replay.js").read_text()
+    assert "kinds: 'frame,log,edge,sample'" in (VHIL / "replay.js").read_text()
     workspace = (VHIL / "workspace.js").read_text()
     assert "openRun(id, { tab: 'scenario' });" in workspace
     rail = (VHIL / "VhilRail.vue").read_text()
     assert "id: 'tests', label: 'Tests'" in rail and "call('GET', '/api/scenarios')" in rail
+
+
+def test_the_state_tab_inspector_card_and_node_pill():
+    """Step 13: a card per board in the State tab (with its history), the
+    selected board's in the inspector and a pill on its node, all from the
+    run's trace (samples too) through state.js; status as text and glyphs;
+    positions through the CSSOM (:style objects), never a style attribute."""
+    dock = (VHIL / "VhilDock.vue").read_text()
+    assert "<VhilState v-else-if=\"tab.id === 'state'\" />" in dock
+    assert "{ id: 'state', label: 'State' }," in (VHIL / "workspace.js").read_text()
+    replay = (VHIL / "replay.js").read_text()
+    assert "new StateTrace(replay.contract, { rawOf: rawValue })" in replay
+    assert "from './shell/decode.js'" in replay
+    card = (VHIL / "VhilStateCard.vue").read_text()
+    template = card.split("<script>")[0]
+    assert " style=" not in template and "v-html" not in template
+    for text in ("no active faults", "'■'", "'□'", "✕", "○", "stale", "for {{ duration("):
+        assert text in card, text
+    assert "<VhilStateCard" in (VHIL / "VhilInspector.vue").read_text()
+    node = (FRONTEND / "src/custom/CustomNode.vue").read_text()
+    assert '<VhilNodeState :board="node.title || node.type" />' in node
+    assert "✕ fault" in (VHIL / "VhilNodeState.vue").read_text()
+    for css in ("state.css", "nodes.css"):
+        assert not re.search(r"#[0-9a-fA-F]{3,8}\b|rgba?\(", (VHIL / css).read_text()), css

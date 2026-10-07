@@ -74,6 +74,18 @@ what its state panel shows: frames, edges and samples, as the trace always
 has, decoded in the browser as live data will be. A symbol the image lacks
 (an older firmware) is left out and the run's log says so.
 
+## In the editor
+
+In REPLAY, the workspace shows each board's state at the scrubber's time
+(`state.js`; the plan's step 13): a card per board in the State tab (FSM
+state, for how long and the one before, relays as ■/□ pills, faults as ✕
+pills with reason and age or ○ once cleared, key values, "stale"; and the
+history: the FSM's and the relays' lanes over the run and the transitions,
+which move the scrubber), the selected board's card in the inspector, and
+a pill on its node ("AMS · Precharge", ringed with "✕ fault" while a fault
+is active). A live session (feature 3) feeds the same model as its records
+stream.
+
 ## The views
 
 AMS (IFS08-CE-AMS `main`): State (`g_state_telemetry`, `ams::fsm::State`);
