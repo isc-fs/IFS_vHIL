@@ -88,6 +88,13 @@ export async function loadGraph(dataflow, { timeoutMs = 30000 } = {}) {
     manager.baklavaView.editor.centerZoom();
 }
 
+/** Locks the topology (LIVE: the session runs the saved system, so nodes
+ *  and wires can't be added, removed or rewired), or unlocks it: Pipeline
+ *  Manager's own read-only mode. */
+export function setLocked(on) {
+    editorManager().baklavaView.editor.readonly = Boolean(on);
+}
+
 /** Selects one node (or none) on the canvas. */
 export function selectNode(node) {
     const graph = liveGraph();

@@ -95,6 +95,28 @@ vHIL: Commit…, Open PR and the keyboard map, as modal dialogs
         </form>
     </dialog>
 
+    <dialog ref="saveDlg" class="vhil-dialog" aria-labelledby="vhil-save-title" @close="closed">
+        <form class="vhil-form" @submit.prevent="doSave">
+            <h2 id="vhil-save-title" class="vhil-panel-title">Save session as scenario</h2>
+            <p class="muted">
+                The session's applied ops, each at the virtual time it took effect, as a new
+                scenario of {{ ws.id }}: Run replays it exactly, Commit… saves it as
+                <span class="mono">systems/{{ ws.id }}.scenarios/{{ saveName || '…' }}.yaml</span>.
+            </p>
+            <label>Name
+                <input
+                    v-model.trim="saveName" class="vhil-input mono" required
+                    pattern="[a-z0-9][a-z0-9-]{0,63}" placeholder="tsms-precharge-live"
+                />
+            </label>
+            <div class="vhil-actions">
+                <span class="vhil-spacer" />
+                <button type="button" class="vhil-btn" @click="close">Cancel</button>
+                <button type="submit" class="vhil-btn --primary" :disabled="ws.busy">Save</button>
+            </div>
+        </form>
+    </dialog>
+
     <dialog ref="keysDlg" class="vhil-dialog" aria-labelledby="vhil-keys-title" @close="closed">
         <h2 id="vhil-keys-title" class="vhil-panel-title">Keyboard shortcuts</h2>
         <table class="vhil-keys">
@@ -117,8 +139,9 @@ import {
     computed, defineComponent, ref, watch,
 } from 'vue';
 import {
-    ws, check, commit, openPr, problemCount,
+    ws, check, commit, openPr, problemCount, saveSession,
 } from './workspace.js';
+import { replay } from './replay.js';
 import { SHORTCUTS } from './shortcuts.js';
 import { scen } from './scenarios.js';
 
@@ -127,8 +150,12 @@ export default defineComponent({
         const commitDlg = ref(null);
         const prDlg = ref(null);
         const keysDlg = ref(null);
+        const saveDlg = ref(null);
         const prUrl = ref('');
-        const dialogs = { commit: commitDlg, pr: prDlg, shortcuts: keysDlg };
+        const saveName = ref('');
+        const dialogs = {
+            commit: commitDlg, pr: prDlg, shortcuts: keysDlg, 'save-session': saveDlg,
+        };
 
         watch(() => ws.dialog, (name) => {
             Object.entries(dialogs).forEach(([key, dlg]) => {
@@ -136,6 +163,7 @@ export default defineComponent({
                 else if (key !== name && dlg.value?.open) dlg.value.close();
             });
             if (name === 'pr') prUrl.value = '';
+            if (name === 'save-session') saveName.value = `live-run-${replay.id}`;
         });
         const close = () => { ws.dialog = null; };
         const closed = () => {
@@ -145,6 +173,9 @@ export default defineComponent({
         const doCommit = async () => {
             const out = await commit();
             if (out) close();
+        };
+        const doSave = async () => {
+            if (await saveSession(saveName.value)) close();
         };
         const doPr = async () => {
             const out = await openPr();
@@ -157,6 +188,9 @@ export default defineComponent({
             commitDlg,
             prDlg,
             keysDlg,
+            saveDlg,
+            saveName,
+            doSave,
             prUrl,
             close,
             closed,
