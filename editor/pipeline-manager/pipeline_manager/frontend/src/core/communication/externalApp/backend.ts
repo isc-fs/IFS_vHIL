@@ -63,7 +63,11 @@ export default class ExternalBackendApp implements ExternalApp {
         private jsonRPC: JSONRPCServerAndClient<void, ClientParams>,
         private maxMessageLength = MAX_CHUNK_SIZE,
     ) {
-        this.socket = io(url, { extraHeaders: ExternalBackendApp.commonHeaders });
+        // vHIL: served under a path (/editor/ on the web app's origin), the
+        // socket.io endpoint is next to the page, not at the origin's root.
+        const path = new URL(url).origin === window.location.origin
+            ? new URL('socket.io', document.baseURI).pathname : '/socket.io';
+        this.socket = io(url, { path, extraHeaders: ExternalBackendApp.commonHeaders });
 
         this.socket.on('connect', () => NotificationHandler.terminalLog('info', 'Initialized connection with communication server', null));
         this.socket.on('disconnect', () => {
