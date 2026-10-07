@@ -43,6 +43,7 @@ import argparse
 import fcntl
 import heapq
 import json
+import math
 import os
 import signal
 import socket
@@ -61,8 +62,9 @@ from vhil import stateview
 from vhil.server.config import Settings
 from vhil.server.runs import (HEARTBEAT_S, MAX_ATTEMPTS, RECLAIM_AFTER_S, TRACE, Limits,
                               RunStore, code_changes, materialise_system, trace_header)
+from vhil.server.session import SessionStore
 from vhil.server.workspace import Workspace
-from vhil.system import System, built_images, image_path
+from vhil.system import System, SystemError, built_images, image_path
 
 DEFAULT_FW_DIR = Path(os.environ.get("VHIL_FW_DIR", "/vhil/fw"))
 
@@ -178,18 +180,107 @@ class TraceWriter:
         self._f.close()
 
 
+# -- a live session ------------------------------------------------------------------
+
+class LiveSession:
+    """A live run's session channel, the worker's side (vhil/server/session.py):
+    its pending ops from the DB, settled back there; when it went idle; and
+    pacing, virtual time held to `rtf` times wall time at each slice boundary,
+    with a deficit over `max_lag_s` forgiven (re-based), never repaid by
+    running flat out (as models/renode/VhilPacer.cs does for the bench)."""
+
+    def __init__(self, store: SessionStore, run_id: int, limits: Limits, *, rtf: float = 1.0,
+                 max_lag_s: float = 0.25, poll_s: float = 0.05,
+                 clock: Callable[[], float] = time.monotonic,
+                 wall: Callable[[], float] = time.time,
+                 sleep: Callable[[float], None] = time.sleep):
+        self.store, self.run_id = store, run_id
+        self.max_periodic, self.idle_s = limits.live_max_periodic, float(limits.live_idle_s)
+        self.rtf, self.max_lag_s, self.poll_s = rtf, max_lag_s, poll_s
+        self.clock_fn, self.wall, self.sleep = clock, wall, sleep
+        self.started = wall()
+        self._idle_checked, self._last = -1e9, self.started
+        self._base = (0, clock())
+        self._window: list[tuple[float, int]] = []     # (wall, virtual us), the last second
+
+    def take(self, now_us: int = 0) -> list[dict]:
+        """The pending ops, in order (at virtual time now_us)."""
+        return self.store.pending(self.run_id)
+
+    def settle(self, settled: list) -> None:
+        self.store.settle(self.run_id, settled)
+
+    def refuse_pending(self, detail: str) -> None:
+        self.settle([(row["id"], "refused", None, detail) for row in self.take()])
+
+    def idle_left(self) -> float:
+        """Seconds of wall time before the session counts as idle."""
+        now = self.wall()
+        if now - self._idle_checked >= 1.0:       # one query a second at most
+            self._idle_checked = now
+            self._last = max(self.started, self.store.last_activity(self.run_id) or 0)
+        return self.idle_s - (now - self._last)
+
+    def idle(self) -> bool:
+        return self.idle_left() <= 0
+
+    def wait(self) -> None:
+        self.sleep(self.poll_s)
+
+    def rebase(self, now_us: int) -> None:
+        self._base = (now_us, self.clock_fn())
+        self._window.clear()
+
+    def pace(self, now_us: int) -> None:
+        v0, w0 = self._base
+        ahead = (now_us - v0) / 1e6 / self.rtf - (self.clock_fn() - w0)
+        if ahead >= 0.001:
+            self.sleep(ahead)
+        elif -ahead > self.max_lag_s:
+            self.rebase(now_us)        # behind: forgive, never sprint to catch up
+
+    def clock(self, now_us: int, paused: bool = False) -> dict:
+        """The slice's `clock` record: virtual time, the real-time factor over
+        the last second of wall time (0 while paused), the idle countdown."""
+        w = self.clock_fn()
+        self._window.append((w, now_us))
+        while len(self._window) > 2 and w - self._window[0][0] > 1.0:
+            self._window.pop(0)
+        (w0, v0), rtf = self._window[0], 0.0
+        if not paused and w > w0:
+            rtf = (now_us - v0) / 1e6 / (w - w0)
+        return {"kind": "clock", "t_us": now_us, "rtf": round(rtf, 3), "paused": paused,
+                "wall_s": round(self.wall() - self.started, 3),
+                "idle_left_s": max(0, round(self.idle_left()))}
+
+
 # -- the `run` scenario ------------------------------------------------------------
+
+def _us(ms) -> int:
+    """Virtual ms (a row's at_ms, maybe fractional) as whole us: rounded, so
+    a time written as us / 1000 (a recorded session's) comes back exact."""
+    return round(float(ms) * 1000)
+
 
 def execute_run(sim, scenario: dict, trace: TraceWriter, *,
                 cancelled: Callable[[], bool] = lambda: False,
                 progress: Callable[[int], None] = lambda us: None,
-                state_view: bool = False) -> dict:
+                state_view: bool = False, session=None) -> dict:
     """Drive a started Sim through a `run` scenario (runs.RunScenario as a
     dict); returns the summary. Times in the scenario are virtual time from
     the system's power-on. Raises Cancelled when `cancelled()` turns true at
     a slice boundary. With `state_view`, the symbols and pins of every
     board's state view (vhil/stateview.py) are recorded too, as the web app's
-    runs do for their state panel."""
+    runs do for their state panel.
+
+    With `session` (a live session: LiveSession, vhil/server/session.py),
+    at every slice boundary the pending ops are taken in order: a stimulus is
+    scheduled at the end of the slice about to run, exactly as a scenario row
+    at that time is, and written into the trace as an `op` record at that
+    time; pause holds virtual time where it is until resume; stop ends the run
+    at that slice's end; an idle session (no op for session.idle_s) stops as
+    a stop does. Each slice also writes a `clock` record, and the session
+    paces virtual time to wall time."""
     end_us = int(scenario["virtual_ms"]) * 1000
     slice_us = int(scenario.get("slice_ms", 100)) * 1000
     system = sim.system
@@ -210,12 +301,14 @@ def execute_run(sim, scenario: dict, trace: TraceWriter, *,
 
     # A CAN stimulus is in the trace as the frames the probe sent, stamped
     # when they went out (`src: "stimulus"`, CanBus.sent); a periodic
-    # sender's start and stop and every other stimulus as log records.
+    # sender's start and stop and every other stimulus as log records (and a
+    # live op as an `op` record too), written in the slice that reaches them.
     notes: list = []
 
-    def note(t_us: int, text: str) -> None:
+    def note(t_us: int, text) -> None:
         nonlocal seq
-        heapq.heappush(notes, (t_us, seq, text))
+        rec = text if isinstance(text, dict) else {"kind": "log", "t_us": t_us, "text": text}
+        heapq.heappush(notes, (t_us, seq, rec))
         seq += 1
 
     def gpio_target(board: str, pin: str) -> tuple[str, int]:
@@ -246,8 +339,10 @@ def execute_run(sim, scenario: dict, trace: TraceWriter, *,
     # A named can_periodic's sender, for the stop_periodic that names it.
     periodic = {s["name"]: (s["bus"], f"stim{i}", s["id"]) for i, s in enumerate(stimuli)
                 if s["kind"] == "can_periodic" and s.get("name")}
-    for i, s in enumerate(stimuli):
-        t_us = int(s.get("at_ms", 0) * 1000)
+
+    def schedule(s: dict, t_us: int, key: str) -> None:
+        """One stimulus at virtual time t_us (a scenario row's, or a live op's
+        at the end of the coming slice); `key` names a periodic's sender."""
         kind = s["kind"]
         what = f"stimulus {kind}"
         if kind in ("can_send", "can_periodic"):
@@ -256,18 +351,17 @@ def execute_run(sim, scenario: dict, trace: TraceWriter, *,
             sim.can(s["bus"]).send_at(t_us, s["id"], bytes.fromhex(s.get("data", "")),
                                       s.get("ext", False))
         elif kind == "can_periodic":
-            key = f"stim{i}"
             bus = sim.can(s["bus"])
             # SendPeriodic's start 0 means "now", which is the same thing at t=0.
             bus.send_periodic(key, s["id"], bytes.fromhex(s.get("data", "")), s["period_ms"],
                               start_us=t_us, extended=s.get("ext", False))
             note(t_us, f"{what} every {s['period_ms']} ms")
             if s.get("until_ms") is not None:
-                at(int(s["until_ms"] * 1000), lambda bus=bus, key=key: bus.stop_periodic(key))
-                note(int(s["until_ms"] * 1000), f"{what} stopped")
+                at(_us(s["until_ms"]), lambda bus=bus, key=key: bus.stop_periodic(key))
+                note(_us(s["until_ms"]), f"{what} stopped")
         elif kind == "stop_periodic":
-            bus_name, key, can_id = periodic[s["periodic"]]
-            at(t_us, lambda bus=sim.can(bus_name), key=key: bus.stop_periodic(key))
+            bus_name, pkey, can_id = periodic[s["periodic"]]
+            at(t_us, lambda bus=sim.can(bus_name), key=pkey: bus.stop_periodic(key))
             note(t_us, f"{what} {s['periodic']} ({bus_name} 0x{can_id:X})")
         elif kind == "gpio":
             port, pin = gpio_target(s["board"], s["pin"])
@@ -283,7 +377,7 @@ def execute_run(sim, scenario: dict, trace: TraceWriter, *,
                 w = {"kind": "symbol", "board": s["board"], "name": s["symbol"],
                      "size": s.get("size") or symbol_size(sim, s["board"], s["symbol"]),
                      "period_ms": s.get("period_ms") or 10}
-                at(t_us, lambda w=w, t=t_us: samplers.append([t, int(w["period_ms"] * 1000), w]))
+                at(t_us, lambda w=w, t=t_us: samplers.append([t, _us(w["period_ms"]), w]))
                 note(t_us, f"{what} {s['board']}.{s['symbol']} every {w['period_ms']:g} ms")
             else:
                 gpio_target(s["board"], s["pin"])          # refused now, not mid-run
@@ -292,11 +386,14 @@ def execute_run(sim, scenario: dict, trace: TraceWriter, *,
         else:
             raise ValueError(f"unknown stimulus kind '{kind}'")
 
+    for i, s in enumerate(stimuli):
+        schedule(s, _us(s.get("at_ms", 0)), f"stim{i}")
+
     for w in scenario.get("watch", []):
         if w["kind"] == "pin":
             watch_pin(w["board"], w["pin"], level=False)
         elif w["kind"] == "symbol":
-            samplers.append([0, int(w.get("period_ms", 10) * 1000), w])
+            samplers.append([0, _us(w.get("period_ms", 10)), w])
         else:
             raise ValueError(f"unknown watch kind '{w['kind']}'")
     # What the expects read (vhil/expect.py): their pins are watched, with
@@ -329,17 +426,110 @@ def execute_run(sim, scenario: dict, trace: TraceWriter, *,
                 missing.append(f"{board}.{name}")
                 continue
             sampled.add((board, name))
-            samplers.append([0, int(period_ms * 1000), {"kind": "symbol", "board": board,
-                                                        "name": name,
-                                                        "size": symbol_size(sim, board, name)}])
+            samplers.append([0, _us(period_ms), {"kind": "symbol", "board": board,
+                                                 "name": name,
+                                                 "size": symbol_size(sim, board, name)}])
         if missing:
             note(sim.now_us(), "state view: not in the firmware, not recorded: "
                                + ", ".join(missing))
+
+    # -- a live session's ops ------------------------------------------------------
+    live = {"paused": False, "stop": None, "applied": 0, "refused": 0}
+    # Periodic names a live session started (a recording's rows must stay a
+    # valid scenario: one name, one periodic) and those still running.
+    used = set(periodic)
+    running: set[str] = set()
+
+    def apply(row: dict, now: int, t_us: int) -> tuple[str, Optional[int], str]:
+        """One op: (applied | refused, its virtual time, detail)."""
+        op = row["op"]
+        kind = op["kind"]
+        if kind in ("pause", "resume"):
+            live["paused"] = kind == "pause"
+            session.rebase(now)
+            return "applied", now, ""
+        if kind == "stop":
+            live["stop"] = live["stop"] or "op"
+            return "applied", t_us, ""
+        if kind == "keepalive":
+            return "applied", now, ""
+        if live["stop"]:
+            return "refused", None, "the session is stopping"
+        try:
+            if kind in ("can_send", "can_periodic") and op["bus"] not in system.buses:
+                raise ValueError(f"no bus '{op['bus']}' in {system.id}")
+            if kind == "can_periodic":
+                if op["name"] in used:
+                    raise ValueError(f"a periodic named '{op['name']}' ran in this session already")
+                if len(running) >= session.max_periodic:
+                    raise ValueError(f"{len(running)} periodic senders run already, this "
+                                     "server's limit (VHIL_LIVE_MAX_PERIODIC)")
+                periodic[op["name"]] = (op["bus"], f"live{row['id']}", op["id"])
+                used.add(op["name"])
+                running.add(op["name"])
+            elif kind == "stop_periodic":
+                if op["periodic"] not in running:
+                    raise ValueError(f"no periodic named '{op['periodic']}' is running")
+                running.discard(op["periodic"])
+            elif kind == "analog":
+                _, pkind, _ = system.resolve(f"{op['board']}.{op['pin']}")
+                if pkind != "analog":
+                    raise ValueError(f"{op['board']}.{op['pin']} is {pkind}, not analog")
+            elif kind == "watch" and op.get("symbol") and getattr(sim, "firmware", None) \
+                    and not has_symbol(sim, op["board"], op["symbol"]):
+                raise ValueError(f"no symbol {op['symbol']} in {op['board']}'s image")
+            schedule(op, t_us, f"live{row['id']}")
+        except (KeyError, ValueError, SystemError) as e:
+            return "refused", None, str(e).strip("'\"")
+        return "applied", t_us, ""
+
+    def take_ops(now: int, t_us: int) -> None:
+        """The pending ops, applied in order; their records into the trace (a
+        stimulus's at its time, in the slice that reaches it)."""
+        settled, now_records = [], []
+        for row in session.take(now):
+            status, applied_at, detail = apply(row, now, t_us)
+            live["applied" if status == "applied" else "refused"] += 1
+            settled.append((row["id"], status, applied_at, detail))
+            rec = {"kind": "op", "t_us": applied_at if applied_at is not None else now,
+                   "op_id": row["id"], "op": row["op"], "status": status,
+                   "login": row.get("login", "")}
+            if detail:
+                rec["detail"] = detail
+            if status == "applied" and row["op"]["kind"] in STIMULUS_KINDS + ("stop",):
+                note(t_us, rec)
+            else:
+                now_records.append(rec)
+        session.settle(settled)
+        if now_records:
+            trace.write(now_records)
+
+    def live_boundary(now: int, t_us: int) -> None:
+        """A live session's slice boundary: ops, pause, idle, pacing."""
+        while True:
+            was = live["paused"]
+            take_ops(now, t_us)
+            if live["paused"] != was:
+                trace.write([session.clock(now, paused=live["paused"])])
+            if not live["stop"] and session.idle():
+                live["stop"] = "idle"
+                trace.write([{"kind": "log", "t_us": now,
+                              "text": f"live session idle for {session.idle_s:g} s: stopping"}])
+            if live["stop"] or not live["paused"]:
+                break
+            session.wait()
+            progress(now)
+            if cancelled():
+                raise Cancelled({"frames": frames, "sent": sent, **counts})
+        session.pace(now)
 
     now = sim.now_us()
     since = now          # frames/edges from here on belong to the next slice
     slice_end = now + slice_us
     batch: list[dict] = []        # this slice's records, written when it ends
+    if session is not None:
+        session.rebase(now)
+        live_boundary(now, slice_end)
     while True:
         while events and events[0][0] <= now:
             heapq.heappop(events)[2]()
@@ -370,8 +560,9 @@ def execute_run(sim, scenario: dict, trace: TraceWriter, *,
                                   "pin": pin_names.get((board, e.pin), e.pin), "level": int(e.level)})
                     counts["edges"] += 1
             while notes and notes[0][0] <= now:
-                t, _, text = heapq.heappop(notes)
-                batch.append({"kind": "log", "t_us": t, "text": text})
+                batch.append(heapq.heappop(notes)[2])
+            if session is not None:
+                batch.append(session.clock(now))
             since = now + 1
             slice_end = now + slice_us
             # Everything in a slice lies in (previous end, now], so the file
@@ -383,13 +574,26 @@ def execute_run(sim, scenario: dict, trace: TraceWriter, *,
                 break
             if cancelled():
                 raise Cancelled({"frames": frames, "sent": sent, **counts})
+            if session is not None:
+                live_boundary(now, slice_end)
+                if live["stop"]:
+                    # The ops already scheduled take effect: the run ends at
+                    # the end of the slice they were scheduled for.
+                    end_us = min(end_us, slice_end)
         target = min([end_us, slice_end] + ([events[0][0]] if events else [])
                      + [s[0] for s in samplers])
         new = sim.run_for(us=max(target - now, 1))
         if new <= now:
             raise RuntimeError(f"virtual time stuck at {now} us")
         now = new
-    return {"virtual_ms": scenario["virtual_ms"], "frames": frames, "sent": sent, **counts}
+    summary = {"virtual_ms": scenario["virtual_ms"], "frames": frames, "sent": sent, **counts}
+    if session is not None:
+        summary.update(virtual_ms=math.ceil(now / 1000), stopped=live["stop"] or "end",
+                       ops_applied=live["applied"], ops_refused=live["refused"])
+    return summary
+
+
+STIMULUS_KINDS = ("can_send", "can_periodic", "stop_periodic", "gpio", "analog", "watch")
 
 
 def has_symbol(sim, board: str, name: str) -> bool:
@@ -620,6 +824,7 @@ class Worker:
         run_id = run["id"]
         state, virtual_us, summary = "error", 0, {}
         progress = {"us": 0}
+        session: Optional[LiveSession] = None
 
         def cancelled() -> bool:
             """True once cancelled; raises Lost once the run is someone else's."""
@@ -648,10 +853,13 @@ class Worker:
                       ", ".join(f"{k}={p}" for k, p in firmware.items()))
             scenario = run["scenario"]
             if scenario["kind"] == "run":
+                if scenario.get("live"):
+                    session = LiveSession(SessionStore(self.settings.db), run_id, self.limits)
                 sim = self.sim_factory(system_path, firmware, run_dir / "renode.log")
                 with sim:
                     summary = execute_run(sim, scenario, trace, cancelled=cancelled,
-                                          progress=on_progress, state_view=True)
+                                          progress=on_progress, state_view=True,
+                                          session=session)
                 state, virtual_us = "passed", progress["us"]
                 if scenario.get("expect"):
                     summary.update(evaluate_expects(run_dir, scenario, system, firmware,
@@ -685,6 +893,9 @@ class Worker:
                 self.store.finish(run_id, state, virtual_us, summary, worker=self.id)
                 trace.close()
                 raise
+        if session is not None:
+            # Ops that came after the run's last boundary never apply.
+            session.refuse_pending(f"the session ended ({state})")
         final = self.store.finish(run_id, state, virtual_us, summary, worker=self.id)
         trace.close()
         print(f"run {run_id}: {final} ({virtual_us} us)", flush=True)
