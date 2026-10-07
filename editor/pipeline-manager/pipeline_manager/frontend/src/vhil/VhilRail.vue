@@ -2,8 +2,9 @@
 vHIL: the activity rail (44 px) and its sidebar (260 px, Ctrl+B)
 (CHANGELOG-VHIL.md): Palette (Pipeline Manager's node tree, teleported into
 #vhil-palette-host from the canvas, whose drag-and-drop it keeps), Systems
-(open one onto the canvas) and Runs (the open system's history, each linking
-to its run page; REPLAY comes with step 9).
+(open one onto the canvas) and Runs (the open system's history, or every
+system's with none open: opening one enters REPLAY, step 9; its shell page,
+with the signals, log and artifacts REPLAY doesn't show yet, is a link).
 -->
 
 <template>
@@ -91,29 +92,36 @@ to its run page; REPLAY comes with step 9).
         </div>
 
         <div v-if="layout.view === 'runs'" class="vhil-runs">
-            <p v-if="!ws.id" class="muted">Open a system to see its runs.</p>
-            <template v-else>
-                <div class="vhil-runs-head">
-                    <span class="muted">{{ ws.id }}: last {{ ws.runs.length }}</span>
-                    <button type="button" class="vhil-btn --small" @click="loadRuns">
-                        Refresh
+            <div class="vhil-runs-head">
+                <span class="muted">{{ ws.id || 'every system' }}: last {{ ws.runs.length }}</span>
+                <button type="button" class="vhil-btn --small" @click="loadRuns">
+                    Refresh
+                </button>
+            </div>
+            <p v-if="!ws.runs.length" class="muted">No runs yet: Run (F5) starts one.</p>
+            <ul class="vhil-list" aria-label="Runs">
+                <li v-for="r in ws.runs" :key="r.id" class="vhil-run-item">
+                    <button
+                        type="button"
+                        class="vhil-list-item vhil-run-row"
+                        :class="{ '--current': r.id === replay.id }"
+                        :aria-current="r.id === replay.id ? 'true' : undefined"
+                        :title="`Replay run ${r.id}: its frames in the Bus tab`"
+                        @click="openRun(r.id)"
+                    >
+                        <span class="mono num">#{{ r.id }}</span>
+                        <StateBadge :state="r.state" />
+                        <span class="vhil-list-sub muted mono">
+                            {{ ws.id ? '' : `${r.system} · ` }}{{ when(r) }}
+                        </span>
                     </button>
-                </div>
-                <p v-if="!ws.runs.length" class="muted">No runs yet: Run (F5) starts one.</p>
-                <ul class="vhil-list" aria-label="Runs">
-                    <li v-for="r in ws.runs" :key="r.id">
-                        <a
-                            class="vhil-list-item vhil-run-row"
-                            :href="runPage(r.id)" target="_blank" rel="noopener"
-                            :title="`Run ${r.id}: open its page in a new tab`"
-                        >
-                            <span class="mono num">#{{ r.id }}</span>
-                            <StateBadge :state="r.state" />
-                            <span class="vhil-list-sub muted mono">{{ when(r) }}</span>
-                        </a>
-                    </li>
-                </ul>
-            </template>
+                    <a
+                        class="vhil-run-page" :href="runPage(r.id)" target="_blank" rel="noopener"
+                        :aria-label="`Run ${r.id}'s page: signals, log and artifacts`"
+                        :title="`Run ${r.id}'s page: signals, log and artifacts (new tab)`"
+                    >↗</a>
+                </li>
+            </ul>
         </div>
     </aside>
     </div>
@@ -124,9 +132,10 @@ import {
     computed, defineComponent, ref, watch,
 } from 'vue';
 import {
-    ws, loadRuns, newSystem, open,
+    ws, loadRuns, newSystem, open, openRun,
 } from './workspace.js';
 import { runPage } from './api.js';
+import { replay } from './replay.js';
 import StateBadge from './VhilStateBadge.vue';
 
 const VIEWS = [
@@ -180,6 +189,8 @@ export default defineComponent({
             openFrom,
             create,
             loadRuns,
+            openRun,
+            replay,
             runPage,
             when,
         };
