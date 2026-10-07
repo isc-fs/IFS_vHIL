@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from vhil.server import create_app  # noqa: E402
 from vhil.server.config import Settings, check_dev_bind, is_loopback  # noqa: E402
+from vhil.server.security import EDITOR_CSP  # noqa: E402
 from vhil.system import REPO  # noqa: E402
 
 
@@ -123,14 +124,24 @@ def test_every_response_carries_the_security_headers(client, path):
     assert h["referrer-policy"] == "same-origin"
 
 
-def test_the_csp_frames_the_editor_and_the_public_wss(monkeypatch, tmp_path):
+def test_the_csp_frames_only_this_origin_and_names_the_public_wss(monkeypatch, tmp_path):
+    """The editor is same-origin (/editor/): no other origin may be framed,
+    whatever VHIL_EDITOR_URL a deployment still sets."""
     monkeypatch.setenv("VHIL_EDITOR_URL", "https://editor.example.org:5443/x/")
     monkeypatch.setenv("VHIL_AUTH", "dev")
     monkeypatch.setenv("VHIL_PUBLIC_URL", "https://vhil.example.org")
     settings = Settings(workspace=REPO, db=tmp_path / "db", results=tmp_path / "r", auth="dev")
     csp = TestClient(create_app(settings)).get("/").headers["content-security-policy"]
-    assert "frame-src 'self' https://editor.example.org:5443;" in csp
+    assert "frame-src 'self';" in csp and "editor.example.org" not in csp
     assert "connect-src 'self' wss://vhil.example.org;" in csp
+
+
+def test_the_editors_csp_needs_no_unsafe_source():
+    csp = dict(d.split(" ", 1) for d in EDITOR_CSP.split("; "))
+    for directive in ("default-src", "script-src", "style-src", "connect-src", "font-src"):
+        assert csp[directive] == "'self'", directive
+    assert csp["frame-ancestors"] == "'self'" and csp["object-src"] == "'none'"
+    assert "unsafe" not in EDITOR_CSP and "*" not in EDITOR_CSP
 
 
 def test_a_hostile_host_header_stays_out_of_the_csp(client):

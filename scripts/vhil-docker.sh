@@ -17,7 +17,8 @@
 #   scripts/vhil-docker.sh ifs-hil [suite] [pytest args]
 #                                                IFS_HIL's ECU suite over vcan (VHIL_DUT=ams: AMS suite)
 #                                                (VHIL_SYSTEM=systems/ecu-ams.yaml: with the AMS)
-#   scripts/vhil-docker.sh editor                system editor on http://localhost:5050
+#   scripts/vhil-docker.sh editor                system editor on http://localhost:8080/editor/
+#                                                (with the app's api and proxy)
 #   scripts/vhil-docker.sh server                web app API + shell on http://localhost:8080
 #                                                (M5; full stack: docker/compose.yaml)
 #   scripts/vhil-docker.sh worker [--once ...]   run worker for the server's queue (vhil.worker)
@@ -38,6 +39,8 @@ base_image=${VHIL_IMAGE:-ifs-vhil}
 editor_image=$base_image-editor
 image=$base_image
 docker=(docker --context "$context")
+# The web app's services, behind one proxy on one origin (docker/compose.yaml).
+compose=("${docker[@]}" compose -f "$repo/docker/compose.yaml")
 # Unprivileged on Docker's default network unless a job needs vcan: only
 # `ifs-hil` (and `shell`/`run` with VHIL_DOCKER_VCAN=1) gets --privileged
 # --network host. Published ports bind 127.0.0.1 only.
@@ -88,7 +91,6 @@ in_container() {
         -v "$repo:/work" -v vhil-data:/vhil \
         -e IFS_HIL_REF="${IFS_HIL_REF:-dev}" -e FW_REFS="${FW_REFS:-}" \
         -e VHIL_SYSTEM="${VHIL_SYSTEM:-}" -e VHIL_DUT="${VHIL_DUT:-ecu}" \
-        -e EDITOR_URL="http://localhost:${VHIL_EDITOR_PORT:-5050}" \
         "$image" bash -c "$1" vhil "${@:2}"
 }
 
@@ -180,34 +182,27 @@ ifs-hil)
         fi
         exit $rc' "$@" ;;
 editor)
-    # Its own network: the UI port is published (Colima forwards it to the
-    # Mac). It runs nothing: Run is the web app's (`server` + `worker`). Not
-    # 5000 on the host: macOS's AirPlay Receiver holds it.
-    image=$editor_image run_args=(-p "127.0.0.1:${VHIL_EDITOR_PORT:-5050}:5000")
-    in_container 'PM_HOST=0.0.0.0 exec scripts/editor.sh' ;;
+    # Pipeline Manager on the web app's origin, under /editor/, behind the
+    # proxy (docker/compose.yaml; the api comes up with it, for the login
+    # check). It publishes no port of its own and runs nothing: Run is the
+    # web app's (`worker` executes it).
+    "${docker[@]}" image inspect "$editor_image" >/dev/null 2>&1 || build_images
+    VHIL_IMAGE=$base_image exec "${compose[@]}" up editor proxy ;;
 editor-check)
     # Pipeline Manager's ./validate (its frontend's load) on each system's
     # dataflow, in the editor image where the patched checkout lives.
     image=$editor_image
     in_container 'exec python -m vhil.editor check "$@"' "$@" ;;
 server)
-    # A local checkout: dev mode (no login) unless VHIL_AUTH says otherwise.
-    # The server refuses dev mode off loopback, and in the container it
-    # listens on 0.0.0.0, so the port is published on the host's 127.0.0.1
-    # only and VHIL_ALLOW_DEV_ON_NETWORK=1 says so (vhil/server/config.py).
-    export VHIL_AUTH=${VHIL_AUTH:-dev}
-    run_args=(-p "127.0.0.1:${VHIL_WEB_PORT:-8080}:8080")
-    [ "$VHIL_AUTH" = dev ] && run_args+=(-e VHIL_ALLOW_DEV_ON_NETWORK=1)
-    # Auth settings pass through when set (docs/development/web-app.md).
-    for v in VHIL_AUTH VHIL_GITHUB_ORG VHIL_GITHUB_CLIENT_ID VHIL_GITHUB_CLIENT_SECRET \
-             VHIL_SESSION_SECRET VHIL_PUBLIC_URL VHIL_GITHUB_APP_ID VHIL_GITHUB_APP_KEY \
-             VHIL_ADMINS; do
-        run_args+=(-e "$v")
-    done
-    in_container 'export VHIL_DATA=/vhil/server; exec python -m vhil.server --host 0.0.0.0 --port 8080' ;;
+    # A local checkout: dev mode (no login) unless VHIL_AUTH says otherwise;
+    # the auth settings pass through when set (docs/development/web-app.md).
+    # The api listens on 0.0.0.0 in its container, reached only through the
+    # proxy, whose port is on the host's 127.0.0.1 only (docker/compose.yaml).
+    ensure_image
+    VHIL_IMAGE=$base_image exec "${compose[@]}" up api proxy ;;
 worker)
     in_container 'export VHIL_DATA=/vhil/server VHIL_FW_DIR=/vhil/fw; exec python -m vhil.worker "$@"' "$@" ;;
 shell) in_container 'exec bash' ;;
 run) in_container 'exec "$@"' "$@" ;;
-*) sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'; [ "$cmd" = help ] ;;
+*) sed -n '2,33p' "$0" | sed 's/^# \{0,1\}//'; [ "$cmd" = help ] ;;
 esac

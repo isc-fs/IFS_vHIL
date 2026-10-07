@@ -11,8 +11,9 @@
 #   egress     the workers' only way out: CONNECT to an allowlist (GitHub)
 #   api        FastAPI (vhil.server): shell, systems, runs, auth
 #   worker     vhil.worker x VHIL_WORKERS: claims queued runs, runs Renode
-#   editor     Pipeline Manager + vhil.editor (the shell embeds it)
-#   proxy      Caddy: TLS for VHIL_SITE (the app) and VHIL_EDITOR_SITE (the editor)
+#   editor     Pipeline Manager + vhil.editor (the shell embeds it, same origin)
+#   proxy      Caddy: TLS for VHIL_SITE, the one origin: the app, and the
+#              editor under /editor/ behind the API's login check
 #   backup     SQLite + saved-branch snapshots (deploy/backup.py)
 #
 # The code, catalogue and systems every service runs come from the workspace
@@ -189,7 +190,6 @@ services:
       VHIL_ALLOW_DEV_ON_NETWORK: ${VHIL_ALLOW_DEV_ON_NETWORK:-}
       VHIL_ADMINS: ${VHIL_ADMINS:-}
       VHIL_PUBLIC_URL: ${VHIL_PUBLIC_URL:?set VHIL_PUBLIC_URL in deploy/.env}
-      VHIL_EDITOR_URL: ${VHIL_EDITOR_URL:?set VHIL_EDITOR_URL in deploy/.env}
       VHIL_GITHUB_ORG: ${VHIL_GITHUB_ORG:-isc-fs}
       VHIL_GITHUB_CLIENT_ID: ${VHIL_GITHUB_CLIENT_ID:-}
       VHIL_GITHUB_CLIENT_SECRET_FILE: /run/secrets/github_client_secret
@@ -268,7 +268,7 @@ services:
     image: ${VHIL_IMAGE:-ghcr.io/isc-fs/ifs-vhil}-editor:${VHIL_TAG:-latest}${VHIL_EDITOR_DIGEST:-}
     command: scripts/editor.sh
     # Internal network shared with the proxy only: reachable through the
-    # proxy's auth gate and nowhere else, and no way out.
+    # proxy's auth gate (/editor/ on VHIL_SITE) and nowhere else, and no way out.
     networks: [editor]
     tmpfs:
       - /tmp:size=512m,mode=1777          # it runs nothing: Run is a worker's run
@@ -278,7 +278,7 @@ services:
       HOME: /tmp
       PM_HOST: 0.0.0.0
       LOG_DIR: /tmp/editor
-      EDITOR_URL: ${VHIL_EDITOR_URL}
+      EDITOR_URL: ${VHIL_PUBLIC_URL}/editor/
     healthcheck:
       test: ["CMD", "python", "-c",
              "import urllib.request as u; u.urlopen('http://127.0.0.1:5000/', timeout=5)"]
@@ -317,7 +317,6 @@ services:
       - "${VHIL_BIND_ADDR:-0.0.0.0}:${VHIL_HTTP_PORT:-80}:80"
       - "${VHIL_BIND_ADDR:-0.0.0.0}:${VHIL_HTTPS_PORT:-443}:443"
       - "${VHIL_BIND_ADDR:-0.0.0.0}:${VHIL_HTTPS_PORT:-443}:443/udp"
-      - "${VHIL_BIND_ADDR:-0.0.0.0}:${VHIL_EDITOR_PORT:-5443}:5443"
     tmpfs:
       - /tmp:exec,size=128m,mode=1777     # exec: the caddy copy above
     volumes:
@@ -326,8 +325,6 @@ services:
       - caddy-config:/config
     environment:
       VHIL_SITE: ${VHIL_SITE:?set VHIL_SITE in deploy/.env}
-      VHIL_EDITOR_SITE: ${VHIL_EDITOR_SITE:?set VHIL_EDITOR_SITE in deploy/.env}
-      VHIL_PUBLIC_URL: ${VHIL_PUBLIC_URL:?set VHIL_PUBLIC_URL in deploy/.env}
       VHIL_HSTS_MAX_AGE: ${VHIL_HSTS_MAX_AGE:-31536000}
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:2019/config/"]
