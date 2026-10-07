@@ -4,11 +4,20 @@ name: Smoke (virtual)
 # declares, render the system to a Renode script, and run its smoke suite
 # (tests/<system>_smoke.robot). No hardware.
 
+# Heavy CI runs only in special cases (owner, 2026-10-06): a pull request
+# labelled `full-ci`, a release pull request into main, the nightly run on
+# dev, or a manual dispatch. Otherwise the jobs are skipped, which counts as
+# passing for required checks; unit tests (unit.yml) run on every pull request.
 on:
   pull_request:
-  push:
-    branches: [dev]
+    types: [opened, synchronize, reopened, labeled]
+  schedule:
+    - cron: '30 2 * * *'   # nightly, on dev (see the checkout ref)
   workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -27,17 +36,28 @@ jobs:
       fail-fast: false
       matrix:
         system: [ecu, ams]
+    env:
+      # Skipped legs still report "smoke (<system>)", the required checks.
+      FULL: ${{ github.event_name != 'pull_request' || github.base_ref == 'main' || contains(github.event.pull_request.labels.*.name, 'full-ci') }}
     steps:
+      - name: Not a special case, skipping
+        if: env.FULL != 'true'
+        run: echo "smoke runs on full-ci-labelled PRs, PRs into main, nightly and dispatch"
+
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        if: env.FULL == 'true'
         with:
+          ref: ${{ github.event_name == 'schedule' && 'dev' || '' }}
           persist-credentials: false
 
       - name: Arm GNU toolchain (pinned like IFS_HIL's recipes)
+        if: env.FULL == 'true'
         uses: carlosperate/arm-none-eabi-gcc-action@98c40e51546516419841748d3210c290df0d2c6c # v1.13.0
         with:
           release: '14.2.Rel1'
 
       - name: Build firmware from systems/${{ matrix.system }}.yaml
+        if: env.FULL == 'true'
         id: fw
         env:
           SYSTEM: ${{ matrix.system }}
@@ -49,6 +69,7 @@ jobs:
           echo "bootloader=$(sed -n "s/^$SYSTEM.bootloader=//p" built.txt)" >> "$GITHUB_OUTPUT"
 
       - name: Install Renode ${{ env.RENODE_VERSION }}
+        if: env.FULL == 'true'
         run: |
           curl -fsSL -o renode.tar.gz \
             "https://github.com/renode/renode/releases/download/v${RENODE_VERSION}/renode-${RENODE_VERSION}.linux-portable.tar.gz"
@@ -59,6 +80,7 @@ jobs:
             "psutil==5.9.4" "pyyaml==6.0.*" "telnetlib3==2.0.*"
 
       - name: Run tests/${{ matrix.system }}_smoke.robot
+        if: env.FULL == 'true'
         env:
           SYSTEM: ${{ matrix.system }}
           ELF: ${{ steps.fw.outputs.elf }}
@@ -73,7 +95,7 @@ jobs:
             --variable RESC:"$RUNNER_TEMP/system.resc" -r results
 
       - name: Upload results
-        if: always()
+        if: always() && env.FULL == 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: smoke-${{ matrix.system }}

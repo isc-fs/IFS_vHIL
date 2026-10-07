@@ -228,6 +228,19 @@ exit criterion. Bugs and model gaps get their own issue, labelled
 - Small and thematic. Draft PRs are fine for blocked work.
 - Green CI before merge; merge commit, not squash; delete the branch
   after merge.
+- **CI runs the heavy jobs only in special cases.** These are the sim shards,
+  smoke and the IFS_HIL ECU/ECU+AMS/AMS suites, and they run when:
+  - the PR is labelled `full-ci`;
+  - the PR is a release PR into `main`;
+  - the nightly run on `dev` fires;
+  - someone dispatches a workflow by hand.
+
+  Every PR runs `unit`, a minute or so, which also validates every system.
+  Otherwise the heavy jobs are skipped, which counts as passing for the
+  required checks. Label a PR `full-ci` when it can change what the emulated
+  firmware does: models, platforms, the catalogue, systems, `vhil/`'s
+  simulation code, tests or the workflows. Docs, web app and editor-only
+  changes don't need it.
 
 ## Release process
 

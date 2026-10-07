@@ -6,10 +6,15 @@ name: IFS_HIL ECU and AMS suites (virtual)
 # bridged to vcan can0/can1/can2 and the virtual broker answering IFS_HIL's
 # broker protocol (issue #1).
 
+# Heavy CI runs only in special cases (owner, 2026-10-06): a pull request
+# labelled `full-ci`, a release pull request into main, the nightly run on
+# dev, or a manual dispatch. Otherwise the jobs are skipped, which counts as
+# passing for required checks; unit tests (unit.yml) run on every pull request.
 on:
   pull_request:
-  push:
-    branches: [dev]
+    types: [opened, synchronize, reopened, labeled]
+  schedule:
+    - cron: '30 2 * * *'   # nightly, on dev (see the checkout ref)
   workflow_dispatch:
     inputs:
       suite:
@@ -30,6 +35,10 @@ on:
 
 # The jobs run code from other repos (IFS_HIL, the firmware repos): the token
 # can only read this one.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -51,6 +60,7 @@ jobs:
   # and jump through can-flasher over vcan, #4) runs here: a skip in it fails
   # the job, as it would mean the flashing path never ran.
   ecu:
+    if: github.event_name != 'pull_request' || github.base_ref == 'main' || contains(github.event.pull_request.labels.*.name, 'full-ci')
     runs-on: ubuntu-latest
     timeout-minutes: 40
     env:
@@ -61,6 +71,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          ref: ${{ github.event_name == 'schedule' && 'dev' || '' }}
           persist-credentials: false
 
       - name: Check out IFS_HIL
@@ -163,11 +174,13 @@ jobs:
   # IFS_HIL's real-AMS block against the emulated AMS. Every test must run:
   # a skip here means the live AMS was not there.
   ecu-ams:
+    if: github.event_name != 'pull_request' || github.base_ref == 'main' || contains(github.event.pull_request.labels.*.name, 'full-ci')
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          ref: ${{ github.event_name == 'schedule' && 'dev' || '' }}
           persist-credentials: false
 
       - name: Check out IFS_HIL
@@ -261,6 +274,7 @@ jobs:
   # What the virtual bench can't run yet is skipped with its reason from
   # configs/gaps.yaml.
   ams:
+    if: github.event_name != 'pull_request' || github.base_ref == 'main' || contains(github.event.pull_request.labels.*.name, 'full-ci')
     runs-on: ubuntu-latest
     timeout-minutes: 50
     env:
@@ -269,6 +283,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          ref: ${{ github.event_name == 'schedule' && 'dev' || '' }}
           persist-credentials: false
 
       - name: Check out IFS_HIL
