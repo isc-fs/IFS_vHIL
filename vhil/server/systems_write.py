@@ -7,8 +7,9 @@
                                         whether each is built (ls-remote, cached)
     GET  /api/systems/{id}/dataflow     a system as a Pipeline Manager graph (?branch=, ?new=)
     POST /api/systems/{id}/preview      {yaml | dataflow} -> {yaml, errors}, nothing saved
-    PUT  /api/systems/{id}              {yaml | dataflow, message, branch} -> {ref, branch}
-    POST /api/systems                   {id, yaml? | dataflow?, message, branch} -> {ref, branch}
+    PUT  /api/systems/{id}              {yaml | dataflow, message, branch, base?} -> {ref, branch}
+    POST /api/systems                   {id, yaml? | dataflow?, message, branch, base?}
+                                        -> {ref, branch}
     POST /api/systems/{id}/pr           {branch, title, body} -> {url}
 
 A save is a commit of systems/<id>.yaml on `branch`, built with git plumbing
@@ -25,6 +26,7 @@ import functools
 import json
 import logging
 import os
+import re
 import tempfile
 from pathlib import Path
 
@@ -44,6 +46,9 @@ from vhil.system import ID, SCHEMA, System, SystemError, built_images, image_pat
 
 router = APIRouter()
 EDITOR_PATH = "/editor/"
+# A save's `base`: a commit id, full or abbreviated (never a ref name or an
+# option look-alike).
+_COMMIT = re.compile(r"^[0-9a-fA-F]{7,64}\Z")
 log = logging.getLogger("vhil.server.systems")
 
 
@@ -63,6 +68,11 @@ class Save(BaseModel):
     # Move a branch another member last saved (logged, and recorded in the
     # commit as Vhil-Takeover-From). Admins (VHIL_ADMINS) need not.
     takeover: bool = False
+    # The commit the edit started from (the editor: the one the system was
+    # opened at, GET .../dataflow's `ref`). A new branch is made from it, so a
+    # system opened from the workspace's tree saves to a branch that runs here
+    # (vhil/server/runs.py, runs at a saved ref). Default: the base branch.
+    base: str | None = None
 
 
 class Create(Save):
@@ -262,7 +272,13 @@ def _save(request: Request, system_id: str, body: Save, create: bool) -> dict:
     if not body.message.strip():
         raise HTTPException(422, {"errors": ["a commit message is needed"]})
     author = _author(request, body)
-    parent = store.parent(body.branch)
+    base = None
+    if body.base:
+        base = store.rev(body.base) if _COMMIT.match(body.base) else None
+        if base is None:
+            raise HTTPException(422, {"errors": [f"base {body.base!r} is not a commit of the "
+                                                 f"workspace"]})
+    parent = store.parent(body.branch, base)
     trailers = _owner_trailers(request, store, body, store.branch_tip(body.branch))
     text = _text(body, system_id, store.read(parent, _path(system_id)))
     errors, warnings = check_with_warnings(store, parent, system_id, text)
@@ -270,7 +286,8 @@ def _save(request: Request, system_id: str, body: Save, create: bool) -> dict:
         raise HTTPException(422, {"errors": errors, "yaml": text})
     try:
         out = store.commit_file(body.branch, _path(system_id), text, body.message, author,
-                                must_not_exist=create, trailers=trailers, expect_parent=parent)
+                                must_not_exist=create, trailers=trailers, expect_parent=parent,
+                                base=base)
     except Conflict as e:
         raise HTTPException(409, str(e))
     except GitError as e:

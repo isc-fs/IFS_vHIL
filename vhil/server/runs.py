@@ -668,6 +668,28 @@ def code_changes(root: Path, a: str, b: str) -> list[str]:
     return [line for line in out.stdout.splitlines() if line]
 
 
+def code_mismatch(root: Path, head: str, commit: str, ref: str, system_id: str,
+                  changed: list[str]) -> str:
+    """Why a run at `ref` (`commit`) is refused: what it changes besides its
+    system file, and what to do about it. Most often the ref is a branch made
+    from the base branch's tip (dev) while the deployment runs an older
+    pinned commit: the branch changes no code itself, its base does."""
+    files = ", ".join(changed[:10]) + (f" and {len(changed) - 10} more" if len(changed) > 10 else "")
+    why = (f"ref {ref} ({commit[:12]}) and this deployment's workspace ({head[:12]}) differ in "
+           f"code a run reads: {files}. A run at a saved ref takes only systems/{system_id}.yaml "
+           f"from it and runs the workspace's code, so it would not run as in CI. ")
+    base = os.environ.get("VHIL_BASE_BRANCH", "dev")
+    # Where the editor's saves start without a base (gitstore.GitStore.base_commit).
+    tip = resolve_ref(root, f"refs/remotes/origin/{base}") or resolve_ref(root, base)
+    fork =_git(root, "merge-base", commit, tip).stdout.strip() if tip else ""
+    if fork and fork != head and not code_changes(root, fork, commit):
+        return why + (f"{ref} changes no code itself: it is built on {base} at {fork[:12]}, "
+                      f"not on the workspace's {head[:12]}. Save the system to a new branch "
+                      f"from the editor, which builds on the commit the system was opened at, "
+                      f"or run {ref} once the deployment is at that code.")
+    return why + f"{ref} changes that code itself: run it where it is checked out (CI)."
+
+
 def system_at(root: Path, commit: str, system_id: str) -> Optional[str]:
     out = _git(root, "cat-file", "blob", f"{commit}:systems/{system_id}.yaml")
     return out.stdout if out.returncode == 0 else None
@@ -835,9 +857,8 @@ def router(settings, workspace, limits: Optional[Limits] = None) -> APIRouter:
                                              f"systems as checked out: ref {req.ref} is not HEAD")
                 changed = code_changes(workspace.root, head, commit)
                 if changed:
-                    raise HTTPException(422, f"ref {req.ref} changes what a run reads besides its "
-                                             f"system file, so it would not run as in CI: "
-                                             f"{', '.join(changed[:10])}")
+                    raise HTTPException(422, code_mismatch(workspace.root, head, commit, req.ref,
+                                                           req.system, changed))
                 try:
                     path = materialise_system(workspace.root, commit, req.system, Path(tmp))
                 except RuntimeError:
