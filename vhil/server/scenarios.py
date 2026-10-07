@@ -104,6 +104,11 @@ def parse(doc: dict, system_id: str, name: str) -> tuple[Optional[RunScenario], 
         errors.append(f"description: text, at most {MAX_DESCRIPTION} characters")
         description = ""
     run = {k: v for k, v in doc.items() if k not in _META}
+    if "live" in run:
+        # A live session is started from the editor, not from a file; its
+        # recording is a plain scenario (vhil/server/session.py).
+        errors.append("live: a scenario file is not a live session")
+        run.pop("live")
     try:
         sc = RunScenario.model_validate({**run, "kind": "run", "name": name})
     except ValidationError as e:
@@ -177,6 +182,7 @@ def as_data(sc: RunScenario, description: str) -> dict:
     d = sc.model_dump(exclude_none=True)
     d.pop("kind", None)
     d.pop("name", None)
+    d.pop("live", None)
     return {"description": description, **d}
 
 

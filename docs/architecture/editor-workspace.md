@@ -348,7 +348,17 @@ In the owner's order.
     Signals with it.
 14. **Session channel** (feature 3a). `/runs/{id}/session`, acks echoed into
     the trace, slice-boundary application, clock heartbeat, 50 ms poll; tests
-    for mid-run ops and the determinism of a recorded session.
+    for mid-run ops and the determinism of a recorded session. Done:
+    [`docs/live-session.md`](../live-session.md). A live session is a run
+    with `live: true` (50 ms slices, paced to wall time, open-ended to
+    `VHIL_MAX_LIVE_MS`, stopped after `VHIL_LIVE_IDLE_S` without an op); ops
+    go through the database (`session_ops`), since the API and the workers
+    share nothing else, and take effect at the end of the slice after the
+    boundary that takes them, scheduled as a scenario row at that time is;
+    each is an `op` record in the trace, and each slice a `clock` record. One
+    connection holds control (a lease), the rest watch.
+    `GET /api/runs/{id}/session/scenario` is the recording, which replays the
+    session's trace exactly (on the AMS through Precharge to Run).
 15. **Live UI** (feature 3b). LIVE mode with topology locked; Transmit with
     periodic management and "stop all"; pin switches and analog set; wire
     frames/s and a throttled dash march; Record → scenario.

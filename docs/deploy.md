@@ -171,6 +171,9 @@ Runs are bounded by the API ([`vhil/server/runs.py`](../vhil/server/runs.py),
 | `VHIL_MAX_QUEUED_PER_USER` [10] | active runs per login | 429 |
 | `VHIL_MAX_TRACE_MB` [512] | a run's `trace.jsonl` (worker) | the run ends `error` |
 | `VHIL_MAX_OUTPUT_MB` [64] | a pytest run's `pytest.txt` (worker) | the run ends `error` |
+| `VHIL_MAX_LIVE_MS` [3600000] | a live session's virtual time ([live-session.md](live-session.md)) | 422 |
+| `VHIL_LIVE_IDLE_S` [1800] | a live session's wall time without an op (worker) | the session stops |
+| `VHIL_LIVE_OPS_PER_S` [20] / `VHIL_LIVE_MAX_PERIODIC` [16] | a live session's ops a second per connection / periodic senders at once (worker) | the op is refused |
 
 A pytest run is also bounded by its own `timeout_s` (at most 6 h), Caddy
 caps request bodies at 8 MB, and each container by its CPU, memory and pids

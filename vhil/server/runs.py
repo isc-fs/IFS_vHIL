@@ -62,7 +62,10 @@ log = logging.getLogger("vhil.server.runs")
 
 STATES = ("queued", "running", "passed", "failed", "error", "cancelled")
 TERMINAL = frozenset({"passed", "failed", "error", "cancelled"})
-TRACE_KINDS = frozenset({"frame", "edge", "sample", "log", "bus_load"})
+# op: a live session's op as the worker applied it (or refused it); clock: a
+# live run's per-slice heartbeat (vhil/server/session.py); bus_load: a bus's
+# load over a slice (vhil/worker.py, #174).
+TRACE_KINDS = frozenset({"frame", "edge", "sample", "log", "op", "clock", "bus_load"})
 TRACE = "trace.jsonl"
 # The kind of a trace's first line, which says whose trace it is (trace_header).
 HEADER_KIND = "run"
@@ -77,6 +80,9 @@ MAX_ATTEMPTS = 2
 # MainLite spends its CAN bootloader's 2 s auto-jump window before its app
 # starts (CLAUDE.md invariant 5), so less than 3 s shows little of the app.
 DEFAULT_VIRTUAL_MS = 3000
+# A live session's slice (the trace is flushed, and its ops applied, at each
+# slice boundary; Limits.max_live_ms caps its virtual time).
+LIVE_SLICE_MS = 50
 
 
 def _env_int(name: str, default: int) -> int:
@@ -97,6 +103,13 @@ class Limits:
     max_expect: int = 200                   # VHIL_MAX_EXPECTS
     max_trace_bytes: int = 512 << 20        # VHIL_MAX_TRACE_MB: a run's trace.jsonl
     max_output_bytes: int = 64 << 20        # VHIL_MAX_OUTPUT_MB: a pytest run's output
+    # Live sessions (vhil/server/session.py): a live run's virtual time, how
+    # long it may go without an op before the worker stops it, ops a second
+    # per connection, and periodic senders running at once.
+    max_live_ms: int = 3_600_000            # VHIL_MAX_LIVE_MS
+    live_idle_s: int = 1800                 # VHIL_LIVE_IDLE_S
+    live_ops_per_s: int = 20                # VHIL_LIVE_OPS_PER_S
+    live_max_periodic: int = 16             # VHIL_LIVE_MAX_PERIODIC
 
     @classmethod
     def from_env(cls) -> "Limits":
@@ -108,7 +121,11 @@ class Limits:
                    max_watch=_env_int("VHIL_MAX_WATCHES", d.max_watch),
                    max_expect=_env_int("VHIL_MAX_EXPECTS", d.max_expect),
                    max_trace_bytes=_env_int("VHIL_MAX_TRACE_MB", d.max_trace_bytes >> 20) << 20,
-                   max_output_bytes=_env_int("VHIL_MAX_OUTPUT_MB", d.max_output_bytes >> 20) << 20)
+                   max_output_bytes=_env_int("VHIL_MAX_OUTPUT_MB", d.max_output_bytes >> 20) << 20,
+                   max_live_ms=_env_int("VHIL_MAX_LIVE_MS", d.max_live_ms),
+                   live_idle_s=_env_int("VHIL_LIVE_IDLE_S", d.live_idle_s),
+                   live_ops_per_s=_env_int("VHIL_LIVE_OPS_PER_S", d.live_ops_per_s),
+                   live_max_periodic=_env_int("VHIL_LIVE_MAX_PERIODIC", d.live_max_periodic))
 
 
 class QueueFull(Exception):
@@ -303,9 +320,14 @@ class RunScenario(_Model):
     # The scenario file it came from (systems/<system>.scenarios/<name>.yaml),
     # if any: the Tests view's last result for it is this run's.
     name: Optional[str] = None
-    virtual_ms: int = Field(DEFAULT_VIRTUAL_MS, ge=1, le=600_000)
+    # A live session (vhil/server/session.py): paced to wall time, open-ended
+    # up to virtual_ms (default and cap Limits.max_live_ms), taking ops over
+    # /api/runs/{id}/session at its slice boundaries until stopped.
+    live: bool = False
+    # Limits.max_virtual_ms (max_live_ms for a live session) bounds it.
+    virtual_ms: int = Field(DEFAULT_VIRTUAL_MS, ge=1, le=86_400_000)
     # Virtual time per slice: the trace is flushed and cancellation checked
-    # after each one.
+    # after each one (a live session's default: LIVE_SLICE_MS).
     slice_ms: int = Field(100, ge=10, le=1000)
     stimuli: list[Stimulus] = []
     watch: list[Watch] = []
@@ -318,6 +340,12 @@ class RunScenario(_Model):
             raise ValueError("name must be a scenario name: lowercase letters, digits and '-', "
                              "at most 64")
         return v
+
+    @model_validator(mode="after")
+    def _live(self):
+        if self.live and "slice_ms" not in self.model_fields_set:
+            self.slice_ms = LIVE_SLICE_MS
+        return self
 
     @model_validator(mode="after")
     def _rows(self):
@@ -1028,9 +1056,10 @@ def check_limits(req: RunRequest, limits: Limits) -> list[str]:
     """What in the request is over the per-run limits (Limits)."""
     sc, errors = req.scenario, []
     if isinstance(sc, RunScenario):
-        if sc.virtual_ms > limits.max_virtual_ms:
-            errors.append(f"virtual_ms: {sc.virtual_ms} is over this server's limit of "
-                          f"{limits.max_virtual_ms}")
+        cap = limits.max_live_ms if sc.live else limits.max_virtual_ms
+        if sc.virtual_ms > cap:
+            errors.append(f"virtual_ms: {sc.virtual_ms} is over this server's limit of {cap}"
+                          + (" for a live session" if sc.live else ""))
         if len(sc.stimuli) > limits.max_stimuli:
             errors.append(f"stimuli: {len(sc.stimuli)} is over the limit of {limits.max_stimuli}")
         if len(sc.watch) > limits.max_watch:
@@ -1073,6 +1102,11 @@ def router(settings, workspace, limits: Optional[Limits] = None) -> APIRouter:
 
     @r.post("", status_code=201)
     def create(req: RunRequest, request: Request):
+        sc = req.scenario
+        if isinstance(sc, RunScenario) and sc.live and "virtual_ms" not in sc.model_fields_set:
+            # Open-ended: until stopped, idle, or this server's cap.
+            req = req.model_copy(update={"scenario": sc.model_copy(
+                update={"virtual_ms": limits.max_live_ms})})
         over = check_limits(req, limits)
         if over:
             raise HTTPException(422, over)
@@ -1188,6 +1222,8 @@ def router(settings, workspace, limits: Optional[Limits] = None) -> APIRouter:
             return
         path = results / str(run_id) / TRACE
         token = run.get("token") or None
+        # A live session streams in 50 ms slices: poll as often.
+        poll_s = 0.05 if (run.get("scenario") or {}).get("live") else 0.2
         # offset: where the next read starts in the file `inode`; None until
         # that file is this run's (trace_start). A stale trace left at a
         # reused id's path is never read, however long the run stays queued.
@@ -1239,7 +1275,7 @@ def router(settings, workspace, limits: Optional[Limits] = None) -> APIRouter:
                     await ws.send_json({"kind": "end", "state": state})
                     await ws.close()
                     return
-                await asyncio.sleep(0.2)
+                await asyncio.sleep(poll_s)
         except WebSocketDisconnect:
             return
 
