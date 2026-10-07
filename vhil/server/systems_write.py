@@ -1,6 +1,7 @@
 """Compose systems from the browser: save, PR, firmware picker (M5.4, #116).
 
-    GET  /api/config                    editor URL, base branch, whether PRs can be opened
+    GET  /api/config                    editor URL, base branch, whether PRs can be opened,
+                                        a run's default virtual time
     GET  /api/firmware                  catalogue firmware sources (repo, default ref, recipe)
     GET  /api/firmware/{id}/refs        that repo's branches and tags with their commits, and
                                         whether each is built (ls-remote, cached)
@@ -37,6 +38,7 @@ from vhil.server.githost import (CachedRefs, GitHost, GitHubHost, HostError, Hos
                                  LsRemote, RefLister, repo_slug)
 from vhil.server.gitstore import (OWNER_TRAILER, TAKEOVER_TRAILER, BadBranch, Conflict, GitError,
                                   GitStore)
+from vhil.server.runs import DEFAULT_VIRTUAL_MS
 from vhil.server.workspace import SYSTEM_ID
 from vhil.system import ID, SCHEMA, System, SystemError, built_images, image_path
 
@@ -283,7 +285,8 @@ def config(request: Request):
     return {"editor_url": os.environ.get("VHIL_EDITOR_URL", "http://localhost:5050"),
             "base_branch": _store(request).base,
             "auth": request.app.state.settings.auth,
-            "can_open_pr": bool(host.token) if isinstance(host, GitHubHost) else True}
+            "can_open_pr": bool(host.token) if isinstance(host, GitHubHost) else True,
+            "run_virtual_ms": DEFAULT_VIRTUAL_MS}
 
 
 def _firmware_docs(request: Request) -> dict[str, dict]:

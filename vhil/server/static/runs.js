@@ -9,7 +9,8 @@ const TERMINAL = new Set(["passed", "failed", "error", "cancelled"]);
 const live = new Map();   // run id -> {ws, counts: {bus: n}}
 
 export async function renderRuns(view, { api, esc }) {
-  const systems = await api("/api/systems");
+  // The default virtual time is the server's (runs.py DEFAULT_VIRTUAL_MS).
+  const [systems, config] = await Promise.all([api("/api/systems"), api("/api/config")]);
   view.innerHTML = `<h2>Runs</h2>
     <form id="run-form">
       <label>System <select name="system">${
@@ -18,7 +19,7 @@ export async function renderRuns(view, { api, esc }) {
         title="A branch, tag or commit of the workspace: the system file as saved there (empty: the workspace's HEAD)"></label>
       <datalist id="run-refs"></datalist>
       <label>Scenario <select name="kind"><option value="run">run</option><option value="pytest">pytest</option></select></label>
-      <label data-kind="run">Virtual ms <input name="virtual_ms" type="number" value="1000" min="1" max="600000" required></label>
+      <label data-kind="run">Virtual ms <input name="virtual_ms" type="number" value="${Number(config.run_virtual_ms)}" min="1" max="600000" required></label>
       <label data-kind="pytest" class="grow" hidden>Test <input name="select" list="run-tests" placeholder="tests/sim/test_x.py[::test_y]"
         autocomplete="off" disabled required></label>
       <label data-kind="pytest" hidden>Timeout s <input name="timeout_s" type="number" value="3600" min="10" max="21600" disabled required></label>
