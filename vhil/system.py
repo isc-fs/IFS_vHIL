@@ -36,7 +36,7 @@ from vhil.flash_image import FLASH_BASE
 REPO = Path(__file__).resolve().parent.parent
 SCHEMA = REPO / "schemas" / "vhil.schema.json"
 CATALOG = REPO / "catalog"
-# The CAN bus model a bus with `arbitration: true` uses (#174).
+# The CAN bus model every bus uses unless it says `arbitration: false` (#174).
 CAN_BUS_SOURCE = REPO / "models" / "renode" / "VhilCanBus.cs"
 
 # What a system file may name, as the schema says (schemas/vhil.schema.json):
@@ -677,8 +677,9 @@ class System:
 
     def arbitrated(self, bus: str) -> bool:
         """Whether a bus is modelled in virtual time (VhilCanBus) rather than
-        by Renode's hub: `arbitration: true` in the system file."""
-        return self.buses[bus].get("arbitration") is True
+        by Renode's hub: every bus is, unless the system file says
+        `arbitration: false`."""
+        return self.buses[bus].get("arbitration") is not False
 
     def flash_bus(self, board: str) -> str | None:
         """The bus a board is flashed over (its flash_bus connector's), or None
@@ -805,8 +806,8 @@ class System:
         if quantum:
             rn.number(quantum)
             out += [f"emulation SetGlobalQuantum {rn.quote(format(quantum, 'g'))}", ""]
-        # A bus with `arbitration: true` is the vHIL's bus model, created
-        # once its source is compiled (below); the others are Renode's hub.
+        # A bus is the vHIL's bus model, created once its source is compiled
+        # (below), unless it says `arbitration: false`: then Renode's hub.
         for bus in self.buses:
             if not self.arbitrated(bus):
                 out.append(f"emulation CreateCANHub {rn.quote(rn.ident(bus))}")

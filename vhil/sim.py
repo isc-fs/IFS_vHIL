@@ -179,8 +179,8 @@ def _arg(value) -> str:
 
 
 class CanBus:
-    """One bus of the system, seen through its VhilCanProbe. On a bus with
-    `arbitration: true` the probe is a node like any other: what it sends
+    """One bus of the system, seen through its VhilCanProbe. On an arbitrated
+    bus (the default) the probe is a node like any other: what it sends
     waits for the bus and may lose arbitration, and it acknowledges frames
     unless set_ack(False) makes it listen only; timeline(), load(), stats()
     and nodes() read the bus model (models/renode/VhilCanBus.cs)."""
@@ -207,8 +207,8 @@ class CanBus:
 
     def _bus(self, command: str) -> str:
         if not self.arbitrated:
-            raise ValueError(f"bus '{self.name}' has no arbitration (arbitration: true in "
-                             f"{self.sim.system.path.name})")
+            raise ValueError(f"bus '{self.name}' has no arbitration (arbitration: false in "
+                             f"{self.sim.system.path.name}, or Sim(hub=...))")
         return self.sim.monitor(f"{rn.ident(self.name)} {command}")
 
     def timeline(self, since_us: int = 0) -> list[BusFrame]:
@@ -358,15 +358,16 @@ class Sim:
                  write_protect: dict[str, list[int]] | None = None,
                  trace: Optional[int] = None, coverage_dir: Optional[Path] = None,
                  card_dirs: Iterable[Path | str] = (),
-                 arbitration: Iterable[str] = ()):
+                 arbitration: Iterable[str] = (), hub: Iterable[str] = ()):
         """params overrides device params for this run, e.g.
         {"sd": {"image": "card.img"}}, checked as the system file's are;
         write_protect a board's write-protected flash sectors at power-on, as
         the system file's write_protect, e.g. {"ecu": [0]}. card_dirs adds
         directories an sd-card image may come from, besides the configured
         card-image directory (vhil.system.card_dirs), e.g. a test's tmp_path.
-        arbitration names buses to model in virtual time for this run, as
-        `arbitration: true` on them in the system file (#174), e.g.
+        Every bus is modelled in virtual time (#174) unless the system file
+        says `arbitration: false`; arbitration names buses to model so for
+        this run all the same, hub buses to leave to Renode's hub, e.g.
         ["can_acu"]. trace and coverage_dir default to INSTRUMENT's."""
         self.system = System(Path(system), extra_card_dirs=card_dirs)
         for name, sectors in (write_protect or {}).items():
@@ -377,6 +378,10 @@ class Sim:
             if bus not in self.system.buses:
                 raise ValueError(f"arbitration: no bus '{bus}' in {self.system.id}")
             self.system.buses[bus]["arbitration"] = True
+        for bus in hub:
+            if bus not in self.system.buses:
+                raise ValueError(f"hub: no bus '{bus}' in {self.system.id}")
+            self.system.buses[bus]["arbitration"] = False
         self.system._check()
         for name, values in (params or {}).items():
             if name not in self.system.devices:

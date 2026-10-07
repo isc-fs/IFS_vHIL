@@ -174,30 +174,37 @@ def test_bad_systems_are_rejected_with_a_reason(tmp_path, body, message):
 
 
 def test_an_arbitrated_bus_renders_the_bus_model_after_the_fdcan(tmp_path):
-    """#174: a bus with `arbitration: true` is VhilCanBus, compiled after the
-    platform's FDCAN (it builds on IVhilCanController) and created before any
-    controller connects to it; the others stay Renode's hub."""
+    """#174: every bus is VhilCanBus unless it says `arbitration: false`,
+    compiled once after the platform's FDCAN (it builds on
+    IVhilCanController) and created before any controller connects to it;
+    an opted-out bus stays Renode's hub."""
     s = System(_system(tmp_path, "buses:\n  a: {kind: can, nodes: [ecu.FDCAN1], arbitration: true}\n"
                                  "  b: {kind: can, nodes: [ecu.FDCAN2]}\n"
                                  "  c: {kind: can, nodes: [ecu.FDCAN3], arbitration: false}\n"))
-    assert [s.arbitrated(b) for b in "abc"] == [True, False, False]
+    assert [s.arbitrated(b) for b in "abc"] == [True, True, False]
     text = s.render_renode()
-    assert 'emulation CreateCANHub "a"' not in text
-    assert 'emulation CreateCANHub "b"' in text and 'emulation CreateCANHub "c"' in text
+    assert 'emulation CreateCANHub "a"' not in text and 'emulation CreateCANHub "b"' not in text
+    assert 'emulation CreateCANHub "c"' in text
     assert text.count("models/renode/VhilCanBus.cs") == 1
     assert (text.index("models/renode/Stm32H7Fdcan.cs") < text.index("models/renode/VhilCanBus.cs")
             < text.index('emulation CreateVhilCanBus "a"') < text.index("connector Connect"))
-    assert text.count("CreateVhilCanBus") == 1
+    assert text.count("CreateVhilCanBus") == 2
 
 
 @pytest.mark.parametrize("path", SYSTEMS, ids=lambda p: p.name)
-def test_a_system_without_arbitration_renders_renodes_hub_only(path):
-    """No bus model in a script whose buses don't ask for it: the rendered
-    scripts of systems without `arbitration` are what they were."""
+def test_every_bus_of_a_committed_system_is_arbitrated(path):
+    """Arbitration is the default (#174): a committed system's script creates
+    the bus model for each of its buses and no Renode hub, unless a bus
+    opts out with `arbitration: false`. This changed every rendered script:
+    `emulation CreateCANHub` per bus became `include VhilCanBus.cs` and
+    `emulation CreateVhilCanBus` per bus, after the platform's models."""
     system = System(path)
-    if any(system.arbitrated(b) for b in system.buses):
-        pytest.skip("this system arbitrates a bus")
-    assert "VhilCanBus" not in system.render_renode(socketcan=True)
+    text = system.render_renode(socketcan=True)
+    for bus in system.buses:
+        hub = system.buses[bus].get("arbitration") is False
+        assert (f'emulation CreateCANHub "{bus}"' in text) == hub
+        assert (f'emulation CreateVhilCanBus "{bus}"' in text) == (not hub)
+    assert ("models/renode/VhilCanBus.cs" in text) == any(map(system.arbitrated, system.buses))
 
 
 @pytest.mark.parametrize("value", ["yes", 1, None, "true"])
