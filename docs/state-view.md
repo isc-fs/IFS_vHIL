@@ -74,6 +74,12 @@ what its state panel shows: frames, edges and samples, as the trace always
 has, decoded in the browser as live data will be. A symbol the image lacks
 (an older firmware) is left out and the run's log says so.
 
+Symbols are sampled inside the emulation (`BoardIO.sample`,
+`VhilGpioProbe.Sample` in `models/renode/VhilProbe.cs`), at its sync points,
+so the run never stops for a sample: it stops only at its slices and
+stimuli. A sample time between two sync points (every `time.quantum_s`) is
+read, and stamped, at the next one.
+
 ## In the editor
 
 In REPLAY, the workspace shows each board's state at the scrubber's time
