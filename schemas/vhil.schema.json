@@ -511,6 +511,10 @@
                 "type": "string",
                 "description": "SocketCAN interface this bus is bridged to, when bridging is on.",
                 "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,14}$"
+              },
+              "arbitration": {
+                "type": "boolean",
+                "description": "Model the bus in virtual time: arbitration, frame time with stuff bits, ACK and transmit error counting (models/renode/VhilCanBus.cs, #174). Off: Renode's CAN hub, which hands every frame to every node at once."
               }
             }
           }
