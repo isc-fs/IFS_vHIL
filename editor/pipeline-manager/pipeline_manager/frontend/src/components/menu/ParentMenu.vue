@@ -65,7 +65,7 @@ export default defineComponent({
 <style lang="scss">
     .popup-menu {
         position: absolute;
-        background-color: #{$gray-600}E6;
+        background-color: color-mix(in srgb, #{$gray-600} 90%, transparent);
         border: 1px solid $green;
         border-radius: 10px;
         color: white;
@@ -95,7 +95,6 @@ export default defineComponent({
             & > .__close {
                 flex-grow: 0;
                 user-select: none;
-                outline: none;
                 cursor: pointer;
             }
         }

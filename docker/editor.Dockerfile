@@ -50,6 +50,13 @@ RUN cd /opt/pm/pipeline_manager/frontend && npm ci --no-audit --no-fund \
 # version comes from setuptools-scm, which has no git history here. The
 # frontend is built by ./build below, not by pip.
 COPY editor/pipeline-manager/ /opt/pm/
+# The shell's design tokens and self-hosted fonts, from their one source
+# (vhil/server/static/, which the shell serves too), into the frontend's
+# src/vhil/shell/ (not in git); the fonts checked against the hashes they
+# were pinned with.
+COPY vhil/server/static/tokens.css /opt/pm/pipeline_manager/frontend/src/vhil/shell/
+COPY vhil/server/static/fonts/ /opt/pm/pipeline_manager/frontend/src/vhil/shell/fonts/
+RUN cd /opt/pm/pipeline_manager/frontend/src/vhil/shell/fonts && sha256sum -c --quiet SHA256SUMS
 RUN python -m venv /opt/pm-venv \
     && SETUPTOOLS_SCM_PRETEND_VERSION_FOR_PIPELINE_MANAGER="$PM_VERSION" \
        PIPELINE_MANAGER_SKIP_FRONTEND_BUILD=1 \
@@ -57,6 +64,13 @@ RUN python -m venv /opt/pm-venv \
     && /opt/pm-venv/bin/pip install --no-cache-dir \
         "git+https://github.com/antmicro/kenning-pipeline-manager-backend-communication.git@${PM_COMM_REF}" \
     && cd /opt/pm && PATH=/opt/pm-venv/bin:$PATH ./build server-app --skip-install-deps
+# The built UI carries the copy: every token tokens.css defines, and the
+# fonts, served from the editor's own origin.
+RUN cd /opt/pm/pipeline_manager/frontend \
+    && for t in $(grep -o -- '--[a-z0-9-]*:' src/vhil/shell/tokens.css | sort -u); do \
+        grep -qF -- "$t" dist/css/*.css || { echo "dist/css lacks $t" >&2; exit 1; }; done \
+    && ls dist/fonts/Inter-Regular.*.woff2 dist/fonts/JetBrainsMono-Regular.*.woff2 >/dev/null \
+    && ! grep -l 'fonts.googleapis' -r dist
 
 # What runs: the Python package with the built UI (frontend/dist) and what
 # ./validate loads the frontend's code with (src, node_modules, Node; the

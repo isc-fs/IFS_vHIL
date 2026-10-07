@@ -143,7 +143,10 @@ it back onto the original text, comments kept. Natively:
    `python3 -m venv ~/vhil-tools/pm-venv`, then in that venv
    `SETUPTOOLS_SCM_PRETEND_VERSION_FOR_PIPELINE_MANAGER=0.5.2 PIPELINE_MANAGER_SKIP_FRONTEND_BUILD=1 pip install -e editor/pipeline-manager`
    and `pip install git+https://github.com/antmicro/kenning-pipeline-manager-backend-communication.git`;
-   then `npm ci` in `editor/pipeline-manager/pipeline_manager/frontend` and
+   then `npm ci` in `editor/pipeline-manager/pipeline_manager/frontend`, the
+   shell's tokens and fonts copied in (the image build does the same:
+   `mkdir -p editor/pipeline-manager/pipeline_manager/frontend/src/vhil/shell && cp -r vhil/server/static/tokens.css vhil/server/static/fonts editor/pipeline-manager/pipeline_manager/frontend/src/vhil/shell/`,
+   git ignores the copy; redo it when they change), and
    `PATH=~/vhil-tools/node/bin:$PATH ./build server-app --skip-install-deps`
    in `editor/pipeline-manager`, and `export PM_DIR=$PWD/editor/pipeline-manager`.
 3. The same backend library, and `ruamel.yaml==0.18.*`, in this repo's venv.

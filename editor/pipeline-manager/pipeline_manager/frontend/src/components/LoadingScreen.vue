@@ -37,7 +37,7 @@ with specification and graph are being downloaded and loaded.
   left: 0;
 
   z-index: 99;
-  background-color: #{$gray-600}80;
+  background-color: color-mix(in srgb, #{$gray-600} 50%, transparent);
   animation: fade-in 0.5s;
 }
 

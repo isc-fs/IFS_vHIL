@@ -25,6 +25,7 @@ import { saveSpecificationConfiguration } from '../../components/saveConfigurati
 import getExternalApplicationManager from './ExternalApplicationManager';
 import { checkTerminalExistence, TerminalView } from './utils';
 import { prepareSubgraphInstance } from '../../custom/CustomGraphNode';
+import { setTheme, Theme } from '../../vhil/theme';
 
 /* eslint-disable import/prefer-default-export */
 /* eslint-disable camelcase */
@@ -458,6 +459,14 @@ export function progress_change(params: {progress: number, method: string}) {
  */
 export function metadata_change(params: { metadata: any }) {
     editorManager.updateMetadata(params.metadata, true);
+}
+
+/**
+ * vHIL: switches the editor's theme, so it follows the shell's
+ * (src/vhil/theme.ts, CHANGELOG-VHIL.md).
+ */
+export function vhil_set_theme(params: { theme: Theme }) {
+    setTheme(params.theme);
 }
 
 /**

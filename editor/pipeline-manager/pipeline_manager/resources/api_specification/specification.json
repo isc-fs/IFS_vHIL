@@ -241,6 +241,20 @@
             },
             "returns": null
         },
+        "vhil_set_theme": {
+            "description": "vHIL: sets the editor's theme; 'auto' follows the browser's prefers-color-scheme",
+            "params": {
+                "type": "object",
+                "properties": {
+                    "theme": {
+                        "enum": ["dark", "light", "auto"]
+                    }
+                },
+                "required": ["theme"],
+                "additionalProperties": false
+            },
+            "returns": null
+        },
         "terminal_add": {
             "description": "Create new terminal instance",
             "params": {

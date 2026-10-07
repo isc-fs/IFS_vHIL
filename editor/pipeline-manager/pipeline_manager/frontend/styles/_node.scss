@@ -10,7 +10,7 @@
     display: table;
     max-width: none;
 
-    background-color: #{$gray-600}E6;
+    background-color: color-mix(in srgb, #{$gray-600} 90%, transparent);
     transition: box-shadow var(--baklava-visual-transition) !important;
     filter: none;
 

@@ -1,5 +1,5 @@
 .__markdown {
-    background-color: #{$gray-600}80;
+    background-color: color-mix(in srgb, #{$gray-600} 50%, transparent);
     backdrop-filter: blur(10px);
     position: absolute;
     padding: $spacing-l;
