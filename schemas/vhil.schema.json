@@ -564,7 +564,8 @@
               },
               "arbitration": {
                 "type": "boolean",
-                "description": "Model the bus in virtual time: arbitration, frame time with stuff bits, ACK and transmit error counting (models/renode/VhilCanBus.cs, #174). Off: Renode's CAN hub, which hands every frame to every node at once."
+                "default": true,
+                "description": "Model the bus in virtual time: arbitration, frame time with stuff bits, ACK and transmit error counting (models/renode/VhilCanBus.cs, #174). The default. false: Renode's CAN hub, which hands every frame to every node at once, at the next sync point."
               }
             }
           }

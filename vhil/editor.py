@@ -376,9 +376,10 @@ def specification(catalog: Path = CATALOG) -> dict:
                         "bus": {"type": "twoSided", "size": BUS_SIZE}}],
         "properties": [{"name": "host_netdev", "type": "text", "default": "",
                         "description": "SocketCAN interface to bridge to (optional)."},
-                       {"name": "arbitration", "type": "bool", "default": False,
+                       {"name": "arbitration", "type": "bool", "default": True,
                         "description": "Model the bus in virtual time: arbitration, frame "
-                                       "time, ACK and bus load (#174)."}],
+                                       "time, ACK and bus load (#174). Off: Renode's hub, "
+                                       "which has none of them."}],
         "additionalData": {"vhil": {"kind": "bus", "bitrate": CAN_BITRATE}},
     })
     for model_id, model in _catalog("model", catalog).items():
@@ -479,7 +480,7 @@ def to_dataflow(doc: dict, spec: dict | None = None, source: str | None = None) 
         # (their CAN connectors are on the right; the bus is to their right).
         size = max(BUS_SIZE, BUS_PITCH * (len(bus["nodes"]) + 1))
         n = node(BUS_NODE, name, {"host_netdev": bus.get("host_netdev", ""),
-                                  "arbitration": bus.get("arbitration") is True},
+                                  "arbitration": bus.get("arbitration") is not False},
                  BOARD_WIDTH + 200, y)
         # A bus node is its header and property plus the bus: stack the next
         # one below it, not on top.
@@ -575,8 +576,10 @@ def from_dataflow(dataflow: dict, spec: dict | None = None) -> dict:
             buses[name] = {"kind": "can", "nodes": []}
             if props.get("host_netdev"):
                 buses[name]["host_netdev"] = props["host_netdev"]
-            if props.get("arbitration") is True:
-                buses[name]["arbitration"] = True
+            # Arbitration is the default: only the opt-out is written, so a
+            # system that doesn't name it round-trips without it.
+            if props.get("arbitration") is False:
+                buses[name]["arbitration"] = False
         else:
             dev = {"model": n["name"]}
             if props.get("count", 1) != 1:

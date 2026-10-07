@@ -49,10 +49,12 @@ Drift and findings:
     R2D transition", vcu_r2d_confirm.def) but goes out every 100 ms with the
     latch as value (control_task.cpp:335-337); the generated DBC's cycle time
     is stale.
-  - IFS_HIL#128 (0x703 absent on bench-01) does not reproduce: 0x703 is in
-    every stream tick. Renode transmits instantly, so a TX-FIFO overflow
-    (can_tx_task.cpp:50-52 ignores the HAL's return) cannot show here; bus
-    timing stays a physical-bench question.
+  - IFS_HIL#128 (0x703 absent on bench-01) reproduces on the bus model: a
+    stream tick on the uDV tick posts 18 ACU frames into FDCAN2's 16-deep TX
+    FIFO (fdcan.c:115) faster than the bus drains it, and the HAL's refusal
+    is ignored (can_tx_task.cpp:50-52), so 0x703 and 0x705 never go out
+    (isc-fs/IFS08-CE-ECU#251; strict xfails below). Renode's hub, which
+    delivered every frame at once, hid it.
   - 0x508/0x509 keep 200 ms only while GpsTask wakes on time: last_tx = now
     (gps_task.cpp:135) turns any late wake into a 220 ms interval at the next
     20 ms poll. Seen here every few posts, idle or loaded; how often on the
@@ -69,7 +71,7 @@ from functools import lru_cache
 import pytest
 
 from vhil import candef
-from vhil.sim import Sim, assert_period, intervals_us
+from vhil.sim import Frame, Sim, assert_cadence, assert_period, intervals_us
 from vhil.system import REPO
 
 PIT_CMD, PIT_ACK, HEALTH = 0x7E0, 0x7E1, 0x704
@@ -84,6 +86,8 @@ DASH = {0x510: 8, 0x511: 6, 0x512: 6, 0x513: 6, 0x514: 4, 0x515: 4, 0x516: 4,
 DASH_PERIOD_MS = 200                                  # telemetry_task.cpp:35
 FWINFO_ADDR = 0x08020400                              # firmware_info.cpp:15-16
 TICK_MS = 10
+KERNEL_TICK_US = 1000      # configTICK_RATE_HZ 1000 (FreeRTOSConfig.h:67)
+TX_FIFO_DEPTH = 16         # FDCAN2 TxFifoQueueElmtsNbr (fdcan.c:115)
 BOOT_MS = 300
 
 
@@ -169,6 +173,17 @@ def _gps(sim, *bodies):
     """The module's TX line: whole sentences into USART10, CR LF ended."""
     for body in bodies:
         sim.monitor(f'sysbus.usart10 WriteLine "{_nmea(body)}" CRLF', board="ecu")
+
+
+def _offers(bus, ids, since_us):
+    """id -> the frames with that id the bus model saw the ECU offer from
+    since_us on, each stamped with its offer (TXBAR) time: when the firmware
+    handed it to FDCAN, whatever the bus then made it wait."""
+    out = {}
+    for r in bus.timeline(since_us=since_us):
+        if r.id in ids and r.node.startswith("ecu:"):
+            out.setdefault(r.id, []).append(Frame(r.offer_ns // 1000, r.id, r.extended, r.data))
+    return out
 
 
 def _arm(sim, payload=ENABLE, bus="can_acu", extended=False):
@@ -262,21 +277,41 @@ def test_nothing_streams_before_the_arm(live, stream_ids):
 
 def test_arm_acks_once_and_streams_every_frame_every_100_ms(live, src, stream_ids):
     """H-001: 0x7E0 DEADBEEF -> one 0x7E1 [1] on the next CanRx wake; then
-    all 13 stream frames in one tick, every 100 ms exactly, the first on the
-    tick after the ack (last_pit was 0)."""
+    all 13 stream frames posted in one tick (offered to the bus within one
+    kernel tick: they then go out one after another), every 100 ms on one
+    grid, the first on the tick after the ack (last_pit was 0)."""
     sim, t_arm = live
     acu = sim.can("can_acu")
     acks = acu.frames(PIT_ACK, since_us=t_arm)
     assert [a.data for a in acks] == [b"\x01"], f"acks {acks}"
     assert acks[0].t_us - t_arm < TICK_MS * 1000, f"ack {acks[0].t_us - t_arm} us after the arm"
     period_us = _config(src, "PitDiagStreamMs") * 1000
+    # The frames that reach the bus; isc-fs/IFS08-CE-ECU#251 drops the
+    # last of an 18-frame tick (the next test). FDCAN2's TX FIFO is 16 deep
+    # (fdcan.c:115) and at most 5 non-stream frames precede the stream in
+    # a tick (control_task.cpp:305-338), so at least 11 stream frames fit.
+    offers = _offers(acu, stream_ids, t_arm)
+    assert len(offers) >= TX_FIFO_DEPTH - 5, f"only {sorted(map(hex, offers))} reached the bus"
     first = {}
-    for can_id in stream_ids:
-        frames = acu.frames(can_id, since_us=t_arm)
-        assert_period(frames, period_us=period_us, tolerance_us=0, min_count=LIVE_MS // 100 - 1)
-        first[can_id] = frames[0].t_us
-    assert len(set(first.values())) == 1, f"stream split across ticks: {first}"
+    for can_id, times in offers.items():
+        assert_cadence(times, period_us=period_us, jitter_us=KERNEL_TICK_US,
+                       min_count=LIVE_MS // 100 - 1)
+        first[can_id] = times[0].t_us
+    assert max(first.values()) - min(first.values()) < KERNEL_TICK_US, \
+        f"stream split across ticks: {first}"
     assert 0 <= min(first.values()) - acks[0].t_us <= TICK_MS * 1000
+
+
+@pytest.mark.xfail(strict=True, reason=(
+    "isc-fs/IFS08-CE-ECU#251: a stream tick on the 100 ms uDV tick posts 18 ACU "
+    "frames into FDCAN2's 16-deep TX FIFO (fdcan.c:115); CanTxTask ignores the "
+    "refusal (can_tx_task.cpp:50-52), so 0x703 and 0x705 never reach the bus"))
+def test_every_stream_frame_reaches_the_bus(live, stream_ids):
+    """H-001: all 13 stream frames on the bus, every stream tick."""
+    sim, t_arm = live
+    offers = _offers(sim.can("can_acu"), stream_ids, t_arm)
+    assert set(offers) == set(stream_ids), \
+        f"never on the bus: {sorted(map(hex, set(stream_ids) - set(offers)))}"
 
 
 def test_disarm_acks_and_stops_the_stream_but_not_health(ecu, src, stream_ids):
@@ -292,11 +327,14 @@ def test_disarm_acks_and_stops_the_stream_but_not_health(ecu, src, stream_ids):
     late = acu.frames(stream_ids, since_us=acks[0].t_us + 1)
     assert not late, f"stream after the disarm ack: {late[:3]}"
     health = acu.frames(HEALTH, since_us=t_off)
-    assert_period(health, period_us=_config(src, "DiagPeriodMs") * 1000, tolerance_us=0, min_count=2)
+    assert_cadence(health, period_us=_config(src, "DiagPeriodMs") * 1000, jitter_us=KERNEL_TICK_US,
+                   min_count=2)
     t_on = _arm(ecu)
     ecu.run_for(ms=3 * TICK_MS)
-    resumed = acu.frames(stream_ids, since_us=t_on)
-    assert {f.id for f in resumed} == set(stream_ids), "re-arm did not resume the full stream"
+    resumed = {f.id for f in acu.frames(stream_ids, since_us=t_on)}
+    # All that fit FDCAN2's TX FIFO: 0x703/0x705 are lost on a uDV tick
+    # (isc-fs/IFS08-CE-ECU#251, test_every_stream_frame_reaches_the_bus).
+    assert len(resumed) >= TX_FIFO_DEPTH - 5, f"re-arm resumed only {sorted(map(hex, resumed))}"
 
 
 @pytest.mark.parametrize("payload, bus, extended, ack", [
@@ -341,21 +379,24 @@ def test_every_ecu_frame_matches_its_def(live, contract):
 
 
 def test_every_cyclic_frame_keeps_its_declared_period(live, contract):
-    """Each ControlTask/DiagTask frame with a period in the .def holds it
-    exactly (osDelayUntil). GpsTask's are the next test; the PitCal_* frames
-    run only inside a calibration session (ecu-cal)."""
+    """Each ControlTask/DiagTask frame with a period in the .def is offered
+    to the bus on one grid of it (osDelayUntil), within a kernel tick. When
+    it then goes out depends on the bus: the probe's injected frames win
+    arbitration over many of them. GpsTask's are the next test; the PitCal_*
+    frames run only inside a calibration session (ecu-cal); 0x703 and 0x705
+    never reach the bus (isc-fs/IFS08-CE-ECU#251, the stream test above)."""
     sim, t_arm = live
     acu = sim.can("can_acu")
     off = {}
     for can_id, msg in sorted(contract.items()):
         if (msg.sender != "VCU" or not msg.period_ms or msg.name.startswith("PitCal_")
-                or can_id in (GPS_POSITION, GPS_STATUS)):
+                or can_id in (GPS_POSITION, GPS_STATUS, FWINFO, 0x705)):
             continue
-        frames = acu.frames(can_id, since_us=t_arm)
-        bad = [d for d in intervals_us(frames) if d != msg.period_ms * 1000]
-        if len(frames) < 2 or bad:
-            off[msg.name] = (msg.period_ms, len(frames), bad[:5])
-    assert not off, f"(period ms, frames, off intervals us): {off}"
+        frames = _offers(acu, [can_id], t_arm).get(can_id, [])
+        grid = [f.t_us - frames[0].t_us - k * msg.period_ms * 1000 for k, f in enumerate(frames)]
+        if len(frames) < 2 or max(grid) - min(grid) > KERNEL_TICK_US:
+            off[msg.name] = (msg.period_ms, len(frames), grid[:5])
+    assert not off, f"(period ms, frames, offsets from the grid us): {off}"
 
 
 def test_gps_frames_every_200_ms_or_the_next_poll(live, contract, src):
@@ -374,6 +415,9 @@ def test_gps_frames_every_200_ms_or_the_next_poll(live, contract, src):
         assert not bad, f"{can_id:#x} intervals {d}"
 
 
+@pytest.mark.xfail(strict=True, reason=(
+    "isc-fs/IFS08-CE-ECU#251: 0x703 is refused by FDCAN2's full TX FIFO on every "
+    "stream tick that falls on the uDV tick, and never reaches the bus"))
 def test_fwinfo_is_the_image_record(live, contract, firmware):
     """0x703 carries the version and git hash of the record the bootloader
     validates (A-005's fields), and the hash is not blank."""
@@ -459,7 +503,7 @@ def test_rpm_mirrors_to_shaft_rpm(ecu, contract, erpm):
     ecu.run_for(ms=210)
     shaft = int(erpm / 10)
     rpm = ecu.can("can_acu").frames(MOTOR_RPM, since_us=t)
-    assert_period(rpm, period_us=TICK_MS * 1000, tolerance_us=0, min_count=20)
+    assert_cadence(rpm, period_us=TICK_MS * 1000, jitter_us=KERNEL_TICK_US, min_count=20)
     assert {contract[MOTOR_RPM].decode(f.data)["motor_rpm"] for f in rpm} == {shaft}
     assert _latest(ecu, contract[0x702])["inv_rpm"] == shaft
 

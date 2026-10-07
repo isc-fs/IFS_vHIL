@@ -52,6 +52,7 @@ from vhil.system import REPO
 
 CAL_CMD, CAL_STATUS, CAL_APPS, CAL_BRAKE = 0x7E2, 0x7E3, 0x7E4, 0x7E5
 HEALTH, PIT_ARM, PIT_BRAKE = 0x704, 0x7E0, 0x705
+UDV_TS_ACTIVE = 0x504                # 100 ms uDV tick (control_task.cpp:326-338)
 AMS_OK_PRECHARGE, INV_RPM = 0x020, 0x463
 POLL, ENTER, CAPTURE, READ_STORED, READ_STAGED, COMMIT, ABORT, RESET_DEFAULTS = range(8)
 APPS_REST, APPS_FULL, BRAKE_REST, BRAKE_PRESSED, APPS_MID = 1, 2, 3, 4, 5
@@ -93,6 +94,31 @@ def _record(values):
 
 def _crc(values):
     return zlib.crc32(_record(values))
+
+
+def _offer_us(sim, frame):
+    """When the ECU handed a frame it sent to FDCAN (its offer on the bus
+    model's timeline): on its ControlTask tick, whatever the bus then made
+    it wait."""
+    for r in sim.can("can_acu").timeline(since_us=frame.t_us - 20_000):
+        if r.id == frame.id and r.data == frame.data and (r.end_ns - 2000) // 1000 == frame.t_us:
+            return r.offer_ns // 1000
+    raise AssertionError(f"{frame} not on the bus timeline")
+
+
+def _arm_pit_diag_off_the_udv_tick(sim):
+    """Arm pit-diag so its 100 ms stream falls between uDV ticks (0x504),
+    where a stream tick's 15 ACU frames fit FDCAN2's 16-deep TX FIFO. On the
+    uDV tick it is 18 and 0x705 never goes out (isc-fs/IFS08-CE-ECU#251,
+    a strict xfail in test_ecu_diag.py). The arm is handled within a tick
+    and the stream starts on the next."""
+    acu = sim.can("can_acu")
+    sim.run_for(ms=STREAM_MS + TICK_MS)
+    last = acu.last(UDV_TS_ACTIVE).t_us
+    now = sim.now_us()
+    target = last + ((now - last) // (STREAM_MS * 1000) + 1) * STREAM_MS * 1000 + STREAM_MS * 500
+    sim.run_for(us=target - 5000 - now)
+    acu.send(PIT_ARM, bytes.fromhex("DEADBEEF"))
 
 
 def _cmd(sim, cmd, arg=0, guard=0) -> Reply:
@@ -248,11 +274,13 @@ def test_capture_takes_the_live_adc_and_derives_the_brake_thresholds(ecu):
 
 
 def test_the_session_streams_its_status_every_100_ms(ecu):
-    from vhil.sim import assert_period
+    """On a 100 ms grid, within a kernel tick (ECU FreeRTOS tick:
+    configTICK_RATE_HZ 1000, FreeRTOSConfig.h:67)."""
+    from vhil.sim import assert_cadence
     _cmd(ecu, ENTER, guard=GUARD)
     t = ecu.run_for(ms=1000)
     beats = ecu.can("can_acu").frames([CAL_STATUS], since_us=t - 1_000_000)
-    assert_period(beats, period_us=STREAM_MS * 1000, tolerance_us=0, min_count=9)
+    assert_cadence(beats, period_us=STREAM_MS * 1000, jitter_us=1000, min_count=9)
     assert all(f.data[0] == ACTIVE for f in beats)
 
 
@@ -329,7 +357,10 @@ def test_a_spinning_motor_keeps_the_session_shut_until_it_reports_zero(ecu):
 
 def test_an_idle_session_closes_after_30_s(ecu):
     """No traffic for CalSessionTimeoutMs: one 0x7E3 Idle/NotInSession on the
-    tick it lapses, then the stream stops."""
+    tick it lapses, then the stream stops. Timed from tick to tick: the
+    kernel tick (1 ms, FreeRTOSConfig.h:67) in which ControlTask offered
+    the ENTER reply and the close; each frame then waits for the bus behind
+    the frames posted before it in its tick."""
     acu = ecu.can("can_acu")
     t = ecu.now_us()
     _cmd(ecu, ENTER, guard=GUARD)
@@ -339,7 +370,7 @@ def test_an_idle_session_closes_after_30_s(ecu):
     closed = [f for f in after if f.data[0] == IDLE]
     assert closed, "the session never timed out"
     assert closed[0].data[2] == NOT_IN_SESSION
-    lapse_ms = (closed[0].t_us - reply.t_us) / 1000
+    lapse_ms = _offer_us(ecu, closed[0]) // 1000 - _offer_us(ecu, reply) // 1000
     assert SESSION_TIMEOUT_MS <= lapse_ms <= SESSION_TIMEOUT_MS + TICK_MS, lapse_ms
     assert all(f.t_us <= closed[0].t_us for f in after), "status kept streaming after close"
 
@@ -377,7 +408,7 @@ def test_commit_applies_now_persists_one_flash_word_and_reloads(fresh):
     appended after the bootloader's with seq = max + 1, cal_status Loaded,
     and after a power cut the ECU boots on the committed set."""
     acu = fresh.can("can_acu")
-    acu.send(PIT_ARM, bytes.fromhex("DEADBEEF"))
+    _arm_pit_diag_off_the_udv_tick(fresh)
     before = _entries(fresh)
     _sweep(fresh)
     _pedals(fresh, 2500, 2200, 1900)
