@@ -29,7 +29,8 @@ records every board's [state view](state-view.md), as every web-app run does,
 and paces virtual time to wall time at each slice boundary: when the
 emulation runs faster than real time it waits, and when it runs slower it
 goes as fast as it can and never sprints to catch up (a deficit over 250 ms
-is forgiven, as `models/renode/VhilPacer.cs` does for the bench). Each slice
+is forgiven, as `models/renode/VhilPacer.cs` does for the bench, and the
+next slice runs at once). Each slice
 writes a `clock` record:
 
 ```json

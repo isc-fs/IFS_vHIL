@@ -248,8 +248,12 @@ class LiveSession:
         """At virtual time now_us, before running the slice to until_us."""
         v0, w0 = self._base
         if (self.clock_fn() - w0) - (now_us - v0) / 1e6 / self.rtf > self.max_lag_s:
-            self.rebase(now_us, window=False)   # behind: forgive, never sprint to catch up
-            v0, w0 = self._base
+            # Behind: forgive, never sprint to catch up. Wall time now is the
+            # slice's end, so it runs at once: re-based at its start instead,
+            # an emulation slower than real time would wait out a whole slice
+            # each time it is forgiven.
+            self.rebase(until_us, window=False)
+            return
         wait = (until_us - v0) / 1e6 / self.rtf - (self.clock_fn() - w0)
         if wait >= 0.001:
             self.sleep(wait)
@@ -359,7 +363,15 @@ def execute_scenario(sim, scenario: dict, trace: TraceWriter, *,
         return target["port"], target["pin"]
 
     pin_names: dict[tuple[str, str], str] = {}     # (board, "port:pin") -> "PB4"
-    samplers = []                                  # [next_t_us, period_us, watch]
+    # Symbols are sampled inside the emulation (BoardIO.sample), so a run
+    # stops only at its slices and stimuli; each slice collects what was
+    # sampled in it. The emulation samples at its sync points (every
+    # time.quantum_s): a time between two is sampled, and stamped, at the
+    # next. Stopping the run there instead, as this loop once did, moved
+    # every later sync point of the emulation, and with it when the
+    # firmware's frames went out.
+    samplers: list = []                            # [first_t_us, period_us, watch], to start
+    sampled_order: dict[tuple[str, str], int] = {}  # (board, name) -> its order at one time
     initial: list[dict] = []                       # pin levels as watching starts
     edge_boards: set[str] = set()
 
@@ -720,6 +732,12 @@ def execute_scenario(sim, scenario: dict, trace: TraceWriter, *,
             raise box["e"]
         return box["t"]
 
+    def start_samplers(now: int) -> None:
+        for first, period, w in samplers:
+            sampled_order.setdefault((w["board"], w["name"]), len(sampled_order))
+            sim.io(w["board"]).sample(w["name"], w.get("size", 1), period, first, now)
+        samplers.clear()
+
     now = sim.now_us()
     since = now          # frames/edges from here on belong to the next slice
     slice_end = now + slice_us
@@ -730,16 +748,18 @@ def execute_scenario(sim, scenario: dict, trace: TraceWriter, *,
     while True:
         while events and events[0][0] <= now:
             heapq.heappop(events)[2]()
-        for s in samplers:
-            if s[0] <= now:
-                w = s[2]
-                batch.append({"kind": "sample", "t_us": now, "board": w["board"], "name": w["name"],
-                              "value": sim.read_symbol(w["board"], w["name"], w.get("size", 1))})
-                counts["samples"] += 1
-                while s[0] <= now:
-                    s[0] += s[1]
+        start_samplers(now)
         slice_done = now >= slice_end or now >= end_us
         if slice_done:
+            # A slice's samples first at each time, in the order their
+            # samplers started, as when the run stopped to read them.
+            samples = [(t, sampled_order[(board, name)], board, name, value)
+                       for board in sorted({b for b, _ in sampled_order})
+                       for t, name, value in sim.io(board).samples(now)]
+            for t, _, board, name, value in sorted(samples):
+                batch.append({"kind": "sample", "t_us": t, "board": board, "name": name,
+                              "value": value})
+                counts["samples"] += 1
             for bus in system.buses:
                 seen = sim.can(bus).frames(since_us=since)
                 mine = sim.can(bus).sent(since_us=since)
@@ -784,8 +804,7 @@ def execute_scenario(sim, scenario: dict, trace: TraceWriter, *,
                     # The ops already scheduled take effect: the run ends at
                     # the end of the slice they were scheduled for.
                     end_us = min(end_us, slice_end)
-        target = min([end_us, slice_end] + ([events[0][0]] if events else [])
-                     + [s[0] for s in samplers])
+        target = min([end_us, slice_end] + ([events[0][0]] if events else []))
         new = run_slice(now, max(target - now, 1))
         if new <= now:
             raise RuntimeError(f"virtual time stuck at {now} us")

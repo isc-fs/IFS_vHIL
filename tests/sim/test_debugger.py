@@ -170,7 +170,8 @@ def test_a_live_session_breaks_steps_and_goes_on(images, tmp_path):
     trace = TraceWriter(path)
     with Sim(ECU_AMS, images("ecu-ams"), log_path=tmp_path / "renode.log") as sim:
         summary = execute_run(sim, {"kind": "run", "live": True, "virtual_ms": 60_000,
-                                    "slice_ms": 50}, trace, session=session, debug_hub=hub)
+                                    "slice_ms": 50}, trace, session=session, debug_hub=hub,
+                              state_view=True)
     trace.close()
     assert summary["stopped"] == "op"
     assert [s[1] for s in session.settled] == ["applied"] * 7, session.settled

@@ -349,6 +349,26 @@ class BoardIO:
     def level(self, pin: str) -> bool:
         return self.sim.monitor(f'{self.probe} Level {rn.quote(pin)}').strip() == "True"
 
+    def sample(self, symbol: str, size: int, period_us: int, first_us: int, now_us: int) -> None:
+        """Sample a firmware global (1, 2 or 4 bytes) at first_us and every
+        period_us after it, inside the emulation (models/renode/VhilProbe.cs,
+        Sample): what read_symbol would read with the run stopped at each of
+        those times, without stopping it. now_us: the time the Sim is
+        paused at; a sample due by then is taken now."""
+        address, _ = elf.symbol(self.sim.firmware[self.board], symbol)
+        self.sim.monitor(f'{self.probe} Sample {rn.quote(symbol)} {_int(address)} {_int(size)} '
+                         f'{_int(period_us)} {_int(first_us)} {_int(now_us)}')
+
+    def samples(self, now_us: int) -> list[tuple[int, str, int]]:
+        """[(t_us, symbol, value)] sampled since the last call, up to now_us
+        (the time the Sim is paused at)."""
+        out = []
+        for line in self.sim.monitor(f'{self.probe} Samples {_int(now_us)}').splitlines():
+            parts = line.split()
+            if len(parts) == 3 and parts[0].isdigit():
+                out.append((int(parts[0]), parts[1], int(parts[2])))
+        return out
+
 
 class Sim:
     def __init__(self, system: Path | str, firmware: dict[str, Path | str], *,
@@ -585,9 +605,13 @@ class Sim:
         if board is None and len(self.system.boards) == 1:
             board = next(iter(self.system.boards))
         self.last_activity = next(_activity)
-        if board is not None:
+        # Select the board's machine only when it isn't selected already: a
+        # `mach set` is a round trip as dear as the command.
+        if board is not None and board != self._mach:
             self._monitor.execute(f"mach set {rn.quote(rn.ident(board))}")
             self._mach = board
+        if command.startswith(("mach ", "include ")):
+            self._mach = None    # may select another machine
         return self._monitor.execute(command)
 
 
