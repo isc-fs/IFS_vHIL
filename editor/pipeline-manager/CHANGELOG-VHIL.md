@@ -176,6 +176,47 @@ from `git archive 04613679` except as listed below.
     - **Layout CSS** is `src/vhil/workspace.css`, on the tokens. Script sets
       only the grid's sizes, as custom properties through the CSSOM (Vue's
       `:style` objects), which `style-src 'self'` allows.
+14. **Runs, REPLAY and the Bus tab** (step 9 of the editor workspace plan).
+    All in `src/vhil/` but for the image build; no Pipeline Manager file
+    changes.
+    - **REPLAY** (`replay.js`, `workspace.js`): opening a run from Runs
+      (`VhilRail.vue`: each row replays its run; `↗` opens its shell page),
+      or `?run=<id>`, opens the run's system as saved on its branch, loads
+      its record, its CAN contract (`/api/runs/<id>/contract`) and its trace
+      (`/api/runs/<id>/trace?kinds=frame,log`, 50 000 records a page,
+      following `X-Trace-Cursor`: `api.js` `tracePage`), and sets the mode
+      to REPLAY. The top bar (`VhilTopBar.vue`) trades the run duration for
+      the run's clock: a range over its virtual time, `t=` and the end, the
+      run's page link and Exit; the mode pill takes `--status-replay`. The
+      run's log records go to the Log. With no system open, Runs lists every
+      system's runs. Opening a system, or Run, leaves REPLAY.
+    - **Frames** (`frames.js`, `monitor.js`, pure; `tests/js/frames.test.mjs`
+      under node): `FrameStore` keeps frames in typed arrays, a ring of
+      2^20 that drops the oldest, sorted by virtual time (the worker writes a
+      slice bus by bus); `Monitor` folds them into one row per (bus, id) as
+      of a time, only the frames since the last call while time moves
+      forward.
+    - **The Bus tab** (`VhilBus.vue`, `bus.css`; `VhilDock.vue` renders it):
+      Monitor (one row per (bus, id): last data with the bytes changed in
+      the last 250 ms marked, fields decoded, count, mean period, age) and
+      Trace (every frame, filtered by bus and id with the shell's id filter,
+      the frame at the scrubber marked and centred while following, later
+      ones dimmed; a click moves the scrubber). Both are `rowtable.js`: the
+      shell's `vtable.js` window (`windowFor`, `scrollFor`) over a fixed pool
+      of rows made once and filled through `textContent` and classes, drawn
+      once per animation frame; only the rows in view are decoded, with the
+      shell's `decode.js`, and cached. `window.vhilBusTimings` keeps the last
+      600 draw times (ms), for the performance check.
+    - **One source:** `docker/editor.Dockerfile` copies `vtable.js` and
+      `decode.js` from `vhil/server/static/` into `src/vhil/shell/` with the
+      tokens and `editor-run.js`; the editor CI job compares the image's
+      copies with the checkout.
+    - **The shell** (`vhil/server/static/app.js`, `editor.js`): `#/runs/<id>`
+      redirects to `/editor/?run=<id>`, `#/runs` to the Runs view,
+      `#/systems[/<id>]` to the workspace, as `#/editor` did. Its own pages
+      stay under `#/classic/` (`api.js` `runPage`): a run's page keeps its
+      signals and artifacts, which REPLAY doesn't show yet, and links to
+      REPLAY; the runs list keeps its pytest runs.
 
 ## Left for later
 
