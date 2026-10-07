@@ -106,7 +106,7 @@ vHIL: Commit…, Open PR and the keyboard map, as modal dialogs
             <label>Name
                 <input
                     v-model.trim="saveName" class="vhil-input mono" required
-                    pattern="[a-z0-9][a-z0-9-]{0,63}" placeholder="tsms-precharge-live"
+                    pattern="[a-z0-9][a-z0-9\-]{0,63}" placeholder="tsms-precharge-live"
                 />
             </label>
             <div class="vhil-actions">

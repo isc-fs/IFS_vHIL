@@ -541,6 +541,7 @@ async function liveEnded(state) {
     try { run = await runRecord(replay.id); } catch { /* the record as it was */ }
     endLive(run);
     ws.mode = 'REPLAY';
+    document.title = `run ${replay.id} · ${ws.id} · IFS vHIL`;
     if (ws.run && ws.run.id === replay.id) ws.run.state = state;
     const s = run?.summary || {};
     const why = { op: 'stopped', idle: 'stopped: idle', end: 'reached its cap' }[s.stopped] || state;
