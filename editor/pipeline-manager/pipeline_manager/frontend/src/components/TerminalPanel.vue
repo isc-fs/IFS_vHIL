@@ -217,7 +217,7 @@ export default defineComponent({
             // Focus on terminal if it is not readonly
             if (activeTerminal.value !== undefined &&
             (!checkReadonly || !terminalStore.isReadOnly(activeTerminal.value))) {
-                nextTick().then(() => document.getElementById('hterm-terminal')?.focus());
+                nextTick().then(() => document.querySelector<HTMLElement>('#pm-terminal input')?.focus());
             }
         };
 
