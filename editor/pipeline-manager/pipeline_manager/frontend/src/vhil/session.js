@@ -23,7 +23,7 @@ import {
 } from './live.js';
 import { feedLive, replay } from './replay.js';
 
-const KINDS = 'frame,log,edge,sample,op,clock';
+const KINDS = 'frame,log,edge,sample,bus_load,op,clock';
 const FLUSH_MS = 50;
 const RATES_MS = 250; // the wires' frames/s and dash march: 4 Hz
 

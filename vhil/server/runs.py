@@ -63,8 +63,9 @@ log = logging.getLogger("vhil.server.runs")
 STATES = ("queued", "running", "passed", "failed", "error", "cancelled")
 TERMINAL = frozenset({"passed", "failed", "error", "cancelled"})
 # op: a live session's op as the worker applied it (or refused it); clock: a
-# live run's per-slice heartbeat (vhil/server/session.py).
-TRACE_KINDS = frozenset({"frame", "edge", "sample", "log", "op", "clock"})
+# live run's per-slice heartbeat (vhil/server/session.py); bus_load: a bus's
+# load over a slice (vhil/worker.py, #174).
+TRACE_KINDS = frozenset({"frame", "edge", "sample", "log", "op", "clock", "bus_load"})
 TRACE = "trace.jsonl"
 # The kind of a trace's first line, which says whose trace it is (trace_header).
 HEADER_KIND = "run"

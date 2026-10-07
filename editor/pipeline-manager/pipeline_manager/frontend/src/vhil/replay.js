@@ -15,7 +15,8 @@
  * Step 13: the trace's samples and edges too, and, once the contract (with
  * each board's state view) and the trace are both in, `replay.stateTrace`
  * (state.js): what the State tab, the inspector and the node pills show at
- * the scrubber's time.
+ * the scrubber's time. The worker's `bus_load` records (one per bus and
+ * slice, vhil/worker.py; #174) come with them, for the Bus tab's load.
  *
  * Step 15: a live session fills the same store and model as its records
  * stream (beginLive, feedLive; session.js): `replay.live` while it runs,
@@ -48,6 +49,7 @@ export const replay = reactive({
     edges: [], // its pin edges (the scenario timeline's actual levels; step 11)
     samples: [], // its symbol samples (step 13)
     stateTrace: null, // the boards' state over the run (state.js; raw), once all is in
+    loads: [], // the run's bus_load records, in time order (#174)
     version: 0, // bumped when the frames change
     live: false, // a live session's records stream in (step 15)
     tick: 0, // bumped per live batch: frames appended, nothing else changed
@@ -71,6 +73,7 @@ function reset() {
         edges: [],
         samples: [],
         stateTrace: null,
+        loads: [],
         version: replay.version + 1,
         live: false,
     });
@@ -130,11 +133,14 @@ export async function loadRun(run) {
     const logs = [];
     const edges = [];
     const samples = [];
-    const into = { log: logs, edge: edges, sample: samples };
+    const loads = [];
+    const into = {
+        log: logs, edge: edges, sample: samples, bus_load: loads,
+    };
     let cursor = '';
     try {
         for (;;) {
-            const q = new URLSearchParams({ kinds: 'frame,log,edge,sample', limit: String(PAGE) });
+            const q = new URLSearchParams({ kinds: 'frame,log,edge,sample,bus_load', limit: String(PAGE) });
             if (cursor) q.set('cursor', cursor);
             // eslint-disable-next-line no-await-in-loop
             const page = await tracePage(`/api/runs/${run.id}/trace?${q}`);
@@ -160,6 +166,7 @@ export async function loadRun(run) {
         logs: markRaw(logs),
         edges: markRaw(edges),
         samples: markRaw(samples),
+        loads: markRaw(loads),
     });
     buildState();
     replay.version += 1;
@@ -186,6 +193,7 @@ export function beginLive(run) {
         logs: markRaw([]),
         edges: markRaw([]),
         samples: markRaw([]),
+        loads: markRaw([]),
     });
     call('GET', `/api/runs/${run.id}/contract`).then((c) => {
         if (mine !== loading) return;
@@ -220,12 +228,15 @@ export function feedLive(records) {
             if (tr) tr.add(r);
         } else if (r.kind === 'log') {
             replay.logs.push(r);
+        } else if (r.kind === 'bus_load') {
+            replay.loads.push(r);
         }
         if (tr && r.t_us > tr.end) tr.end = r.t_us;
     });
     trim(replay.samples);
     trim(replay.edges);
     trim(replay.logs);
+    trim(replay.loads);
     if (frames.length) store.append(frames);
     replay.tick += 1;
 }
@@ -236,6 +247,24 @@ export function endLive(run) {
     replay.live = false;
     if (run) replay.run = run;
     replay.version += 1;
+}
+
+/**
+ * A bus's load as of virtual time `t`: {load, peak, exact} from its last
+ * bus_load record at or before `t` and the highest one so far, or null.
+ */
+export function loadAt(bus, t) {
+    let last = null;
+    let peak = 0;
+    replay.loads.some((r) => {
+        if (r.t_us > t) return true;
+        if (r.bus === bus) {
+            last = r;
+            peak = Math.max(peak, r.load);
+        }
+        return false;
+    });
+    return last && { load: last.load, peak, exact: last.exact };
 }
 
 /** "1.234 s". */

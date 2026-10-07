@@ -62,8 +62,9 @@ NOT_CONNECTED = "n.c."
 # it. Pipeline Manager places a new stub at size / 2, so a tiny bus stacks
 # every connection on the node header.
 BUS_SIZE, BUS_PITCH = 120, 40
-# A bus node's height above its bus (header, host_netdev, margin), in pixels.
-BUS_NODE_HEIGHT = 200
+# A bus node's height above its bus (header, host_netdev, arbitration,
+# margin), in pixels.
+BUS_NODE_HEIGHT = 240
 # How far apart boards stack in a graph made from a system: a board node's
 # height and a margin, in pixels.
 BOARD_PITCH = 900
@@ -374,7 +375,10 @@ def specification(catalog: Path = CATALOG) -> dict:
                         "maxConnectionsCount": -1,
                         "bus": {"type": "twoSided", "size": BUS_SIZE}}],
         "properties": [{"name": "host_netdev", "type": "text", "default": "",
-                        "description": "SocketCAN interface to bridge to (optional)."}],
+                        "description": "SocketCAN interface to bridge to (optional)."},
+                       {"name": "arbitration", "type": "bool", "default": False,
+                        "description": "Model the bus in virtual time: arbitration, frame "
+                                       "time, ACK and bus load (#174)."}],
         "additionalData": {"vhil": {"kind": "bus", "bitrate": CAN_BITRATE}},
     })
     for model_id, model in _catalog("model", catalog).items():
@@ -474,7 +478,8 @@ def to_dataflow(doc: dict, spec: dict | None = None, source: str | None = None) 
         # One stub per connection, spread along the bus, facing the boards
         # (their CAN connectors are on the right; the bus is to their right).
         size = max(BUS_SIZE, BUS_PITCH * (len(bus["nodes"]) + 1))
-        n = node(BUS_NODE, name, {"host_netdev": bus.get("host_netdev", "")},
+        n = node(BUS_NODE, name, {"host_netdev": bus.get("host_netdev", ""),
+                                  "arbitration": bus.get("arbitration") is True},
                  BOARD_WIDTH + 200, y)
         # A bus node is its header and property plus the bus: stack the next
         # one below it, not on top.
@@ -570,6 +575,8 @@ def from_dataflow(dataflow: dict, spec: dict | None = None) -> dict:
             buses[name] = {"kind": "can", "nodes": []}
             if props.get("host_netdev"):
                 buses[name]["host_netdev"] = props["host_netdev"]
+            if props.get("arbitration") is True:
+                buses[name]["arbitration"] = True
         else:
             dev = {"model": n["name"]}
             if props.get("count", 1) != 1:

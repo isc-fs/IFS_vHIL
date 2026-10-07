@@ -6,7 +6,9 @@ data (the bytes that changed in it marked), its fields decoded from the
 firmware's .def contracts, how many came, the mean period and the age.
 Trace: every frame in time order, filtered by bus and id, the last one at
 the scrubber's time marked and kept in view (follow); a click moves the
-scrubber there.
+scrubber there. The summary carries each bus's load as of the scrubber
+(the worker's bus_load records, #174): exact on a bus with arbitration,
+an estimate from the frames (~) on Renode's hub.
 
 Both tables are rowtable.js (the shell's vtable.js window, rows reused) and
 decode with the shell's decode.js, copied into shell/ by the image build:
@@ -89,7 +91,7 @@ import * as dec from './shell/decode.js';
 import RowTable from './rowtable.js';
 import { filterIndices, lastAtOrBefore } from './frames.js';
 import { Monitor, meanPeriod } from './monitor.js';
-import { replay, store } from './replay.js';
+import { loadAt, replay, store } from './replay.js';
 import VhilSend from './VhilSend.vue';
 import { cannotSend, live as session, stopAll } from './session.js';
 import './bus.css';
@@ -342,7 +344,14 @@ export default defineComponent({
             if (replay.state !== 'ready') return '';
             replay.tick; // eslint-disable-line no-unused-expressions
             const kept = store.dropped ? ` (${store.dropped.toLocaleString()} dropped)` : '';
-            return `${replay.live ? 'LIVE ' : ''}run ${replay.id} · ${store.length.toLocaleString()} frames${kept}`;
+            const pct = (x) => `${Math.round(x * 100)} %`;
+            const loads = (bus.value ? [bus.value] : buses.value).map((b) => {
+                const l = loadAt(b, replay.t);
+                return l && `${b} ${l.exact ? '' : '~'}${pct(l.load)} (peak ${pct(l.peak)})`;
+            }).filter(Boolean);
+            const load = loads.length ? ` · load ${loads.join(', ')}` : '';
+            const live = replay.live ? 'LIVE ' : '';
+            return `${live}run ${replay.id} · ${store.length.toLocaleString()} frames${kept}${load}`;
         });
 
         return {

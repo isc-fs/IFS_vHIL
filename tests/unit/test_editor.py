@@ -424,6 +424,17 @@ def test_firmware_refs_survive_the_round_trip(spec, path):
     assert validate(doc) == []
 
 
+def test_bus_arbitration_survives_the_round_trip(spec):
+    """#174: a bus's `arbitration: true` is a property of its bus node."""
+    doc = yaml.safe_load((REPO / "systems" / "ecu-ams.yaml").read_text())
+    doc["buses"]["can_acu"]["arbitration"] = True
+    graph = to_dataflow(doc, spec)
+    bus = next(n for n in graph["graphs"][0]["nodes"] if n["instanceName"] == "can_acu")
+    assert {p["name"]: p["value"] for p in bus["properties"]}["arbitration"] is True
+    assert from_dataflow(graph, spec) == doc
+    assert validate(doc) == []
+
+
 @pytest.mark.parametrize("path", SYSTEMS, ids=lambda p: p.name)
 def test_connections_reference_interfaces_that_exist(spec, path):
     graph = to_dataflow(yaml.safe_load(path.read_text()), spec)["graphs"][0]
