@@ -53,7 +53,7 @@ and records it in the trace.
             <template v-if="periodic">
                 <label>Period (ms)
                     <input
-                        v-model.number="periodMs" type="number" min="0.5" max="60000" step="1"
+                        v-model.number="periodMs" type="number" min="0.5" max="60000" step="any"
                         class="vhil-input mono --num"
                     />
                 </label>

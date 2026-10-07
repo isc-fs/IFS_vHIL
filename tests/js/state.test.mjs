@@ -157,6 +157,7 @@ test("in the bootloader's 2 s window a card says so, not the app's first state",
   for (let t = 0; t <= 2600; t += 10) tr.add(sample(t, "g_state", t < 2400 ? 0 : 1));
   assert.equal(BOOT_WINDOW_US, 2e6);
   assert.equal(tr.cardAt("ams", ms(1500)).boot, true);
+  assert.equal(new StateTrace(CONTRACT, { rawOf: rawValue }).cardAt("ams", 0).stale, false);
   assert.equal(tr.pillAt("ams", ms(1500)).text, "AMS · bootloader");
   assert.equal(tr.cardAt("ams", ms(2100)).boot, false);
   assert.equal(tr.pillAt("ams", ms(2100)).text, "AMS · Start");

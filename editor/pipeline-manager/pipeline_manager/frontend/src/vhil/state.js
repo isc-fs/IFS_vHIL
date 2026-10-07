@@ -341,7 +341,8 @@ export class StateTrace {
         card.cleared = card.faults.filter((f) => f.cleared);
         card.faulted = card.active.length > 0;
         card.has = Boolean(card.state?.has);
-        card.stale = Boolean(card.state && (!card.state.has || card.state.stale));
+        // Not stale in the bootloader's window: the app isn't running yet.
+        card.stale = !card.boot && Boolean(card.state && (!card.state.has || card.state.stale));
         return card;
     }
 

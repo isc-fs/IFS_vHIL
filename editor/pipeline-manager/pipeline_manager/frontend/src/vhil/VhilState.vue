@@ -10,8 +10,8 @@ live session will feed the same model (state.js) as its records stream.
 <template>
     <div class="vhil-state">
         <p v-if="replay.state === 'idle'" class="vhil-placeholder muted">
-            Open a run from Runs in the sidebar: each board's state shows here at the
-            scrubber's time (LIVE comes with the live session).
+            Open a run from Runs in the sidebar, or start a live session (● Live): each
+            board's state shows here at the scrubber's time, or as it happens.
         </p>
         <p v-else-if="replay.state === 'loading'" class="vhil-placeholder muted">
             Loading run {{ replay.id }}…
@@ -56,7 +56,7 @@ export default defineComponent({
         const notes = computed(() => {
             const c = replay.contract || {};
             const out = Object.values(c.state || {}).flatMap((v) => v.errors || []);
-            if (tr.value && !replay.samples.length) {
+            if (tr.value && !replay.live && !replay.samples.length) {
                 out.push('this run recorded no symbol samples: its states show "no data"');
             }
             return out;
