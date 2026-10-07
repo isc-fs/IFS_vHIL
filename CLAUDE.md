@@ -113,6 +113,15 @@ IFS_HIL recipe ─▶ ECU08.elf / AMS.elf  (same image the physical bench flashe
         tests: tests/*.robot (Renode-native) · IFS_HIL pytest suites (Phase 1+)
 ```
 
+A CAN bus is Renode's hub, which delivers every frame whole and at once: no
+bit time, arbitration, load or ACK. A bus with `arbitration: true` (or
+`Sim(..., arbitration=[...])`) is the vHIL's bus model instead
+(`models/renode/VhilCanBus.cs`, [`docs/can-bus.md`](docs/can-bus.md)).
+Frames wait for the bus and lose arbitration, a lone node goes
+error-passive, and the timeline and load are exact in virtual time. Between
+boards, what a firmware sees can lag by up to one sync quantum. Test bus
+load, priority and ACK on an arbitrated bus, never on the hub.
+
 ## Hard invariants
 
 All of these are hard rules. The general ones hold for every board, platform

@@ -36,6 +36,8 @@ from vhil.flash_image import FLASH_BASE
 REPO = Path(__file__).resolve().parent.parent
 SCHEMA = REPO / "schemas" / "vhil.schema.json"
 CATALOG = REPO / "catalog"
+# The CAN bus model a bus with `arbitration: true` uses (#174).
+CAN_BUS_SOURCE = REPO / "models" / "renode" / "VhilCanBus.cs"
 
 # What a system file may name, as the schema says (schemas/vhil.schema.json):
 # checked again here so that a schema that loosens can't let a value reach a
@@ -273,6 +275,9 @@ class System:
                 need(ENDPOINT, node, f"bus '{bus}': node")
             if "host_netdev" in spec:
                 need(NETDEV, spec["host_netdev"], f"bus '{bus}': host_netdev")
+            if "arbitration" in spec and not isinstance(spec["arbitration"], bool):
+                raise SystemError(f"bus '{bus}': arbitration must be true or false, "
+                                  f"not {spec['arbitration']!r}")
         for name, dev in self.devices.items():
             need(NAME, name, "device name")
             need(ID, dev["model"], f"device '{name}': model")
@@ -670,6 +675,11 @@ class System:
                     out[controller] = bus
         return out
 
+    def arbitrated(self, bus: str) -> bool:
+        """Whether a bus is modelled in virtual time (VhilCanBus) rather than
+        by Renode's hub: `arbitration: true` in the system file."""
+        return self.buses[bus].get("arbitration") is True
+
     def flash_bus(self, board: str) -> str | None:
         """The bus a board is flashed over (its flash_bus connector's), or None
         if it names none or that connector is on no bus of this system."""
@@ -795,8 +805,11 @@ class System:
         if quantum:
             rn.number(quantum)
             out += [f"emulation SetGlobalQuantum {rn.quote(format(quantum, 'g'))}", ""]
+        # A bus with `arbitration: true` is the vHIL's bus model, created
+        # once its source is compiled (below); the others are Renode's hub.
         for bus in self.buses:
-            out.append(f"emulation CreateCANHub {rn.quote(rn.ident(bus))}")
+            if not self.arbitrated(bus):
+                out.append(f"emulation CreateCANHub {rn.quote(rn.ident(bus))}")
         out.append("")
         # Platform models first, in catalogue order: a device model may build
         # on one (an I2C target on the I2C controller's interface).
@@ -808,6 +821,13 @@ class System:
                            if "source" in d["model_doc"].get("renode", {})} - set(sources))
         if sources:
             out += [f"include {rn.file_arg(src)}" for src in sources] + [""]
+        arbitrated = [bus for bus in self.buses if self.arbitrated(bus)]
+        if arbitrated:
+            # After the platform's models: it builds on the FDCAN's
+            # IVhilCanController (models/renode/Stm32H7Fdcan.cs).
+            out.append(f"include {rn.file_arg(CAN_BUS_SOURCE)}")
+            out += [f"emulation CreateVhilCanBus {rn.quote(rn.ident(bus))}" for bus in arbitrated]
+            out.append("")
         for b in self.boards.values():
             if b.platform["backend"] != "renode":
                 raise SystemError(f"board '{b.name}': backend {b.platform['backend']} is not supported")

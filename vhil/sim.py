@@ -81,6 +81,35 @@ class Frame:
 
 
 @dataclass(frozen=True)
+class BusFrame:
+    """One frame the arbitrated bus decided (models/renode/VhilCanBus.cs,
+    Timeline): times in ns of virtual time. outcome "ok" (sent and
+    acknowledged; end = its last EOF bit), "ack" (nobody acknowledged it; end =
+    the end of its error frame) or "lost" (lost arbitration with automatic
+    retransmission disabled: cancelled; end = the end of the arbitration
+    field). free: when the bus was idle again, after intermission."""
+    start_ns: int
+    end_ns: int
+    free_ns: int
+    offer_ns: int
+    node: str
+    id: int
+    extended: bool
+    remote: bool
+    dlc: int
+    outcome: str
+    data: bytes
+
+    @property
+    def start_us(self) -> float:
+        return self.start_ns / 1000.0
+
+    @property
+    def end_us(self) -> float:
+        return self.end_ns / 1000.0
+
+
+@dataclass(frozen=True)
 class Edge:
     t_us: int
     pin: str
@@ -94,6 +123,17 @@ def parse_frames(text: str) -> list[Frame]:
         if len(parts) in (3, 4) and parts[0].isdigit() and parts[1].startswith("0x"):
             out.append(Frame(int(parts[0]), int(parts[1], 16), parts[2] == "1",
                              bytes.fromhex(parts[3] if len(parts) == 4 else "")))
+    return out
+
+
+def parse_timeline(text: str) -> list[BusFrame]:
+    out = []
+    for line in text.splitlines():
+        parts = line.split()
+        if len(parts) in (10, 11) and parts[0].isdigit() and parts[5].startswith("0x"):
+            out.append(BusFrame(int(parts[0]), int(parts[1]), int(parts[2]), int(parts[3]), parts[4],
+                                int(parts[5], 16), parts[6] == "1", parts[7] == "1", int(parts[8]),
+                                parts[9], bytes.fromhex(parts[10] if len(parts) == 11 else "")))
     return out
 
 
@@ -139,10 +179,70 @@ def _arg(value) -> str:
 
 
 class CanBus:
-    """One bus of the system, seen through its VhilCanProbe."""
+    """One bus of the system, seen through its VhilCanProbe. On a bus with
+    `arbitration: true` the probe is a node like any other: what it sends
+    waits for the bus and may lose arbitration, and it acknowledges frames
+    unless set_ack(False) makes it listen only; timeline(), load(), stats()
+    and nodes() read the bus model (models/renode/VhilCanBus.cs)."""
 
-    def __init__(self, sim: "Sim", name: str):
-        self.sim, self.name, self.probe = sim, name, f"vhil_probe_{rn.ident(name)}"
+    def __init__(self, sim: "Sim", name: str, probe: Optional[str] = None):
+        self.sim, self.name = sim, name
+        self.probe = probe or f"vhil_probe_{rn.ident(name)}"
+
+    @property
+    def arbitrated(self) -> bool:
+        return self.sim.system.arbitrated(self.name)
+
+    def node(self, name: str) -> "CanBus":
+        """Another probe on this bus, its own node (with its own transmit
+        queue, ACK and error counter): for a test that needs two senders,
+        e.g. sim.can("can_acu").node("logger").send(...). Created the first
+        time it is asked for."""
+        probe = f"vhil_probe_{rn.ident(self.name)}_{rn.ident(name)}"
+        if probe not in self.sim._extra_probes:
+            self.sim.monitor(f"emulation CreateVhilCanProbe {rn.quote(probe)}")
+            self.sim.monitor(f"connector Connect {probe} {rn.ident(self.name)}")
+            self.sim._extra_probes.add(probe)
+        return CanBus(self.sim, self.name, probe)
+
+    def _bus(self, command: str) -> str:
+        if not self.arbitrated:
+            raise ValueError(f"bus '{self.name}' has no arbitration (arbitration: true in "
+                             f"{self.sim.system.path.name})")
+        return self.sim.monitor(f"{rn.ident(self.name)} {command}")
+
+    def timeline(self, since_us: int = 0) -> list[BusFrame]:
+        """Every frame the bus decided from since_us on, in start order."""
+        return parse_timeline(self._bus(f"Timeline {_int(since_us)}"))
+
+    def load(self, from_us: int, to_us: int) -> float:
+        """Fraction of [from_us, to_us) the bus was busy (frames, error frames,
+        intermission). Exact on an arbitrated bus."""
+        return float(self._bus(f"Load {_int(from_us)} {_int(to_us)}").strip())
+
+    def stats(self) -> dict:
+        """frames, ack_errors, lost, busy_ns, late (effects a machine saw after
+        their bus time: a frame that started and ended between two sync points
+        of a multi-board bus), max_late_ns, dropped_records, eager."""
+        parts = self._bus("Stats").split()
+        return {k: int(v) for k, v in zip(parts[::2], parts[1::2])}
+
+    def nodes(self) -> dict[str, dict]:
+        """name -> kind, machine, tec, ack, sent, ack_errors, lost, bitrate."""
+        out = {}
+        for line in self._bus("Nodes").splitlines():
+            p = line.split()
+            if len(p) == 9:
+                out[p[0]] = {"kind": p[1], "machine": p[2], "tec": int(p[3]), "ack": p[4] == "1",
+                             "sent": int(p[5]), "ack_errors": int(p[6]), "lost": int(p[7]),
+                             "bitrate": int(p[8])}
+        return out
+
+    def set_ack(self, ack: bool) -> None:
+        """Whether this probe acknowledges frames (default: yes, as the rest
+        of the car would). False: it only listens, like an adapter in
+        listen-only mode, so a board alone on the bus gets no ACK."""
+        self._bus(f"SetAck {rn.quote(self.probe)} {_arg(bool(ack))}")
 
     def frames(self, ids=None, since_us: int = 0) -> list[Frame]:
         return parse_frames(self.sim.monitor(f'{self.probe} Frames {_ids(ids)} {_int(since_us)}'))
@@ -257,19 +357,26 @@ class Sim:
                  params: dict[str, dict] | None = None,
                  write_protect: dict[str, list[int]] | None = None,
                  trace: Optional[int] = None, coverage_dir: Optional[Path] = None,
-                 card_dirs: Iterable[Path | str] = ()):
+                 card_dirs: Iterable[Path | str] = (),
+                 arbitration: Iterable[str] = ()):
         """params overrides device params for this run, e.g.
         {"sd": {"image": "card.img"}}, checked as the system file's are;
         write_protect a board's write-protected flash sectors at power-on, as
         the system file's write_protect, e.g. {"ecu": [0]}. card_dirs adds
         directories an sd-card image may come from, besides the configured
         card-image directory (vhil.system.card_dirs), e.g. a test's tmp_path.
-        trace and coverage_dir default to INSTRUMENT's."""
+        arbitration names buses to model in virtual time for this run, as
+        `arbitration: true` on them in the system file (#174), e.g.
+        ["can_acu"]. trace and coverage_dir default to INSTRUMENT's."""
         self.system = System(Path(system), extra_card_dirs=card_dirs)
         for name, sectors in (write_protect or {}).items():
             if name not in self.system.boards:
                 raise ValueError(f"write_protect: no board '{name}' in {self.system.id}")
             self.system.boards[name].write_protect = list(sectors)
+        for bus in arbitration:
+            if bus not in self.system.buses:
+                raise ValueError(f"arbitration: no bus '{bus}' in {self.system.id}")
+            self.system.buses[bus]["arbitration"] = True
         self.system._check()
         for name, values in (params or {}).items():
             if name not in self.system.devices:
@@ -287,6 +394,7 @@ class Sim:
         self.last_activity = 0
         self.app_started: dict[str, int] = {}   # board -> us its app started (wait_for_app)
         self._mach: Optional[str] = None
+        self._extra_probes: set[str] = set()     # CanBus.node()
         self._proc = self._monitor = None
 
     # -- lifecycle -----------------------------------------------------------
