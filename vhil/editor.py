@@ -78,20 +78,38 @@ BOARD_WIDTH = 520
 # pattern per interface type, and a header colour, icon and pill per node
 # category. Wire colours follow the type, never status: CAN is the amber
 # backbone, analog teal so it isn't read as "ok" green, GPIO a dotted grey.
-_WIRES = {"can": ("#f59f00", "solid"), "spi": ("#4dabf7", "solid"),
-          "isospi": ("#4dabf7", "solid"), "i2c": ("#3bc9db", "solid"),
-          "sdmmc": ("#9775fa", "solid"), "uart": ("#e599f7", "solid"),
-          "gpio": ("#adb5bd", "dotted"), "analog": ("#20c997", "dashed")}
-# Category -> (header colour, built-in icon, pill). Headers are the raised
-# surface (--bg-3); the pill names the kind in its wire colour.
-_CATEGORY_STYLES = {"Boards": ("#262c36", "Cube", {"text": "board", "color": "#4c8dff"}),
-                    "Buses": ("#262c36", "Backend", {"text": "CAN", "color": "#f59f00"}),
-                    "Models": ("#1d222a", "Cogwheel", {"text": "device", "color": "#adb5bd"})}
+# Each colour is a token of vhil/server/static/tokens.css, as a CSS var()
+# with its dark value as the fallback, so the light theme recolours the
+# canvas: Pipeline Manager sets them through the CSSOM (a port's background,
+# a wire's --color, a header's background), where a var() resolves. The
+# vHIL's node shapes (the vendored Pipeline Manager's custom/CustomNode.vue)
+# draw boards, buses and devices from tokens themselves, and tint each CAN
+# bus's rail and wires --can-1..4.
+_WIRES = {"can": ("--wire-can", "#f59f00", "solid"), "spi": ("--wire-spi", "#4dabf7", "solid"),
+          "isospi": ("--wire-spi", "#4dabf7", "solid"), "i2c": ("--wire-i2c", "#3bc9db", "solid"),
+          "sdmmc": ("--wire-sdmmc", "#9775fa", "solid"),
+          "uart": ("--wire-uart", "#e599f7", "solid"),
+          "gpio": ("--wire-gpio", "#adb5bd", "dotted"),
+          "analog": ("--wire-analog", "#20c997", "dashed")}
+# Category -> (header colour, built-in icon, (pill, its colour)). Headers are
+# the raised surface (--bg-3); the pill names the kind in its wire colour.
+_CATEGORY_STYLES = {"Boards": (("--bg-3", "#262c36"), "Cube", ("board", ("--focus", "#4c8dff"))),
+                    "Buses": (("--bg-3", "#262c36"), "Backend", ("CAN", ("--wire-can", "#f59f00"))),
+                    "Models": (("--bg-2", "#1d222a"), "Cogwheel",
+                               ("device", ("--wire-gpio", "#adb5bd")))}
+
+
+def token(name: str, dark: str) -> str:
+    """A design token as a CSS value, with its dark value as the fallback."""
+    return f"var({name}, {dark})"
+
+
 CANVAS_METADATA = {
-    "interfaces": {t: {"interfaceColor": c, "interfaceConnectionColor": c,
-                       "interfaceConnectionPattern": p} for t, (c, p) in _WIRES.items()},
-    "styles": {cat: {"color": c, "icon": i, "pill": pill}
-               for cat, (c, i, pill) in _CATEGORY_STYLES.items()},
+    "interfaces": {t: {"interfaceColor": token(n, c), "interfaceConnectionColor": token(n, c),
+                       "interfaceConnectionPattern": p} for t, (n, c, p) in _WIRES.items()},
+    "styles": {cat: {"color": token(*head), "icon": i,
+                     "pill": {"text": text, "color": token(*pill)}}
+               for cat, (head, i, (text, pill)) in _CATEGORY_STYLES.items()},
     # --bg-0 (the token, so the canvas follows the theme; its dark value as
     # the fallback), a 24 px grid and an 8 px snap (the 4 px spacing grid,
     # doubled).
@@ -101,6 +119,12 @@ CANVAS_METADATA = {
     # "new graph" entries in the palette.
     "welcome": False, "newGraphNode": False, "newNodeType": False,
 }
+# A CAN bus's bitrate, written on its rail and in its wires' tooltip. The
+# emulated buses have none (a frame arrives whole); this is the car's: every
+# ISC bus is classic CAN at 500 kbit/s (the CAN bootloader's, main.c:253-262,
+# vhil/can_bootloader.py; IFS_HIL brings every bench bus up at 500000,
+# infra/systemd/hil-can-up.service).
+CAN_BITRATE = 500_000
 
 # Board catalogue section -> interface type. A board's pins are two columns:
 # on the left what devices attach to (they sit to its left in a graph: SPI,
@@ -334,9 +358,14 @@ def specification(catalog: Path = CATALOG) -> dict:
                  "default": role_firmware(role, firmware_docs),
                  "description": "The role's firmware: an ECU runs the ECU firmware."},
                 ref, *tail],
+            # roles: the select's values; role_info: what the node's
+            # sub-line reads in each role ("node 0x2 · FDCAN1").
             "additionalData": {"vhil": {"kind": "board", "board": board_id,
                                         "roles": {role_choice(n, r): n
-                                                  for n, r in roles.items()}}},
+                                                  for n, r in roles.items()},
+                                        "role_info": {n: {"node_id": r["node_id"],
+                                                          "flash_bus": r["flash_bus"]}
+                                                      for n, r in roles.items()}}},
         })
     nodes.append({
         "name": BUS_NODE, "category": "Buses", "style": "Buses", "layer": "bus",
@@ -346,7 +375,7 @@ def specification(catalog: Path = CATALOG) -> dict:
                         "bus": {"type": "twoSided", "size": BUS_SIZE}}],
         "properties": [{"name": "host_netdev", "type": "text", "default": "",
                         "description": "SocketCAN interface to bridge to (optional)."}],
-        "additionalData": {"vhil": {"kind": "bus"}},
+        "additionalData": {"vhil": {"kind": "bus", "bitrate": CAN_BITRATE}},
     })
     for model_id, model in _catalog("model", catalog).items():
         iface = model.get("interface", {})
@@ -808,14 +837,13 @@ class EditorMethods:
         return {"type": OK, "content": self.spec}
 
     def app_capabilities_get(self, **_):
-        # Navbar buttons (common_types navbar_items): returned bare, not wrapped.
-        # The vHIL workspace has no navbar (its Check stands for this one;
-        # editor/pipeline-manager/CHANGELOG-VHIL.md). No Run: a run is a
-        # normal POST /api/runs run of the saved system, which the
-        # workspace's Run starts (vhil/server/static/editor-run.js), never
-        # one in this process.
-        return [{"name": "Validate system", "iconName": "Validate",
-                 "procedureName": "dataflow_validate"}]
+        # Navbar buttons (common_types navbar_items), returned bare: none.
+        # The vHIL workspace has no navbar (editor/pipeline-manager/
+        # CHANGELOG-VHIL.md): its Check validates (the API's preview of the
+        # system), and its Run is a normal POST /api/runs run of the saved
+        # system (vhil/server/static/editor-run.js), never one in this
+        # process.
+        return []
 
     def frontend_on_connect(self, **_):
         return {}   # null_or_empty
