@@ -13,7 +13,8 @@
 #   3. save: an edit of systems/ecu.yaml committed through the API to a
 #      branch of the workspace clone; it survives the workspace service
 #      running again (fetch + checkout never touch local branches)
-#   4. a 500 ms virtual-time run of systems/ecu.yaml, queued through the API
+#   4. a 3 s virtual-time run of systems/ecu.yaml (past the bootloader's 2 s
+#      auto-jump window, so the app's frames are in it), queued through the API
 #      and executed by the worker: passes, with CAN frames in its trace
 #   5. a snapshot (backup.py once: the DB and the saved branch), one more run,
 #      then a restore of the snapshot: the later run is gone, the earlier one
@@ -156,7 +157,7 @@ dc run --rm --no-deps -T --entrypoint git api -C /workspace rev-parse refs/heads
 run() {   # queue a run of systems/ecu.yaml; wait; print its id
     local id state
     id=$(api -X POST -H 'Content-Type: application/json' "$base/api/runs" \
-         -d '{"system": "ecu", "scenario": {"kind": "run", "virtual_ms": 500}}' \
+         -d '{"system": "ecu", "scenario": {"kind": "run", "virtual_ms": 3000}}' \
          | json 'd["run_id"]') || fail "POST /api/runs"
     for _ in $(seq 1 300); do
         state=$(api "$base/api/runs/$id" | json 'd["state"]')
@@ -167,7 +168,7 @@ run() {   # queue a run of systems/ecu.yaml; wait; print its id
     echo "$id"
 }
 
-say "run systems/ecu.yaml (500 ms virtual) through the API"
+say "run systems/ecu.yaml (3 s virtual) through the API"
 first=$(run)
 frames=$(api "$base/api/runs/$first/trace?kinds=frame" | json 'len(d) if isinstance(d, list) else len(d.get("records", []))')
 echo "  trace: $frames frames"

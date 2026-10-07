@@ -462,7 +462,7 @@ hardening at runtime (every service uid 10001 with a read-only root and no
 capabilities; no secrets in the worker; the worker reaches neither the API,
 the editor, the metadata address nor anything off the host but GitHub through
 `egress`; the security headers), a save of `systems/ecu.yaml` to a
-branch that survives the workspace service running again, a 500 ms run of
+branch that survives the workspace service running again, a 3 s run (past the bootloader's 2 s window) of
 `systems/ecu.yaml` queued through the API and executed by the worker (passed,
 CAN frames in its trace), a snapshot (0700/0600), one more run, a restore
 (the later run gone), and the saved branch restored from the bundle. The
