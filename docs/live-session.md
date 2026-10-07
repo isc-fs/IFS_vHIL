@@ -116,7 +116,7 @@ took effect, the session's slice, and `virtual_ms` to where it ended. The
 editor's "Save session as scenario" opens it in the Scenario tab, and
 Commit… saves it like any scenario. Run, it gives the session's trace again:
 the same frames, edges and samples at the same virtual times
-(`tests/sim/test_live_session.py` on the AMS, from Start through Precharge to
+(`tests/sim/test_ams_live_session.py` on the AMS, from Start through Precharge to
 Run; `tests/unit/test_session.py` on the fake Sim). A session longer than
 `VHIL_MAX_VIRTUAL_MS` (10 min) records a scenario over that limit: the
 Scenario tab says so.

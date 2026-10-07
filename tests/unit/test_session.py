@@ -2,7 +2,7 @@
 docs/live-session.md): the session channel's ops, the worker applying them
 at slice boundaries in virtual time, ownership, the idle timeout, and the
 determinism of a recorded session replayed as a scenario. Against the fake
-Sim of test_runs.py; the real Sim is tests/sim/test_live_session.py."""
+Sim of test_runs.py; the real Sim is tests/sim/test_ams_live_session.py."""
 import json
 import threading
 import time
