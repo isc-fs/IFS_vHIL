@@ -32,7 +32,8 @@ def test_every_system_resolves_and_renders(path):
         assert f'mach create "{name}"' in script
         assert f"$elf_{name}=@/fw/{name}.elf" in script
     for bus in system.buses:
-        assert f'emulation CreateCANHub "{bus}"' in script
+        create = "CreateVhilCanBus" if system.arbitrated(bus) else "CreateCANHub"
+        assert f'emulation {create} "{bus}"' in script
 
 
 def test_ecu_system_renders_the_bench_setup():
@@ -169,6 +170,41 @@ def _system(tmp_path, body):
 ])
 def test_bad_systems_are_rejected_with_a_reason(tmp_path, body, message):
     with pytest.raises(SystemError, match=message):
+        System(_system(tmp_path, body))
+
+
+def test_an_arbitrated_bus_renders_the_bus_model_after_the_fdcan(tmp_path):
+    """#174: a bus with `arbitration: true` is VhilCanBus, compiled after the
+    platform's FDCAN (it builds on IVhilCanController) and created before any
+    controller connects to it; the others stay Renode's hub."""
+    s = System(_system(tmp_path, "buses:\n  a: {kind: can, nodes: [ecu.FDCAN1], arbitration: true}\n"
+                                 "  b: {kind: can, nodes: [ecu.FDCAN2]}\n"
+                                 "  c: {kind: can, nodes: [ecu.FDCAN3], arbitration: false}\n"))
+    assert [s.arbitrated(b) for b in "abc"] == [True, False, False]
+    text = s.render_renode()
+    assert 'emulation CreateCANHub "a"' not in text
+    assert 'emulation CreateCANHub "b"' in text and 'emulation CreateCANHub "c"' in text
+    assert text.count("models/renode/VhilCanBus.cs") == 1
+    assert (text.index("models/renode/Stm32H7Fdcan.cs") < text.index("models/renode/VhilCanBus.cs")
+            < text.index('emulation CreateVhilCanBus "a"') < text.index("connector Connect"))
+    assert text.count("CreateVhilCanBus") == 1
+
+
+@pytest.mark.parametrize("path", SYSTEMS, ids=lambda p: p.name)
+def test_a_system_without_arbitration_renders_renodes_hub_only(path):
+    """No bus model in a script whose buses don't ask for it: the rendered
+    scripts of systems without `arbitration` are what they were."""
+    system = System(path)
+    if any(system.arbitrated(b) for b in system.buses):
+        pytest.skip("this system arbitrates a bus")
+    assert "VhilCanBus" not in system.render_renode(socketcan=True)
+
+
+@pytest.mark.parametrize("value", ["yes", 1, None, "true"])
+def test_arbitration_is_a_boolean(tmp_path, value):
+    body = "buses:\n  a: {kind: can, nodes: [ecu.FDCAN1], arbitration: %s}\n" % (
+        "null" if value is None else repr(value) if isinstance(value, str) else value)
+    with pytest.raises(SystemError, match="arbitration must be true or false|not valid"):
         System(_system(tmp_path, body))
 
 

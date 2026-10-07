@@ -134,6 +134,7 @@ MUTATIONS = {
         "quantum_s": _set("time", "quantum_s"),
     },
     ECU_AMS: {
+        "arbitration": lambda d, v: d["buses"]["can_acu"].update(arbitration=v),
         "dac route": lambda d, v: d["bench"]["dac_routes"][0].update(to=v),
         "bootloader_ref": lambda d, v: d["boards"]["ecu"].update(bootloader_ref=v),
     },
@@ -470,6 +471,7 @@ def test_the_sim_refuses_to_send_a_hostile_string(sim, value):
         lambda: sim.can("can_acu").send_periodic(value, 1, b"", 10),
         lambda: sim.can("can_acu").update_periodic(value, b""),
         lambda: sim.can("can_acu").stop_periodic(value),
+        lambda: sim.can("can_acu").node(value),
         lambda: sim.io("ecu").set_input(value, 5, True),
         lambda: sim.io("ecu").watch(value, 5),
         lambda: sim.io("ecu").edges(value),
