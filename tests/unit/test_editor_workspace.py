@@ -129,7 +129,8 @@ def test_replay():
     """Opening a run enters REPLAY: the mode, the cursor-paged trace, the
     scrubber in the top bar, the Bus tab."""
     workspace = (VHIL / "workspace.js").read_text()
-    assert "ws.mode = 'REPLAY';" in workspace and "ws.layout.dockTab = 'bus';" in workspace
+    assert "ws.mode = 'REPLAY';" in workspace and "ws.layout.dockTab = tab;" in workspace
+    assert "export function openRun(id, { tab = 'bus' } = {}) {" in workspace
     assert "{ id: 'bus', label: 'Bus' }," in workspace
     replay = (VHIL / "replay.js").read_text()
     assert "/api/runs/${run.id}/trace?" in replay and "q.set('cursor', cursor)" in replay
@@ -186,3 +187,23 @@ def test_the_scenario_tab():
     run = (STATIC / "editor-run.js").read_text()
     assert "Object.assign(run, { name: scenario.name, stimuli, watch, expect });" in run
     assert "export function encodeField(" in (STATIC / "decode.js").read_text()
+
+
+def test_the_timeline_and_the_tests_view():
+    """Step 11: the timeline draws the scenario on REPLAY's time axis (SVG
+    attributes and classes, no style attribute), drags with a snap, zooms
+    with Ctrl+wheel and lays the run's results over its lanes; a scenario's
+    run is replayed on the Scenario tab when it ends; Tests lists them."""
+    assert "<VhilTimeline :buses=\"buses\" :boards=\"boardNames\" />" in (
+        VHIL / "VhilScenario.vue").read_text()
+    tl = (VHIL / "VhilTimeline.vue").read_text()
+    template = tl.split("<script>")[0]
+    assert " style=" not in template and ":style" not in template and "v-html" not in template
+    assert "snap(drag.t0 + (ev.clientX - drag.x0) / scale.value, snapMs.value)" in tl
+    assert "if (!ev.ctrlKey && !ev.metaKey) return;" in tl
+    assert "replay.t = Math.min(replay.end, r.tUs);" in tl
+    assert "kinds: 'frame,log,edge'" in (VHIL / "replay.js").read_text()
+    workspace = (VHIL / "workspace.js").read_text()
+    assert "openRun(id, { tab: 'scenario' });" in workspace
+    rail = (VHIL / "VhilRail.vue").read_text()
+    assert "id: 'tests', label: 'Tests'" in rail and "call('GET', '/api/scenarios')" in rail

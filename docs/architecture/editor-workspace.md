@@ -323,7 +323,12 @@ In the owner's order.
 11. **Timeline and vHIL tests** (feature 1b). Lanes, drag/snap, watch gutter,
     expected-vs-actual overlay; the worker evaluates expects; a pytest
     collector and CI job (advisory) with JUnit into the Tests view, green for
-    AMS and ECU before going on.
+    AMS and ECU before going on. Done: `tests/scenarios/` runs every
+    committed scenario (`.github/workflows/scenarios.yml`: `full-ci`,
+    nightly, dispatch; advisory), seeded with `ams/tsms-precharge-run` and
+    `ecu/heartbeat-r2d`, both green on the declared firmware. The Tests view
+    shows the web app's last run of each scenario; CI's JUnit is the
+    workflow's artifact and step summary.
 12. **State sources** (feature 2a). Catalogue state-view blocks for AMS and
     ECU; `GET /api/firmware/<id>/enums`; the mid-run `watch` op.
 13. **State UI** (feature 2b). State cards, inspector card, node pill and

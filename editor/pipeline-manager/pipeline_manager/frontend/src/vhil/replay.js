@@ -32,6 +32,7 @@ export const replay = reactive({
     contract: null, // {buses: {bus: {id: message}}} (raw, not reactive)
     contractNote: '',
     logs: [], // the run's log records
+    edges: [], // its pin edges (the scenario timeline's actual levels; step 11)
     version: 0, // bumped when the frames change
 });
 
@@ -50,6 +51,7 @@ function reset() {
         contract: null,
         contractNote: '',
         logs: [],
+        edges: [],
         version: replay.version + 1,
     });
 }
@@ -94,15 +96,17 @@ export async function loadRun(run) {
     // the last page stopped, so each costs what it returns).
     const frames = [];
     const logs = [];
+    const edges = [];
+    const into = { log: logs, edge: edges };
     let cursor = '';
     try {
         for (;;) {
-            const q = new URLSearchParams({ kinds: 'frame,log', limit: String(PAGE) });
+            const q = new URLSearchParams({ kinds: 'frame,log,edge', limit: String(PAGE) });
             if (cursor) q.set('cursor', cursor);
             // eslint-disable-next-line no-await-in-loop
             const page = await tracePage(`/api/runs/${run.id}/trace?${q}`);
             if (mine !== loading) return;
-            page.data.forEach((r) => (r.kind === 'log' ? logs : frames).push(r));
+            page.data.forEach((r) => (into[r.kind] || frames).push(r));
             replay.loaded = frames.length;
             if (page.data.length < PAGE || !page.cursor || page.cursor === cursor) break;
             cursor = page.cursor;
@@ -121,6 +125,7 @@ export async function loadRun(run) {
         end: Math.max(replay.end, last),
         t: Math.max(replay.end, last),
         logs: markRaw(logs),
+        edges: markRaw(edges),
         version: replay.version + 1,
     });
 }
