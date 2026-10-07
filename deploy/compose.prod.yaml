@@ -271,7 +271,7 @@ services:
     # proxy's auth gate and nowhere else, and no way out.
     networks: [editor]
     tmpfs:
-      - /tmp:exec,size=512m,mode=1777     # exec: a Run from the editor starts Renode
+      - /tmp:size=512m,mode=1777          # it runs nothing: Run is a worker's run
     volumes:
       - workspace:/workspace:ro
     environment:

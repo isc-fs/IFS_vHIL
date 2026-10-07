@@ -181,13 +181,10 @@ ifs-hil)
         exit $rc' "$@" ;;
 editor)
     # Its own network: the UI port is published (Colima forwards it to the
-    # Mac); Run needs no vcan. Images come from the last `fw`. Not 5000 on
-    # the host: macOS's AirPlay Receiver holds it.
+    # Mac). It runs nothing: Run is the web app's (`server` + `worker`). Not
+    # 5000 on the host: macOS's AirPlay Receiver holds it.
     image=$editor_image run_args=(-p "127.0.0.1:${VHIL_EDITOR_PORT:-5050}:5000")
-    in_container "$prelude"'
-        export VHIL_ECU_ELF=$(elf ecu) VHIL_AMS_ELF=$(elf ams) PM_HOST=0.0.0.0 \
-            VHIL_CAN_BOOTLOADER_ELF=$(elf ecu.bootloader)
-        exec scripts/editor.sh' ;;
+    in_container 'PM_HOST=0.0.0.0 exec scripts/editor.sh' ;;
 editor-check)
     # Pipeline Manager's ./validate (its frontend's load) on each system's
     # dataflow, in the editor image where the patched checkout lives.

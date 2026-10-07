@@ -801,8 +801,7 @@ class EditorMethods:
     """Methods Pipeline Manager calls on its external application. Names and
     parameters follow its external-app API; each returns {type, content}."""
 
-    def __init__(self, run_ms: int = 2000):
-        self.run_ms = run_ms
+    def __init__(self):
         self.spec = specification()
 
     def specification_get(self, **_):
@@ -810,10 +809,11 @@ class EditorMethods:
 
     def app_capabilities_get(self, **_):
         # Navbar buttons (common_types navbar_items): returned bare, not wrapped.
+        # No Run: a run is a normal POST /api/runs run of the saved system,
+        # which the web app's Editor page starts (vhil/server/static/editor-run.js),
+        # never one in this process.
         return [{"name": "Validate system", "iconName": "Validate",
-                 "procedureName": "dataflow_validate"},
-                {"name": "Run 2 s of virtual time", "iconName": "Run",
-                 "procedureName": "dataflow_run"}]
+                 "procedureName": "dataflow_validate"}]
 
     def frontend_on_connect(self, **_):
         return {}   # null_or_empty
@@ -864,38 +864,6 @@ class EditorMethods:
         except (yaml.YAMLError, SystemError, KeyError, TypeError) as e:
             return {"type": ERROR, "content": str(e)}
 
-    def dataflow_run(self, dataflow, **_):
-        """Run the system for run_ms of virtual time; report each bus's traffic.
-        Images come from $VHIL_<FIRMWARE>_ELF (e.g. VHIL_AMS_ELF)."""
-        from vhil.sim import Sim
-        try:
-            doc = from_dataflow(dataflow, self.spec)
-            errors = validate(doc)
-            if errors:
-                return {"type": ERROR, "content": "; ".join(errors)}
-            with tempfile.TemporaryDirectory() as tmp:
-                path = Path(tmp) / f"{doc['id']}.yaml"
-                path.write_text(dump_system(doc))
-                # Each board's firmware: its role's, or the one it names.
-                firmware = {}
-                for board, b in System(path).boards.items():
-                    var = f"VHIL_{b.firmware['id'].upper().replace('-', '_')}_ELF"
-                    elf = os.environ.get(var)
-                    if not elf:
-                        return {"type": ERROR, "content": f"no image for {board}: set {var}"}
-                    firmware[board] = elf
-                with Sim(path, firmware) as sim:
-                    sim.run_for(ms=self.run_ms)
-                    lines = []
-                    for bus in doc.get("buses", {}):
-                        frames = sim.can(bus).frames()
-                        ids = sorted({f.id for f in frames})
-                        lines.append(f"{bus}: {len(frames)} frames, ids "
-                                     + " ".join(f"0x{i:X}" for i in ids))
-            return {"type": OK, "content": f"{self.run_ms} ms of virtual time\n" + "\n".join(lines)}
-        except Exception as e:  # report, don't kill the backend
-            return {"type": ERROR, "content": f"{type(e).__name__}: {e}"}
-
 
 class _Logged:
     """Logs every call the editor makes and what it got back."""
@@ -932,23 +900,9 @@ class _Logged:
 
 
 class _ServedMethods(EditorMethods):
-    """EditorMethods with a run that doesn't block the connection and shows
-    its result: Pipeline Manager only displays progress for a plain OK."""
+    """EditorMethods with a role change that talks back to the frontend."""
 
     client = None
-
-    async def dataflow_run(self, dataflow, **kwargs):
-        import asyncio
-        result = await asyncio.get_running_loop().run_in_executor(
-            None, lambda: EditorMethods.dataflow_run(self, dataflow, **kwargs))
-        ok = result["type"] == OK
-        text = str(result.get("content", ""))
-        await self.client.notify("terminal_write", {
-            "name": "Terminal", "message": text.replace("\n", "\r\n") + "\r\n"})
-        await self.client.notify("notification_send", {
-            "type": "info" if ok else "error",
-            "title": "Run finished" if ok else "Run failed", "details": text})
-        return result
 
     async def properties_on_change(self, graph_id, node_id, properties, **_):
         """A board's role changed: relabel it (relabel()). It asks the
