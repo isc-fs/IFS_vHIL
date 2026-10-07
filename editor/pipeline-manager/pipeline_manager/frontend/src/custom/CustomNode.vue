@@ -217,6 +217,7 @@ import {
 } from '../core/NodeFactory.js';
 
 import notifyEvents from './notifyEvents.js';
+import { vhilKind } from '../vhil/graph.js';
 
 import { checkForUnsavedEditorChangesWithToast } from './node_editor/NodeSpecEditorUtils.js';
 
@@ -300,7 +301,11 @@ const sidebarProperties = computed(() => [...Object.values((props.node.inputs))
     .filter((intf) => !intf.port),
 ...bigBuses.value],
 );
+// vHIL: a board's properties (role, firmware, refs) are in the workspace's
+// inspector, not on its node (CHANGELOG-VHIL.md).
+const inInspector = vhilKind(props.node.type) === 'board';
 const displayedProperties = computed(() => {
+    if (inInspector) return bigBuses.value;
     if (editorManager.baklavaView.settings.showHiddenProperties) {
         return sidebarProperties.value;
     }
