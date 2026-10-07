@@ -69,6 +69,31 @@ namespace Antmicro.Renode.Testing
             }
         }
 
+        // -- on an arbitrated bus (models/renode/VhilCanBus.cs) ----------------
+        //
+        // The bus delivers at the first sync point at or after a frame's end
+        // and says when that was: records carry the bus's time, not the sync
+        // point's. What the probe sends is recorded when its frame is over
+        // (it may wait for the bus, or never get on it), not when it is sent.
+
+        public bool OnArbitratedBus { get; set; }
+
+        public void OnFrameReceivedAt(CANMessageFrame frame, ulong timeUs)
+        {
+            lock(sync)
+            {
+                received.Add(new Record(timeUs, frame));
+            }
+        }
+
+        public void OnFrameSentAt(CANMessageFrame frame, ulong timeUs)
+        {
+            lock(sync)
+            {
+                sent.Add(new Record(timeUs, frame));
+            }
+        }
+
         // -- observe --------------------------------------------------------
 
         // "t_us id ext hex" per line, for frames received at or after sinceUs.
@@ -79,8 +104,9 @@ namespace Antmicro.Renode.Testing
         }
 
         // The frames this probe itself put on the bus (Send, SendAt,
-        // SendPeriodic, SendBatch, SendSequence), stamped when they went out,
-        // in the same format. Kept apart from Frames/Count, which stay what
+        // SendPeriodic, SendBatch, SendSequence), stamped when they went out
+        // (on an arbitrated bus: when their last EOF bit did), in the same
+        // format. Kept apart from Frames/Count, which stay what
         // the probe received from the bus.
         public string Sent(string ids = "", ulong sinceUs = 0)
         {
@@ -237,9 +263,12 @@ namespace Antmicro.Renode.Testing
         // Every send goes through here, in the synced context that sends it.
         private void Emit(CANMessageFrame frame)
         {
-            lock(sync)
+            if(!OnArbitratedBus)
             {
-                sent.Add(new Record(NowMicros(), frame));
+                lock(sync)
+                {
+                    sent.Add(new Record(NowMicros(), frame));
+                }
             }
             SendFrame(frame);
         }
