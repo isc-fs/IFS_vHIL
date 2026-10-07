@@ -53,6 +53,10 @@ test("the Send panel's ops and what stops them", () => {
 test("ops read as text", () => {
   assert.equal(opText(VCU), "periodic vcu can_acu 0x100 [00 00 02] every 10 ms");
   assert.equal(opText({ kind: "gpio", board: "ams", pin: "PF9", level: false }), "gpio ams.PF9 = LOW");
+  assert.equal(opText({ kind: "debug", board: "ecu", cmd: "break", location: { file: "control.cpp", line: 36 } }),
+    "debug ecu break control.cpp:36");
+  assert.equal(opText({ kind: "debug", board: "ecu", cmd: "clear", number: 2 }), "debug ecu clear 2");
+  assert.equal(opText({ kind: "debug", board: "ams", cmd: "continue" }), "debug ams continue");
   assert.equal(opText({ kind: "watch", board: "ams", symbol: "g_x" }), "watch ams.g_x");
   assert.equal(opText({ kind: "pause" }), "pause");
 });

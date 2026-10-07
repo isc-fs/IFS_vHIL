@@ -30,6 +30,12 @@ export function opText(op) {
         case 'gpio': return `gpio ${op.board}.${op.pin} = ${op.level ? 'HIGH' : 'LOW'}`;
         case 'analog': return `analog ${op.board}.${op.pin} = ${op.volts} V`;
         case 'watch': return op.symbol ? `watch ${op.board}.${op.symbol}` : `watch pin ${op.board}.${op.pin}`;
+        case 'debug': { // docs/debugger.md
+            const loc = op.location || {};
+            const at = loc.function || (loc.file ? `${loc.file}:${loc.line}` : loc.address);
+            const what = at ?? op.number ?? op.expr ?? (op.exprs ? op.exprs.join(', ') : '');
+            return `debug ${op.board} ${op.cmd}${what !== '' ? ` ${what}` : ''}`;
+        }
         default: return op?.kind ?? '?';
     }
 }
