@@ -12,9 +12,10 @@ each slice the frames, GPIO edges and samples it produced are appended to
 live WebSocket streams them while the run goes on; then the run's DB state is
 read, and a run cancelled from the API stops there. Each slice also writes a
 `bus_load` record per CAN bus (#174): the fraction of the slice the bus was
-busy, exact on a bus with `arbitration: true` (models/renode/VhilCanBus.cs),
-else estimated from the frames seen at 500 kbit/s (vhil/canframe.py,
-`exact: false`); the summary carries each bus's mean and peak.
+busy, exact from the bus model (models/renode/VhilCanBus.cs, every bus by
+default), estimated on a bus with `arbitration: false` from the frames seen at
+500 kbit/s (vhil/canframe.py, `exact: false`); the summary carries each
+bus's mean and peak.
 
 Firmware: each image key of the system ("<board>", "<board>.bootloader")
 needs an ELF at the ref the run asks for (default: the catalogue's). An image
