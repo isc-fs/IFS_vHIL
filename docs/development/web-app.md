@@ -12,9 +12,9 @@ Unset `VHIL_AUTH` means `github`: the server fails closed, and without the
 GitHub settings below it refuses to start. Dev mode needs `VHIL_AUTH=dev`, and
 `python -m vhil.server` then refuses to listen on anything but loopback
 (`--host 127.0.0.1`, the default) unless `VHIL_ALLOW_DEV_ON_NETWORK=1` says the
-port is reachable from this machine only some other way: a container whose
-port is published on the host's `127.0.0.1` (what `vhil-docker.sh server` and
-`docker/compose.yaml` do), or a test. It logs a warning whenever dev mode
+port is reachable from this machine only some other way: a container
+reached only through a port on the host's `127.0.0.1` (`docker/compose.yaml`'s
+proxy, which `vhil-docker.sh server` starts), or a test. It logs a warning whenever dev mode
 starts. Never set it on a host.
 
 ## How it works
@@ -55,8 +55,8 @@ starts. Never set it on a host.
   it retries with `takeover`. Dev mode has one user and no ownership checks.
 - **Headers** (`vhil/server/security.py`): every response carries a strict
   Content-Security-Policy (`default-src 'self'`, no inline script or style,
-  `connect-src` this site and its WebSocket, `frame-src` this site and
-  `VHIL_EDITOR_URL`'s origin, `frame-ancestors 'self'`), `X-Frame-Options:
+  `connect-src` this site and its WebSocket, `frame-src 'self'`: the
+  editor is this site's `/editor/`, `frame-ancestors 'self'`), `X-Frame-Options:
   SAMEORIGIN`, `X-Content-Type-Options: nosniff` and `Referrer-Policy:
   same-origin`. So the shell's code has no inline `<script>`, `style=""` or
   `on*=` handlers: set styles through `el.style` and handlers with

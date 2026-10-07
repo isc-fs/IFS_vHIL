@@ -14,7 +14,8 @@ from `git archive 04613679` except as listed below.
 
 - `README-VHIL.md`, `CHANGELOG-VHIL.md`: this file and its neighbour.
 - `pipeline_manager/frontend/src/vhil/`: vHIL's own frontend code (theme,
-  below); `src/vhil/shell/` is filled by the image build, not in git.
+  validators, log view, below); `src/vhil/shell/` is filled by the image
+  build and `src/vhil/validators/` by `build-validators.mjs`, neither in git.
 
 ## Changed
 
@@ -73,6 +74,57 @@ from `git archive 04613679` except as listed below.
    `resources/api_specification/specification.json`), switches it at run
    time (the shell's Editor page calls it over postMessage): the page passes
    its theme in `?theme=` and calls it when the theme changes.
+6. **Served under a path** (step 6 of the editor workspace plan: the editor
+   is on the web app's origin, under `/editor/`, behind its proxy, which
+   strips the prefix). `core/communication/externalApp/backend.ts`: the
+   socket.io client's `path` is `socket.io` next to the page
+   (`new URL('socket.io', document.baseURI)`: `/editor/socket.io` there,
+   upstream's `/socket.io` at the root) when the backend is the page's own
+   origin. Asset URLs were relative already (`publicPath: ''`).
+7. **Precompiled validators** (CSP `script-src 'self'`: Ajv compiles with
+   `new Function`). `src/vhil/build-validators.mjs` (new) compiles, with
+   upstream's two Ajv configurations, every schema the editor checks against
+   into standalone code, `src/vhil/validators/{editor,rpc}.js` with their
+   `.d.ts` (TypeScript's checker overflows its stack inferring the generated
+   code): the specification, dataflow, metadata, graph and message schemas
+   with each of their `$defs`, and every JSON-RPC endpoint's params and
+   returns. `package.json`'s `build-server-app` and `build-static-html` run
+   it first. `core/validate-json.js` takes the precompiled validators and
+   looks one up by the schema's `$id` and the reference (upstream: an Ajv
+   instance, compiling), and uses `JSON.stringify` for Ajv's `stringify`;
+   `core/EditorManager.js` `validateJSONWithSchema` and
+   `core/communication/rpcCommunication.ts` construct no Ajv (its
+   `additionalAjvOptions` parameter, which nothing passed, is gone, and the
+   endpoint schemas' compile check moved to the build script). The bundle
+   keeps only Ajv's runtime helpers.
+8. **The terminal is a plain log** (CSP `style-src 'self'`: hterm wrote
+   inline styles; owner decision). `components/Terminal.vue` renders
+   `src/vhil/LogView.vue` (new): a virtualised list of plain-text lines
+   (only the rows in view are in the DOM; it follows the end unless
+   scrolled up; at most 20 000 lines; escape sequences dropped), with an
+   input line for a writable terminal (Enter sends the line through
+   `requestTerminalRead`, where hterm sent keystrokes). Entries are no
+   longer separated by a blank line. `components/TerminalPanel.vue` focuses
+   that input instead of `#hterm-terminal`. `src/third-party/hterm_all.js`
+   is gone.
+9. **postMessage on one origin.** `custom/Editor.vue` drops messages from
+   any origin but its own (the shell's Editor page, now the same origin)
+   and replies to `event.origin`; `core/communication/externalApp/frontend.ts`
+   posts to `window.location.origin`. Upstream accepted any origin and
+   replied to `'*'`.
+10. **CORS and CSP on the server.** `backend/fastapi.py`: CORS only for the
+    origins `PM_ALLOWED_ORIGINS` names (comma-separated; none by default:
+    upstream allowed `*`), and `backend/socketio.py`'s handshake the same
+    (same origin by default; upstream `*`). A new middleware sends `PM_CSP`
+    as the `Content-Security-Policy` on every response, or
+    `-Report-Only` with `PM_CSP_REPORT_ONLY=1`; unset, none (upstream).
+    vHIL's policy is `EDITOR_CSP` in `vhil/server/security.py`, which
+    `scripts/editor.sh` passes.
+11. **No style attribute in a node's title** (CSP `style-src 'self'`, found
+    by the Report-Only rollout: one report per node render).
+    `custom/CustomNode.vue` built the subtitle as
+    `<pre class="subtitle" style="overflow: hidden; …">`, set with `v-html`;
+    it is the class `subtitle-ellipsis` now, styled in `styles/_node.scss`.
 
 ## Left for later
 
@@ -83,15 +135,10 @@ from `git archive 04613679` except as listed below.
   The wire, header and pill colours in the specification's metadata
   (`vhil/editor.py`) are the dark theme's hex values (its canvas
   `backgroundColor` is `var(--bg-0, #0f1115)` and follows the theme).
-- **CSP, step 6.** Ajv still compiles the RPC and specification schemas at
-  run time (`new Function`: needs `'unsafe-eval'`) until they are
-  precompiled (`core/EditorManager.js`, `core/communication/rpcCommunication.ts`);
-  hterm (`src/third-party/hterm_all.js`, the terminal) writes inline styles
-  (needs `style-src 'unsafe-inline'`) until it is replaced;
-  `core/communication/externalApp/frontend.ts` still answers postMessage with
-  `targetOrigin '*'`, and `backend/fastapi.py` sends no CSP and allows any
-  CORS origin. This step adds no inline script or style: tokens, fonts and
-  the theme code are bundled files.
+- **HTML from the specification** (node titles and pills in
+  `custom/CustomNode.vue`, palette entries: `v-html` through DOMPurify): a
+  `style` attribute in it is refused by the CSP. vHIL's specification puts
+  none there.
 - **Screenshot baselines.** The editor image has Playwright's library
   (`node_modules`) but no browser; the dark/light × 1366×768/1920×1080
   baselines and the axe scan wait for a pinned browser in CI.
