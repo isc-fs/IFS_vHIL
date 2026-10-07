@@ -322,8 +322,23 @@ def test_pacing_holds_virtual_time_to_wall_time():
     s.pace(50_000, 100_000)
     assert slept == [pytest.approx(0.05)] * 2
     t[0] = 1.0
-    s.pace(100_000, 150_000)        # 0.9 s behind: forgiven, not repaid by running flat out
-    assert slept == [pytest.approx(0.05)] * 3 and s._base == (100_000, 1.0)
+    s.pace(100_000, 150_000)        # 0.9 s behind: forgiven, not repaid by running flat out,
+    assert slept == [pytest.approx(0.05)] * 2 and s._base == (150_000, 1.0)   # nor waited for
+    t[0] = 1.01
+    s.pace(150_000, 200_000)        # paced again from there
+    assert slept == [pytest.approx(0.05)] * 2 + [pytest.approx(0.04)]
+
+
+def test_an_emulation_slower_than_real_time_is_never_held_back():
+    t = [0.0]
+    slept = []
+    s = LiveSession(store=None, run_id=1, limits=Limits(), clock=lambda: t[0],
+                    wall=lambda: t[0], sleep=lambda d: slept.append(d))
+    s.rebase(0)
+    for k in range(1, 30):
+        t[0] += 0.2                          # 50 ms of virtual time per 0.2 s of wall time
+        s.pace(k * 50_000, (k + 1) * 50_000)
+    assert slept == []
 
 
 def test_the_clock_reads_the_emulations_speed_when_it_cannot_keep_up():

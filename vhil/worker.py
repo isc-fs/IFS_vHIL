@@ -246,8 +246,12 @@ class LiveSession:
         """At virtual time now_us, before running the slice to until_us."""
         v0, w0 = self._base
         if (self.clock_fn() - w0) - (now_us - v0) / 1e6 / self.rtf > self.max_lag_s:
-            self.rebase(now_us, window=False)   # behind: forgive, never sprint to catch up
-            v0, w0 = self._base
+            # Behind: forgive, never sprint to catch up. Wall time now is the
+            # slice's end, so it runs at once: re-based at its start instead,
+            # an emulation slower than real time would wait out a whole slice
+            # each time it is forgiven.
+            self.rebase(until_us, window=False)
+            return
         wait = (until_us - v0) / 1e6 / self.rtf - (self.clock_fn() - w0)
         if wait >= 0.001:
             self.sleep(wait)
