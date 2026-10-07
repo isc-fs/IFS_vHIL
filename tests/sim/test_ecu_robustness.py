@@ -56,8 +56,8 @@ the bottom of DiagTask's stack overwritten, nothing above them.
 """
 import pytest
 
-from vhil import elf
-from vhil.sim import Sim
+from vhil import canframe, elf
+from vhil.sim import Frame, Sim, assert_cadence
 from vhil.system import REPO
 
 HEARTBEAT, HEALTH, PIT_STATUS = 0x100, 0x704, 0x700
@@ -67,6 +67,7 @@ ARM = bytes.fromhex("DEADBEEF")
 TRIGGER = bytes.fromhex("B007AD12")
 
 TICK_MS, IWDG_MS, PIT_MS = 10, 500, 100
+KERNEL_TICK_US = 1000      # configTICK_RATE_HZ 1000 (FreeRTOSConfig.h:67)
 POWER_ON, PIN, SOFTWARE, IWDG = 1, 2, 3, 4
 NO_FAULT, HARD_FAULT, STACK_OVERFLOW = 0x00, 0xF1, 0xF5
 WAIT_VDC, PRECHARGE, AMS_ERROR = 0, 1, 6
@@ -388,9 +389,12 @@ def test_motor_rpm_at_the_20_bit_limits(ecu, raw, dlc, rpm):
 
 def test_an_rx_flood_does_not_disturb_control(ecu):
     """A babbling node at ~90 % of the ACU bus (4000 8-byte frames/s, lowest
-    priority ID) with pit-diag streaming: the heartbeat keeps its exact 10 ms,
-    nothing is dropped on the RX path, a command still gets through, and the
-    board never resets."""
+    priority ID) with pit-diag streaming: ControlTask still offers the
+    heartbeat on its 10 ms grid (osDelayUntil, within a kernel tick), and
+    0x100 wins every arbitration against 0x7FF, so it waits at most for the
+    flood frame already on the bus (ISO 11898-1: no pre-emption). Nothing is
+    dropped on the RX path, a command still gets through, and the board
+    never resets."""
     acu = ecu.can("can_acu")
     acu.send(PIT_ARM, ARM)
     for k in range(4):
@@ -398,8 +402,15 @@ def test_an_rx_flood_does_not_disturb_control(ecu):
     t = ecu.run_for(ms=500)
     acu.send(PIT_ARM, bytes(4))                # disarm: acked with 0
     ecu.run_for(ms=1500)
-    hb = acu.frames(HEARTBEAT, since_us=t)
-    assert {b.t_us - a.t_us for a, b in zip(hb, hb[1:])} == {TICK_MS * 1000}
+    hb = [r for r in acu.timeline(since_us=t) if r.id == HEARTBEAT]
+    assert {r.outcome for r in hb} == {"ok"}
+    assert_cadence([Frame(r.offer_ns // 1000, r.id, r.extended, r.data) for r in hb],
+                   period_us=TICK_MS * 1000, jitter_us=KERNEL_TICK_US, min_count=140)
+    one_flood_frame_ns = (canframe.frame_bits(0x7FF, bytes(range(8))) + canframe.INTERMISSION) * 2000
+    waits = [r.start_ns - r.offer_ns for r in hb]
+    assert max(waits) <= one_flood_frame_ns, f"0x100 waited up to {max(waits)} ns"
+    got = {f.t_us for f in acu.frames(HEARTBEAT, since_us=t)}
+    assert all((r.end_ns - 2000) // 1000 in got for r in hb), "a heartbeat on the bus was not received"
     assert [f.data[0] for f in acu.frames(PIT_ACK, since_us=t)] == [0]
     assert ecu.read_symbol("ecu", "g_can_rx_isr_drop", 4) == 0
     assert not any(cause == IWDG or uptime == 0 for _, cause, _, uptime in _health(ecu, since_us=t))
