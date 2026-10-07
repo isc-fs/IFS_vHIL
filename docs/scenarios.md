@@ -78,7 +78,9 @@ timeline and in results, and what a `stop_periodic` names.
 | `watch: symbol` | `board`, `name`, `size` (1, 2, 4), `period_ms` | samples a firmware global from power-on |
 | `watch: pin` | `board`, `pin` | records its edges from power-on |
 
-A frame the scenario sends is in the trace with `src: "stimulus"`. The
+A frame the scenario sends is in the trace with `src: "stimulus"`. A live
+session's ops are these rows without their time
+([live-session.md](live-session.md)), and its recording is a scenario. The
 `watch` stimulus is the one that starts mid-run, a live session's op too;
 the `watch` list's rows hold from power-on. The web app's runs also record
 every board's state view ([state-view.md](state-view.md)).
