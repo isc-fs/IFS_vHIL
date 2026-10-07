@@ -23,6 +23,7 @@ from vhil.system import REPO  # noqa: E402
 
 NODE = shutil.which("node") or next((p for p in ("/opt/node/bin/node",) if os.path.exists(p)), None)
 EDITOR_RUN = REPO / "vhil" / "server" / "static" / "editor-run.js"
+WORKSPACE = REPO / "editor/pipeline-manager/pipeline_manager/frontend/src/vhil/workspace.js"
 
 
 @pytest.fixture
@@ -120,10 +121,10 @@ def test_a_run_defaults_to_three_seconds_from_one_place(client):
     assert r.status_code == 201, r.text
     assert client.get(f"/api/runs/{r.json()['run_id']}").json()["scenario"]["virtual_ms"] \
         == DEFAULT_VIRTUAL_MS
-    # The pages take it from /api/config, not a number of their own.
-    for page in ("runs.js", "editor.js"):
-        src = client.get(f"/static/{page}").text
-        assert "run_virtual_ms" in src, page
+    # The pages take it from /api/config, not a number of their own: the
+    # Runs page and the editor workspace (which the Editor route redirects to).
+    assert "run_virtual_ms" in client.get("/static/runs.js").text
+    assert "config.run_virtual_ms" in WORKSPACE.read_text()
 
 
 def test_the_editor_backend_runs_nothing():

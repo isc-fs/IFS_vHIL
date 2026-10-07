@@ -7,6 +7,8 @@ editor/pipeline-manager/**/dist
 editor/pipeline-manager/**/__pycache__
 editor/pipeline-manager/**/.env.local
 editor/pipeline-manager/pipeline_manager/frontend/src/vhil/shell
-# The shell's tokens and fonts, which the editor's build takes from here.
+# The shell's tokens, fonts and run request, which the editor's build takes
+# from here.
 !vhil/server/static/tokens.css
+!vhil/server/static/editor-run.js
 !vhil/server/static/fonts
