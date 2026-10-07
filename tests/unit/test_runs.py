@@ -13,6 +13,7 @@ import pytest
 fastapi = pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient  # noqa: E402
 
+from vhil import canframe  # noqa: E402
 from vhil.server import create_app  # noqa: E402
 from vhil.server.config import Settings  # noqa: E402
 from vhil.server.runs import RunStore, read_trace, trace_header  # noqa: E402
@@ -394,6 +395,8 @@ def test_live_on_an_unknown_run_closes(client):
 # -- the scenario executor against a fake Sim ----------------------------------------
 
 class FakeBus:
+    arbitrated = False      # Renode's hub: the worker estimates the load
+
     def __init__(self, sim, name):
         self.sim, self.name = sim, name
 
@@ -546,8 +549,29 @@ def test_executor_is_flushed_slice_by_slice(tmp_path):
         return False
 
     run_fake(tmp_path, {"kind": "run", "virtual_ms": 300, "slice_ms": 100}, cancelled=cancelled)
-    # Checked after the first two slices, with their 10 heartbeats each on disk.
-    assert seen == [10, 20]
+    # Checked after the first two slices, with their 10 heartbeats and a
+    # bus_load record per bus (3) each on disk.
+    assert seen == [13, 26]
+
+
+def test_executor_reports_each_bus_load_per_slice(tmp_path):
+    """#174: a bus_load record per bus and slice. On Renode's hub it is an
+    estimate from the frames seen: ten 0x100 [01] heartbeats per 100 ms at
+    500 kbit/s, each 1 + 11 + 3 + 4 + 8 + 15 bits with their stuff bits, the
+    tail (10) and intermission (3)."""
+    _, summary, trace = run_fake(tmp_path, {"kind": "run", "virtual_ms": 200, "slice_ms": 100})
+    loads = [r for r in trace if r["kind"] == "bus_load"]
+    assert [(r["t_us"], r["bus"]) for r in loads] == [
+        (t, b) for t in (100_000, 200_000) for b in ("can_inv", "can_dash", "can_acu")]
+    hb = canframe.busy_bits(0x100, b"\x01")
+    acu = [r for r in loads if r["bus"] == "can_acu"]
+    # The first slice runs from power-on (0) to 100 ms inclusive.
+    assert acu[0] == {"kind": "bus_load", "t_us": 100_000, "bus": "can_acu",
+                      "load": round(10 * hb / (100_001e-6 * 500_000), 4), "window_us": 100_001,
+                      "exact": False}
+    assert all(r["load"] == 0 for r in loads if r["bus"] != "can_acu")
+    assert summary["bus_load"]["can_acu"]["peak"] == max(r["load"] for r in acu)
+    assert summary["bus_load"]["can_inv"] == {"mean": 0, "peak": 0}
 
 
 def test_executor_stops_at_the_slice_after_a_cancel(tmp_path):

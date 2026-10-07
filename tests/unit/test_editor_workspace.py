@@ -202,7 +202,7 @@ def test_the_timeline_and_the_tests_view():
     assert "snap(drag.t0 + (ev.clientX - drag.x0) / scale.value, snapMs.value)" in tl
     assert "if (!ev.ctrlKey && !ev.metaKey) return;" in tl
     assert "replay.t = Math.min(replay.end, r.tUs);" in tl
-    assert "kinds: 'frame,log,edge,sample'" in (VHIL / "replay.js").read_text()
+    assert "kinds: 'frame,log,edge,sample,bus_load'" in (VHIL / "replay.js").read_text()
     workspace = (VHIL / "workspace.js").read_text()
     assert "openRun(id, { tab: 'scenario' });" in workspace
     rail = (VHIL / "VhilRail.vue").read_text()

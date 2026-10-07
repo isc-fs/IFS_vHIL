@@ -10,7 +10,11 @@ A `run` advances virtual time in slices (slice_ms, default 100 ms). After
 each slice the frames, GPIO edges and samples it produced are appended to
 `<results>/<id>/trace.jsonl` in virtual-time order and flushed, so the API's
 live WebSocket streams them while the run goes on; then the run's DB state is
-read, and a run cancelled from the API stops there.
+read, and a run cancelled from the API stops there. Each slice also writes a
+`bus_load` record per CAN bus (#174): the fraction of the slice the bus was
+busy, exact on a bus with `arbitration: true` (models/renode/VhilCanBus.cs),
+else estimated from the frames seen at 500 kbit/s (vhil/canframe.py,
+`exact: false`); the summary carries each bus's mean and peak.
 
 Firmware: each image key of the system ("<board>", "<board>.bootloader")
 needs an ELF at the ref the run asks for (default: the catalogue's). An image
@@ -57,6 +61,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Callable, Optional
 
+from vhil import canframe
 from vhil import expect as vexpect
 from vhil import stateview
 from vhil.server.config import Settings
@@ -294,6 +299,7 @@ def execute_run(sim, scenario: dict, trace: TraceWriter, *,
     system = sim.system
     frames = {bus: 0 for bus in system.buses}     # received from the bus
     sent = {bus: 0 for bus in system.buses}       # the scenario's own CAN stimuli
+    loads: dict[str, list[float]] = {bus: [] for bus in system.buses}
     counts = {"edges": 0, "samples": 0}
 
     # Timed actions: (t_us, seq, fn). CAN frames are scheduled in the probe
@@ -552,14 +558,20 @@ def execute_run(sim, scenario: dict, trace: TraceWriter, *,
         slice_done = now >= slice_end or now >= end_us
         if slice_done:
             for bus in system.buses:
-                for f in sim.can(bus).frames(since_us=since):
+                seen = sim.can(bus).frames(since_us=since)
+                mine = sim.can(bus).sent(since_us=since)
+                for f in seen:
                     batch.append({"kind": "frame", "t_us": f.t_us, "bus": bus, "id": f.id,
                                   "ext": f.extended, "data": f.data.hex()})
                     frames[bus] += 1
-                for f in sim.can(bus).sent(since_us=since):
+                for f in mine:
                     batch.append({"kind": "frame", "t_us": f.t_us, "bus": bus, "id": f.id,
                                   "ext": f.extended, "data": f.data.hex(), "src": "stimulus"})
                     sent[bus] += 1
+                if now >= since:
+                    record = bus_load(sim, bus, since, now + 1, seen + mine)
+                    loads[bus].append(record["load"])
+                    batch.append(record)
             batch += initial
             initial.clear()
             for board in sorted(edge_boards):
@@ -581,7 +593,8 @@ def execute_run(sim, scenario: dict, trace: TraceWriter, *,
             if now >= end_us:
                 break
             if cancelled():
-                raise Cancelled({"frames": frames, "sent": sent, **counts})
+                raise Cancelled({"frames": frames, "sent": sent, **counts,
+                                 "bus_load": load_summary(loads)})
             if session is not None:
                 live_boundary(now, slice_end)
                 if live["stop"]:
@@ -594,11 +607,31 @@ def execute_run(sim, scenario: dict, trace: TraceWriter, *,
         if new <= now:
             raise RuntimeError(f"virtual time stuck at {now} us")
         now = new
-    summary = {"virtual_ms": scenario["virtual_ms"], "frames": frames, "sent": sent, **counts}
+    summary = {"virtual_ms": scenario["virtual_ms"], "frames": frames, "sent": sent, **counts,
+               "bus_load": load_summary(loads)}
     if session is not None:
         summary.update(virtual_ms=math.ceil(now / 1000), stopped=live["stop"] or "end",
                        ops_applied=live["applied"], ops_refused=live["refused"])
     return summary
+
+
+def bus_load(sim, bus: str, from_us: int, to_us: int, frames) -> dict:
+    """A `bus_load` trace record for [from_us, to_us): the bus model's busy
+    time on an arbitrated bus, else an estimate from the frames the probe saw
+    and sent there (Renode's hub has no timing; vhil/canframe.py)."""
+    can = sim.can(bus)
+    if can.arbitrated:
+        load, exact = can.load(from_us, to_us), True
+    else:
+        load, exact = canframe.load(frames, to_us - from_us), False
+    return {"kind": "bus_load", "t_us": to_us - 1, "bus": bus, "load": round(load, 4),
+            "window_us": to_us - from_us, "exact": exact}
+
+
+def load_summary(loads: dict[str, list[float]]) -> dict:
+    """bus -> {mean, peak} of its per-slice loads."""
+    return {bus: {"mean": round(sum(v) / len(v), 4), "peak": max(v)}
+            for bus, v in loads.items() if v}
 
 
 STIMULUS_KINDS = ("can_send", "can_periodic", "stop_periodic", "gpio", "analog", "watch")
