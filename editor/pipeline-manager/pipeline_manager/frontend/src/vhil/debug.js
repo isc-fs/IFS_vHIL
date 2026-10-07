@@ -80,7 +80,8 @@ export class DebugState {
         return b;
     }
 
-    /** One `debug` record. */
+    /** One `debug` record. A board's entry is replaced, never changed in
+     *  place, so a view holding the last one sees that it changed. */
     add(rec) {
         if (rec.kind !== 'debug') return;
         if (!rec.board) { // every board: a stop of the session, or all going on
@@ -90,10 +91,10 @@ export class DebugState {
             if (rec.event === 'detached') this.boards.clear();
             return;
         }
-        const b = this.board(rec.board);
+        const b = { ...this.board(rec.board) };
         switch (rec.event) {
             case 'attached': b.attached = true; break;
-            case 'detached': this.boards.delete(rec.board); break;
+            case 'detached': this.boards.delete(rec.board); return;
             case 'breakpoints':
                 b.breakpoints = rec.breakpoints || [];
                 b.watches = rec.watches || [];
@@ -106,6 +107,7 @@ export class DebugState {
             case 'running': b.stop = null; break;
             default: break;
         }
+        this.boards.set(rec.board, b);
     }
 
     /** The boards held at a stop, by name. */
