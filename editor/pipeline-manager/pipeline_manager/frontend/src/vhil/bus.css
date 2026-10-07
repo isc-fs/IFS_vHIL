@@ -1,0 +1,69 @@
+/* vHIL: the Bus tab (VhilBus.vue) and its tables (rowtable.js), on the
+   tokens (step 9 of docs/architecture/editor-workspace.md). Rows are a
+   fixed height (--vhil-rt-row-h, set through the CSSOM); numbers are
+   tabular and right-aligned, cells don't wrap. */
+
+.vhil-bus { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.vhil-bus-bar {
+  display: flex; align-items: center; gap: var(--sp-3); flex: none; flex-wrap: wrap;
+  padding: var(--sp-1) var(--sp-3); border-bottom: 1px solid var(--line); font-size: var(--fs-dense);
+}
+.vhil-seg { display: inline-flex; border: 1px solid var(--border-control); border-radius: var(--r-control); overflow: hidden; }
+.vhil-seg-btn {
+  height: 24px; padding: 0 var(--sp-3); color: var(--fg-muted); background: var(--bg-1);
+  border: 0; font: inherit; cursor: pointer;
+}
+.vhil-seg-btn + .vhil-seg-btn { border-left: 1px solid var(--border-control); }
+.vhil-seg-btn[aria-pressed="true"] { color: var(--fg); background: var(--sel-bg); font-weight: 600; }
+.vhil-bus-field { display: inline-flex; align-items: center; gap: var(--sp-1); color: var(--fg-muted); }
+.vhil-bus-field .vhil-input { min-height: 24px; height: 24px; width: auto; color: var(--fg); }
+.vhil-bus-field.--grow { flex: 1 1 14rem; }
+.vhil-bus-field.--grow .vhil-input { width: 100%; }
+.vhil-bus-field .vhil-input[aria-invalid="true"] { border-color: var(--status-failed); }
+.vhil-bus-check { display: inline-flex; align-items: center; gap: var(--sp-1); }
+.vhil-bus-summary { margin-left: auto; white-space: nowrap; }
+.vhil-bus-note { margin: 0; padding: 2px var(--sp-3); font-size: var(--fs-small); }
+.vhil-bus-table { flex: 1; min-height: 0; display: flex; }
+
+/* -- the tables ---------------------------------------------------------- */
+
+.vhil-rt { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; font-size: var(--fs-dense); }
+.vhil-rt-row {
+  display: grid; align-items: center; gap: var(--sp-2); box-sizing: border-box;
+  height: var(--vhil-rt-row-h, 22px); padding: 0 var(--sp-3); border-left: 3px solid transparent;
+  white-space: nowrap;
+}
+.vhil-rt-row > span { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.vhil-rt-head {
+  flex: none; height: 24px; color: var(--fg-muted); background: var(--bg-1);
+  border-bottom: 1px solid var(--line); font-size: var(--fs-small); text-transform: uppercase; letter-spacing: 0.04em;
+}
+.vhil-rt-body { position: relative; flex: 1; min-height: 0; overflow: auto; }
+.vhil-rt-spacer { width: 1px; }
+.vhil-rt-rows { position: absolute; top: 0; left: 0; right: 0; }
+.vhil-rt-rows .vhil-rt-row:hover { background: var(--bg-3); }
+.--monitor .vhil-rt-row {
+  grid-template-columns: 6.5rem 6.5rem minmax(7rem, 11rem) 2.5rem 13.5rem minmax(10rem, 1fr) 4.5rem 5.5rem 5.5rem;
+}
+.--trace .vhil-rt-row {
+  grid-template-columns: 6rem 6.5rem 6.5rem minmax(7rem, 11rem) 2.5rem 13.5rem minmax(10rem, 1fr);
+}
+.--trace .vhil-rt-rows .vhil-rt-row { cursor: pointer; }
+.vhil-c-num { text-align: right; font-variant-numeric: tabular-nums; }
+.vhil-c-id, .vhil-c-data, .vhil-c-dec { font-variant-numeric: tabular-nums; }
+.vhil-c-name { font-weight: 600; }
+.vhil-c-dec { color: var(--fg-muted); }
+.vhil-c-data { display: flex; gap: 4px; }
+.vhil-byte { flex: none; width: 2ch; padding: 0 1px; border-radius: 2px; }
+.vhil-byte:empty { display: none; }
+/* A byte that changed in the last frame, within the last 250 ms of virtual
+   time: marked by a tint and an underline, never colour alone. */
+.vhil-byte.--changed {
+  color: var(--fg); background: color-mix(in srgb, var(--status-warn) 28%, transparent);
+  text-decoration: underline;
+}
+.vhil-rt-row.--fresh { border-left-color: var(--status-warn); }
+.vhil-rt-row.--stimulus .vhil-c-bus { font-style: italic; }
+/* Trace: the frame at the scrubber's time, and the frames after it. */
+.vhil-rt-row.--cursor { background: var(--sel-bg); border-left-color: var(--focus); }
+.vhil-rt-row.--after { color: var(--fg-muted); }

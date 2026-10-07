@@ -2,8 +2,9 @@
 vHIL: the bottom dock (Ctrl+J; Ctrl+1..7 or Alt+1..7 picks a tab;
 CHANGELOG-VHIL.md). Log is Pipeline Manager's terminal (the plain log view,
 src/vhil/LogView.vue), moved here from its own panel; Problems lists Check's
-errors and warnings, and a click selects the node one is about. Scenario,
-State, Bus, Signals and Debug are slots the later steps of the plan fill.
+errors and warnings, and a click selects the node one is about; Bus shows a
+replayed run's frames (VhilBus.vue, step 9). Scenario, State, Signals and
+Debug are slots the later steps of the plan fill.
 Collapsed, it is its tab strip, which still shows the problem count.
 -->
 
@@ -71,6 +72,7 @@ Collapsed, it is its tab strip, which still shows the problem count.
             :aria-labelledby="`vhil-tab-${tab.id}`"
         >
             <Terminal v-if="tab.id === 'log'" :terminalInstance="logName" />
+            <VhilBus v-else-if="tab.id === 'bus'" />
             <div v-else-if="tab.id === 'problems'" class="vhil-problems">
                 <p v-if="!ws.problems.length" class="muted">
                     {{ ws.checked ? 'No problems: the system is valid.'
@@ -104,13 +106,14 @@ Collapsed, it is its tab strip, which still shows the problem count.
 <script>
 import { computed, defineComponent, onMounted } from 'vue';
 import Terminal from '../components/Terminal.vue';
+import VhilBus from './VhilBus.vue';
 import { terminalStore, MAIN_TERMINAL } from '../core/stores.js';
 import {
     ws, DOCK_TABS, problemCount, select,
 } from './workspace.js';
 
 export default defineComponent({
-    components: { Terminal },
+    components: { Terminal, VhilBus },
     setup() {
         const errors = computed(() => problemCount('error'));
         const warnings = computed(() => problemCount('warning'));
