@@ -44,6 +44,15 @@ editor (Debug tab) ── WS /api/runs/{id}/session ──▶ API ── session
   each slice's RunFor in a thread and services the debuggers from its own;
   Renode's stub writes each halt's virtual time to a file, since the monitor
   is busy in that RunFor.
+- **Attaching stops the board** before its next instruction (the stub puts
+  its CPU in single-step mode when GDB connects): a breakpoint or watch that
+  attaches a board goes in there and the board runs on; an `interrupt` that
+  attaches it keeps that stop. **Break** on a board that runs puts its CPU in
+  single-step mode too (`machine VhilGdbBreak`), so it stops before its next
+  instruction and holds the time source as a breakpoint does. Not GDB's
+  Ctrl-C: Renode's stub answers it with `cpu.Pause()`, which the next RunFor
+  undoes, so between two RunFors it reported a stop while the board ran on,
+  or never stopped it.
 - A breakpoint, clear or watch set while the board runs is **deferred**: GDB
   can't change breakpoints of a running target in all-stop mode, so the
   worker interrupts the board, and when it stops for that (in the next
