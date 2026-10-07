@@ -141,6 +141,12 @@
                 & > span {
                     color: $green;
                 }
+
+                // vHIL: was an inline style attribute (custom/CustomNode.vue).
+                &.subtitle-ellipsis {
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                }
             }
 
             & > span {
