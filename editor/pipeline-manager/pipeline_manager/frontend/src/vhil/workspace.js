@@ -198,6 +198,7 @@ export function open(id, { branch = '', isNew = false } = {}) {
         setProblems(s.errors, s.warnings);
         ws.checked = true;
         remember();
+        document.title = `${id} · IFS vHIL`;
         const where = `${branch || 'checked-out tree'} @ ${(s.ref || '').slice(0, 8)}`;
         say(`Opened ${id}${s.exists ? '' : ' (new)'} · ${where}`);
         if (s.errors.length) {
@@ -274,7 +275,7 @@ export function pickRef(node, refProp, value) {
     setProp(node, refProp, value);
     refreshDirty();
     const what = refProp === 'bootloader_ref' ? 'bootloader' : 'app';
-    say(`${nodeName(node)} ${what} → ${value || 'the catalogue’s ref'}. Commit to keep it.`);
+    say(`${nodeName(node)} ${what} → ${value || 'the catalogue’s ref'}: commit to keep it`);
 }
 
 // -- commit and PR --------------------------------------------------------------
@@ -441,6 +442,7 @@ export function select(nodeId, { center = false } = {}) {
 // -- start ----------------------------------------------------------------------
 
 export async function start() {
+    document.title = 'IFS vHIL';
     const q = new URLSearchParams(window.location.search);
     if (!q.has('theme')) {
         const saved = stored(THEME_KEY);

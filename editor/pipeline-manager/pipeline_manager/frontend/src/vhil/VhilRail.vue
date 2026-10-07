@@ -120,7 +120,9 @@ to its run page; REPLAY comes with step 9).
 </template>
 
 <script>
-import { computed, defineComponent, ref } from 'vue';
+import {
+    computed, defineComponent, ref, watch,
+} from 'vue';
 import {
     ws, loadRuns, newSystem, open,
 } from './workspace.js';
@@ -151,7 +153,11 @@ export default defineComponent({
             else Object.assign(ws.layout, { sidebar: true, view: id });
             if (id === 'runs') loadRuns();
         };
-        const fromId = ref(ws.id ?? '');
+        const fromId = ref('');
+        // The open system, else the first, once they are known.
+        watch(() => [ws.id, ws.systems.length], () => {
+            if (!fromId.value) fromId.value = ws.id || ws.systems[0]?.id || '';
+        }, { immediate: true });
         const fromBranch = ref('');
         const newId = ref('');
         const openSystem = (id, branch = '') => (id ? open(id, { branch }) : undefined);
