@@ -27,7 +27,7 @@ port:
 | `gpio_in` | plant → system | bool | Held on the input until changed. |
 | `gpio_out` | system → plant | bool | The output's level at the step boundary. |
 | `can_rx` | system → plant | frames | Every frame with that ID the system sent on the bus during the last step, with its virtual timestamp (µs) and data. |
-| `can_tx` | plant → system | frames | Standard frames to put on the bus at the start of the next step, in order. |
+| `can_tx` | plant → system | frames | Standard frames to put on the bus at the start of the next step, in order. On a bus with `arbitration: true` they are offered then and go out as the bus lets them ([`can-bus.md`](can-bus.md)). |
 
 Endpoints are board connectors from the catalogue (`<board>.<pin>`, e.g.
 `ecu.PF8`); which car signal a pin carries on its backplane (`ecu.PF8` is
