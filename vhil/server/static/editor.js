@@ -1,8 +1,13 @@
 // The Editor page (M5.4, #116): Pipeline Manager in an iframe, driven over its
 // postMessage JSON-RPC (graph_change / graph_get / properties_change), with a
-// firmware picker, a Save form (commit on a branch) and Open PR.
+// firmware picker, a Save form (commit on a branch), Open PR, and Run: a
+// normal run of the saved system through POST /api/runs (editor-run.js),
+// followed over its live WebSocket, its state written to the editor's
+// terminal and notifications.
 // The system file stays the source of truth: the graph is translated to and
 // from it by the API (vhil.editor), never kept here.
+
+import { frameCounts, runBlocker, runRequest } from "./editor-run.js";
 
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 
@@ -70,7 +75,10 @@ export async function editorPage(view, initialId) {
   const fwById = Object.fromEntries(firmware.map((f) => [f.id, f]));
   const editorUrl = config.editor_url;
   const origin = new URL(editorUrl, location.href).origin;
-  const state = { id: null, isNew: false, savedBranch: null };
+  // saved: the system file the graph gave when opened or last saved (Run
+  // refuses while it gives another); runRef: the commit that file is at
+  // ("" for the checked-out tree), which Run runs.
+  const state = { id: null, isNew: false, savedBranch: null, saved: null, runRef: "" };
 
   view.innerHTML = `
     <h2>Editor</h2>
@@ -81,6 +89,11 @@ export async function editorPage(view, initialId) {
       <button id="ed-open">Open</button>
       <button id="ed-new" type="button">New…</button>
       <span id="ed-state" class="muted"></span>
+      <label>Virtual ms <input id="ed-ms" type="number" min="1" max="600000" step="100" size="7"
+        value="${Number(config.run_virtual_ms)}"
+        title="Virtual time from power-on; each board spends its bootloader's 2 s first"></label>
+      <button id="ed-run" type="button" title="Run the saved system as a normal run (Runs page)">Run</button>
+      <span id="ed-run-state" aria-live="polite"></span>
     </div>
     <div class="ed-grid">
       <iframe id="ed-frame" title="System editor (Pipeline Manager)" src="${esc(themedUrl(editorUrl))}"></iframe>
@@ -172,8 +185,9 @@ export async function editorPage(view, initialId) {
     if (isNew) q.set("new", "true");
     const s = await call("GET", `/api/systems/${encodeURIComponent(id)}/dataflow?${q}`);
     await loadGraph(s.dataflow);
-    Object.assign(state, { id, isNew: !s.exists, savedBranch: null,
-      extra: s.dataflow.graphs[0].additionalData?.vhil || null });
+    Object.assign(state, { id, isNew: !s.exists, savedBranch: null, saved: null,
+      runRef: branch ? s.ref : "", extra: s.dataflow.graphs[0].additionalData?.vhil || null });
+    if (s.exists) state.saved = await previewYaml();
     saveForm.elements.branch.value ||= branch || `feat/system-${id}-${today()}`;
     saveForm.elements.message.value = s.exists ? `feat(systems): update ${id}` : `feat(systems): add ${id}`;
     prForm.elements.title.value = saveForm.elements.message.value;
@@ -265,6 +279,91 @@ export async function editorPage(view, initialId) {
     }
   }
 
+  // The system file the graph in the editor gives (as Check shows it).
+  async function previewYaml() {
+    const p = await call("POST", `/api/systems/${encodeURIComponent(state.id)}/preview`,
+      { dataflow: await currentGraph() });
+    return p.yaml;
+  }
+
+  // Run's state, in the editor's terminal and notifications and next to
+  // the button, with a link to the run's page.
+  const term = (line) => rpc("terminal_write", { name: "Terminal", message: `${line}\r\n` }).catch(() => {});
+  const notify = (type, title, details) =>
+    rpc("notification_send", { type, title, details }).catch(() => {});
+  const runState = (html) => { $("#ed-run-state").innerHTML = html; };
+
+  async function run() {
+    const virtualMs = Number($("#ed-ms").value);
+    let dataflow = null, current = null;
+    if (state.id && !state.isNew) {
+      dataflow = await currentGraph();
+      current = await previewYaml();
+    }
+    const why = runBlocker({ id: state.id, isNew: state.isNew, saved: state.saved, current, virtualMs });
+    if (why) {
+      show(esc(why), "error");
+      notify("warning", "Not run", why);
+      return;
+    }
+    const body = runRequest({ system: state.id, ref: state.runRef, dataflow, virtualMs });
+    let out;
+    try {
+      out = await call("POST", "/api/runs", body);
+    } catch (e) {
+      notify("error", "Run refused", e.message);
+      term(`run refused: ${e.message}`);
+      throw e;
+    }
+    follow(out.run_id, body);
+  }
+
+  // Follow a run over /api/runs/{id}/live until it ends: frames counted per
+  // bus (not the scenario's own), its log lines into the terminal.
+  function follow(id, body) {
+    const page = `#/runs/${id}`;
+    const link = `<a href="${page}">run ${id}</a>`;
+    const at = body.ref ? ` @ ${body.ref.slice(0, 8)}` : "";
+    const fw = Object.entries(body.firmware).map(([k, v]) => `${k}=${v}`).join(", ");
+    const what = `${body.system}${at}, ${body.scenario.virtual_ms} ms${fw ? `, ${fw}` : ""}`;
+    $("#ed-run").disabled = true;
+    runState(`${link} <span class="badge state-queued">queued</span>`);
+    term(`run ${id} queued: ${what} (${location.origin}/${page})`);
+    notify("info", `Run ${id} queued`, what);
+    const counts = {};
+    let started = false, ended = false, painted = 0;
+    const paint = (st, force = false) => {
+      if (!force && Date.now() - painted < 500) return;
+      painted = Date.now();
+      runState(`${link} <span class="badge state-${esc(st)}">${esc(st)}</span>
+        <span class="muted">${esc(frameCounts(counts))}</span>`);
+    };
+    const proto = location.protocol === "https:" ? "wss" : "ws";
+    const ws = new WebSocket(`${proto}://${location.host}/api/runs/${id}/live?kinds=frame,log`);
+    ws.onmessage = (ev) => {
+      if (!frame.isConnected) { ws.close(); return; }
+      const rec = JSON.parse(ev.data);
+      if (rec.kind === "end") {
+        ended = true;
+        $("#ed-run").disabled = false;
+        paint(rec.state || "unknown", true);
+        term(`run ${id} ${rec.state}: ${frameCounts(counts)}`);
+        notify(rec.state === "passed" ? "info" : rec.state === "cancelled" ? "warning" : "error",
+          `Run ${id} ${rec.state}`, `${frameCounts(counts)}. ${location.origin}/${page}`);
+        return;
+      }
+      if (!started) { started = true; term(`run ${id} running`); paint("running", true); }
+      if (rec.kind === "log") term(`  ${(rec.t_us / 1e6).toFixed(3)} s  ${rec.text}`);
+      else if (!rec.src) counts[rec.bus] = (counts[rec.bus] || 0) + 1;
+      paint("running");
+    };
+    ws.onclose = () => {
+      if (ended || !frame.isConnected) return;
+      $("#ed-run").disabled = false;
+      runState(`${link} <span class="muted">live view lost: see its page</span>`);
+    };
+  }
+
   async function guarded(fn) {
     try { await fn(); } catch (e) { showErrors(e.status === 422 ? "Not valid:" : "Failed:", e.errors || [e.message]); }
   }
@@ -278,6 +377,7 @@ export async function editorPage(view, initialId) {
     await open(id, { isNew: true });
   }));
   $("#ed-fw-refresh").addEventListener("click", () => guarded(refreshFirmware));
+  $("#ed-run").addEventListener("click", () => guarded(run));
 
   $("#ed-check").addEventListener("click", () => guarded(async () => {
     if (!state.id) throw new Error("open a system first");
@@ -305,6 +405,7 @@ export async function editorPage(view, initialId) {
       out = await send({ ...body, takeover: true });
     }
     state.isNew = false;
+    Object.assign(state, { runRef: out.ref, saved: await previewYaml() });
     if (out.changed) {
       state.savedBranch = out.branch;
       show(`Saved <code>${esc(out.path)}</code> on <code>${esc(out.branch)}</code> @ <code>${esc(out.ref.slice(0, 8))}</code>.${warningList(out.warnings)}`);

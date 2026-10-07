@@ -152,8 +152,8 @@ it back onto the original text, comments kept. Natively:
 3. The same backend library, and `ruamel.yaml==0.18.*`, in this repo's venv.
 4. `scripts/editor.sh`, then open http://localhost:5000. Load a system with
    `python -m vhil.editor to-graph systems/ams.yaml -o ams.json` and drop the
-   file on the canvas. Run needs `VHIL_<FIRMWARE>_ELF` (e.g. `VHIL_AMS_ELF`, and
-   `VHIL_CAN_BOOTLOADER_ELF` for the bootloader every MainLite boots through).
+   file on the canvas. Running a system is the web app's (below): the editor
+   has no Run of its own.
 
 Changes to Pipeline Manager are commits to `editor/pipeline-manager/`, each
 listed in its `CHANGELOG-VHIL.md`. The first, bus-per-instance, fixes graphs
@@ -183,7 +183,15 @@ and the bootloader it carries is a read-only `bootloader` property. The firmware
 ls-remote`). Open PR pushes the branch and opens a PR to `dev`; it needs
 `VHIL_GITHUB_TOKEN` (or `VHIL_GITHUB_TOKEN_FILE`; contents + pull requests write) on the API until the
 GitHub App (M5.5) replaces it. Without it the button is off and the branch
-stays local. Known gap: Pipeline Manager 0.5.2 rejects the graphs of the
+stays local. Run (next to Open) starts a normal run, as the Runs page
+does (`POST /api/runs`, `vhil/server/static/editor-run.js`): the system as
+saved, at the commit it was opened from or last saved to (the checked-out
+tree if it was opened from there), with each board's `firmware_ref` /
+`bootloader_ref` from the graph, for the virtual ms given (default 3000:
+each MainLite spends its bootloader's 2 s window first). With unsaved edits
+it refuses and says to save first; it never runs the graph in the browser.
+Its state goes to the editor's terminal and notifications, with a link to
+the run's page. Known gap: Pipeline Manager 0.5.2 rejects the graphs of the
 systems with more than one CAN bus ("Missing dst s:can_inv:0": the earlier
 buses' stubs are not found), so the ECU systems don't load in the editor yet;
 single-bus systems such as `ams` do.

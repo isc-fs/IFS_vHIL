@@ -288,7 +288,11 @@ In the owner's order.
    and an axe scan of shell and editor.
 5. **One run model.** The editor's Run creates a normal `POST /api/runs` run
    and follows `/live`; the in-process 2 s `EditorMethods.dataflow_run` (on
-   `$VHIL_*_ELF`, no history) goes.
+   `$VHIL_*_ELF`, no history) goes. A run runs a saved system: with unsaved
+   edits Run refuses and says to save, and otherwise runs the commit the
+   graph was opened from or last saved to, with the graph's firmware refs;
+   default 3 s of virtual time (`DEFAULT_VIRTUAL_MS`, `vhil/server/runs.py`),
+   as every run counts from power-on through the bootloader's 2 s window.
 6. **Same origin and CSP.** PM under `/editor/` behind Caddy with socket.io
    proxied; precompiled Ajv; narrowed CORS; a real `targetOrigin`;
    `default-src`/`script-src`/`style-src 'self'` staged through Report-Only,
