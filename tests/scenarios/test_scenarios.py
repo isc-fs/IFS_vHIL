@@ -1,7 +1,8 @@
 """The vHIL's own test suite: every committed scenario of every system
 (systems/<system>.scenarios/*.yaml, docs/scenarios.md) run as one test.
 
-    python -m pytest tests/scenarios --junitxml=scenarios.xml       # images from $VHIL_<X>_ELF
+    python -m pytest tests/scenarios -o junit_family=xunit1 --junitxml=scenarios.xml
+                                                            # images from $VHIL_<X>_ELF
 
 Each scenario runs as the web app's worker runs it (vhil/worker.py
 execute_run on vhil.sim.Sim, from power-on through each board's CAN
@@ -9,7 +10,8 @@ bootloader), and its expects are checked against the trace in virtual time
 (vhil/expect.py) with the contract the images' own .def files give. A test
 fails when an expect does, listing each with its evidence; each expect is
 also a JUnit property of the test (`expect[i] <name>`: pass or fail and the
-detail). A scenario whose system's images are missing is skipped, so
+detail; JUnit's xunit1 family, which keeps properties). A scenario whose
+system's images are missing is skipped, so
 `pytest tests` on a host without firmware still runs.
 
 CI (.github/workflows/scenarios.yml) runs it with `full-ci`, nightly and on
@@ -54,7 +56,10 @@ def test_scenario(path, images, tmp_path, request, record_property):
 
     from vhil.sim import Sim
     log_dir = request.config.getoption("--sim-log-dir")
-    log = Path(log_dir) / f"scenario-{system_id}-{path.stem}.log" if log_dir else None
+    log = None
+    if log_dir:
+        Path(log_dir).mkdir(parents=True, exist_ok=True)
+        log = Path(log_dir) / f"scenario-{system_id}-{path.stem}.log"
     trace = TraceWriter(tmp_path / "trace.jsonl")
     with Sim(system_path, firmware, log_path=log) as sim:
         execute_run(sim, scenario, trace)

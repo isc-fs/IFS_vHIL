@@ -82,7 +82,9 @@ jobs:
           VHIL_CAN_BOOTLOADER_ELF: ${{ steps.fw.outputs.bootloader }}
         run: |
           set +e
-          python -m pytest tests/scenarios -v --sim-log-dir sim-logs --junitxml=scenarios.xml
+          # xunit1: the family whose report keeps each expect's property.
+          python -m pytest tests/scenarios -v --sim-log-dir sim-logs \
+              -o junit_family=xunit1 --junitxml=scenarios.xml
           echo "rc=$?" >> "$GITHUB_OUTPUT"
 
       - name: Results (step summary; a warning per failed scenario)

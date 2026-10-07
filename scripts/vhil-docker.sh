@@ -141,7 +141,7 @@ scenarios)
         need_elf ecu; need_elf ams
         VHIL_ECU_ELF=$(elf ecu) VHIL_AMS_ELF=$(elf ams) VHIL_CAN_BOOTLOADER_ELF=$(elf ecu.bootloader) \
             python -m pytest tests/scenarios -v --sim-log-dir results/sim-logs \
-                --junitxml=results/scenarios.xml "$@"' "$@" ;;
+                -o junit_family=xunit1 --junitxml=results/scenarios.xml "$@"' "$@" ;;
 coverage)
     in_container "$prelude"'
         need_elf ecu; need_elf ams

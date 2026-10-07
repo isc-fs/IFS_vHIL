@@ -147,7 +147,7 @@ A scenario whose system's images are missing is skipped.
 
 ```sh
 scripts/vhil-docker.sh scenarios               # in Docker, the last built firmware; JUnit in results/
-python -m pytest tests/scenarios --junitxml=scenarios.xml   # images from $VHIL_<X>_ELF
+python -m pytest tests/scenarios -o junit_family=xunit1 --junitxml=scenarios.xml
 ```
 
 CI runs it in `.github/workflows/scenarios.yml` with `full-ci`, nightly on
