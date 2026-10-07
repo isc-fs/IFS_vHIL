@@ -15,10 +15,15 @@ index file:
 
 The last step is a compare-and-swap: if another save moved the branch in
 between, it fails and nothing is lost. The parent is the branch's tip, else
-the remote's copy of it (origin/<branch>), else the base branch (origin/dev,
-dev). A branch checked out in any worktree is refused: moving its ref under
-that tree would make the tree look like it reverted the save. `dev` and
-`main` are never written; changes reach them through a PR.
+the remote's copy of it (origin/<branch>), else the commit the save names as
+its `base` (the editor's: the commit the system was opened at), else the base
+branch (origin/dev, dev). A run at a saved ref runs the deployment's code
+with the ref's system file (vhil/server/runs.py), so a new branch made from
+the workspace's commit is one that runs here; one made from dev's tip runs
+only where the workspace is at dev's tip. A branch checked out in any
+worktree is refused: moving its ref under that tree would make the tree look
+like it reverted the save. `dev` and `main` are never written; changes reach
+them through a PR.
 
 Who saved a commit is recorded as a `Vhil-User: <login>` trailer
 (OWNER_TRAILER), so the API can refuse to move a branch another member last
@@ -108,14 +113,16 @@ class GitStore:
                 return sha
         raise GitError("the workspace has no commits")
 
-    def parent(self, branch: str | None) -> str:
-        """The commit a save on `branch` builds on (and a read of it shows)."""
+    def parent(self, branch: str | None, base: str | None = None) -> str:
+        """The commit a save on `branch` builds on (and a read of it shows):
+        its tip; for a new branch, `base` (a commit) if given, else the
+        base branch."""
         if branch:
             for ref in (f"refs/heads/{branch}", f"refs/remotes/origin/{branch}"):
                 sha = self.rev(ref)
                 if sha:
                     return sha
-        return self.base_commit()
+        return base or self.base_commit()
 
     def branch_tip(self, branch: str) -> str | None:
         """The commit a save on `branch` would move (local, else origin's
@@ -168,8 +175,9 @@ class GitStore:
     def commit_file(self, branch: str, path: str, text: str, message: str,
                     author: tuple[str, str], must_not_exist: bool = False,
                     trailers: dict[str, str] | None = None,
-                    expect_parent: str | None = None) -> dict:
-        """Commit `text` as `path` on `branch` (created from the base if new).
+                    expect_parent: str | None = None, base: str | None = None) -> dict:
+        """Commit `text` as `path` on `branch` (created from `base`, a commit,
+        if new, else from the base branch).
         `trailers` end the message (e.g. {OWNER_TRAILER: login}); with
         `expect_parent`, the save is refused (Conflict) if the branch no longer
         builds on that commit: what the caller checked is what it moves.
@@ -187,7 +195,7 @@ class GitStore:
                 raise Conflict(f"branch '{branch}' is checked out in the workspace; "
                                f"save to another branch")
             local = self.rev(f"refs/heads/{branch}")
-            parent = self.parent(branch)
+            parent = self.parent(branch, base)
             if expect_parent is not None and parent != expect_parent:
                 raise Conflict(f"branch '{branch}' moved during the save; retry")
             if must_not_exist and self.read(parent, path) is not None:

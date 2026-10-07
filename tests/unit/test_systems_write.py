@@ -397,12 +397,13 @@ def test_the_editor_page_is_served(env):
 
 # -- runs at a saved ref --------------------------------------------------------------
 
-def saved_ams(env, branch="feat/ams-run", fw_ref="feat/x", description="saved from the editor"):
+def saved_ams(env, branch="feat/ams-run", fw_ref="feat/x", description="saved from the editor",
+              **kw):
     text = (env.ws / "systems" / "ams.yaml").read_text()
     doc = yaml.safe_load(text)
     doc["boards"]["ams"]["firmware_ref"] = fw_ref
     doc["description"] = description
-    r = put(env, "ams", yaml=editor.write_system(doc, text), branch=branch)
+    r = put(env, "ams", yaml=editor.write_system(doc, text), branch=branch, **kw)
     assert r.status_code == 200, r.text
     return r.json()["ref"]
 
@@ -510,6 +511,104 @@ def test_a_worker_refuses_a_ref_the_workspace_code_moved_away_from(env, tmp_path
     run = RunStore(settings.db).get(run_id)
     assert run["state"] == "error" and "catalog/firmware/ams.yaml" in run["summary"]["error"]
     assert sha[:12] in run["summary"]["error"]
+
+
+# -- save then run, with the deployment pinned behind dev's tip ----------------------
+
+def advance_dev(env, tmp_path):
+    """Move the remote's dev past the workspace's commit with a catalogue
+    change, and fetch it: the workspace stays at its (older, pinned) commit,
+    as a deployment at VHIL_WORKSPACE_REF does while dev moves on."""
+    other = tmp_path / "other"
+    subprocess.run(["git", "clone", "-q", str(env.bare), str(other)], check=True)
+    fw = other / "catalog" / "firmware" / "ams.yaml"
+    fw.write_text(fw.read_text() + "# newer on dev\n")
+    git(other, "commit", "-qam", "catalogue moves on dev")
+    git(other, "push", "-q", "origin", "dev")
+    git(env.ws, "fetch", "-q")
+    assert git(env.ws, "rev-parse", "HEAD") != git(env.ws, "rev-parse", "origin/dev")
+
+
+def opened_at(env, system="ams"):
+    """The commit the editor opens the checked-out tree's system at."""
+    return env.client.get(f"/api/systems/{system}/dataflow").json()["ref"]
+
+
+def test_a_new_branch_builds_on_the_commit_the_save_names_as_its_base(env, tmp_path):
+    advance_dev(env, tmp_path)
+    head = git(env.ws, "rev-parse", "HEAD")
+    assert opened_at(env) == head
+    sha = saved_ams(env, branch="feat/from-head", base=head)
+    assert git(env.ws, "rev-parse", f"{sha}^") == head
+    assert git(env.ws, "diff", "--name-only", head, sha) == "systems/ams.yaml"
+    # An existing branch stacks on its tip, whatever the base.
+    again = saved_ams(env, branch="feat/from-head", description="again",
+                      base=git(env.ws, "rev-parse", "origin/dev"))
+    assert git(env.ws, "rev-parse", f"{again}^") == sha
+    # Without one, a new branch still starts at the base branch's tip.
+    other = saved_ams(env, branch="feat/from-dev")
+    assert git(env.ws, "rev-parse", f"{other}^") == git(env.ws, "rev-parse", "origin/dev")
+
+
+@pytest.mark.parametrize("base", ["dev", "--upload-pack=x", "0" * 40, "zz" * 20])
+def test_a_base_that_is_not_a_workspace_commit_is_422(env, base):
+    r = put(env, "ams", yaml=edited_ams(env.ws), branch="feat/bad-base", base=base)
+    assert r.status_code == 422 and "is not a commit of the workspace" in r.text, r.text
+    assert "feat/bad-base" not in git(env.ws, "branch")
+
+
+def test_save_then_run_works_with_the_deployment_behind_dev(env, tmp_path):
+    """The editor's main flow (#164): open the checked-out tree's system,
+    save it to a new branch, run that commit. The branch is made from the
+    commit the system was opened at, so only its system file differs from
+    the deployment's code, and the run is queued and runs."""
+    from vhil.server.runs import RunStore
+    from vhil.worker import Worker
+    from .test_runs import FakeSim, FixedResolver
+    advance_dev(env, tmp_path)
+    sha = saved_ams(env, branch="feat/editor-save", base=opened_at(env))
+    r = env.client.post("/api/runs", json={"system": "ams", "ref": sha,
+                                           "scenario": run_scenario()})
+    assert r.status_code == 201, r.text
+    settings = env.app.state.settings
+    Worker(settings, sim_factory=lambda *a: FakeSim(), resolver=FixedResolver()).run_once()
+    run = RunStore(settings.db).get(r.json()["run_id"])
+    assert run["state"] == "passed", run["summary"]
+
+
+def test_a_branch_from_devs_tip_is_refused_with_why_and_what_to_do(env, tmp_path):
+    """A branch made from dev's tip changes no code itself, but dev moved
+    past the deployment's commit: it would run dev's tip's system with the
+    deployment's code. Refused, saying so and what to do instead."""
+    advance_dev(env, tmp_path)
+    saved_ams(env, branch="feat/from-dev")
+    r = env.client.post("/api/runs", json={"system": "ams", "ref": "feat/from-dev",
+                                           "scenario": run_scenario()})
+    assert r.status_code == 422, r.text
+    msg = r.json()["detail"]
+    head = git(env.ws, "rev-parse", "HEAD")
+    fork = git(env.ws, "rev-parse", "origin/dev")
+    assert "catalog/firmware/ams.yaml" in msg
+    assert "changes no code itself" in msg and f"built on dev at {fork[:12]}" in msg
+    assert f"not on the workspace's {head[:12]}" in msg
+    assert "new branch from the editor" in msg
+
+
+def test_a_branch_that_changes_code_itself_is_still_refused(env, tmp_path):
+    """Only the system file may differ: a branch made from the workspace's
+    commit that also changes a model or the catalogue is refused, so a run
+    never mixes a ref's code with the deployment's."""
+    from vhil.server.gitstore import GitStore
+    advance_dev(env, tmp_path)
+    head = git(env.ws, "rev-parse", "HEAD")
+    saved_ams(env, branch="feat/code-too", base=head)
+    GitStore(env.ws).commit_file("feat/code-too", "catalog/boards/extra.yaml", "x: 1\n",
+                                 "test: code", ("t", "t@example.com"))
+    r = env.client.post("/api/runs", json={"system": "ams", "ref": "feat/code-too",
+                                           "scenario": run_scenario()})
+    assert r.status_code == 422, r.text
+    msg = r.json()["detail"]
+    assert "catalog/boards/extra.yaml" in msg and "changes that code itself" in msg
 
 
 def test_workspace_refs_list_branches_and_tags(env):

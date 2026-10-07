@@ -77,8 +77,10 @@ export async function editorPage(view, initialId) {
   const origin = new URL(editorUrl, location.href).origin;
   // saved: the system file the graph gave when opened or last saved (Run
   // refuses while it gives another); runRef: the commit that file is at
-  // ("" for the checked-out tree), which Run runs.
-  const state = { id: null, isNew: false, savedBranch: null, saved: null, runRef: "" };
+  // ("" for the checked-out tree), which Run runs; base: the commit the
+  // graph was opened at or last saved as, which a save to a new branch
+  // builds on, so the branch runs with this deployment's code.
+  const state = { id: null, isNew: false, savedBranch: null, saved: null, runRef: "", base: "" };
 
   view.innerHTML = `
     <h2>Editor</h2>
@@ -186,7 +188,7 @@ export async function editorPage(view, initialId) {
     const s = await call("GET", `/api/systems/${encodeURIComponent(id)}/dataflow?${q}`);
     await loadGraph(s.dataflow);
     Object.assign(state, { id, isNew: !s.exists, savedBranch: null, saved: null,
-      runRef: branch ? s.ref : "", extra: s.dataflow.graphs[0].additionalData?.vhil || null });
+      runRef: branch ? s.ref : "", base: s.ref || "", extra: s.dataflow.graphs[0].additionalData?.vhil || null });
     if (s.exists) state.saved = await previewYaml();
     saveForm.elements.branch.value ||= branch || `feat/system-${id}-${today()}`;
     saveForm.elements.message.value = s.exists ? `feat(systems): update ${id}` : `feat(systems): add ${id}`;
@@ -311,9 +313,12 @@ export async function editorPage(view, initialId) {
     try {
       out = await call("POST", "/api/runs", body);
     } catch (e) {
+      // The API says why (e.g. a branch whose code differs from this
+      // deployment's: vhil/server/runs.py code_mismatch).
       notify("error", "Run refused", e.message);
       term(`run refused: ${e.message}`);
-      throw e;
+      showErrors("Run refused:", e.errors || [e.message]);
+      return;
     }
     follow(out.run_id, body);
   }
@@ -391,6 +396,7 @@ export async function editorPage(view, initialId) {
     if (!state.id) throw new Error("open a system first");
     const body = { dataflow: await currentGraph(), branch: saveForm.elements.branch.value.trim(),
       message: saveForm.elements.message.value };
+    if (state.base) body.base = state.base;
     const send = (b) => state.isNew
       ? call("POST", "/api/systems", { id: state.id, ...b })
       : call("PUT", `/api/systems/${encodeURIComponent(state.id)}`, b);
@@ -405,7 +411,7 @@ export async function editorPage(view, initialId) {
       out = await send({ ...body, takeover: true });
     }
     state.isNew = false;
-    Object.assign(state, { runRef: out.ref, saved: await previewYaml() });
+    Object.assign(state, { runRef: out.ref, base: out.ref, saved: await previewYaml() });
     if (out.changed) {
       state.savedBranch = out.branch;
       show(`Saved <code>${esc(out.path)}</code> on <code>${esc(out.branch)}</code> @ <code>${esc(out.ref.slice(0, 8))}</code>.${warningList(out.warnings)}`);
