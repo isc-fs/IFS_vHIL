@@ -166,7 +166,13 @@ from `git archive 04613679` except as listed below.
       bootloader: five rows that made the board taller than wide). The
       inspector edits the same property objects, so the node still tells the
       backend of a role change (`properties_on_change`) and the backend
-      relabels its pins as before.
+      relabels its pins as before. A property's watcher skipped its first
+      change (its control settling as the node mounts); a board's
+      properties have no control on the node, so theirs skips nothing, or
+      the user's first role change would be lost.
+    - **Moved by CSS** (`workspace.css`): the zoom buttons
+      (`components/Zoom.vue`, fixed to the window's corner, where the dock
+      is now) sit in the canvas's corner.
     - **Layout CSS** is `src/vhil/workspace.css`, on the tokens. Script sets
       only the grid's sizes, as custom properties through the CSSOM (Vue's
       `:style` objects), which `style-src 'self'` allows.
