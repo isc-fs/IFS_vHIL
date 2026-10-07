@@ -13,7 +13,7 @@ from `git archive 04613679` except as listed below.
 ## Added
 
 - `README-VHIL.md`, `CHANGELOG-VHIL.md`: this file and its neighbour.
-- `pipeline_manager/frontend/src/vhil/`: vHIL's own frontend code (theme,
+- `pipeline_manager/frontend/src/vhil/`: vHIL's own frontend code (the workspace, theme,
   validators, log view, below); `src/vhil/shell/` is filled by the image
   build and `src/vhil/validators/` by `build-validators.mjs`, neither in git.
 
@@ -125,6 +125,51 @@ from `git archive 04613679` except as listed below.
     `custom/CustomNode.vue` built the subtitle as
     `<pre class="subtitle" style="overflow: hidden; …">`, set with `v-html`;
     it is the class `subtitle-ellipsis` now, styled in `styles/_node.scss`.
+12. **The vHIL workspace** (step 7 of the editor workspace plan: the layout).
+    `components/Home.vue` lays out the vHIL workspace (`src/vhil/`, new)
+    instead of `NavBar`, the canvas alone and `TerminalPanel`: a 40 px top
+    bar (`VhilTopBar.vue`: the mark, "system @ branch" with a dot for unsaved
+    edits, a firmware chip per board opening the ref picker
+    `VhilRefPicker.vue`, the run's duration, Run (F5) and Stop (Shift+F5),
+    the mode pill, Commit… and Open PR, the theme toggle), the activity rail
+    and sidebar (`VhilRail.vue`, Ctrl+B: Palette, Systems, Runs), the canvas,
+    the inspector (`VhilInspector.vue`, resizable), the bottom dock
+    (`VhilDock.vue`, Ctrl+J, Ctrl/Alt+1..7: Log, Problems, and empty
+    Scenario, State, Bus, Signals and Debug tabs for later steps), the status
+    strip (`VhilStatus.vue`) and the dialogs (`VhilDialogs.vue`: Commit, PR,
+    the `?` keyboard map). What they do (`workspace.js`, `graph.js`, `api.js`,
+    `shortcuts.js`) is what the shell's Editor page did around the editor:
+    the web app's API on the same origin (`/api`, with the session's CSRF
+    token), and Run as `vhil/server/static/editor-run.js` says (copied into
+    `src/vhil/shell/` by the image build, as the tokens are). The graph is
+    read and edited in place (`saveDataflow`, a property's `value`) where the
+    shell went through postMessage JSON-RPC; the URL's `?system=&branch=`
+    opens a system, and the layout and theme are kept per viewer in
+    `localStorage`.
+    - **Gone from the page:** NavBar (its file menu, node search, graph
+      details, settings, notifications panel, fullscreen and backend-status
+      buttons, and the backend's navbar actions, so `Validate system`: Check
+      replaces it) and TerminalPanel (its tab strip and resizer: the dock's
+      Log tab renders `components/Terminal.vue` for the main terminal, and
+      takes `terminalStore.manager`, so `terminal_show` opens the Log). The
+      files are unchanged. Toasts still show; the node sidebar
+      (`custom/CustomSidebar.vue`) is mounted on the canvas, with the
+      `hoveredOver` NavBar provided.
+    - **The palette** (`components/Palette.vue`) is rendered in the canvas's
+      `palette` slot as before, inside a `<Teleport defer>` to the sidebar's
+      `#vhil-palette-host`: it keeps the canvas's `editorEl` injection, so
+      dragging a node onto the canvas places it as before. `workspace.css`
+      takes away its absolute position and slide transform.
+    - **A board's properties are in the inspector, not on its node.**
+      `custom/CustomNode.vue` shows no property rows on a node whose type's
+      `additionalData.vhil.kind` is `board` (the role, firmware, refs and
+      bootloader: five rows that made the board taller than wide). The
+      inspector edits the same property objects, so the node still tells the
+      backend of a role change (`properties_on_change`) and the backend
+      relabels its pins as before.
+    - **Layout CSS** is `src/vhil/workspace.css`, on the tokens. Script sets
+      only the grid's sizes, as custom properties through the CSSOM (Vue's
+      `:style` objects), which `style-src 'self'` allows.
 
 ## Left for later
 

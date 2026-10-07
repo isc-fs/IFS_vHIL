@@ -809,9 +809,11 @@ class EditorMethods:
 
     def app_capabilities_get(self, **_):
         # Navbar buttons (common_types navbar_items): returned bare, not wrapped.
-        # No Run: a run is a normal POST /api/runs run of the saved system,
-        # which the web app's Editor page starts (vhil/server/static/editor-run.js),
-        # never one in this process.
+        # The vHIL workspace has no navbar (its Check stands for this one;
+        # editor/pipeline-manager/CHANGELOG-VHIL.md). No Run: a run is a
+        # normal POST /api/runs run of the saved system, which the
+        # workspace's Run starts (vhil/server/static/editor-run.js), never
+        # one in this process.
         return [{"name": "Validate system", "iconName": "Validate",
                  "procedureName": "dataflow_validate"}]
 
