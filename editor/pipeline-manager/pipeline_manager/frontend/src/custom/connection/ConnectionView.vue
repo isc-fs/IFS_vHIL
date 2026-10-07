@@ -7,10 +7,18 @@ SPDX-License-Identifier: Apache-2.0
 <!--
 Component defining connection between two different nodes
 Inherits from baklavajs/renderer-vue/src/connection/ConnectionView.vue
+
+vHIL: a wire is classed by its interface type (its width, _connection.scss),
+a CAN wire takes its bus's tint (--can-1..4), and hovering one shows what
+it is ("can_acu · 500 kbit/s · 3 nodes": src/vhil/shapes.js).
 -->
 
 <template>
-    <g v-if="Array.isArray(parsedNewD)">
+    <g
+        v-if="Array.isArray(parsedNewD)"
+        @pointermove="showTip"
+        @pointerleave="hideWireTip"
+    >
         <path :d="parsedNewD" class="connection-wrapper baklava-connection"></path>
         <!-- The connection wrapper is rendered twice, once for
             easy highlight detection, and once for creating anchor points -->
@@ -41,6 +49,8 @@ Inherits from baklavajs/renderer-vue/src/connection/ConnectionView.vue
     </g>
     <g
         v-else
+        @pointermove="showTip"
+        @pointerleave="hideWireTip"
         @pointerdown.left.exact="onMouseDown"
         @pointerdown="(ev) => { if(ev.pointerType === 'touch') onMouseDown(ev) }"
         @pointerdown.left.ctrl.exact="(ev) => onMouseCtrlDown(ev, 0)"
@@ -58,6 +68,9 @@ import { Components, useGraph, useViewModel } from '@baklavajs/renderer-vue';
 import doubleClick from '../../core/doubleClick';
 import Anchor from '../../components/Anchor.vue';
 import EditorManager from '../../core/EditorManager';
+import {
+    busTint, hideWireTip, showWireTip, wireBus, wireText, wireType,
+} from '../../vhil/shapes.js';
 
 /* eslint-disable vue/no-mutating-props,no-param-reassign */
 export default defineComponent({
@@ -82,16 +95,27 @@ export default defineComponent({
             props.connection.to,
         );
 
+        // vHIL: the wire's type and, on a bus, the bus's tint.
+        const type = wireType(props.connection);
+        const tint = computed(() => {
+            const bus = type === 'can' ? wireBus(props.connection, graph.value) : null;
+            return bus ? busTint(bus, graph.value) : null;
+        });
+
         const cssClasses = computed(() => ({
             ...classes.value,
             '--hover': props.isHighlighted || hover.value,
             '--dashed': connectionStyle.interfaceConnectionPattern === 'dashed',
             '--dotted': connectionStyle.interfaceConnectionPattern === 'dotted',
+            [`--t-${type}`]: Boolean(type),
         }));
 
         const style = computed(() => ({
-            '--color': connectionStyle.interfaceConnectionColor,
+            '--color': tint.value
+                ? `var(--can-${tint.value}, ${connectionStyle.interfaceConnectionColor})`
+                : connectionStyle.interfaceConnectionColor,
         }));
+        const showTip = (ev) => showWireTip(wireText(props.connection, graph.value), ev);
 
         const draggingOffset = ref({});
         const draggingStartPoint = ref({});
@@ -204,6 +228,8 @@ export default defineComponent({
             hasAnchors,
             removeAnchor,
             editorManager,
+            showTip,
+            hideWireTip,
         };
     },
 });
