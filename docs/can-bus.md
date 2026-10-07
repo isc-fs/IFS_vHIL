@@ -1,23 +1,36 @@
 # CAN buses in virtual time
 
-A system's CAN bus is Renode's CAN hub unless it says otherwise. The hub hands
-each frame to every other node the instant it is sent. It has no bit time, no
-contention, no capacity and no ACK, and a frame from another board lands at
-the next sync point (every `time.quantum_s`, 500 µs). That is enough for
-contract tests. It can't show a bus that is full, a high-priority ID holding a
-chatty one off, or a node that nobody acknowledges.
-
-A bus marked `arbitration: true` is the vHIL's bus model instead,
+Every CAN bus of a system is the vHIL's bus model,
 [`models/renode/VhilCanBus.cs`](../models/renode/VhilCanBus.cs) (#174):
+frames wait for the bus and lose arbitration, they take their bit time, a
+node nobody acknowledges goes error-passive, and the bus timeline and load
+are exact in virtual time. A firmware sees what it would see on the car's
+bus.
+
+A bus can opt out with `arbitration: false`, and is then Renode's CAN hub:
 
 ```yaml
 buses:
-  can_acu: {kind: can, nodes: [ecu.FDCAN2, ams.FDCAN1], host_netdev: can2, arbitration: true}
+  can_acu: {kind: can, nodes: [ecu.FDCAN2, ams.FDCAN1], host_netdev: can2, arbitration: false}
 ```
 
-A test can turn it on for one run: `Sim(..., arbitration=["can_acu"])`. It
-is opt-in. A bus without it renders exactly as before, so existing suites and
-their timing are unchanged.
+The hub hands each frame to every other node the instant it is sent. It has
+no bit time, no contention, no capacity and no ACK, and a frame from another
+board lands at the next sync point (every `time.quantum_s`, 500 µs), so its
+timestamps sit on the sync grid. Keep it for what truly needs it:
+renode-test's CAN Tester keywords attach only to a hub (Renode's
+`CANKeywords.cs`, `TestersProvider<CANTester, CANHub>`), so the smoke suites
+render their script with `python -m vhil.system render --can-hub`, which
+puts the hub on every bus. A test can opt out for one run with
+`Sim(..., hub=["can_acu"])`. Test bus load, priority, ACK and frame timing
+on the bus model, never on the hub.
+
+The bus model was opt-in at first (`arbitration: true`, which now says what
+the default says). Making it the default (#182) changed what some tests saw:
+a frame is stamped at its end on the bus, not at a sync point, so periods
+carry the firmware's own jitter. Such tests assert
+a cadence (`vhil.sim.assert_cadence`: a fixed grid, no drift, no missing
+frame, jitter under one kernel tick), not exact 10 000 µs intervals.
 
 ## What the bus does
 
@@ -71,7 +84,7 @@ are on [#174](https://github.com/isc-fs/IFS_vHIL/issues/174).
 ## Using it from a test
 
 ```python
-with Sim("systems/ecu-ams.yaml", fw, arbitration=["can_acu"]) as sim:
+with Sim("systems/ecu-ams.yaml", fw) as sim:
     can = sim.can("can_acu")
     logger = can.node("logger")        # a second probe: its own queue, ACK, TEC
     can.set_ack(False)                 # the main probe listens only

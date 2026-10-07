@@ -295,9 +295,12 @@ class Debugger:
 
     # -- lifecycle --------------------------------------------------------------
 
-    def start(self) -> None:
+    def start(self, resume: bool = True) -> None:
         """Start the board's stub (with the monitor free: between RunFors)
-        and attach GDB. Attaching halts the board; it runs on at once."""
+        and attach GDB. Attaching halts the board (before its next
+        instruction, as a breakpoint does); with `resume` it runs on at once,
+        else it stays stopped there, a stop like any other (`events`), for
+        breakpoints to go in before it runs."""
         self.workdir.mkdir(parents=True, exist_ok=True)
         if not getattr(self.sim, "_vhil_gdb_loaded", False):
             self.sim.monitor(f"include {rn.file_arg(GDB_SOURCE)}")
@@ -318,11 +321,14 @@ class Debugger:
                         "remotetimeout 10"):
             self._mi(f"-gdb-set {setting}")
         self._mi(f"-target-select remote 127.0.0.1:{int(port)}", timeout_s=60)
-        self.state = "stopped"
         self._drain()
-        self._mi("-exec-continue")
-        self.state, self.stop = "running", None
-        self._events = []           # attaching's own stop and resume
+        self.state = "stopped"
+        self.stop = {**(self.stop or {}), "reason": "attached"}
+        self._events = [{"event": "stopped", **self.stop}]
+        if resume:
+            self._mi("-exec-continue")
+            self.state, self.stop = "running", None
+            self._events = []       # attaching's own stop and resume
 
     def close(self) -> None:
         """Let the board go: every breakpoint deleted, running again, GDB
@@ -585,11 +591,14 @@ class Debugger:
         return out
 
     def interrupt(self) -> None:
-        """Ask GDB to halt the board (mi-async): the stop arrives once the
-        board next executes, in the RunFor after this."""
+        """Halt the board before its next instruction, with the monitor free
+        (between RunFors): the stop (SIGINT) arrives once the board next
+        executes, in the RunFor after this. Not GDB's -exec-interrupt: the
+        stub's Ctrl-C pauses the CPUs, which the next RunFor resumes
+        (models/renode/VhilGdb.cs, VhilGdbBreak)."""
         self._drain()
         if self.state == "running":
-            self._mi("-exec-interrupt")
+            self.sim.monitor("machine VhilGdbBreak", board=self.board)
 
 
 # -- a live session's debuggers -----------------------------------------------------
@@ -704,9 +713,22 @@ class DebugHub:
                     raise DebugError("the system is held at a breakpoint: attach another "
                                      "board once it runs again")
                 d = self.factory(self.sim, board, self.workdir)
-                d.start()
+                # Attaching stops the board: a break or watch goes in there and
+                # it runs on; an interrupt keeps that stop (it is the stop).
+                d.start(resume=cmd == "attach")
                 self.boards[board] = d
                 recs.append(self._record(now, board, "attached", elf=str(d.elf)))
+                if cmd == "interrupt":
+                    self.wanted.add(board)
+                    return "applied", None, "", recs
+                if cmd in ("break", "watches"):
+                    try:
+                        result = self._edit(d, op)
+                    finally:
+                        d.resume("continue")
+                        d.events()          # attaching's stop and resume, not shown
+                    recs.append(self._breakpoints(now, board))
+                    return "applied", result, "", recs
             if cmd == "attach":
                 return "applied", self.state(board), "", recs
             if d is None:

@@ -47,18 +47,15 @@ def test_a_breakpoint_holds_every_board_and_reads_the_firmware(make_sim, tmp_pat
     sim.run_for(ms=100)
     ecu0, ams0 = ticks(sim)
     dbg = Debugger(sim, "ecu", tmp_path)
-    dbg.start()
+    # Attaching stops the board before its next instruction: the
+    # breakpoint goes in there.
+    dbg.start(resume=False)
     try:
-        # A breakpoint goes in while the board is stopped: interrupt it (it
-        # stops as soon as it runs, with no virtual time passing).
-        dbg.interrupt()
-        first = threading.Thread(target=lambda: sim.run_for(ms=1))
-        first.start()
-        assert dbg.wait_stop(timeout_s=60)["signal"] == "SIGINT"
+        assert dbg.state == "stopped" and dbg.stop["reason"] == "attached"
         bp = dbg.break_insert(STEP)
         assert bp["file"].endswith("control.cpp") and bp["line"] > 0, bp
         dbg.resume("continue")
-        first.join(60)
+        sim.run_for(ms=1)
         box = {}
         runner = threading.Thread(target=lambda: box.update(t=sim.run_for(ms=200)))
         runner.start()
@@ -87,13 +84,23 @@ def test_a_breakpoint_holds_every_board_and_reads_the_firmware(make_sim, tmp_pat
         dbg.resume("continue")
         runner.join(120)
         assert not runner.is_alive()
+        # Break, once it ran on: it stops where it is, before its next
+        # instruction, and the system is held there as at a breakpoint.
+        dbg.interrupt()
+        runner = threading.Thread(target=lambda: sim.run_for(ms=10))
+        runner.start()
+        assert dbg.wait_stop(timeout_s=60)["signal"] == "SIGINT"
+        time.sleep(1)
+        assert runner.is_alive(), "virtual time went on past an interrupt"
+        dbg.resume("continue")
+        runner.join(60)
     finally:
         dbg.close()
     ecu1, ams1 = ticks(sim)
-    # 201 ms of virtual time ran since the first read (1 + 200), and in it
+    # 211 ms of virtual time ran since the first read (1 + 200 + 10), and in it
     # the two boards' ticks moved together: the AMS did not run on while the
     # ECU was held, for the 3+ s of wall time it was.
-    assert 195 <= ecu1 - ecu0 <= 215, (ecu0, ecu1)
+    assert 205 <= ecu1 - ecu0 <= 225, (ecu0, ecu1)
     assert abs((ams1 - ecu1) - (ams0 - ecu0)) <= 1, (ecu0, ams0, ecu1, ams1)
 
 
@@ -101,12 +108,10 @@ def test_the_stub_answers_no_monitor_command_and_no_write(make_sim, tmp_path):
     gdb_or_skip()
     sim = make_sim("ecu-ams")
     dbg = Debugger(sim, "ecu", tmp_path)
-    dbg.start()
+    dbg.start(resume=False)
     try:
-        dbg.interrupt()
         runner = threading.Thread(target=lambda: sim.run_for(ms=10))
         runner.start()
-        assert dbg.wait_stop(timeout_s=60)["signal"] == "SIGINT"
         # Past vhil.gdb's own checks, straight to GDB: the stub refuses a
         # monitor command, and a write never reaches the target's memory
         # (the stub has no M/X packets), whatever GDB makes of it.

@@ -425,14 +425,30 @@ def test_firmware_refs_survive_the_round_trip(spec, path):
 
 
 def test_bus_arbitration_survives_the_round_trip(spec):
-    """#174: a bus's `arbitration: true` is a property of its bus node."""
+    """#174: arbitration is a property of a bus node, on by default. Only the
+    opt-out is written back: a bus without the key stays without it, and
+    `arbitration: false` round-trips as itself."""
     doc = yaml.safe_load((REPO / "systems" / "ecu-ams.yaml").read_text())
-    doc["buses"]["can_acu"]["arbitration"] = True
     graph = to_dataflow(doc, spec)
     bus = next(n for n in graph["graphs"][0]["nodes"] if n["instanceName"] == "can_acu")
     assert {p["name"]: p["value"] for p in bus["properties"]}["arbitration"] is True
     assert from_dataflow(graph, spec) == doc
+    assert all("arbitration" not in b for b in from_dataflow(graph, spec)["buses"].values())
+    doc["buses"]["can_acu"]["arbitration"] = False
+    graph = to_dataflow(doc, spec)
+    bus = next(n for n in graph["graphs"][0]["nodes"] if n["instanceName"] == "can_acu")
+    assert {p["name"]: p["value"] for p in bus["properties"]}["arbitration"] is False
+    assert from_dataflow(graph, spec) == doc
     assert validate(doc) == []
+
+
+def test_an_explicit_arbitration_true_round_trips_as_the_default(spec):
+    """`arbitration: true` says what the default says: the editor writes the
+    bus back without it, the same bus."""
+    doc = yaml.safe_load((REPO / "systems" / "ecu-ams.yaml").read_text())
+    explicit = copy.deepcopy(doc)
+    explicit["buses"]["can_acu"]["arbitration"] = True
+    assert from_dataflow(to_dataflow(explicit, spec), spec) == doc
 
 
 @pytest.mark.parametrize("path", SYSTEMS, ids=lambda p: p.name)

@@ -88,8 +88,10 @@ jobs:
         run: |
           # With the images: the script loads the provisioned flash (the
           # bootloader in sector 0, the app behind it) that it builds.
+          # --can-hub: renode-test's CAN Tester keywords attach only to
+          # Renode's hub; the suite checks frames arrive, not their timing.
           python -m vhil.system render "systems/$SYSTEM.yaml" --firmware "$SYSTEM=$ELF" \
-            --firmware "$SYSTEM.bootloader=$BL_ELF" -o "$RUNNER_TEMP/system.resc"
+            --firmware "$SYSTEM.bootloader=$BL_ELF" --can-hub -o "$RUNNER_TEMP/system.resc"
           "$RUNNER_TEMP/renode/renode-test" "tests/${SYSTEM}_smoke.robot" \
             --variable ELF:"$ELF" \
             --variable RESC:"$RUNNER_TEMP/system.resc" -r results

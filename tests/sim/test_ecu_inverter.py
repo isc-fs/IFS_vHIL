@@ -35,7 +35,7 @@ import pytest
 from vhil.cosim import Port
 from vhil.plants import (APPS1_FULL, APPS1_REST, APPS2_FULL, APPS2_REST, BRAKE_FIRM,
                          BRAKE_RELEASED, COUNTS_TO_V, AcuStimulus, Inverter, Pedals)
-from vhil.sim import Sim
+from vhil.sim import Frame, Sim, assert_cadence
 from vhil.system import REPO
 
 MODE, TORQUE, INV_STATE, VDC = 0x360, 0x362, 0x461, 0x466
@@ -45,6 +45,7 @@ FLT_CLEAR = 0x80
 INV_STANDBY, INV_READY, INV_TORQUE, INV_SOFT, INV_HARD = 3, 4, 6, 10, 11
 WAIT_VDC, PRECHARGE, WAIT_START_BRAKE, R2D_DELAY, WAIT_INV_STANDBY, ACTIVE, AMS_ERROR = range(7)
 TICK_MS, INV_STALE_MS, R2D_SOUND_MS = 10, 200, 2000
+KERNEL_TICK_US = 1000      # configTICK_RATE_HZ 1000 (FreeRTOSConfig.h:67)
 BURST = {INV_HARD: [HARD_FAULT_RESET, OFF | FLT_CLEAR],
          INV_SOFT: [FAULT, HARD_FAULT_RESET, OFF | FLT_CLEAR]}
 
@@ -165,8 +166,10 @@ def _to_active(ecu, throttle):
 # -- tests ----------------------------------------------------------------------
 
 def test_healthy_cycle_is_one_mode_word_then_torque(ecu):
-    """Healthy inverter before R2D: every 10 ms exactly [Off, 0x362 0 Nm],
-    never a follow word or Flt_Clear."""
+    """Healthy inverter before R2D: every ControlTask tick [Off, 0x362 0 Nm],
+    never a follow word or Flt_Clear. The cycles keep a 10 ms grid within a
+    kernel tick (osDelayUntil, control_task.cpp:426-427): each waits on the
+    bus behind whatever the inverter's frames put there first."""
     _inv(ecu, INV_STANDBY)
     _vdc(ecu)
     _ams(ecu)
@@ -176,8 +179,8 @@ def test_healthy_cycle_is_one_mode_word_then_torque(ecu):
     cycles = _cycles(ecu, t)
     assert len(cycles) >= 48
     assert set(_words(cycles)) == {(OFF, ("T", 0))}
-    starts = [s for s, _ in cycles]
-    assert {b - a for a, b in zip(starts, starts[1:])} == {TICK_MS * 1000}
+    assert_cadence([Frame(s, MODE, False, b"") for s, _ in cycles], period_us=TICK_MS * 1000,
+                   jitter_us=KERNEL_TICK_US, min_count=48)
 
 
 @pytest.mark.parametrize("inv_state, reach", [(INV_HARD, "WaitInvVdcConfig"),

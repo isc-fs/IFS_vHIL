@@ -109,18 +109,21 @@ co-simulation port its file declares (`port:`), in lock-step virtual time:
 ```
 IFS_HIL recipe ─▶ ECU08.elf / AMS.elf  (same image the physical bench flashes)
         emulator (Renode): platforms/cpus/stm32h733.repl  +  scripts/<dut>.resc
-        FDCANn ─▶ CAN hub per bus ─▶ (Phase 1) SocketCAN vcan
+        FDCANn ─▶ CAN bus model per bus ─▶ (Phase 1) SocketCAN vcan
         tests: tests/*.robot (Renode-native) · IFS_HIL pytest suites (Phase 1+)
 ```
 
-A CAN bus is Renode's hub, which delivers every frame whole and at once: no
-bit time, arbitration, load or ACK. A bus with `arbitration: true` (or
-`Sim(..., arbitration=[...])`) is the vHIL's bus model instead
-(`models/renode/VhilCanBus.cs`, [`docs/can-bus.md`](docs/can-bus.md)).
-Frames wait for the bus and lose arbitration, a lone node goes
-error-passive, and the timeline and load are exact in virtual time. Between
-boards, what a firmware sees can lag by up to one sync quantum. Test bus
-load, priority and ACK on an arbitrated bus, never on the hub.
+Every CAN bus is the vHIL's bus model (`models/renode/VhilCanBus.cs`,
+[`docs/can-bus.md`](docs/can-bus.md)): frames wait for the bus and lose
+arbitration, a lone node goes error-passive, and the timeline and load are
+exact in virtual time. Between boards, what a firmware sees can lag by up to
+one sync quantum. A bus with `arbitration: false` (or `Sim(..., hub=[...])`,
+or `render --can-hub` for every bus) is Renode's hub instead, which delivers
+every frame whole at the next sync point: no bit time, arbitration, load or
+ACK. Only renode-test's CAN Tester keywords (the smoke suites) need it. A
+frame's timestamp carries the firmware's jitter, so assert a period as a
+cadence (`assert_cadence`, bounded by what the firmware guarantees), never as
+exact sync-point intervals.
 
 ## Hard invariants
 
@@ -201,6 +204,7 @@ export VHIL_CAN_BOOTLOADER_ELF=<bl-elf>                            # every MainL
 RENODE=<renode> scripts/explore.sh systems/ecu.yaml <elf> 5       # boot + CAN log
 RENODE=<renode> scripts/probe.sh systems/ecu.yaml <elf> 3 "nvic Frequency"
 <renode-dir>/renode-test tests/ecu_smoke.robot --variable ELF:<elf> --variable RESC:build/ecu.resc
+                                                                  # (that script rendered with --can-hub)
 python -m pytest tests/unit                                       # host-only, no Renode
 python -m pytest tests/sim --ecu-elf <elf> --can-bootloader-elf <bl-elf>  # native tests (vhil/sim.py)
 python -m vhil.editor spec|to-graph|to-system|serve              # system editor backend (Pipeline Manager)

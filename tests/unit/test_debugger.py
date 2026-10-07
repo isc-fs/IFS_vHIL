@@ -144,8 +144,10 @@ class FakeDebugger:
         self.state, self.stop, self.breakpoints, self.watches = "detached", None, {}, []
         self._events, self._interrupt, self.closed = [], False, False
 
-    def start(self):
+    def start(self, resume=True):
         self.state = "running"
+        if not resume:      # attaching stops the board, before its next instruction
+            self._stopped(reason="attached", frame={"func": "idle", "addr": "0x8"})
 
     def close(self):
         self.closed, self.state = True, "detached"
@@ -277,6 +279,7 @@ def dbg(**op):
 
 def test_a_breakpoint_holds_the_session_until_continue(tmp_path):
     session, summary, trace = run_debug(tmp_path, [
+        (at(2_000_000), dbg(cmd="attach")),
         (at(2_000_000), dbg(cmd="break", location={"function": "step"})),
         (held, dbg(cmd="locals")),
         (held, {"kind": "can_send", "bus": "can_acu", "id": 0x100, "data": "00"}),
@@ -289,10 +292,11 @@ def test_a_breakpoint_holds_the_session_until_continue(tmp_path):
     by_id = {s[0]: s for s in session.settled}
     # The break came while the ECU ran: deferred, the board interrupted, and
     # applied (with its result) when it stopped for that, at the next slice.
-    assert by_id[1][1] == "applied" and by_id[1][4]["number"] == 1
-    assert by_id[2][4] == [{"name": "now_ms", "value": "2150"}]
+    assert by_id[2][1] == "applied" and by_id[2][4]["number"] == 1
+    assert by_id[2][2] > 2_000_000
+    assert by_id[3][4] == [{"name": "now_ms", "value": "2150"}]
     # A stimulus waits while the system is held: it goes at the next boundary.
-    assert by_id[3][1] == "applied" and by_id[3][2] > by_id[5][2]
+    assert by_id[4][1] == "applied" and by_id[4][2] > by_id[6][2]
     stops = [r for r in trace if r["kind"] == "debug" and r["event"] == "stopped"]
     assert [s["reason"] for s in stops] == ["breakpoint-hit", "end-stepping-range"]
     assert stops[0]["at_us"] == 2_150_000 and stops[0]["locals"][0]["name"] == "now_ms"
@@ -304,7 +308,7 @@ def test_a_breakpoint_holds_the_session_until_continue(tmp_path):
     assert all(s.get("signal") != "SIGINT" for s in stops)
     assert [r["t_us"] for r in trace] == sorted(r["t_us"] for r in trace)
     assert [r["op"]["cmd"] for r in trace if r["kind"] == "op"
-            and r["op"]["kind"] == "debug"] == ["break", "next", "continue"]
+            and r["op"]["kind"] == "debug"] == ["attach", "break", "next", "continue"]
 
 
 def test_queries_on_a_running_board_are_refused_and_say_why(tmp_path):
@@ -358,3 +362,27 @@ def test_the_session_channel_carries_debug_ops(tmp_path):
     ops = SessionStore(settings.db).ops(run_id)
     assert [o["op"] for o in ops] == [
         {"kind": "debug", "board": "ecu", "cmd": "break", "location": {"function": "main"}}]
+
+
+def test_a_break_on_a_board_not_debugged_attaches_and_goes_in_at_once(tmp_path):
+    session, _, trace = run_debug(tmp_path, [
+        (at(2_000_000), dbg(cmd="break", location={"function": "step"})),
+        (held, dbg(cmd="continue")),
+        (at(2_300_000), {"kind": "stop"}),
+    ])
+    by_id = {s[0]: s for s in session.settled}
+    # Attaching stopped the board: the breakpoint went in there, at once.
+    assert by_id[1][1] == "applied" and by_id[1][2] == 2_000_000
+    stops = [r for r in trace if r["kind"] == "debug" and r["event"] == "stopped"]
+    assert [s["reason"] for s in stops] == ["breakpoint-hit"], "attaching's stop is not shown"
+
+
+def test_an_interrupt_on_a_board_not_debugged_is_its_attach_stop(tmp_path):
+    session, _, trace = run_debug(tmp_path, [
+        (at(2_000_000), dbg(cmd="interrupt")),
+        (held, dbg(cmd="continue")),
+        (at(2_200_000), {"kind": "stop"}),
+    ])
+    stops = [r for r in trace if r["kind"] == "debug" and r["event"] == "stopped"]
+    assert [s["reason"] for s in stops] == ["attached"]
+    assert [s[1] for s in session.settled] == ["applied"] * 3
