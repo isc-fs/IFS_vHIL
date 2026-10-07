@@ -57,6 +57,14 @@ def test_the_terminal_is_a_plain_log():
     assert "v-html" not in log and "innerHTML" not in log
 
 
+def test_no_html_string_carries_a_style_attribute():
+    """HTML built in code (v-html, innerHTML) is parsed by the browser, and
+    a style attribute in it is refused (custom/CustomNode.vue's subtitle
+    was). A template's own style bindings are set through the CSSOM: fine."""
+    for path, text in sources(".js", ".ts", ".vue"):
+        assert not re.search(r"`[^`\n]*(?<![:\w-])style=[\"'][^`\n]*`", text), path
+
+
 def test_post_message_names_its_origin():
     for path, text in sources(".js", ".ts", ".vue"):
         assert not re.search(r"postMessage\([^;]*,\s*'\*'\s*\)", text), path
