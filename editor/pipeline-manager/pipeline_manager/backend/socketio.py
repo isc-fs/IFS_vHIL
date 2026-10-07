@@ -26,6 +26,7 @@ from pipeline_manager_backend_communication.misc_structures import (
 )
 
 from pipeline_manager.backend.chunked_com import send_chunked
+from pipeline_manager.backend.fastapi import allowed_origins
 from pipeline_manager.backend.config import (
     CHUNKED_MESSAGE_TIMEOUT,
     MAX_HTTP_BUFFER_SIZE,
@@ -50,7 +51,8 @@ def create_socketio() -> socketio.AsyncServer:
     """
     sio = socketio.AsyncServer(
         async_mode="asgi",
-        cors_allowed_origins="*",
+        # vHIL: same origin, plus PM_ALLOWED_ORIGINS (upstream: "*").
+        cors_allowed_origins=allowed_origins() or None,
         max_http_buffer_size=MAX_HTTP_BUFFER_SIZE,
     )
     CHUNKS = defaultdict(lambda: defaultdict(lambda: [0, []]))
