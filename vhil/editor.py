@@ -838,11 +838,13 @@ class EditorMethods:
 
     def app_capabilities_get(self, **_):
         # Navbar buttons (common_types navbar_items), returned bare: none.
-        # The vHIL workspace has no navbar (editor/pipeline-manager/
-        # CHANGELOG-VHIL.md): its Check validates (the API's preview of the
-        # system), and its Run is a normal POST /api/runs run of the saved
-        # system (vhil/server/static/editor-run.js), never one in this
-        # process.
+        # The vHIL workspace has no navbar and no longer asks for them
+        # (editor/pipeline-manager/CHANGELOG-VHIL.md): its Check validates
+        # (the API's preview of the system), and its Run is a normal POST
+        # /api/runs run of the saved system (vhil/server/static/
+        # editor-run.js), never one in this process. (Over the backend
+        # library an empty list arrives as {}: its send_jsonrpc_message_with_sid
+        # replaces a falsy result.)
         return []
 
     def frontend_on_connect(self, **_):

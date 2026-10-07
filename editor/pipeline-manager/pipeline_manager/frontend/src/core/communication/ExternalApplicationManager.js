@@ -539,10 +539,9 @@ class ExternalApplicationManager {
             );
         }
 
-        await Promise.all([
-            this.requestSpecification(),
-            this.requestAppCapabilities(),
-        ]);
+        // vHIL: no app capabilities (navbar buttons): the workspace shows no
+        // navbar (CHANGELOG-VHIL.md), and vhil.editor offers none.
+        await this.requestSpecification();
 
         try {
             await this.request('frontend_on_connect');
