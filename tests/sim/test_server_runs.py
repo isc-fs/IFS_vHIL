@@ -11,9 +11,10 @@ import pytest
 pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient  # noqa: E402
 
+from vhil import canframe  # noqa: E402
 from vhil.server import create_app  # noqa: E402
 from vhil.server.config import Settings  # noqa: E402
-from vhil.sim import Frame, assert_period  # noqa: E402
+from vhil.sim import Frame, assert_cadence  # noqa: E402
 from vhil.system import REPO  # noqa: E402
 from vhil.worker import Worker  # noqa: E402
 
@@ -60,20 +61,24 @@ def test_a_queued_run_streams_its_trace_and_passes(tmp_path, images):
     hb = [Frame(f["t_us"], f["id"], f["ext"], bytes.fromhex(f["data"]))
           for f in frames if f["id"] == HEARTBEAT]
     assert {f["bus"] for f in frames if f["id"] == HEARTBEAT} == {"can_acu"}
-    # Exact from the second frame on, as without the worker's slicing: the
-    # trace doesn't depend on how the run was cut into slices.
-    assert_period(hb[1:], period_us=CONTROL_PERIOD_US, tolerance_us=0, min_count=90)
+    # On ControlTask's grid from the second frame on, within a kernel tick
+    # (ECU configTICK_RATE_HZ 1000, FreeRTOSConfig.h:67), as without the
+    # worker's slicing: the trace doesn't depend on how the run was cut.
+    assert_cadence(hb[1:], period_us=CONTROL_PERIOD_US, jitter_us=1000, min_count=90)
     assert run["summary"]["frames"]["can_acu"] >= len(hb)
 
     # The scenario's own frames are frame records too, at the virtual time
-    # the probe sent them, marked as stimulus and counted apart.
-    # (A periodic start goes out up to one 500 us quantum late, as
+    # the probe's frame went out (its last EOF bit on the bus model; the bus
+    # is idle at each of these offers), marked as stimulus and counted
+    # apart. (A periodic start is offered up to one 500 us quantum late, as
     # tests/sim/test_probe.py shows; the trace has when it really went.)
     stim = [(f["t_us"], f["bus"], f["id"], f["data"]) for f in frames if f.get("src") == "stimulus"]
-    start, boot = stim[1][0], BOOT_MS * 1000
+    ok_us = canframe.frame_bits(0x020, b"\x01") * 2      # 500 kbit/s: 2 us a bit
+    inv_us = canframe.frame_bits(0x461, b"\x00") * 2
+    start, boot = stim[1][0] - inv_us, BOOT_MS * 1000
     assert boot + 500_000 <= start <= boot + 500_500, start
-    assert stim == [(boot + 300_000, "can_acu", 0x020, "01")] + [
-        (t, "can_inv", 0x461, "00") for t in range(start, boot + 595_000, 10_000)]
+    assert stim == [(boot + 300_000 + ok_us, "can_acu", 0x020, "01")] + [
+        (t + inv_us, "can_inv", 0x461, "00") for t in range(start, boot + 595_000, 10_000)]
     assert run["summary"]["sent"] == {"can_acu": 1, "can_inv": 10, "can_dash": 0}
     assert all(f["id"] != 0x461 for f in frames if not f.get("src")), "a send seen as received"
 

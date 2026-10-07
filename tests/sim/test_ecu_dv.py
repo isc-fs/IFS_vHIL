@@ -41,7 +41,7 @@ which is what the uDV keys on and what is asserted here.
 import pytest
 
 from vhil.plants import APPS1_FULL, APPS2_FULL, APPS1_REST, APPS2_REST, COUNTS_TO_V
-from vhil.sim import Sim, assert_period
+from vhil.sim import Sim, assert_cadence
 from vhil.system import REPO
 
 TS_ACTIVE, BRAKE_OVER, MOTOR_RPM, R2D_CONFIRM = 0x504, 0x505, 0x506, 0x511
@@ -52,6 +52,7 @@ WAIT_START_BRAKE, R2D_DELAY, WAIT_INV_STANDBY, ACTIVE, AMS_ERROR, PRECHARGE = 2,
 INV_STANDBY, INV_READY, INV_TORQUE_EN = 3, 4, 6
 W_OFF, W_READY, W_TORQUE = 0x01, 0x04, 0x06
 TICK_MS, UDV_PERIOD_MS, R2D_SOUND_MS = 10, 100, 2000
+KERNEL_TICK_US = 1000      # ECU FreeRTOS tick: configTICK_RATE_HZ 1000 (FreeRTOSConfig.h:67)
 R2D_STALE_MS, CMD_STALE_MS = 200, 100
 BRAKE_RELEASED, BRAKE_FIRM, BRAKE_DV_HARD, BRAKE_HARD = 580, 1500, 2500, 2700
 
@@ -187,11 +188,12 @@ def parked(images):
 
 @pytest.mark.parametrize("erpm, rpm", [(54321, 5432), (-12345, -1234), (0, 0)])
 def test_motor_rpm_every_tick_mechanical(parked, erpm, rpm):
-    """L-003: 0x506 = erpm / 10 (truncated toward zero), s32 LE, every 10 ms."""
+    """L-003: 0x506 = erpm / 10 (truncated toward zero), s32 LE, every 10 ms
+    (ControlTask's tick, within a kernel tick of its grid)."""
     parked.inv.update_periodic("rpm", _rpm_frame(erpm))
     t = parked.sim.run_for(ms=200)
     frames = parked.acu.frames([MOTOR_RPM], since_us=t - 100_000)
-    assert_period(frames, period_us=TICK_MS * 1000, tolerance_us=0, min_count=9)
+    assert_cadence(frames, period_us=TICK_MS * 1000, jitter_us=KERNEL_TICK_US, min_count=9)
     assert {int.from_bytes(f.data[:4], "little", signed=True) for f in frames} == {rpm}
     parked.inv.update_periodic("rpm", _rpm_frame(0))
 
@@ -202,7 +204,7 @@ def test_100_ms_frames_cadence_and_idle_values(parked):
     t = parked.sim.run_for(ms=1000)
     for can_id, value in [(TS_ACTIVE, 1), (BRAKE_OVER, 0), (R2D_CONFIRM, 0)]:
         frames = parked.acu.frames([can_id], since_us=t - 1_000_000)
-        assert_period(frames, period_us=UDV_PERIOD_MS * 1000, tolerance_us=0, min_count=9)
+        assert_cadence(frames, period_us=UDV_PERIOD_MS * 1000, jitter_us=KERNEL_TICK_US, min_count=9)
         assert {(len(f.data), f.data[0]) for f in frames} == {(1, value)}, hex(can_id)
 
 
