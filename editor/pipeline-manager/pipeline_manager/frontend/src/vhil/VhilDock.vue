@@ -5,8 +5,9 @@ src/vhil/LogView.vue), moved here from its own panel; Problems lists Check's
 errors and warnings, and a click selects the node one is about (or the
 scenario row: its check's messages and its run's failed expects, step 10);
 Bus shows a replayed run's frames (VhilBus.vue, step 9); Scenario the
-selected scenario's rows (VhilScenario.vue, step 10). State, Signals and
-Debug are slots the later steps of the plan fill.
+selected scenario's rows (VhilScenario.vue, step 10); State each board's
+state card (VhilState.vue, step 13). Signals and Debug are slots the later
+steps of the plan fill.
 Collapsed, it is its tab strip, which still shows the problem count.
 -->
 
@@ -75,6 +76,7 @@ Collapsed, it is its tab strip, which still shows the problem count.
         >
             <Terminal v-if="tab.id === 'log'" :terminalInstance="logName" />
             <VhilBus v-else-if="tab.id === 'bus'" />
+            <VhilState v-else-if="tab.id === 'state'" />
             <VhilScenario v-else-if="tab.id === 'scenario'" />
             <div v-else-if="tab.id === 'problems'" class="vhil-problems">
                 <p v-if="!problems.length" class="muted">
@@ -100,6 +102,10 @@ Collapsed, it is its tab strip, which still shows the problem count.
                     </li>
                 </ul>
             </div>
+            <p v-else-if="tab.id === 'signals'" class="vhil-placeholder muted">
+                Signals: the FSM state and digital lanes are in the State tab's history
+                for now; analog and value plots come later.
+            </p>
             <p v-else class="vhil-placeholder muted">
                 {{ tab.label }}: comes with step {{ tab.step }} of the workspace plan.
             </p>
@@ -112,6 +118,7 @@ import { computed, defineComponent, onMounted } from 'vue';
 import Terminal from '../components/Terminal.vue';
 import VhilBus from './VhilBus.vue';
 import VhilScenario from './VhilScenario.vue';
+import VhilState from './VhilState.vue';
 import { scen } from './scenarios.js';
 import { terminalStore, MAIN_TERMINAL } from '../core/stores.js';
 import {
@@ -119,7 +126,9 @@ import {
 } from './workspace.js';
 
 export default defineComponent({
-    components: { Terminal, VhilBus, VhilScenario },
+    components: {
+        Terminal, VhilBus, VhilScenario, VhilState,
+    },
     setup() {
         const errors = computed(() => problemCount('error'));
         const warnings = computed(() => problemCount('warning'));
