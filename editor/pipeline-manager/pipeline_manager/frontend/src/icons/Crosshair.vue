@@ -43,7 +43,7 @@ export default {
 
 <style lang="scss" scoped>
 .normal {
-    stroke: #ffffff;
+    stroke: $white; // vHIL: --fg, so it shows on the light theme (was #ffffff)
 }
 
 .hovered {
