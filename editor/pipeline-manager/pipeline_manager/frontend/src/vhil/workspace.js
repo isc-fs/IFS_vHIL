@@ -6,7 +6,8 @@
  * commit to a branch, open a PR, and Run, a normal run of the saved system
  * through POST /api/runs (shell/editor-run.js, the shell's own copy). Step 9
  * adds REPLAY of a run (openRun; replay.js), which the shell's #/runs/<id>
- * now opens.
+ * now opens; step 10 the system's scenarios (scenarios.js): Run runs the
+ * selected one, Commit… commits it too, and its problems are listed.
  */
 
 import { reactive, watch } from 'vue';
@@ -19,10 +20,17 @@ import { setTheme, THEMES } from './theme.ts';
 import {
     clearReplay, loadRun, replay, runRecord, store as frames,
 } from './replay.js';
-// eslint-disable-next-line import/no-unresolved, import/extensions -- copied by the build
-import { frameCounts, runBlocker, runRequest } from './shell/editor-run.js';
+/* eslint-disable import/no-unresolved, import/extensions -- copied by the build */
+import {
+    firmwareRefs, frameCounts, runBlocker, runRequest,
+} from './shell/editor-run.js';
+/* eslint-enable import/no-unresolved, import/extensions */
 import { terminalStore } from '../core/stores.js';
 import NotificationHandler from '../core/notifications.js';
+import {
+    bindWorkspace, clearScenario, commitScenario, loadContract, loadScenarios, newScenario, scen,
+    scenarioProblems, selectScenario, setResults,
+} from './scenarios.js';
 
 const TERMINAL = new Set(['passed', 'failed', 'error', 'cancelled']);
 const LAYOUT_KEY = 'vhil.layout';
@@ -39,7 +47,7 @@ function store(key, value) {
 
 export const DOCK_TABS = [
     // id, label, the step that fills it (none: here now)
-    { id: 'scenario', label: 'Scenario', step: 10 },
+    { id: 'scenario', label: 'Scenario' },
     { id: 'state', label: 'State', step: 13 },
     { id: 'bus', label: 'Bus' },
     { id: 'signals', label: 'Signals', step: 13 },
@@ -80,7 +88,10 @@ export const ws = reactive({
     savedBranch: null,
     extra: null,
     dirty: false,
-    commit: { branch: '', message: '' },
+    // What Commit… commits: the system file, the selected scenario, or both.
+    commit: {
+        branch: '', message: '', system: true, scenario: false, scenarioMessage: '',
+    },
     pr: { title: '', body: '' },
     // Check's (and opening's) findings: {severity: error|warning, text, nodeId}.
     problems: [],
@@ -165,7 +176,11 @@ function setProblems(errors = [], warnings = []) {
     ws.problems = [...errors.map(item('error')), ...warnings.map(item('warning'))];
 }
 
-export const problemCount = (severity) => ws.problems.filter((p) => p.severity === severity).length;
+/** The system's problems (Check) and the selected scenario's (its check,
+ *  its last run's failed expects). */
+export const allProblems = () => [...ws.problems, ...scenarioProblems()];
+export const problemCount = (severity) => allProblems()
+    .filter((p) => p.severity === severity).length;
 
 // The URL names what is open (and the run in REPLAY), so a reload or a
 // shared link opens it again.
@@ -174,6 +189,8 @@ function remember() {
     if (ws.id && !ws.isNew) u.searchParams.set('system', ws.id); else u.searchParams.delete('system');
     if (ws.branch) u.searchParams.set('branch', ws.branch); else u.searchParams.delete('branch');
     if (replay.id) u.searchParams.set('run', String(replay.id)); else u.searchParams.delete('run');
+    if (scen.name && !scen.isNew) u.searchParams.set('scenario', scen.name);
+    else u.searchParams.delete('scenario');
     u.searchParams.delete('view');
     window.history.replaceState(null, '', u);
 }
@@ -188,7 +205,9 @@ export function exitReplay() {
 
 const today = () => new Date().toISOString().slice(0, 10).replace(/-/g, '');
 
-export function open(id, { branch = '', isNew = false, keepReplay = false } = {}) {
+export function open(id, {
+    branch = '', isNew = false, keepReplay = false, scenario = '',
+} = {}) {
     return guarded(`could not open ${id}`, async () => {
         if (!keepReplay) exitReplay();
         ws.status = `opening ${id}…`;
@@ -221,6 +240,9 @@ export function open(id, { branch = '', isNew = false, keepReplay = false } = {}
         ws.checked = true;
         remember();
         document.title = `${id} · IFS vHIL`;
+        clearScenario();
+        // eslint-disable-next-line no-use-before-define
+        await openScenarios(scenario);
         const where = `${branch || 'checked-out tree'} @ ${(s.ref || '').slice(0, 8)}`;
         say(`Opened ${id}${s.exists ? '' : ' (new)'} · ${where}`);
         if (s.errors.length) {
@@ -253,6 +275,47 @@ export function check() {
         else say(`${ws.id} is valid${p.warnings.length ? `, with ${p.warnings.length} warning(s)` : ''}`);
         return p;
     });
+}
+
+// -- scenarios ------------------------------------------------------------------
+
+/** The graph's firmware refs, as a run takes them (or none mid-load). */
+function graphRefs() {
+    try { return firmwareRefs(saveDataflow()); } catch { return {}; }
+}
+bindWorkspace(() => ({ id: ws.id, branch: ws.branch, fw: graphRefs() }), say);
+
+/** Lists the open system's scenarios and loads its contract; selects
+ *  `name` if it is one of them. */
+async function openScenarios(name = '') {
+    await loadScenarios();
+    loadContract();
+    // eslint-disable-next-line no-use-before-define
+    if (name && scen.list.some((x) => x.name === name)) await pickScenario(name);
+}
+
+/** Selects a scenario for Run and the Scenario tab ('' for none). */
+export async function pickScenario(name) {
+    await selectScenario(name);
+    if (scen.doc) ws.virtualMs = Number(scen.doc.virtual_ms);
+    ws.commit.scenario = Boolean(scen.name);
+    ws.commit.scenarioMessage = scen.name
+        ? `test(scenarios): ${scen.isNew ? 'add' : 'update'} ${ws.id}/${scen.name}` : '';
+    remember();
+}
+
+/** A new scenario of the open system, selected (committed by Commit…). */
+export function createScenario(name) {
+    if (!ws.id) {
+        say('Open a system first', 'warning');
+        return;
+    }
+    if (!newScenario(name, Number(ws.virtualMs) || 3000)) return;
+    ws.commit.scenario = true;
+    ws.commit.scenarioMessage = `test(scenarios): add ${ws.id}/${name}`;
+    ws.layout.dock = true;
+    ws.layout.dockTab = 'scenario';
+    say(`New scenario ${name}: add rows, then Commit…`);
 }
 
 // -- firmware refs --------------------------------------------------------------
@@ -302,46 +365,85 @@ export function pickRef(node, refProp, value) {
 
 // -- commit and PR --------------------------------------------------------------
 
+/** After a commit at `out` (system or scenario) on a branch: the workspace
+ *  is on that branch, at that commit, which Run runs. */
+function committedAt(out) {
+    ws.runRef = out.ref;
+    ws.base = out.ref;
+    if (out.changed) {
+        ws.savedBranch = out.branch;
+        ws.branch = out.branch;
+        ws.ref = out.ref;
+        remember();
+    }
+}
+
+/** Commits what Commit… ticked: the system file, then the scenario on the
+ *  same branch (on the system's new commit). */
 export function commit({ takeover = false } = {}) {
     return guarded('Commit', async () => {
         if (!ws.id) throw new Error('open a system first');
-        const body = {
-            dataflow: currentGraph(), branch: ws.commit.branch.trim(), message: ws.commit.message,
-        };
-        if (ws.base) body.base = ws.base;
-        if (takeover) body.takeover = true;
-        const send = (b) => (ws.isNew
-            ? call('POST', '/api/systems', { id: ws.id, ...b })
-            : call('PUT', `/api/systems/${encodeURIComponent(ws.id)}`, b));
-        let out;
-        try {
-            out = await send(body);
-        } catch (e) {
-            // Another member saved this branch last (vhil/server/systems_write.py):
-            // moving it is a takeover, which the server logs.
-            if (e.status !== 409 || !e.detail?.takeover) throw e;
-            // eslint-disable-next-line no-alert
-            if (!window.confirm(`${e.message}\n\nTake the branch over? This is logged.`)) throw e;
-            out = await send({ ...body, takeover: true });
+        const { system, scenario } = ws.commit;
+        if (!system && !(scenario && scen.name)) throw new Error('tick what to commit');
+        let out = null;
+        if (system) {
+            // eslint-disable-next-line no-use-before-define
+            out = await commitSystem({ takeover });
+            if (!out) return undefined;
         }
-        ws.isNew = false;
-        ws.runRef = out.ref;
-        ws.base = out.ref;
-        ws.saved = signature(saveDataflow());
-        ws.savedYaml = (await previewYaml()).yaml;
-        refreshDirty();
-        if (out.warnings?.length) setProblems([], out.warnings);
-        if (out.changed) {
-            ws.savedBranch = out.branch;
-            ws.branch = out.branch;
-            ws.ref = out.ref;
-            remember();
-            say(`Committed ${out.path} on ${out.branch} @ ${out.ref.slice(0, 8)}`);
-        } else {
-            say(`Nothing to commit: identical to ${out.ref.slice(0, 8)}`);
+        if (scenario && scen.name) {
+            const branch = (out?.branch || ws.commit.branch).trim();
+            const sc = await commitScenario({
+                branch,
+                message: ws.commit.scenarioMessage || `test(scenarios): update ${ws.id}/${scen.name}`,
+                base: out ? out.ref : ws.base,
+                takeover,
+            });
+            committedAt(sc);
+            say(sc.changed ? `Committed ${sc.path} on ${sc.branch} @ ${sc.ref.slice(0, 8)}`
+                : `Scenario ${scen.name}: nothing to commit`);
+            await loadScenarios();
+            ws.commit.scenarioMessage = `test(scenarios): update ${ws.id}/${scen.name}`;
+            return out || sc;
         }
         return out;
     });
+}
+
+async function commitSystem({ takeover = false } = {}) {
+    const body = {
+        dataflow: currentGraph(), branch: ws.commit.branch.trim(), message: ws.commit.message,
+    };
+    if (ws.base) body.base = ws.base;
+    if (takeover) body.takeover = true;
+    const send = (b) => (ws.isNew
+        ? call('POST', '/api/systems', { id: ws.id, ...b })
+        : call('PUT', `/api/systems/${encodeURIComponent(ws.id)}`, b));
+    let out;
+    try {
+        out = await send(body);
+    } catch (e) {
+        // Another member saved this branch last (vhil/server/systems_write.py):
+        // moving it is a takeover, which the server logs.
+        if (e.status !== 409 || !e.detail?.takeover) throw e;
+        // eslint-disable-next-line no-alert
+        if (!window.confirm(`${e.message}\n\nTake the branch over? This is logged.`)) throw e;
+        out = await send({ ...body, takeover: true });
+    }
+    ws.isNew = false;
+    ws.runRef = out.ref;
+    ws.base = out.ref;
+    ws.saved = signature(saveDataflow());
+    ws.savedYaml = (await previewYaml()).yaml;
+    refreshDirty();
+    if (out.warnings?.length) setProblems([], out.warnings);
+    committedAt(out);
+    if (out.changed) {
+        say(`Committed ${out.path} on ${out.branch} @ ${out.ref.slice(0, 8)}`);
+    } else {
+        say(`Nothing to commit: identical to ${out.ref.slice(0, 8)}`);
+    }
+    return out;
 }
 
 export function openPr() {
@@ -431,6 +533,8 @@ function follow(id, body) {
             NotificationHandler.showToast(type, `Run ${id} ${run.state}: ${frameCounts(counts)}`);
             ws.status = `Run ${id} ${run.state}`;
             loadRuns();
+            // eslint-disable-next-line no-use-before-define
+            if (body.scenario.name) scenarioRunEnded(id);
             return;
         }
         if (run.state === 'queued') {
@@ -450,11 +554,38 @@ function follow(id, body) {
     loadRuns();
 }
 
+/** A scenario's run ended: its expect results on the rows and in Problems. */
+async function scenarioRunEnded(id) {
+    try {
+        const run = await runRecord(id);
+        setResults(run);
+        loadScenarios();
+        const s = run.summary || {};
+        if (s.expects) {
+            const failed = s.expects_failed || 0;
+            log(`run ${id}: ${s.expects_passed} expect(s) passed, ${failed} failed`);
+            s.expects.forEach((r) => log(`  ${r.passed ? '✓ pass' : '✕ FAIL'}  ${r.name || r.check} `
+                + `${r.signal}: ${r.detail}`));
+            if (failed) {
+                ws.layout.dock = true;
+                ws.layout.dockTab = 'problems';
+            }
+        }
+    } catch (e) {
+        say(`Run ${id}: no results (${e.message})`, 'warning');
+    }
+}
+
 export function runNow() {
     return guarded('Run', async () => {
         if (runActive()) throw new Error(`run ${ws.run.id} is still ${ws.run.state}: stop it first`);
         exitReplay();
-        const virtualMs = Number(ws.virtualMs);
+        const scenario = scen.name && scen.doc ? { name: scen.name, doc: scen.doc } : null;
+        if (scenario && scen.errors.length) {
+            say(`Not run: scenario ${scen.name} has ${scen.errors.length} error(s)`, 'warning', scen.errors);
+            return;
+        }
+        const virtualMs = Number(scenario ? scenario.doc.virtual_ms : ws.virtualMs);
         let dataflow = null;
         let current = null;
         if (ws.id && !ws.isNew) {
@@ -469,7 +600,7 @@ export function runNow() {
             return;
         }
         const body = runRequest({
-            system: ws.id, ref: ws.runRef, dataflow, virtualMs,
+            system: ws.id, ref: ws.runRef, dataflow, virtualMs, scenario,
         });
         let out;
         try {
@@ -529,7 +660,11 @@ export async function start() {
     }
     const id = q.get('system');
     const run = Number(q.get('run'));
-    if (id) await open(id, { branch: q.get('branch') || '', keepReplay: true });
+    if (id) {
+        await open(id, {
+            branch: q.get('branch') || '', keepReplay: true, scenario: q.get('scenario') || '',
+        });
+    }
     if (run > 0) {
         await openRun(run);
     } else if (!id) {
