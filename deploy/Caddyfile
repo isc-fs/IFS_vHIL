@@ -17,10 +17,12 @@
 # on no other port and in no other site.
 #
 # Response headers: nosniff, no referrer across origins, and who may frame a
-# page (CSP frame-ancestors): nobody for the app, only the app itself for
-# the editor, which the shell embeds. Each upstream adds its own full CSP
-# (vhil/server/security.py: the API's, and the editor's through PM_CSP), so
-# a browser enforces both. HSTS on HTTPS responses, max-age
+# page (CSP frame-ancestors): nobody for the app, and no other origin for the
+# editor. Nothing frames the editor now: it is the vHIL workspace, a page of
+# its own, which the shell's Editor route redirects to (vhil/server/static/
+# editor.js). Each upstream adds its own full CSP (vhil/server/security.py:
+# the API's, and the editor's through PM_CSP), so a browser enforces both.
+# HSTS on HTTPS responses, max-age
 # VHIL_HSTS_MAX_AGE (default one year; 0 for a localhost site, or the
 # browser keeps forcing HTTPS on localhost).
 (common) {

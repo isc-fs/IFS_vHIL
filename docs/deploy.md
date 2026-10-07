@@ -32,7 +32,7 @@ browser ─────────▶│ VHIL_SITE: one origin                 
 | `workspace` | `ifs-vhil` | One-shot, runs before the others on every `up`: clones IFS_vHIL into the `workspace` volume if empty, `git fetch`es, checks out `VHIL_WORKSPACE_REF` detached ([`deploy/workspace.sh`](../deploy/workspace.sh)) |
 | `api` | `ifs-vhil` | `python -m vhil.server`: the shell, systems read/save, runs, inspect, login. Healthcheck `GET /api/health` |
 | `worker` | `ifs-vhil` | `python -m vhil.worker`, `VHIL_WORKERS` replicas: claims queued runs, runs Renode, builds missing firmware into `fw` |
-| `editor` | `ifs-vhil-editor` | Pipeline Manager + `vhil.editor`, at `/editor/`, embedded by the shell |
+| `editor` | `ifs-vhil-editor` | Pipeline Manager + `vhil.editor`, at `/editor/`: the vHIL workspace |
 | `proxy` | `caddy:2.11.6-alpine` (by digest) | TLS, security headers, routing (`/editor/` to the editor, the rest to the API), the only published ports: 80 and 443 |
 | `backup` | `ifs-vhil` | Snapshots the DB and the saved branches every `VHIL_BACKUP_INTERVAL_H` ([`deploy/backup.py`](../deploy/backup.py)) |
 
