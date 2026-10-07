@@ -4,7 +4,9 @@
  * the shell's Editor page (vhil/server/static/editor.js) did around the
  * editor before it moved in here: open a system, pick firmware refs, check,
  * commit to a branch, open a PR, and Run, a normal run of the saved system
- * through POST /api/runs (shell/editor-run.js, the shell's own copy).
+ * through POST /api/runs (shell/editor-run.js, the shell's own copy). Step 9
+ * adds REPLAY of a run (openRun; replay.js), which the shell's #/runs/<id>
+ * now opens.
  */
 
 import { reactive, watch } from 'vue';
@@ -14,6 +16,9 @@ import {
     propValue, saveDataflow, selectNode, setProp, signature,
 } from './graph.js';
 import { setTheme, THEMES } from './theme.ts';
+import {
+    clearReplay, loadRun, replay, runRecord, store as frames,
+} from './replay.js';
 // eslint-disable-next-line import/no-unresolved, import/extensions -- copied by the build
 import { frameCounts, runBlocker, runRequest } from './shell/editor-run.js';
 import { terminalStore } from '../core/stores.js';
@@ -36,7 +41,7 @@ export const DOCK_TABS = [
     // id, label, the step that fills it (none: here now)
     { id: 'scenario', label: 'Scenario', step: 10 },
     { id: 'state', label: 'State', step: 13 },
-    { id: 'bus', label: 'Bus', step: 9 },
+    { id: 'bus', label: 'Bus' },
     { id: 'signals', label: 'Signals', step: 13 },
     { id: 'log', label: 'Log' },
     { id: 'debug', label: 'Debug', step: 17 },
@@ -162,18 +167,30 @@ function setProblems(errors = [], warnings = []) {
 
 export const problemCount = (severity) => ws.problems.filter((p) => p.severity === severity).length;
 
-// The URL names what is open, so a reload or a shared link opens it again.
+// The URL names what is open (and the run in REPLAY), so a reload or a
+// shared link opens it again.
 function remember() {
     const u = new URL(window.location.href);
     if (ws.id && !ws.isNew) u.searchParams.set('system', ws.id); else u.searchParams.delete('system');
     if (ws.branch) u.searchParams.set('branch', ws.branch); else u.searchParams.delete('branch');
+    if (replay.id) u.searchParams.set('run', String(replay.id)); else u.searchParams.delete('run');
+    u.searchParams.delete('view');
     window.history.replaceState(null, '', u);
+}
+
+/** Leaves REPLAY for DESIGN. */
+export function exitReplay() {
+    if (!replay.id && ws.mode !== 'REPLAY') return;
+    clearReplay();
+    ws.mode = 'DESIGN';
+    remember();
 }
 
 const today = () => new Date().toISOString().slice(0, 10).replace(/-/g, '');
 
-export function open(id, { branch = '', isNew = false } = {}) {
+export function open(id, { branch = '', isNew = false, keepReplay = false } = {}) {
     return guarded(`could not open ${id}`, async () => {
+        if (!keepReplay) exitReplay();
         ws.status = `opening ${id}…`;
         const q = new URLSearchParams();
         if (branch) q.set('branch', branch);
@@ -339,11 +356,44 @@ export function openPr() {
 
 // -- runs -----------------------------------------------------------------------
 
+/** The open system's runs, or every system's with none open. */
 export function loadRuns() {
-    if (!ws.id) { ws.runs = []; return undefined; }
-    return call('GET', `/api/runs?limit=25&system=${encodeURIComponent(ws.id)}`)
+    const q = ws.id ? `limit=25&system=${encodeURIComponent(ws.id)}` : 'limit=50';
+    return call('GET', `/api/runs?${q}`)
         .then((runs) => { ws.runs = runs; })
         .catch(() => { ws.runs = []; });
+}
+
+/**
+ * REPLAY: opens run `id`'s system (as it was saved on the run's branch) if
+ * another is open, loads its trace and shows its frames in the Bus tab;
+ * the top bar's clock scrubs its virtual time.
+ */
+export function openRun(id) {
+    return guarded(`could not open run ${id}`, async () => {
+        const run = await runRecord(id);
+        if (run.system !== ws.id) {
+            await open(run.system, { branch: run.ref_name || '', keepReplay: true });
+        }
+        ws.mode = 'REPLAY';
+        ws.layout.dock = true;
+        ws.layout.dockTab = 'bus';
+        say(`Replaying run ${id}: loading its trace…`);
+        const loaded = loadRun(run);
+        remember();
+        document.title = `run ${id} · ${run.system} · IFS vHIL`;
+        await loaded;
+        if (replay.id !== run.id) return;
+        const buses = {};
+        for (let i = 0; i < frames.length; i += 1) {
+            const b = frames.busName(i);
+            buses[b] = (buses[b] || 0) + 1;
+        }
+        log(`run ${id} replayed (${run.state}): ${frameCounts(buses) || 'no frames'}`);
+        replay.logs.forEach((r) => log(`  ${(r.t_us / 1e6).toFixed(3)} s  ${r.text}`));
+        const over = (replay.end / 1e6).toFixed(3);
+        say(`Replaying run ${id} (${run.state}): ${frames.length} frames over ${over} s`);
+    });
 }
 
 export const runActive = () => ws.run && !TERMINAL.has(ws.run.state);
@@ -403,6 +453,7 @@ function follow(id, body) {
 export function runNow() {
     return guarded('Run', async () => {
         if (runActive()) throw new Error(`run ${ws.run.id} is still ${ws.run.state}: stop it first`);
+        exitReplay();
         const virtualMs = Number(ws.virtualMs);
         let dataflow = null;
         let current = null;
@@ -477,11 +528,15 @@ export async function start() {
         return;
     }
     const id = q.get('system');
-    if (id) {
-        await open(id, { branch: q.get('branch') || '' });
-    } else {
-        // Nothing to show yet: offer the systems.
+    const run = Number(q.get('run'));
+    if (id) await open(id, { branch: q.get('branch') || '', keepReplay: true });
+    if (run > 0) {
+        await openRun(run);
+    } else if (!id) {
+        // Nothing to show yet: offer the systems (or the runs, from the
+        // shell's #/runs).
         ws.layout.sidebar = true;
-        ws.layout.view = 'systems';
+        ws.layout.view = q.get('view') === 'runs' ? 'runs' : 'systems';
+        if (ws.layout.view === 'runs') loadRuns();
     }
 }

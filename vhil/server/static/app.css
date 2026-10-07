@@ -31,6 +31,7 @@ button { cursor: pointer; }
 button:hover:not(:disabled) { background: var(--bg-3); }
 button:disabled { opacity: .5; cursor: default; }
 button.small { padding: 0 var(--sp-1); font-size: var(--fs-small); }
+.run h2 a.small { font-size: var(--fs-dense); font-weight: 400; }
 form { display: flex; flex-wrap: wrap; gap: var(--sp-2) var(--sp-4); align-items: center; margin: var(--sp-2) 0; }
 .filters label.grow, #run-form label.grow { flex: 1 1 14rem; display: flex; gap: var(--sp-2); align-items: center; }
 .filters label.grow input, #run-form label.grow input { flex: 1; min-width: 0; }

@@ -157,7 +157,14 @@ select.vhil-input option { padding: 2px var(--sp-2); }
   border: 1px solid var(--border-control); color: var(--fg-muted);
   font-size: var(--fs-small); font-weight: 600; letter-spacing: 0.06em; line-height: 20px;
 }
+.vhil-mode.--replay { color: var(--status-replay); border-color: var(--status-replay); }
 .vhil-theme { text-transform: capitalize; flex: none; }
+/* REPLAY: the run's clock, a scrubber over its virtual time (step 9). */
+.vhil-scrub { display: flex; align-items: center; gap: var(--sp-2); flex: 0 1 30rem; min-width: 14rem; font-size: var(--fs-dense); }
+.vhil-scrub-run { flex: none; color: var(--status-replay); }
+.vhil-scrub-range { flex: 1; min-width: 6rem; accent-color: var(--status-replay); }
+.vhil-scrub-clock { flex: none; min-width: 7.5em; text-align: right; color: var(--fg); }
+.vhil-scrub-end { flex: none; }
 
 /* -- rail and sidebar ---------------------------------------------------- */
 
@@ -196,6 +203,10 @@ select.vhil-input option { padding: 2px var(--sp-2); }
 .vhil-runs-head { display: flex; justify-content: space-between; align-items: center; padding: 0 var(--sp-3) var(--sp-1); font-size: var(--fs-dense); }
 .vhil-runs > .muted { padding: 0 var(--sp-3); }
 .vhil-run-row { flex-wrap: nowrap; align-items: center; font-size: var(--fs-dense); }
+.vhil-run-item { display: flex; align-items: stretch; }
+.vhil-run-item .vhil-run-row { flex: 1; min-width: 0; }
+.vhil-run-page { flex: none; display: flex; align-items: center; padding: 0 var(--sp-3); color: var(--fg-muted); }
+.vhil-run-page:hover { color: var(--accent); background: var(--bg-3); text-decoration: none; }
 
 /* -- canvas -------------------------------------------------------------- */
 

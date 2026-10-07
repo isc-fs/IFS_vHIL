@@ -104,3 +104,65 @@ def test_the_shells_editor_route_redirects_to_the_workspace():
     assert "<iframe" not in editor
     assert 'href="/editor/"' in (STATIC / "index.html").read_text()
     assert ".ed-grid" not in (STATIC / "app.css").read_text()
+
+
+def test_the_shells_runs_and_systems_redirect_into_the_workspace():
+    """Step 9: #/runs/<id> opens REPLAY, #/runs the Runs view, #/systems[/<id>]
+    a system; the shell's own pages stay under #/classic/ (a run's signals
+    and artifacts, which REPLAY doesn't show yet)."""
+    app = (STATIC / "app.js").read_text()
+    assert 'editorPage(view, "", { run: Number(arg) })' in app
+    assert 'editorPage(view, "", { view: "runs" })' in app
+    assert "systems: (arg) => editorPage(view, arg)" in app
+    assert 'if (parts[1] !== "classic")' in app
+    editor = (STATIC / "editor.js").read_text()
+    assert 'u.searchParams.set("run", String(run))' in editor
+    inspect = (STATIC / "inspect.js").read_text()
+    assert "`#/classic/runs/${id}/${t}`" in inspect and 'href="/editor/?run=' in inspect
+    assert "#/classic/runs/" in (STATIC / "runs.js").read_text()
+    assert "`/#/classic/runs/${id}`" in (VHIL / "api.js").read_text()
+    workspace = (VHIL / "workspace.js").read_text()
+    assert "const run = Number(q.get('run'));" in workspace and "await openRun(run);" in workspace
+
+
+def test_replay():
+    """Opening a run enters REPLAY: the mode, the cursor-paged trace, the
+    scrubber in the top bar, the Bus tab."""
+    workspace = (VHIL / "workspace.js").read_text()
+    assert "ws.mode = 'REPLAY';" in workspace and "ws.layout.dockTab = 'bus';" in workspace
+    assert "{ id: 'bus', label: 'Bus' }," in workspace
+    replay = (VHIL / "replay.js").read_text()
+    assert "/api/runs/${run.id}/trace?" in replay and "q.set('cursor', cursor)" in replay
+    assert "/api/runs/${run.id}/contract" in replay
+    top = (VHIL / "VhilTopBar.vue").read_text()
+    assert 'type="range"' in top and 'v-model.number="replay.t"' in top
+    assert "<VhilBus v-else-if=\"tab.id === 'bus'\" />" in (VHIL / "VhilDock.vue").read_text()
+    assert '@click="openRun(r.id)"' in (VHIL / "VhilRail.vue").read_text()
+
+
+def test_the_bus_tab_reuses_the_shells_table_and_decoder():
+    """One copy of vtable.js and decode.js: the image build copies them into
+    src/vhil/shell/ (and the editor CI job compares the copies); no fork."""
+    assert "from './shell/decode.js'" in (VHIL / "VhilBus.vue").read_text()
+    assert "from './shell/vtable.js'" in (VHIL / "rowtable.js").read_text()
+    for name in ("vtable.js", "decode.js"):
+        assert not (VHIL / name).exists() and not (VHIL / "shell" / name).is_symlink()
+        assert f"vhil/server/static/{name}" in (REPO / "docker/editor.Dockerfile").read_text()
+        assert f"!vhil/server/static/{name}" in (
+            REPO / "docker/editor.Dockerfile.dockerignore").read_text()
+    ci = (REPO / ".github/workflows/editor.yml").read_text()
+    assert "for f in tokens.css editor-run.js vtable.js decode.js; do" in ci
+    assert 'cmp "/opt/pm/pipeline_manager/frontend/src/vhil/shell/$f" "vhil/server/static/$f"' in ci
+
+
+def test_the_bus_tables_stay_fast_and_csp_clean():
+    """Rows reused and filled as text (no parsed HTML, no style attribute),
+    drawn once per animation frame; only the rows in view decoded."""
+    table = (VHIL / "rowtable.js").read_text()
+    assert "requestAnimationFrame" in table and "innerHTML" not in table
+    assert "this.fill(i, row)" in table and "this.pool" in table
+    bus = (VHIL / "VhilBus.vue").read_text()
+    assert "innerHTML" not in bus and "v-html" not in bus
+    assert "requestAnimationFrame(draw)" in bus and "decoded.get(i)" in bus
+    frames = (VHIL / "frames.js").read_text()
+    assert "new Float64Array(capacity)" in frames and "this.dropped += 1;" in frames

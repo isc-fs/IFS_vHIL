@@ -3,7 +3,8 @@ vHIL: the workspace's top bar, 40 px (step 7 of
 docs/architecture/editor-workspace.md; CHANGELOG-VHIL.md), in place of
 Pipeline Manager's NavBar: the mark, what is open, one firmware chip per
 board (opens the ref picker), the run's duration, Run and Stop, the mode,
-Commit… and Open PR (dialogs), and the theme.
+Commit… and Open PR (dialogs), and the theme. In REPLAY (step 9) the
+duration gives way to the run's clock, a scrubber over its virtual time.
 -->
 
 <template>
@@ -45,7 +46,30 @@ Commit… and Open PR (dialogs), and the theme.
             </button>
         </div>
 
+        <div
+            v-if="ws.mode === 'REPLAY'" class="vhil-scrub" role="group"
+            :aria-label="`Run ${replay.id} clock`"
+        >
+            <a
+                class="vhil-scrub-run mono" :href="runPage(replay.id)"
+                target="_blank" rel="noopener"
+                :title="`Run ${replay.id}'s page: its signals, log and artifacts`"
+            >run {{ replay.id }}</a>
+            <input
+                v-model.number="replay.t"
+                type="range" min="0" :max="replay.end" :step="step"
+                class="vhil-scrub-range" :disabled="replay.state !== 'ready'"
+                :aria-label="`Virtual time of run ${replay.id}`"
+                :aria-valuetext="`t=${seconds(replay.t)}`"
+            />
+            <output class="vhil-scrub-clock mono num">t={{ seconds(replay.t) }}</output>
+            <span class="vhil-scrub-end mono num muted">/ {{ seconds(replay.end) }}</span>
+            <button
+                type="button" class="vhil-btn --small" title="Back to DESIGN" @click="exitReplay"
+            >✕ Exit</button>
+        </div>
         <label
+            v-else
             class="vhil-duration"
             title="Virtual time from power-on; each board spends its bootloader's 2 s first"
         >
@@ -69,7 +93,10 @@ Commit… and Open PR (dialogs), and the theme.
             >■ Stop</button>
         </div>
 
-        <span class="vhil-mode" role="status" :aria-label="`Mode: ${ws.mode}`">{{ ws.mode }}</span>
+        <span
+            class="vhil-mode" :class="`--${ws.mode.toLowerCase()}`" role="status"
+            :aria-label="`Mode: ${ws.mode}`"
+        >{{ ws.mode }}</span>
 
         <div class="vhil-git-buttons">
             <button type="button" class="vhil-btn" :disabled="!ws.id" @click="ws.dialog = 'commit'">
@@ -95,9 +122,11 @@ Commit… and Open PR (dialogs), and the theme.
 <script>
 import { computed, defineComponent } from 'vue';
 import {
-    ws, boardFirmware, cycleTheme, runActive, runNow, stopRun,
+    ws, boardFirmware, cycleTheme, exitReplay, runActive, runNow, stopRun,
 } from './workspace.js';
 import { boards, nodeName } from './graph.js';
+import { replay, seconds } from './replay.js';
+import { runPage } from './api.js';
 
 export default defineComponent({
     props: {
@@ -132,8 +161,23 @@ export default defineComponent({
             ws.picker = ws.picker?.nodeId === nodeId ? null
                 : { nodeId, x: r.left, y: r.bottom + 4 };
         };
+        // 100 µs a step, coarser over a long run (at most ~20000 steps).
+        const step = computed(() => Math.max(100, Math.ceil(replay.end / 20000 / 100) * 100));
         return {
-            ws, chips, crumbTitle, running, themeGlyph, openPicker, runNow, stopRun, cycleTheme,
+            ws,
+            chips,
+            crumbTitle,
+            running,
+            themeGlyph,
+            openPicker,
+            runNow,
+            stopRun,
+            cycleTheme,
+            replay,
+            seconds,
+            step,
+            exitReplay,
+            runPage,
         };
     },
 });

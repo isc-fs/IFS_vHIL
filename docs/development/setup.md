@@ -129,8 +129,10 @@ vendored in [`editor/pipeline-manager/`](../../editor/pipeline-manager/README-VH
 `CHANGELOG-VHIL.md`.
 
 In Docker: `scripts/vhil-docker.sh editor`, then open
-http://localhost:8080/editor/ (the shell's Editor link, and old
-`#/editor/<system>` links, go there; `?system=<id>&branch=<b>` opens a system).
+http://localhost:8080/editor/ (the shell's links, and old `#/editor/<system>`,
+`#/systems[/<id>]` and `#/runs[/<id>]` links, go there; `?system=<id>&branch=<b>`
+opens a system, `?run=<id>` replays a run; the shell's own pages are under
+`#/classic/`).
 It runs `docker/compose.yaml`'s `editor` and `proxy` (and the `api`, for the
 login check): one origin, as on a host, the editor under `/editor/` and no
 port of its own. The image

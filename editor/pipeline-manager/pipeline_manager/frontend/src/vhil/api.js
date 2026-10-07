@@ -21,7 +21,7 @@ export class ApiError extends Error {
     }
 }
 
-export async function call(method, path, body) {
+async function send(method, path, body) {
     const headers = body ? { 'Content-Type': 'application/json' } : {};
     const csrf = cookie('vhil_csrf');
     if (method !== 'GET' && csrf) headers['X-CSRF-Token'] = decodeURIComponent(csrf);
@@ -42,8 +42,21 @@ export async function call(method, path, body) {
         else errors = [typeof d === 'string' ? d : `${r.status} ${r.statusText}`];
         throw new ApiError(errors, r.status, d);
     }
-    return data;
+    return { r, data };
 }
 
-/** The shell's page for a run (its frames, plots, log). */
-export const runPage = (id) => `/#/runs/${id}`;
+export async function call(method, path, body) {
+    return (await send(method, path, body)).data;
+}
+
+/** A page of a run's trace and the next page's cursor (X-Trace-Cursor:
+ *  vhil/server/runs.py). */
+export async function tracePage(path) {
+    const { r, data } = await send('GET', path);
+    return { data, cursor: r.headers.get('X-Trace-Cursor') || '' };
+}
+
+/** The shell's own page for a run (its signals, log and artifacts), kept
+ *  under #/classic/ while REPLAY doesn't show them all
+ *  (vhil/server/static/app.js). */
+export const runPage = (id) => `/#/classic/runs/${id}`;

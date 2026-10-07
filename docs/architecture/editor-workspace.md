@@ -308,7 +308,9 @@ In the owner's order.
    `/trace` with the clock as scrubber; `#/runs` and `#/systems` redirect in.
    Bus Monitor and Trace on `vtable.js` with a ring buffer, rAF batching, row
    reuse, visible-only decode; perf test: 5k frames/s replay, p95 frame time
-   under 16 ms.
+   under 16 ms. The shell's run page stays at `#/classic/runs/<id>` (and its
+   runs list at `#/classic/runs`, for pytest runs) until REPLAY shows a run's
+   signals and artifacts too.
 10. **Scenario model and table** (feature 1a). Shared stimulus/expect schema
     (the same ops that drive live), the table with contract-driven editors,
     server-side validation, YAML through Commit/PR.
