@@ -231,8 +231,8 @@ In the owner's order.
    every scenario as the vHIL's own suite (advisory at first). After a run the
    lanes overlay the result: expected and actual together.
 2. **State panel.** A per-firmware "state view" block in the catalogue, next
-   to `can.contract`: `{label, source}` with source `frame:<msg>.<field>`,
-   `symbol:<elf>` or `pin:<board.pin>`. Enum labels from the `.def` values
+   to `can.contract`: `{label, source, kind}` with source `frame:<connector>.<msg>.<field>`,
+   `symbol:<name>` or `pin:<pin>`. Enum labels from the `.def` values
    and a new `GET /api/firmware/<id>/enums` (DWARF via `vhil/elf.py`,
    cached). The trace stays raw, so replay decodes as live does. Shown in
    three places: the State dock (a 340×420 card per board — FSM state at
@@ -330,7 +330,15 @@ In the owner's order.
     shows the web app's last run of each scenario; CI's JUnit is the
     workflow's artifact and step summary.
 12. **State sources** (feature 2a). Catalogue state-view blocks for AMS and
-    ECU; `GET /api/firmware/<id>/enums`; the mid-run `watch` op.
+    ECU; `GET /api/firmware/<id>/enums`; the mid-run `watch` op. Done:
+    [`docs/state-view.md`](../state-view.md). A view's sources are the
+    expects' grammar without the system's names (`frame:<connector>.…`,
+    `symbol:<name>`, `pin:<pin>`; `vhil/stateview.py` places them); enum
+    labels come from the ELF's DWARF (`vhil/elf.py` `enums`) or the
+    catalogue's cited tables; the contract carries each board's resolved
+    view (`state`) and every labelled signal (`labels`), which expects and
+    the Scenario tab accept (`== Precharge`); the worker records every
+    view's symbols and pins in each web-app run; `watch` is a stimulus kind.
 13. **State UI** (feature 2b). State cards, inspector card, node pill and
     fault ring; FSM and digital lanes in `plot.js`.
 14. **Session channel** (feature 3a). `/runs/{id}/session`, acks echoed into

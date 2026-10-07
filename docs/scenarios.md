@@ -74,10 +74,14 @@ timeline and in results, and what a `stop_periodic` names.
 | `stop_periodic` | `at_ms`, `periodic` (a periodic's name) | stops it |
 | `gpio` | `at_ms`, `board`, `pin` (a GPIO), `level` | drives an input |
 | `analog` | `at_ms`, `board`, `pin` (an analog input), `volts` (0..3.6) | sets its voltage |
-| `watch: symbol` | `board`, `name`, `size` (1, 2, 4), `period_ms` | samples a firmware global |
-| `watch: pin` | `board`, `pin` | records its edges |
+| `watch` | `at_ms`, `board`, `symbol` (with `size`, `period_ms`) or `pin` | from `at_ms` to the end: samples a global (default every 10 ms, its size from the ELF) or records a pin's edges, with its level then |
+| `watch: symbol` | `board`, `name`, `size` (1, 2, 4), `period_ms` | samples a firmware global from power-on |
+| `watch: pin` | `board`, `pin` | records its edges from power-on |
 
-A frame the scenario sends is in the trace with `src: "stimulus"`.
+A frame the scenario sends is in the trace with `src: "stimulus"`. The
+`watch` stimulus is the one that starts mid-run, a live session's op too;
+the `watch` list's rows hold from power-on. The web app's runs also record
+every board's state view ([state-view.md](state-view.md)).
 
 ## Expects
 
@@ -106,8 +110,11 @@ field from the last such frame (the scenario's own frames don't count), a
 symbol's last sample, a pin's level after its last edge. The value carried
 into the window counts as seen at its start. `value` is a number (a field's
 physical value, `raw * factor + offset`; a symbol's raw value; a pin's 0 or
-1), `true`/`false`, `high`/`low` for a pin, or a label of the field's value
-table (`CAN_VAL`), compared with its raw value with `==` or `!=` only.
+1), `true`/`false`, `high`/`low` for a pin, or a label, compared with its
+raw value with `==` or `!=` only: of the field's value table (`CAN_VAL`), or
+of a symbol's enum, from the image's DWARF or its state view's table
+([state-view.md](state-view.md); the contract's `labels`), so
+`symbol:ams.g_state_telemetry == Precharge` reads as the firmware does.
 `op` defaults to `==`.
 
 **Results** are the run's `summary.expects`, one per expect:
@@ -130,9 +137,10 @@ A scenario is checked before it is saved, on every edit in the editor
   the kind the row needs (gpio or analog); a stop names a periodic started
   no later; an expect ends by the run's end.
 - **Against the firmware**, where its build is here: an expect's message,
-  field and label are in the contract, a symbol is in the ELF; a value
-  outside a field's range and a frame whose length isn't its message's
-  are warnings. Firmware not built here leaves these to the run (a warning).
+  field and label are in the contract, a symbol is in the ELF and its label
+  in its enum; a value outside a field's range and a frame whose length
+  isn't its message's are warnings. Firmware not built here leaves these to
+  the run (a warning).
 - **Limits** ([deploy.md](deploy.md#limits)): `VHIL_MAX_STIMULI`,
   `VHIL_MAX_WATCHES`, `VHIL_MAX_EXPECTS`, `VHIL_MAX_VIRTUAL_MS`.
 
@@ -177,7 +185,8 @@ with their last results.
 
 | | |
 |---|---|
-| `GET /api/systems/{id}/contract?branch=&fw=<image>=<ref>` | the CAN contract the system's firmware speaks, without a run, and which images are built |
+| `GET /api/systems/{id}/contract?branch=&fw=<image>=<ref>` | the CAN contract the system's firmware speaks, without a run, and which images are built; each board's state view (`state`) and the value labels of its symbols (`labels`) |
+| `GET /api/firmware/{id}/enums?ref=` | an image's DWARF enums and enum-typed globals ([state-view.md](state-view.md)) |
 | `GET /api/systems/{id}/scenarios?branch=` | its scenarios, each with its last run (`last_run`) |
 | `GET /api/scenarios` | every system's, as checked out |
 | `GET /api/systems/{id}/scenarios/{name}?branch=` | one: `{yaml, scenario, errors, warnings}` |
