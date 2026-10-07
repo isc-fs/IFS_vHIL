@@ -250,16 +250,20 @@ def test_protected_and_malformed_branches_are_refused(env, branch):
 
 
 def test_listing_and_reading_on_a_branch_with_the_last_run(env):
-    assert env.client.get("/api/systems/ams/scenarios").json() == []
+    # The repo's own (systems/*.scenarios/, seeded into the clone) are there too.
+    seeds = [s["name"] for s in env.client.get("/api/systems/ams/scenarios").json()]
+    assert "tsms" not in seeds
     put(env, "tsms")
     listed = env.client.get("/api/systems/ams/scenarios?branch=feat/scen").json()
-    assert [(s["name"], s["expects"], s["valid"], s["last_run"]) for s in listed] == [
-        ("tsms", 2, True, None)]
+    assert [(s["name"], s["expects"], s["valid"], s["last_run"]) for s in listed
+            if s["name"] not in seeds] == [("tsms", 2, True, None)]
+    assert all(s["valid"] for s in listed)
     store = RunStore(env.app.state.settings.db)
     run_id = store.create("ams", "", {}, {"kind": "run", "virtual_ms": 10, "name": "tsms"})
     store.claim("w")
     store.finish(run_id, "failed", 10, {"expects_passed": 1, "expects_failed": 1})
-    last = env.client.get("/api/systems/ams/scenarios?branch=feat/scen").json()[0]["last_run"]
+    last = next(s for s in env.client.get("/api/systems/ams/scenarios?branch=feat/scen").json()
+                if s["name"] == "tsms")["last_run"]
     assert last["id"] == run_id and last["state"] == "failed" and last["expects_failed"] == 1
     one = env.client.get("/api/systems/ams/scenarios/tsms?branch=feat/scen").json()
     assert one["exists"] and one["errors"] == [] and one["scenario"]["virtual_ms"] == 6000
@@ -267,11 +271,14 @@ def test_listing_and_reading_on_a_branch_with_the_last_run(env):
 
 
 def test_every_systems_scenarios_as_checked_out(env):
-    folder = env.ws / "systems" / "ecu.scenarios"
+    folder = env.ws / "systems" / "ecu-ams.scenarios"
     folder.mkdir()
-    (folder / "hb.yaml").write_text("kind: scenario\nsystem: ecu\nvirtual_ms: 100\n")
-    assert [(s["system"], s["name"]) for s in env.client.get("/api/scenarios").json()] == [
-        ("ecu", "hb")]
+    (folder / "hb.yaml").write_text("kind: scenario\nsystem: ecu-ams\nvirtual_ms: 100\n")
+    listed = [(s["system"], s["name"]) for s in env.client.get("/api/scenarios").json()]
+    assert ("ecu-ams", "hb") in listed
+    seeds = sorted((p.parent.name.removesuffix(".scenarios"), p.stem)
+                   for p in REPO.glob("systems/*.scenarios/*.yaml"))
+    assert sorted(listed) == sorted(seeds + [("ecu-ams", "hb")])
 
 
 def test_preview_checks_without_saving(env):

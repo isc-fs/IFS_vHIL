@@ -20,24 +20,28 @@ commit on a branch (Commit…), then Open PR.
 
 ## The file
 
+From `systems/ams.scenarios/tsms-precharge-run.yaml` (shortened):
+
 ```yaml
 kind: scenario
 system: ams
-description: "TSMS on and a press: Precharge, then Run once the link follows"
-virtual_ms: 7000
+description: "Car mode: the ECU's 0x100 at 0 V, TSMS on and a DASH_CHG press arm Precharge ..."
+virtual_ms: 7600
 stimuli:
   - {kind: can_periodic, name: vcu, at_ms: 2500, bus: can_acu, id: 0x100, data: "000002", period_ms: 10}
-  - {kind: gpio, name: tsms, at_ms: 4500, board: ams, pin: PF9, level: true}
-  - {kind: gpio, at_ms: 4700, board: ams, pin: PF10, level: true}
-  - {kind: gpio, at_ms: 4750, board: ams, pin: PF10, level: false}
-  - {kind: stop_periodic, at_ms: 5800, periodic: vcu}
-  - {kind: can_periodic, name: vcu-link, at_ms: 5800, bus: can_acu, id: 0x100, data: "640102", period_ms: 10}
+  - {kind: gpio, name: tsms-on, at_ms: 5500, board: ams, pin: PF9, level: true}
+  - {kind: gpio, name: dash-press, at_ms: 5600, board: ams, pin: PF10, level: true}
+  - {kind: gpio, name: dash-release, at_ms: 5650, board: ams, pin: PF10, level: false}
+  - {kind: stop_periodic, at_ms: 6500, periodic: vcu}
+  - {kind: can_periodic, name: vcu-link, at_ms: 6500, bus: can_acu, id: 0x100, data: "640102", period_ms: 10}
 watch:
   - {kind: symbol, board: ams, name: g_state_telemetry, size: 1, period_ms: 10}
 expect:
-  - {check: eventually, name: precharge, at_ms: 4700, until_ms: 4800, signal: "symbol:ams.g_state_telemetry", value: 1}
-  - {check: eventually, name: run-on-can, at_ms: 5800, until_ms: 6900, signal: "frame:can_acu.AMS_status.fsm_state", value: 3}
-  - {check: always, name: air-plus-closed, at_ms: 6000, signal: "pin:ams.PB5", value: high}
+  - {check: never, name: no-error, at_ms: 0, signal: "symbol:ams.g_state_telemetry", value: 5}
+  - {check: eventually, name: precharge, at_ms: 5600, until_ms: 5700, signal: "symbol:ams.g_state_telemetry", value: 1}
+  - {check: eventually, name: pre-closes, at_ms: 5600, until_ms: 5700, signal: "pin:ams.PB7", value: high}
+  - {check: eventually, name: run-on-can, at_ms: 6500, until_ms: 7550, signal: "frame:can_acu.AMS_status.fsm_state", value: 3}
+  - {check: always, name: air-plus-closed, at_ms: 6800, signal: "pin:ams.PB5", value: high}
   - {check: period, name: status-period, at_ms: 3000, signal: "frame:can_acu.AMS_status", min_ms: 450, max_ms: 550}
 ```
 
@@ -131,6 +135,43 @@ A scenario is checked before it is saved, on every edit in the editor
   are warnings. Firmware not built here leaves these to the run (a warning).
 - **Limits** ([deploy.md](deploy.md#limits)): `VHIL_MAX_STIMULI`,
   `VHIL_MAX_WATCHES`, `VHIL_MAX_EXPECTS`, `VHIL_MAX_VIRTUAL_MS`.
+
+## The suite
+
+Every committed scenario is a test of the vHIL's own suite,
+`tests/scenarios/test_scenarios.py`: one test per file, run on Renode from
+power-on as the worker runs it, its expects checked against the trace with
+the contract the images' own `.def` files give. A failing test lists every
+expect with its evidence; each expect is also a JUnit property of its test.
+A scenario whose system's images are missing is skipped.
+
+```sh
+scripts/vhil-docker.sh scenarios               # in Docker, the last built firmware; JUnit in results/
+python -m pytest tests/scenarios --junitxml=scenarios.xml   # images from $VHIL_<X>_ELF
+```
+
+CI runs it in `.github/workflows/scenarios.yml` with `full-ci`, nightly on
+`dev` and on dispatch. It is **advisory** for now (owner decision): a
+failing scenario is a warning annotation and a row of the step summary's
+table, not a failed check. The seeds, which pass against the firmware the
+systems declare:
+
+| Scenario | What it checks |
+|---|---|
+| `ams/tsms-precharge-run` | Car mode: TSMS and a DASH_CHG press arm Precharge (AIR- and PRE close, `g_state_telemetry` 1); the link following to the pack gives Run (AIR+ closes, PRE opens; `AMS_status.fsm_state` 3 and `AMS_relay_status.air_positive` on CAN); never Error; AMS_OK held; `AMS_status` every 500 ms |
+| `ecu/heartbeat-r2d` | Nothing on the bus in the bootloader's window; `0x100` every 10 ms on the ACU bus only, `0x704` every second; the inverter's DC-bus report and the AMS's `ok_precharge` reach WaitStartBrake; START without the brake sounds no RTDS; with it, R2dDelay and 2 s of RTDS, then WaitInvStandby |
+
+## In the editor
+
+The workspace's Scenario tab (`docs/architecture/editor-workspace.md`,
+feature 1) edits the open system's scenarios: a timeline (a lane per bus and
+per board; drag a mark to move it, 1/5/10 ms snap, Ctrl+wheel zoom; the
+watches below) over the row table and a row editor, where frames are edited
+as the contract's decoded fields. The top bar's pick is what Run runs; when
+the run ends it is replayed on the tab, each expect's result on its lane at
+its evidence time (a click moves the scrubber there) over the frames and pin
+edges the run produced. The Tests view in the sidebar lists the scenarios
+with their last results.
 
 ## API
 
