@@ -10,18 +10,42 @@ vHIL: Commit…, Open PR and the keyboard map, as modal dialogs
         <form class="vhil-form" @submit.prevent="doCommit">
             <h2 id="vhil-commit-title" class="vhil-panel-title">Commit {{ ws.id }}</h2>
             <p class="muted">
-                Writes systems/{{ ws.id }}.yaml from the graph and commits it to a branch of the
-                workspace. Run then runs that commit.
+                Commits to a branch of the workspace: the system file from the graph, and the
+                selected scenario. Run then runs that commit.
             </p>
             <label>Branch
                 <input
                     v-model="ws.commit.branch" class="vhil-input mono" required placeholder="feat/…"
                 />
             </label>
-            <label>Message
-                <textarea v-model="ws.commit.message" class="vhil-input" rows="3" required />
+            <label class="vhil-commit-part">
+                <span><input v-model="ws.commit.system" type="checkbox" />
+                    System
+                    <span class="mono">systems/{{ ws.id }}.yaml</span>
+                    <span v-if="ws.dirty" class="vhil-dirty">● edited</span></span>
             </label>
-            <p v-if="ws.problems.length" class="vhil-note">
+            <label v-if="ws.commit.system">Message
+                <textarea v-model="ws.commit.message" class="vhil-input" rows="2" required />
+            </label>
+            <label v-if="scen.name" class="vhil-commit-part">
+                <span><input v-model="ws.commit.scenario" type="checkbox" />
+                    Scenario
+                    <span class="mono">{{ `systems/${ws.id}.scenarios/${scen.name}.yaml` }}</span>
+                    <span v-if="scen.dirty" class="vhil-dirty">● edited</span></span>
+            </label>
+            <label v-if="scen.name && ws.commit.scenario">Scenario message
+                <textarea
+                    v-model="ws.commit.scenarioMessage" class="vhil-input" rows="2" required
+                />
+            </label>
+            <p
+                v-if="scen.name && ws.commit.scenario && scen.errors.length"
+                class="vhil-note vhil-warn"
+            >
+                ▲ The scenario has {{ scen.errors.length }} error(s): the server refuses it until
+                they are fixed (Problems).
+            </p>
+            <p v-if="errors || warnings" class="vhil-note">
                 {{ errors }} error(s), {{ warnings }} warning(s) at the last Check: see Problems.
             </p>
             <div class="vhil-actions">
@@ -96,6 +120,7 @@ import {
     ws, check, commit, openPr, problemCount,
 } from './workspace.js';
 import { SHORTCUTS } from './shortcuts.js';
+import { scen } from './scenarios.js';
 
 export default defineComponent({
     setup() {
@@ -128,6 +153,7 @@ export default defineComponent({
 
         return {
             ws,
+            scen,
             commitDlg,
             prDlg,
             keysDlg,

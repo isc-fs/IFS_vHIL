@@ -18,7 +18,7 @@ emulation speed and frame rates join it with LIVE (step 15).
         </span>
         <span class="vhil-status-msg" role="status" aria-live="polite">{{ ws.status }}</span>
         <button
-            v-if="ws.problems.length"
+            v-if="errors || warnings"
             type="button"
             class="vhil-status-item vhil-status-problems"
             title="Show Problems"

@@ -397,6 +397,56 @@
               }
             }
           }
+        },
+        "state_view": {
+          "description": "What the state panel shows of a board running this firmware (docs/state-view.md), in order: its FSM state, contactors and relays, faults and key values. Each source is a signal in the scenario expects' grammar without the system's names: frame:<connector>.<message>.<field> (a board CAN connector, e.g. FDCAN1, and a field of the .def contract), symbol:<name> (a firmware global) or pin:<pin> (a board GPIO). The worker records the symbols and pins of every board's view in each run.",
+          "type": "array",
+          "maxItems": 24,
+          "items": {
+            "type": "object",
+            "required": ["label", "source"],
+            "additionalProperties": false,
+            "properties": {
+              "label": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9 ._+/()%-]{0,31}$"
+              },
+              "source": {
+                "type": "string",
+                "pattern": "^(frame:[A-Za-z_][A-Za-z0-9_]{0,63}\\.(0x[0-9A-Fa-f]{1,8}|[A-Za-z_][A-Za-z0-9_]{0,63})\\.[A-Za-z_][A-Za-z0-9_]{0,63}|symbol:[A-Za-z_][A-Za-z0-9_]{0,127}|pin:[A-Za-z0-9_]{1,64})$"
+              },
+              "kind": {
+                "description": "state: the FSM state (one per view); relay: a contactor, relay or digital output, closed/on when non-zero; fault: active when non-zero; value: a key value (the default).",
+                "enum": ["state", "relay", "fault", "value"],
+                "default": "value"
+              },
+              "unit": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9%/._ -]{0,12}$"
+              },
+              "enum": {
+                "description": "The DWARF enumeration (qualified, e.g. ams::fsm::State) whose enumerators label a symbol's values (GET /api/firmware/<id>/enums).",
+                "type": "string",
+                "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}(::[A-Za-z_][A-Za-z0-9_]{0,63}){0,7}$"
+              },
+              "values": {
+                "description": "Labels by raw value, cited in the firmware: where DWARF has no enumerator for a value (or no enum at all), or a symbol is a plain integer. Over the enum's own.",
+                "type": "object",
+                "maxProperties": 64,
+                "propertyNames": {"pattern": "^(0|-?[1-9][0-9]{0,9})$"},
+                "additionalProperties": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_][A-Za-z0-9_ .+:/-]{0,63}$"
+                }
+              },
+              "period_ms": {
+                "description": "How often a symbol is sampled (default 10 ms for state and fault, 50 ms for the rest).",
+                "type": "number",
+                "minimum": 1,
+                "maximum": 1000
+              }
+            }
+          }
         }
       }
     },

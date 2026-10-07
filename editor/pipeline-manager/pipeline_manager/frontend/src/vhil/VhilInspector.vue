@@ -1,7 +1,8 @@
 <!--
 vHIL: the inspector (resizable, 320 px by default; CHANGELOG-VHIL.md). In
 DESIGN, the selected node's properties: a board's role, its firmware and the
-refs picked for it, and a bus's or a device's own; with nothing selected,
+refs picked for it, and a bus's or a device's own; in REPLAY, a board's state
+card above them (VhilStateCard.vue, step 13); with nothing selected,
 the open system and its Check, Commit and PR, which used to be the shell's
 fixed aside. A board's properties live here, not on its node.
 -->
@@ -28,6 +29,12 @@ fixed aside. A board's properties live here, not on its node.
 
         <div v-if="node" class="vhil-inspector-body">
             <span v-if="kind" class="vhil-kind">{{ kind }}</span>
+            <!-- In REPLAY, the board's state at the scrubber's time (step 13) -->
+            <VhilStateCard
+                v-if="stateTrace && kind === 'board' && stateTrace.items.has(nodeName(node))"
+                :trace="stateTrace" :board="nodeName(node)" :t="replay.t" :end="replay.end"
+                :version="replay.version"
+            />
             <dl class="vhil-props">
                 <div v-for="p in properties" :key="p.name" class="vhil-prop">
                     <dt>
@@ -116,6 +123,8 @@ fixed aside. A board's properties live here, not on its node.
 
 <script>
 import { computed, defineComponent } from 'vue';
+import VhilStateCard from './VhilStateCard.vue';
+import { replay } from './replay.js';
 import {
     ws, boardFirmware, check, pickRef, refreshDirty,
 } from './workspace.js';
@@ -130,10 +139,15 @@ const NUMERIC = ['integer', 'number', 'slider'];
 const ROLE_NOTE = 'Sets its firmware, node ID, flash bus and pin labels.';
 
 export default defineComponent({
+    components: { VhilStateCard },
     props: {
         tick: { type: Number, default: 0 },
     },
     setup(props) {
+        const stateTrace = computed(() => {
+            replay.version; // eslint-disable-line no-unused-expressions
+            return ws.mode === 'REPLAY' ? replay.stateTrace : null;
+        });
         const node = computed(() => {
             props.tick; // eslint-disable-line no-unused-expressions
             return ws.selectedId ? nodeById(ws.selectedId) ?? null : null;
@@ -192,6 +206,8 @@ export default defineComponent({
 
         return {
             ws,
+            replay,
+            stateTrace,
             node,
             kind,
             properties,

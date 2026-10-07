@@ -1,0 +1,22 @@
+kind: scenario
+system: ecu
+description: "The ECU's heartbeats (0x100 every 10 ms on the ACU bus only, 0x704 every second) and its start-up gates: the inverter's DC-bus report and the AMS's ok_precharge reach WaitStartBrake; START without the brake does nothing; with it, R2D sounds the RTDS for 2 s. IFS08-CE-ECU control.cpp, ecu_config.hpp; tests/sim/test_ecu_boot.py, test_ecu_startup.py."
+virtual_ms: 6800
+stimuli:
+  - {kind: can_periodic, name: inv-vdc, at_ms: 2500, bus: can_inv, id: 0x466, data: "00005e010000", period_ms: 10}
+  - {kind: can_periodic, name: ams-ok, at_ms: 2500, bus: can_acu, id: 0x20, data: "01", period_ms: 10}
+  - {kind: gpio, name: start-no-brake, at_ms: 3500, board: ecu, pin: PB5, level: true}
+  - {kind: gpio, at_ms: 4000, board: ecu, pin: PB5, level: false}
+  - {kind: analog, name: brake-firm, at_ms: 4200, board: ecu, pin: PF7, volts: 1.2088}
+  - {kind: gpio, name: start, at_ms: 4300, board: ecu, pin: PB5, level: true}
+  - {kind: gpio, at_ms: 4400, board: ecu, pin: PB5, level: false}
+expect:
+  - {check: count, name: silent-in-bootloader, at_ms: 0, until_ms: 1900, signal: "frame:can_acu.0x100", max: 0}
+  - {check: period, name: heartbeat-10ms, at_ms: 2500, signal: "frame:can_acu.VCU_heartbeat", min_ms: 9.5, max_ms: 10.5}
+  - {check: count, name: heartbeat-only-on-acu, at_ms: 0, signal: "frame:can_inv.0x100", max: 0}
+  - {check: period, name: health-1s, at_ms: 2500, signal: "frame:can_acu.PitDiag_health", min_ms: 990, max_ms: 1010}
+  - {check: eventually, name: wait-start-brake, at_ms: 2500, until_ms: 3500, signal: "symbol:ecu.g_last_ctrl_state", value: 2}
+  - {check: never, name: no-r2d-without-brake, at_ms: 3500, until_ms: 4200, signal: "pin:ecu.PB4", value: high}
+  - {check: eventually, name: r2d, at_ms: 4300, until_ms: 4500, signal: "symbol:ecu.g_last_ctrl_state", value: 3}
+  - {check: always, name: rtds-sounds, at_ms: 4500, until_ms: 6200, signal: "pin:ecu.PB4", value: high}
+  - {check: eventually, name: wait-inv-standby, at_ms: 6200, until_ms: 6600, signal: "symbol:ecu.g_last_ctrl_state", value: 4}

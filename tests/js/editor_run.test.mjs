@@ -40,6 +40,16 @@ test("the request is a normal run scenario, at the ref when there is one", () =>
   assert.equal(tree.scenario.virtual_ms, 2500);
 });
 
+test("a scenario's rows ride in the run, named after it", () => {
+  const doc = { description: "x", virtual_ms: 9, slice_ms: 50,
+                stimuli: [{ kind: "gpio", at_ms: 5, board: "ams", pin: "PF9", level: true }],
+                expect: [{ check: "never", signal: "pin:ams.PB5", value: 1 }] };
+  assert.deepEqual(runRequest({ system: "ams", ref: "", dataflow: GRAPH, virtualMs: 6000,
+                                scenario: { name: "tsms", doc } }).scenario, {
+    kind: "run", name: "tsms", virtual_ms: 6000, slice_ms: 50, stimuli: doc.stimuli, watch: [],
+    expect: doc.expect });
+});
+
 test("Run refuses what it can't run as saved", () => {
   const ok = { id: "ams", isNew: false, saved: "a: 1\n", current: "a: 1\n", virtualMs: 3000 };
   assert.equal(runBlocker(ok), null);

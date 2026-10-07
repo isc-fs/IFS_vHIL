@@ -1,0 +1,130 @@
+name: Scenario tests (vHIL suite)
+
+# The vHIL's own suite: every committed scenario of every system
+# (systems/<system>.scenarios/*.yaml, docs/scenarios.md) run on Renode from
+# power-on, its expects checked against the trace in virtual time
+# (tests/scenarios/test_scenarios.py), with JUnit output.
+#
+# Heavy, so it runs as the native tests do (sim.yml; owner, 2026-10-06): a
+# pull request labelled `full-ci`, a release pull request into main, the
+# nightly run on dev, or a manual dispatch. Advisory for now (owner decision:
+# scenario tests don't gate firmware PRs yet): a failing scenario is a warning
+# and the step summary's table, not a failed check.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+  schedule:
+    - cron: '0 3 * * *'   # nightly, on dev (see the checkout ref)
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  RENODE_VERSION: 1.17.0
+  # GitHub's sha256 digest for the release asset (as in sim.yml).
+  RENODE_SHA256: 4ba7c68b59e2447f188ef4b4b112fcccd2802582c460beedceb63b84e5605a5f
+
+jobs:
+  scenarios:
+    if: github.event_name != 'pull_request' || github.base_ref == 'main' || contains(github.event.pull_request.labels.*.name, 'full-ci')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # Advisory: the job reports, it never fails the workflow.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event_name == 'schedule' && 'dev' || '' }}
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.11'
+
+      - name: Arm GNU toolchain (pinned like IFS_HIL's recipe)
+        uses: carlosperate/arm-none-eabi-gcc-action@98c40e51546516419841748d3210c290df0d2c6c # v1.13.0
+        with:
+          release: '14.2.Rel1'
+
+      - name: Build the ECU and AMS firmware their systems declare
+        id: fw
+        run: |
+          pip install -q pyyaml "jsonschema>=4" pytest "fastapi==0.115.*" "httpx==0.28.*"
+          for s in ecu ams; do
+            python -m vhil.system build "systems/$s.yaml" --workdir "$RUNNER_TEMP/fw" | tee -a built.txt
+          done
+          echo "ecu=$(sed -n 's/^ecu=//p' built.txt | tail -1)" >> "$GITHUB_OUTPUT"
+          echo "ams=$(sed -n 's/^ams=//p' built.txt | tail -1)" >> "$GITHUB_OUTPUT"
+          echo "bootloader=$(sed -n 's/^ecu.bootloader=//p' built.txt | tail -1)" >> "$GITHUB_OUTPUT"
+
+      - name: Install Renode ${{ env.RENODE_VERSION }}
+        run: |
+          curl -fsSL -o renode.tar.gz \
+            "https://github.com/renode/renode/releases/download/v${RENODE_VERSION}/renode-${RENODE_VERSION}.linux-portable.tar.gz"
+          echo "${RENODE_SHA256}  renode.tar.gz" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/renode"
+          tar xzf renode.tar.gz -C "$RUNNER_TEMP/renode" --strip-components=1
+
+      - name: FAT tools for SD card images
+        run: sudo apt-get install -y -qq dosfstools mtools >/dev/null
+
+      - name: Run every committed scenario
+        id: run
+        env:
+          RENODE: ${{ runner.temp }}/renode/renode
+          VHIL_ECU_ELF: ${{ steps.fw.outputs.ecu }}
+          VHIL_AMS_ELF: ${{ steps.fw.outputs.ams }}
+          VHIL_CAN_BOOTLOADER_ELF: ${{ steps.fw.outputs.bootloader }}
+        run: |
+          set +e
+          # xunit1: the family whose report keeps each expect's property.
+          python -m pytest tests/scenarios -v --sim-log-dir sim-logs \
+              -o junit_family=xunit1 --junitxml=scenarios.xml
+          echo "rc=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Results (step summary; a warning per failed scenario)
+        if: always()
+        run: |
+          python - <<'EOF'
+          import os
+          import xml.etree.ElementTree as ET
+          out = ["## vHIL scenario tests (advisory)", "",
+                 "| Scenario | Result | Expects |", "|---|---|---|"]
+          if not os.path.exists("scenarios.xml"):
+              out.append("| – | no JUnit report | |")
+          else:
+              for case in ET.parse("scenarios.xml").getroot().iter("testcase"):
+                  name = case.get("name", "").removeprefix("test_scenario[").removesuffix("]")
+                  failed = case.find("failure") is not None or case.find("error") is not None
+                  skipped = case.find("skipped") is not None
+                  props = [(p.get("name"), p.get("value")) for p in case.iter("property")]
+                  bad = sum(1 for _, v in props if v.startswith("FAIL"))
+                  verdict = "skipped" if skipped else ("FAILED" if failed else "passed")
+                  out.append(f"| `{name}` | {verdict} | {len(props) - bad}/{len(props)} |")
+                  if failed:
+                      detail = "; ".join(f"{k}: {v}" for k, v in props if v.startswith("FAIL"))
+                      print(f"::warning title=scenario {name} failed::{detail or 'see the log'}")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write("\n".join(out) + "\n")
+          EOF
+
+      - name: Upload the JUnit report and Renode logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: scenarios
+          path: |
+            scenarios.xml
+            sim-logs/
+          if-no-files-found: ignore
+
+      - name: Advisory verdict
+        if: steps.run.outputs.rc != '0'
+        # A warning, not a red check, while the suite is advisory. To make it
+        # a gate: `exit 1` here and drop the job's continue-on-error.
+        run: echo "::warning::scenario tests failed (advisory, not a gate yet); see the step summary"

@@ -259,6 +259,118 @@ from `git archive 04613679` except as listed below.
       signals and artifacts, which REPLAY doesn't show yet, and links to
       REPLAY; the runs list keeps its pytest runs.
 
+15. **Scenario model and table** (step 10 of the editor workspace plan). All
+    in `src/vhil/` but for the image build; no Pipeline Manager file changes.
+    - **Scenarios** (`scenarios.js`): the open system's scenario files
+      (`systems/<id>.scenarios/<name>.yaml`; `docs/scenarios.md`), listed on
+      its branch with their last runs, one selected for Run and the Scenario
+      tab, its firmware's CAN contract without a run
+      (`GET /api/systems/<id>/contract`, with the graph's firmware refs), and
+      its check on the server, 400 ms after each edit
+      (`POST .../scenarios/<name>/preview`). It imports nothing of
+      `workspace.js`, which binds the open system, branch and refs to it.
+    - **The model** (`scenario.js`, pure; `tests/js/scenario.test.mjs` under
+      node): a scenario's `stimuli`, `watch` and `expect` lists as one table
+      of rows sorted by time, each pointing at its item, edited in place;
+      what a row targets and sets; the server's messages and a run's expect
+      results by row.
+    - **The Scenario tab** (`VhilScenario.vue`, the row editor `VhilScenarioRow.vue`, `scenario.css`;
+      `VhilDock.vue` renders it): the scenario pick and `+ New`, its
+      description and virtual time, `+ Add row…` (send, periodic, stop,
+      gpio, analog, watch, expect), the state (errors, warnings, unsaved, the
+      last run's expects), the rows `t | action | target | value | result`,
+      and an editor for the selected one. A frame is edited as its message's
+      decoded fields from the contract: a value table as a select, a bit as
+      false/true, a scalar as a number with its unit, range and step, the hex
+      in sync (the shell's `decode.js`, which gains `encodeField`,
+      `rawFromPhysical`, `fieldRange` and `bytesToHex`: one copy); with no
+      contract, raw hex. An expect's signal is built from a source (frame
+      field, frame, symbol, pin), its owner and item, and its value is a
+      label select where the field has a value table.
+    - **The top bar** (`VhilTopBar.vue`): the scenario Run runs, next to the
+      run's duration, which is the scenario's own while one is selected.
+      Run (`workspace.js`) sends its rows and name with the run
+      (`shell/editor-run.js` `runRequest`'s `scenario`), and refuses while
+      the scenario has errors; when the run ends, its expect results are on
+      the rows, in the Log and in Problems.
+    - **Commit…** (`VhilDialogs.vue`) commits the system file, the selected
+      scenario or both, on one branch (the scenario on the system's new
+      commit). `?scenario=` in the URL selects one.
+    - **Problems** (`VhilDock.vue`, `VhilStatus.vue`) list the scenario's
+      check (errors, warnings) and its last run's failed expects with the
+      system's; a click shows the row.
+
+16. **Timeline and the Tests view** (step 11 of the editor workspace plan).
+    All in `src/vhil/`; no Pipeline Manager file changes.
+    - **The timeline** (`VhilTimeline.vue`, laid out by `timeline.js`, pure,
+      `tests/js/timeline.test.mjs`; drawn in `scenario.css`), above the
+      Scenario tab's table, on the virtual-time axis REPLAY's scrubber uses:
+      a lane per bus and per board (and per bus or board a row names that the
+      system lacks), a diamond per `can_send`, a hatched bar per
+      `can_periodic` to its stop, a step per gpio/analog set, a bracket per
+      expect over its window; the watches are the gutter below. A mark is
+      dragged with a 1, 5 or 10 ms snap (checked on the server when it is
+      dropped), or moved with ←/→ when focused; Ctrl+wheel zooms around the
+      pointer, − / fit / + by buttons. SVG geometry is attributes and colour
+      classes, so `style-src 'self'` holds.
+    - **Expected against actual.** When a scenario's run ends, the workspace
+      replays it on the Scenario tab (`workspace.js` `openRun(id, {tab})`;
+      opening any run that ran a scenario selects it): each expect's result
+      sits on its lane at its evidence time, ✓ or ✕ (a click moves the
+      scrubber there, replaying the run first if needed), behind the marks
+      the frames and pin edges the scenario names (REPLAY now loads `edge`
+      records too: `replay.js` `replay.edges`), and the scrubber's time is a
+      line; clicking the axis scrubs.
+    - **Tests** (`VhilRail.vue`): a sidebar view of the open system's
+      scenarios (every system's with none open: `GET /api/scenarios`), each
+      with its last run's state and expects (passed, failed); opening one
+      selects it and replays that run on the Scenario tab, ▶ runs it.
+
+17. **State sources in the Scenario tab** (step 12 of the editor workspace
+    plan; [state view](../../docs/state-view.md)). All in `src/vhil/`; no
+    Pipeline Manager file changes.
+    - **Enum labels** (`VhilScenarioRow.vue`): an expect's value is a select
+      of labels for a symbol too, from the contract's `labels` (the image's
+      DWARF enum or the state view's table), with a field's value table
+      over them: `symbol:ams.g_state_telemetry == Precharge`.
+    - **The `watch` stimulus** (`scenario.js`, `timeline.js`,
+      `VhilScenarioRow.vue`): a watch that starts mid-run is a timed row
+      (a symbol or a pin, as the `watch` rows), a diamond on its board's
+      lane.
+
+18. **The state panel** (step 13 of the editor workspace plan;
+    [state view](../../docs/state-view.md)).
+    - **The model** (`state.js`, pure; `tests/js/state.test.mjs` under node):
+      `StateTrace` keeps each state-view signal's observations as a time
+      series of raw values, fed record by record (samples, edges, frames
+      decoded with the shell's `decode.js`): a replayed run's trace now, a
+      live session's stream later. `cardAt(board, t)` is a board's FSM state
+      (label, for how long, the one before, its transitions), relays,
+      active and latched-cleared faults with reason and age, key values,
+      and staleness (a source silent for three periods); `pillAt` the
+      canvas pill; `lanesOf` the history lanes.
+    - **REPLAY** (`replay.js`) loads the trace's `sample` records too and
+      builds the run's `StateTrace` once its contract (with each board's
+      state view) and trace are in.
+    - **The State tab** (`VhilState.vue`, `VhilStateCard.vue`, `state.css`;
+      `VhilDock.vue` renders it): a 340 px card per board at the scrubber's
+      time: the FSM state at 18 px with "for N ms" and the previous state;
+      contactors and relays as square pills with text (■ closed, filled;
+      □ open); active faults as ✕ pills with reason and age, cleared ones
+      outlined (○); key values with units; "stale" and a dashed card when
+      the state went silent; the history: the FSM state's lane (its states
+      written on it) and each relay's digital lane over the run, and the
+      transitions; a click on either moves the scrubber. Segment positions
+      are set through the CSSOM (`:style` objects). The FSM and digital
+      lanes live here until the Signals tab exists.
+    - **The inspector** (`VhilInspector.vue`): in REPLAY, the selected
+      board's card (without the history) above its properties.
+    - **The node pill** (`custom/CustomNode.vue`, the board's
+      `vhil-node-state` slot from step 8: `VhilNodeState.vue`; `nodes.css`):
+      "AMS · Precharge" at the scrubber's time; while a fault is active it
+      reads "✕ fault" and is ringed, and so is the board's card (`:has()`);
+      "stale" and dashed when its state went silent.
+
 ## Left for later
 
 - **Light theme polish** (owner decision: defined now, polished later).

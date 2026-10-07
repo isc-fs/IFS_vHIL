@@ -1,0 +1,139 @@
+/* vHIL: the Scenario tab (VhilScenario.vue), on the tokens (step 10 of
+   docs/architecture/editor-workspace.md). Its bar and notes reuse the Bus
+   tab's (bus.css). Status is text and a glyph, never colour alone. */
+
+.vhil-scen { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.vhil-scen-bar {
+  display: flex; align-items: center; gap: var(--sp-3); flex: none; flex-wrap: wrap;
+  padding: var(--sp-1) var(--sp-3); border-bottom: 1px solid var(--line); font-size: var(--fs-dense);
+}
+.vhil-scen-bar .vhil-input { min-height: 24px; height: 24px; width: auto; color: var(--fg); }
+.vhil-scen-bar .vhil-bus-field.--grow .vhil-input { width: 100%; }
+.vhil-scen-new { display: inline-flex; gap: var(--sp-1); align-items: center; }
+.vhil-scen-new .vhil-input { width: 10rem; }
+.vhil-scen-bar .vhil-scen-num { width: 6rem; text-align: right; }
+.vhil-scen-state { display: inline-flex; gap: var(--sp-2); align-items: center; margin-left: auto; white-space: nowrap; }
+.vhil-scen-ok { color: var(--status-ok); }
+.vhil-scen-msg { margin: 0; padding: 2px var(--sp-3); font-size: var(--fs-dense); font-family: var(--font-mono); }
+.vhil-scen-msg.--error { color: var(--status-failed); }
+.vhil-scen-msg.--ok { color: var(--status-ok); }
+
+.vhil-scen-body {
+  flex: 1; min-height: 0; display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(18rem, 26rem);
+}
+.vhil-scen-table { min-width: 0; min-height: 0; overflow: auto; font-size: var(--fs-dense); }
+.vhil-scen-row {
+  display: grid; align-items: center; gap: var(--sp-2); box-sizing: border-box;
+  grid-template-columns: 4.5rem 5rem minmax(7rem, 1.1fr) minmax(8rem, 1.4fr) minmax(7rem, 10rem) 2rem;
+  min-height: var(--row-dense); padding: 0 var(--sp-3); border-left: 3px solid transparent;
+  white-space: nowrap; cursor: pointer;
+}
+.vhil-scen-row.vhil-rt-head { position: sticky; top: 0; z-index: 1; cursor: default; }
+.vhil-scen-row > span { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.vhil-scen-row:not(.vhil-rt-head):hover { background: var(--bg-3); }
+.vhil-scen-row.--selected { background: var(--sel-bg); border-left-color: var(--focus); }
+.vhil-scen-row.--error { border-left-color: var(--status-failed); }
+.vhil-scen-row.--warning:not(.--error) { border-left-color: var(--status-warn); }
+.vhil-scen-row .vhil-btn.--small { height: 18px; padding: 0 4px; }
+.vhil-scen-action { font-weight: 600; }
+.vhil-scen-action.--expect { color: var(--accent); }
+.vhil-scen-action.--watch { color: var(--fg-muted); }
+.vhil-scen-result { display: inline-flex; gap: var(--sp-1); }
+
+.vhil-scen-editor {
+  min-width: 0; min-height: 0; overflow-y: auto; margin: 0; padding: var(--sp-2) var(--sp-3);
+  border-left: 1px solid var(--line); background: var(--bg-1);
+}
+.vhil-scen-editor .vhil-form-title { display: flex; gap: var(--sp-2); align-items: baseline; margin-bottom: var(--sp-2); }
+.vhil-scen-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-2); }
+.vhil-scen-grid label { display: flex; flex-direction: column; gap: 2px; min-width: 0; font-size: var(--fs-dense); color: var(--fg-muted); }
+.vhil-scen-grid .vhil-input { min-height: 24px; color: var(--fg); }
+.vhil-scen-grid .--wide { grid-column: 1 / -1; }
+.vhil-scen-grid label.vhil-scen-check { flex-direction: row; align-items: center; gap: var(--sp-1); }
+.vhil-scen-fields {
+  display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-2); margin: 0; padding: var(--sp-2);
+  border: 1px solid var(--line); border-radius: var(--r-panel);
+}
+.vhil-scen-fields legend { padding: 0 var(--sp-1); font-size: var(--fs-small); color: var(--fg-muted); }
+.vhil-scen-msgs { margin: 0 0 var(--sp-2); padding-left: var(--sp-4); color: var(--status-failed);
+  font-family: var(--font-mono); font-size: var(--fs-small); }
+.vhil-scen-editor .vhil-note { overflow-wrap: anywhere; }
+
+/* -- the timeline (VhilTimeline.vue, step 11) ------------------------------- */
+
+.vhil-tl { flex: none; display: flex; flex-direction: column; border-bottom: 1px solid var(--line); }
+.vhil-tl-bar {
+  display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap;
+  padding: 2px var(--sp-3); font-size: var(--fs-dense);
+}
+.vhil-tl-bar .vhil-input { min-height: 22px; height: 22px; width: auto; color: var(--fg); }
+.vhil-tl-bar .vhil-seg-btn { height: 22px; }
+.vhil-tl-title { font-weight: 600; }
+.vhil-tl-hint { font-size: var(--fs-small); }
+.vhil-tl-legend { display: inline-flex; gap: var(--sp-2); margin-left: auto; font-size: var(--fs-small); }
+.vhil-tl-key.--actual { color: var(--status-replay); }
+.vhil-tl-body { display: flex; min-width: 0; }
+.vhil-tl-labels { flex: none; width: 92px; border-right: 1px solid var(--line); font-size: var(--fs-small); }
+.vhil-tl-axis-label { height: 18px; padding: 0 var(--sp-2); line-height: 18px; color: var(--fg-muted); }
+.vhil-tl-label {
+  height: 22px; padding: 0 var(--sp-2); line-height: 22px; box-sizing: border-box;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border-left: 3px solid transparent;
+}
+.vhil-tl-label.--bus { border-left-color: var(--wire-can); }
+.vhil-tl-label.--board { border-left-color: var(--wire-gpio); }
+/* Room under the lanes for the horizontal scrollbar, so it covers no lane. */
+.vhil-tl-scroll { flex: 1; min-width: 0; overflow-x: auto; overflow-y: hidden; padding-bottom: 10px; }
+.vhil-tl-svg { display: block; user-select: none; }
+
+.vhil-tl-axis { fill: var(--bg-1); cursor: pointer; }
+.vhil-tl-grid { stroke: var(--line); stroke-width: 1; }
+.vhil-tl-tick { fill: var(--fg-muted); font-family: var(--font-mono); font-size: 10px; }
+.vhil-tl-lane { fill: transparent; }
+.vhil-tl-lane.--odd { fill: color-mix(in srgb, var(--fg) 4%, transparent); }
+.vhil-tl-end { fill: color-mix(in srgb, var(--bg-0) 70%, transparent); }
+
+.vhil-tl-mark { cursor: grab; }
+.vhil-tl-mark:active { cursor: grabbing; }
+.vhil-tl-diamond { fill: var(--wire-can); stroke: var(--bg-0); stroke-width: 1; }
+.vhil-tl-bar-fill { fill: url(#vhil-tl-hatch); stroke: var(--wire-can); stroke-width: 1; }
+.vhil-tl-hatch { stroke: var(--wire-can); stroke-width: 2; }
+.vhil-tl-bar-start { stroke: var(--wire-can); stroke-width: 2; }
+.vhil-tl-step { fill: none; stroke: var(--wire-analog); stroke-width: 2; }
+.vhil-tl-bracket { fill: none; stroke: var(--accent); stroke-width: 1.5; }
+.vhil-tl-text { fill: var(--fg); font-family: var(--font-mono); font-size: 10px; pointer-events: none; }
+/* Selected or focused: a focus-coloured stroke (and the ring the browser draws). */
+.vhil-tl-hit { fill: transparent; }
+.vhil-tl-mark.--selected > :not(text):not(title):not(.vhil-tl-hit),
+.vhil-tl-mark:focus-visible > :not(text):not(title):not(.vhil-tl-hit) { stroke: var(--focus); stroke-width: 2.5; }
+.vhil-tl-mark.--error .vhil-tl-text { fill: var(--status-failed); text-decoration: underline; }
+
+.vhil-tl-result { cursor: pointer; }
+.vhil-tl-result circle { fill: var(--bg-1); stroke-width: 2; }
+.vhil-tl-result text { font-size: 10px; font-weight: 700; pointer-events: none; }
+.vhil-tl-result.--pass circle { stroke: var(--status-ok); }
+.vhil-tl-result.--pass text { fill: var(--status-ok); }
+.vhil-tl-result.--fail circle { stroke: var(--status-failed); fill: color-mix(in srgb, var(--status-failed) 14%, var(--bg-1)); }
+.vhil-tl-result.--fail text { fill: var(--status-failed); }
+.vhil-tl-result:focus-visible circle { stroke: var(--focus); }
+
+.vhil-tl-actual .--frames { stroke: var(--status-replay); stroke-width: 1; opacity: 0.55; }
+.vhil-tl-actual .--pin { fill: none; stroke: var(--status-replay); stroke-width: 1.5; opacity: 0.8; }
+.vhil-tl-cursor { stroke: var(--focus); stroke-width: 1.5; pointer-events: none; }
+
+.vhil-tl-gutter {
+  display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; min-height: 22px;
+  padding: 1px var(--sp-3); border-top: 1px solid var(--line); font-size: var(--fs-small);
+}
+.vhil-tl-gutter-label { width: 80px; flex: none; }
+.vhil-tl-chip {
+  height: 18px; padding: 0 var(--sp-2); color: var(--fg); background: var(--bg-2);
+  border: 1px solid var(--line); border-radius: var(--r-pill); font-size: var(--fs-small); cursor: pointer;
+}
+.vhil-tl-chip.--selected { border-color: var(--focus); background: var(--sel-bg); }
+
+/* Narrow docks: the editor under the table. */
+@media (max-width: 1500px) {
+  .vhil-scen-body { grid-template-columns: minmax(0, 1fr) minmax(16rem, 22rem); }
+  .vhil-scen-row { grid-template-columns: 4rem 4.5rem minmax(6rem, 1fr) minmax(6rem, 1.2fr) minmax(5rem, 8rem) 2rem; }
+}
