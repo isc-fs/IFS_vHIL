@@ -258,6 +258,35 @@ def test_what_the_contract_lacks_fails_the_expect_and_says_why(expect, detail):
     assert not r["passed"] and detail in r["detail"]
 
 
+def test_a_symbol_takes_the_labels_of_its_enum():
+    """The contract's `labels` (vhil/stateview.py: a DWARF enum, a state
+    view's table) label a symbol as CAN_VAL labels a field."""
+    contract = {**CONTRACT, "labels": {
+        "symbol:ams.g_state": {"0": "Start", "1": "Precharge", "5": "Error"},
+        "frame:can_acu.AMS_status.fsm_state": {"9": "Nine"}}}
+    trace = [sample(10, 0), sample(20, 1), sample(30, 1), state(40, 9)]
+
+    def run(e):
+        return vexpect.evaluate([e], trace, contract, 1_000_000)[0]
+    r = run({"check": "eventually", "signal": "symbol:ams.g_state", "value": "Precharge"})
+    assert r["passed"] and r["t_us"] == 20_000 and r["value"] == "Precharge"
+    r = run({"check": "never", "signal": "symbol:ams.g_state", "value": "Error"})
+    assert r["passed"]
+    r = run({"check": "always", "signal": "symbol:ams.g_state", "op": "!=", "value": "Start"})
+    assert not r["passed"] and r["value"] == "Start"
+    # Numbers still work; a label the enum lacks says so.
+    assert run({"check": "eventually", "signal": "symbol:ams.g_state", "value": 1})["passed"]
+    r = run({"check": "eventually", "signal": "symbol:ams.g_state", "value": "Charge"})
+    assert not r["passed"] and "not a label" in r["detail"]
+    # A view's table over a field's CAN_VAL.
+    r = run({"check": "eventually", "signal": STATE, "value": "Nine"})
+    assert r["passed"] and r["value"] == "Nine"
+    assert run({"check": "eventually", "signal": STATE, "value": "Precharge"})["passed"] is False
+    assert vexpect.evaluate([{"check": "eventually", "signal": "symbol:ams.g_state",
+                              "value": "Precharge"}], trace, CONTRACT, 1_000_000)[0]["passed"] \
+        is False
+
+
 def test_evaluate_trace_reads_a_file(tmp_path):
     path = tmp_path / "trace.jsonl"
     records = [{"kind": "run", "t_us": 0, "token": "x"}, {"kind": "log", "t_us": 0, "text": "hi"},
