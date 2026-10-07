@@ -359,7 +359,7 @@ def specification(catalog: Path = CATALOG) -> dict:
                  "description": "The role's firmware: an ECU runs the ECU firmware."},
                 ref, *tail],
             # roles: the select's values; role_info: what the node's
-            # sub-line reads in each role ("node 0x2 · FDCAN1").
+            # sub-line reads in each role ("node 0x2").
             "additionalData": {"vhil": {"kind": "board", "board": board_id,
                                         "roles": {role_choice(n, r): n
                                                   for n, r in roles.items()},
