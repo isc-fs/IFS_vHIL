@@ -116,10 +116,27 @@ took effect, the session's slice, and `virtual_ms` to where it ended. The
 editor's "Save session as scenario" opens it in the Scenario tab, and
 Commit… saves it like any scenario. Run, it gives the session's trace again:
 the same frames, edges and samples at the same virtual times
-(`tests/sim/test_live_session.py` on the AMS, from Start through Precharge to
+(`tests/sim/test_ams_live_session.py` on the AMS, from Start through Precharge to
 Run; `tests/unit/test_session.py` on the fake Sim). A session longer than
 `VHIL_MAX_VIRTUAL_MS` (10 min) records a scenario over that limit: the
 Scenario tab says so.
+
+## In the editor
+
+● Live in the top bar starts a session of the saved system (step 15 of the
+plan; `editor/pipeline-manager/CHANGELOG-VHIL.md`). The mode pill reads LIVE
+(PAUSED while paused), the topology is locked, and the top bar has the clock
+(`t=12.345 s · RTF 0.98×`), who controls the session, Pause/Resume (Space)
+and Stop. The Bus tab's Monitor and Trace stream, and its Send view composes
+a frame from the contract (or raw hex) and sends it once or periodically,
+with the senders running listed (Stop, Stop all) and a banner while any
+runs. A board's inputs (its role's routed GPIO inputs as switches, analog
+inputs as voltages; the contract's `inputs`) are in the inspector and in its
+context menu ("Inputs and analog…"). The State tab, the inspector's card and
+the node pill follow the clock; bus rails show frames a second and their CAN
+wires march while they carry traffic. Another tab that opens the run
+watches. When the session ends, it stays on the workspace as a REPLAY, and
+"Save as scenario…" puts its recording in the Scenario tab.
 
 ## Limits
 

@@ -127,6 +127,26 @@ def test_the_contract_carries_views_and_labels(tmp_path):
     assert labels["frame:can_acu.ACU_soc.soc_percent"] == {"255": "Unknown"}
 
 
+def test_a_live_sessions_inputs_are_the_roles_routed_inputs():
+    """What a live session's switches and analog inputs drive
+    (docs/live-session.md): the role's labelled GPIOs and analog inputs, but
+    for the view's own pins (the relays), the spares and a chip select."""
+    out = stateview.inputs(ams())
+    assert out["ams"] == [
+        {"pin": "PF7", "kind": "analog", "label": "S_CURRENT_P"},
+        {"pin": "PF8", "kind": "analog", "label": "S_CURRENT_N"},
+        {"pin": "PF9", "kind": "gpio", "label": "TSMS"},
+        {"pin": "PC1", "kind": "analog", "label": "S_CURRENT_DCDC"},
+        {"pin": "PF10", "kind": "gpio", "label": "RST_PIL"},
+        {"pin": "PC0", "kind": "analog", "label": "S_TEMP_DCDC"}]
+    ecu = stateview.inputs(System(REPO / "systems" / "ecu.yaml"))["ecu"]
+    assert {p["pin"]: p["kind"] for p in ecu if p["label"] in ("START", "S_BRAKE", "APPS_1")} == {
+        "PB5": "gpio", "PF7": "analog", "PF8": "analog"}
+    assert not [p for p in ecu if p["pin"] in ("PB4", "PB6")]          # RTDS, discharge: outputs
+    from vhil.server.decode import system_contract
+    assert system_contract(ams(), {})["inputs"] == out
+
+
 def test_enums_of_an_image(tmp_path):
     out = stateview.enums_of(_dwarf_elf(tmp_path / "d.elf"))
     assert out["source"] == "dwarf" and out["enums"]["ams::fsm::State"]["5"] == "Error"

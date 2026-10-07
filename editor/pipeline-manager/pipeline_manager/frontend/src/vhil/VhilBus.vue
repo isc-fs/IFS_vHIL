@@ -14,14 +14,30 @@ Both tables are rowtable.js (the shell's vtable.js window, rows reused) and
 decode with the shell's decode.js, copied into shell/ by the image build:
 one source. Only the rows in view are decoded, and a change of time,
 filter or frames draws once per animation frame.
+
+LIVE (step 15): both stream as the session's records come (replay.tick: new
+frames folded in, the Trace's index extended, nothing rebuilt), and a third
+view, Send (VhilSend.vue), composes frames and runs periodic senders; while
+any runs, a banner says so with Stop all.
 -->
 
 <template>
     <div class="vhil-bus">
+        <div
+            v-if="session.periodics.length && replay.live" class="vhil-periodic-banner"
+            role="status"
+        >
+            <span aria-hidden="true">▶</span>
+            {{ bannerCount }} running:
+            <span class="mono">{{ banner }}</span>
+            <button type="button" class="vhil-btn --small" :disabled="!!cannot" @click="stopAll">
+                ■ Stop all
+            </button>
+        </div>
         <div class="vhil-bus-bar">
             <div class="vhil-seg" role="group" aria-label="Bus view">
                 <button
-                    v-for="v in VIEWS" :key="v.id" type="button" class="vhil-seg-btn"
+                    v-for="v in views" :key="v.id" type="button" class="vhil-seg-btn"
                     :aria-pressed="view === v.id" @click="view = v.id"
                 >{{ v.label }}</button>
             </div>
@@ -44,9 +60,10 @@ filter or frames draws once per animation frame.
             <span class="vhil-bus-summary muted mono" role="status">{{ summary }}</span>
         </div>
         <p v-if="replay.state === 'idle'" class="vhil-placeholder muted">
-            Open a run from Runs in the sidebar to replay its frames here (LIVE comes with
-            step 15).
+            Open a run from Runs in the sidebar to replay its frames here, or start a live
+            session (● Live) to see them as they come.
         </p>
+        <VhilSend v-if="view === 'send' && replay.live" class="vhil-bus-send" />
         <p v-else-if="replay.state === 'loading'" class="vhil-placeholder muted">
             Loading run {{ replay.id }}: {{ replay.loaded.toLocaleString() }} frames…
         </p>
@@ -57,6 +74,10 @@ filter or frames draws once per animation frame.
         <div
             v-show="ready && view === 'monitor'" ref="monitorEl" class="vhil-bus-table --monitor"
         />
+        <p
+            v-if="ready && view !== 'send' && replay.live && noFrames"
+            class="vhil-placeholder muted"
+        >No frames yet: each board's bootloader keeps its bus quiet for the first 2 s.</p>
         <div v-show="ready && view === 'trace'" ref="traceEl" class="vhil-bus-table --trace" />
     </div>
 </template>
@@ -71,9 +92,13 @@ import RowTable from './rowtable.js';
 import { filterIndices, lastAtOrBefore } from './frames.js';
 import { Monitor, meanPeriod } from './monitor.js';
 import { loadAt, replay, store } from './replay.js';
+import VhilSend from './VhilSend.vue';
+import { cannotSend, live as session, stopAll } from './session.js';
 import './bus.css';
+import './live.css';
 
 const VIEWS = [{ id: 'monitor', label: 'Monitor' }, { id: 'trace', label: 'Trace' }];
+const SEND = { id: 'send', label: 'Send' };
 // A byte that changed in a frame less than this long before the scrubber
 // is marked (virtual µs).
 const FRESH_US = 250000;
@@ -81,8 +106,27 @@ const BYTES = 8;
 const ms = (us) => (us / 1000).toFixed(3);
 
 export default defineComponent({
+    components: { VhilSend },
     setup() {
         const view = ref('monitor');
+        const views = computed(() => (replay.live ? [...VIEWS, SEND] : VIEWS));
+        watch(() => replay.live, (on) => { if (!on && view.value === 'send') view.value = 'monitor'; });
+        const cannot = computed(() => {
+            session.version; // eslint-disable-line no-unused-expressions
+            return cannotSend();
+        });
+        const noFrames = computed(() => {
+            replay.tick; // eslint-disable-line no-unused-expressions
+            replay.version; // eslint-disable-line no-unused-expressions
+            return store.length === 0;
+        });
+        const bannerCount = computed(() => {
+            const n = session.periodics.length;
+            return `${n} periodic sender${n === 1 ? '' : 's'}`;
+        });
+        const banner = computed(() => session.periodics.slice(0, 4)
+            .map((p) => `${p.name} (${p.bus} 0x${p.id.toString(16).toUpperCase()} every ${p.period_ms} ms)`)
+            .join(', ') + (session.periodics.length > 4 ? ', …' : ''));
         const bus = ref('');
         const ids = ref('');
         const idsError = ref('');
@@ -103,6 +147,7 @@ export default defineComponent({
         let rows = []; // Monitor: the rows that pass the filters
         let traceIdx = []; // Trace: frame indices that pass the filters
         let traceFor = ''; // what traceIdx was built for
+        let traceUpTo = 0; // the frames traceIdx covers (a live session extends it)
         let cursor = -1; // Trace: the position of the last frame at the time
         let keep = () => true;
         const decoded = new Map(); // frame index -> decoded text (rows in view only)
@@ -200,6 +245,7 @@ export default defineComponent({
         // -- drawing: at most once per animation frame -------------------------
         let raf = 0;
         let lastVersion = -1;
+        let lastDropped = 0;
         const timings = []; // ms per draw, the last 600 (window.vhilBusTimings)
 
         const draw = () => {
@@ -213,20 +259,33 @@ export default defineComponent({
                 monitor = new Monitor(store);
                 traceFor = '';
             }
+            if (store.dropped !== lastDropped) {
+                // The ring dropped its oldest: every frame index moved.
+                lastDropped = store.dropped;
+                decoded.clear();
+            }
             if (view.value === 'monitor') {
                 rows = monitor.update(replay.t)
                     .filter((row) => (!bus.value || row.bus === bus.value)
                         && keep(row.id, dec.lookup(replay.contract, row)?.name));
                 monitorTable.setCount(rows.length);
-            } else {
-                const want = `${bus.value}|${ids.value}|${store.version}`;
+            } else if (view.value === 'trace') {
+                const pass = (i) => {
+                    const f = store.frame(i);
+                    return (!bus.value || f.bus === bus.value)
+                        && keep(f.id, dec.lookup(replay.contract, f)?.name);
+                };
+                // Rebuilt when the filter or the frames change; frames only
+                // appended (a live session's) extend it.
+                const want = `${bus.value}|${ids.value}|${store.generation}|${store.dropped}`;
                 if (traceFor !== want) {
                     traceFor = want;
-                    traceIdx = filterIndices(store, (i) => {
-                        const f = store.frame(i);
-                        return (!bus.value || f.bus === bus.value)
-                            && keep(f.id, dec.lookup(replay.contract, f)?.name);
-                    });
+                    traceIdx = filterIndices(store, pass);
+                    traceUpTo = store.length;
+                    traceTable.setCount(traceIdx.length);
+                } else if (traceUpTo < store.length) {
+                    for (let i = traceUpTo; i < store.length; i += 1) if (pass(i)) traceIdx.push(i);
+                    traceUpTo = store.length;
                     traceTable.setCount(traceIdx.length);
                 }
                 cursor = lastAtOrBefore(store, traceIdx, replay.t);
@@ -251,7 +310,7 @@ export default defineComponent({
         });
         watch(bus, () => { traceFor = ''; schedule(); });
         watch(view, schedule, { flush: 'post' });
-        watch(() => [replay.t, replay.version, replay.state], schedule);
+        watch(() => [replay.t, replay.version, replay.state, replay.tick], schedule);
 
         const pickTime = (i) => {
             const fi = traceIdx[i];
@@ -283,6 +342,7 @@ export default defineComponent({
         const summary = computed(() => {
             replay.version; // eslint-disable-line no-unused-expressions
             if (replay.state !== 'ready') return '';
+            replay.tick; // eslint-disable-line no-unused-expressions
             const kept = store.dropped ? ` (${store.dropped.toLocaleString()} dropped)` : '';
             const pct = (x) => `${Math.round(x * 100)} %`;
             const loads = (bus.value ? [bus.value] : buses.value).map((b) => {
@@ -290,11 +350,18 @@ export default defineComponent({
                 return l && `${b} ${l.exact ? '' : '~'}${pct(l.load)} (peak ${pct(l.peak)})`;
             }).filter(Boolean);
             const load = loads.length ? ` · load ${loads.join(', ')}` : '';
-            return `run ${replay.id} · ${store.length.toLocaleString()} frames${kept}${load}`;
+            const live = replay.live ? 'LIVE ' : '';
+            return `${live}run ${replay.id} · ${store.length.toLocaleString()} frames${kept}${load}`;
         });
 
         return {
-            VIEWS,
+            views,
+            session,
+            cannot,
+            banner,
+            bannerCount,
+            stopAll,
+            noFrames,
             replay,
             view,
             bus,

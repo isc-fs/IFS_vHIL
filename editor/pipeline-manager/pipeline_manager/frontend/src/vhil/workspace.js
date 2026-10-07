@@ -7,19 +7,25 @@
  * through POST /api/runs (shell/editor-run.js, the shell's own copy). Step 9
  * adds REPLAY of a run (openRun; replay.js), which the shell's #/runs/<id>
  * now opens; step 10 the system's scenarios (scenarios.js): Run runs the
- * selected one, Commit… commits it too, and its problems are listed.
+ * selected one, Commit… commits it too, and its problems are listed. Step 15
+ * adds LIVE: a live session of the saved system (startLive, openRun of a
+ * running live run; session.js), its topology locked, PAUSED while paused,
+ * REPLAY of the same records once it ends, and its recording saved as a
+ * scenario (saveSession).
  */
 
 import { reactive, watch } from 'vue';
 import { call, runPage } from './api.js';
 import {
     centerOn, entryGraph, loadGraph, nodeById, nodeName, nodeOfMessage, prop,
-    propValue, saveDataflow, selectNode, setProp, signature,
+    propValue, saveDataflow, selectNode, setLocked, setProp, signature,
 } from './graph.js';
 import { setTheme, THEMES } from './theme.ts';
 import {
-    clearReplay, loadRun, replay, runRecord, store as frames,
+    beginLive, clearReplay, endLive, loadRun, replay, runRecord, store as frames,
 } from './replay.js';
+import * as session from './session.js';
+import { recordedDoc } from './live.js';
 /* eslint-disable import/no-unresolved, import/extensions -- copied by the build */
 import {
     firmwareRefs, frameCounts, runBlocker, runRequest,
@@ -28,8 +34,8 @@ import {
 import { terminalStore } from '../core/stores.js';
 import NotificationHandler from '../core/notifications.js';
 import {
-    bindWorkspace, clearScenario, commitScenario, loadContract, loadScenarios, newScenario, scen,
-    scenarioProblems, selectScenario, setResults,
+    bindWorkspace, clearScenario, commitScenario, edited, loadContract, loadScenarios, newScenario,
+    scen, scenarioProblems, selectScenario, setResults,
 } from './scenarios.js';
 
 const TERMINAL = new Set(['passed', 'failed', 'error', 'cancelled']);
@@ -109,8 +115,11 @@ export const ws = reactive({
     selectedId: null,
     layout: { ...LAYOUT, ...(stored(LAYOUT_KEY) || {}) },
     picker: null, // the open ref picker: {nodeId, anchor}
-    dialog: null, // 'commit' | 'pr' | 'shortcuts'
+    dialog: null, // 'commit' | 'pr' | 'shortcuts' | 'save-session'
 });
+
+/** LIVE or PAUSED: a live session on the workspace. */
+export const isLive = () => ws.mode === 'LIVE' || ws.mode === 'PAUSED';
 
 watch(() => ws.layout, (v) => store(LAYOUT_KEY, v), { deep: true });
 
@@ -197,13 +206,20 @@ function remember() {
     window.history.replaceState(null, '', u);
 }
 
-/** Leaves REPLAY for DESIGN. */
+/** Leaves REPLAY (or a live session, which goes on without this tab) for DESIGN. */
 export function exitReplay() {
-    if (!replay.id && ws.mode !== 'REPLAY') return;
+    if (!replay.id && ws.mode !== 'REPLAY' && !isLive()) return;
+    session.leave();
+    setLocked(false);
     clearReplay();
     ws.mode = 'DESIGN';
     remember();
 }
+
+// A paused session reads PAUSED on the mode pill.
+watch(() => session.live.paused, (paused) => {
+    if (isLive()) ws.mode = paused ? 'PAUSED' : 'LIVE';
+});
 
 const today = () => new Date().toISOString().slice(0, 10).replace(/-/g, '');
 
@@ -479,6 +495,13 @@ export function openRun(id, { tab = 'bus' } = {}) {
         if (run.system !== ws.id) {
             await open(run.system, { branch: run.ref_name || '', keepReplay: true });
         }
+        if (run.scenario?.live && !TERMINAL.has(run.state)) {
+            // eslint-disable-next-line no-use-before-define
+            enterLive(run);
+            return;
+        }
+        session.leave();
+        setLocked(false);
         ws.mode = 'REPLAY';
         ws.layout.dock = true;
         ws.layout.dockTab = tab;
@@ -507,6 +530,105 @@ export function openRun(id, { tab = 'bus' } = {}) {
 }
 
 export const runActive = () => ws.run && !TERMINAL.has(ws.run.state);
+
+// -- LIVE ---------------------------------------------------------------------------
+
+/** The live session ended (stopped, idle, cancelled): what it streamed stays,
+ *  now a REPLAY of the run, whose clock scrubs it. */
+async function liveEnded(state) {
+    setLocked(false);
+    let run = null;
+    try { run = await runRecord(replay.id); } catch { /* the record as it was */ }
+    endLive(run);
+    ws.mode = 'REPLAY';
+    document.title = `run ${replay.id} · ${ws.id} · IFS vHIL`;
+    if (ws.run && ws.run.id === replay.id) ws.run.state = state;
+    const s = run?.summary || {};
+    const why = { op: 'stopped', idle: 'stopped: idle', end: 'reached its cap' }[s.stopped] || state;
+    say(`Live session ${replay.id} ${why}: replaying it`);
+    NotificationHandler.showToast(state === 'passed' ? 'info' : 'warning',
+        `Live session ${replay.id} ${why}`);
+    loadRuns();
+}
+
+/** LIVE on run `run` (a running live session): its records stream into the
+ *  Bus, State and Log; this tab controls it if the server gives it control. */
+function enterLive(run) {
+    ws.picker = null;
+    beginLive(run);
+    ws.mode = 'LIVE';
+    setLocked(true);
+    ws.layout.dock = true;
+    if (!['bus', 'state'].includes(ws.layout.dockTab)) ws.layout.dockTab = 'state';
+    session.connect(run, {
+        control: true, log, say, onEnd: liveEnded,
+    });
+    remember();
+    document.title = `LIVE run ${run.id} · ${run.system} · IFS vHIL`;
+    say(`Live session ${run.id} on ${run.system}: the boards boot through their bootloaders first`);
+}
+
+/** Starts a live session of the saved system (as Run starts a run). */
+export function startLive() {
+    return guarded('Live', async () => {
+        if (isLive()) throw new Error(`live session ${replay.id} is on: stop it first`);
+        if (runActive()) throw new Error(`run ${ws.run.id} is still ${ws.run.state}: stop it first`);
+        let dataflow = null;
+        let current = null;
+        if (ws.id && !ws.isNew) {
+            dataflow = currentGraph();
+            current = (await previewYaml()).yaml;
+        }
+        const why = runBlocker({
+            id: ws.id, isNew: ws.isNew, saved: ws.savedYaml, current, virtualMs: 1,
+        });
+        if (why) {
+            say('No live session', 'warning', why.replace('Run then runs', 'Live then runs'));
+            return;
+        }
+        const body = runRequest({
+            system: ws.id, ref: ws.runRef, dataflow, virtualMs: 1,
+        });
+        // Open-ended: the server caps it (VHIL_MAX_LIVE_MS).
+        body.scenario = { kind: 'run', live: true };
+        let out;
+        try {
+            out = await call('POST', '/api/runs', body);
+        } catch (e) {
+            say('Live session refused', 'error', e.errors || [e.message]);
+            return;
+        }
+        exitReplay();
+        log(`live session ${out.run_id} queued: ${body.system}${body.ref ? ` @ ${body.ref.slice(0, 8)}` : ''}`);
+        enterLive(await runRecord(out.run_id));
+        loadRuns();
+    });
+}
+
+/** Pause, resume, stop or keep alive the live session. */
+export const pauseLive = () => session.send({ kind: session.live.paused ? 'resume' : 'pause' });
+export const stopLive = () => session.send({ kind: 'stop' });
+export const keepAlive = () => session.send({ kind: 'keepalive' });
+
+/** "Save session as scenario": the session's applied ops as a new scenario of
+ *  the open system, in the Scenario tab; Commit… saves it. */
+export function saveSession(name) {
+    return guarded('Save session', async () => {
+        if (!replay.id) throw new Error('no live session on the workspace');
+        const out = await call('GET', `/api/runs/${replay.id}/session/scenario`);
+        if (!newScenario(name, out.scenario.virtual_ms)) return false;
+        Object.assign(scen.doc, recordedDoc(out.scenario));
+        edited();
+        ws.commit.scenario = true;
+        ws.commit.scenarioMessage = `test(scenarios): add ${ws.id}/${name}`;
+        ws.layout.dock = true;
+        ws.layout.dockTab = 'scenario';
+        remember();
+        say(`Scenario ${name}: ${out.ops} op(s) of session ${replay.id}`
+            + `${out.final ? '' : ' so far'}; Run replays it, Commit… saves it`);
+        return true;
+    });
+}
 
 // Follow a run over /api/runs/{id}/live until it ends: frames counted per bus
 // (not the scenario's own), its log lines into the Log.
@@ -583,6 +705,7 @@ async function scenarioRunEnded(id) {
 
 export function runNow() {
     return guarded('Run', async () => {
+        if (isLive()) throw new Error(`live session ${replay.id} is on: stop it first`);
         if (runActive()) throw new Error(`run ${ws.run.id} is still ${ws.run.state}: stop it first`);
         exitReplay();
         const scenario = scen.name && scen.doc ? { name: scen.name, doc: scen.doc } : null;
@@ -622,6 +745,10 @@ export function runNow() {
 
 export function stopRun() {
     return guarded('Stop', async () => {
+        if (isLive()) {
+            stopLive();
+            return;
+        }
         if (!runActive()) throw new Error('no run in progress');
         await call('POST', `/api/runs/${ws.run.id}/cancel`);
         say(`Run ${ws.run.id}: stop requested`);

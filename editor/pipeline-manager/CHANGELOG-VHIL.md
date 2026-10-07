@@ -371,6 +371,55 @@ from `git archive 04613679` except as listed below.
       reads "✕ fault" and is ringed, and so is the board's card (`:has()`);
       "stale" and dashed when its state went silent.
 
+19. **LIVE** (step 15 of the editor workspace plan; [live
+    sessions](../../docs/live-session.md)).
+    - **The session** (`session.js`): a live run's two WebSockets, its trace
+      as it is written (`/api/runs/<id>/live`: frames, samples, edges and
+      logs into the REPLAY store and model, `replay.js` `beginLive` and
+      `feedLive`; its `op` and `clock` records into the session's state) and
+      its channel (`/api/runs/<id>/session`: ops out, acks and control in).
+      Records are flushed every 50 ms at most. Every tab on the run folds the
+      same `op` records (`live.js` `SessionState`, pure,
+      `tests/js/live.test.mjs`), so the one that controls the session and
+      the ones that watch show the same periodic senders and pin levels.
+    - **The workspace** (`workspace.js`): ● Live starts a live session of the
+      saved system (`startLive`, refused as Run is with unsaved edits);
+      opening a running live run (Runs, `?run=`) joins it, as its controller
+      if the server gives control, else view only. The mode pill reads LIVE,
+      PAUSED while paused; the topology is locked (Pipeline Manager's own
+      read-only mode, `graph.js` `setLocked`); when the session ends, what it
+      streamed stays as a REPLAY of the run. "Save as scenario…"
+      (`VhilDialogs.vue`) opens the session's recording
+      (`GET /api/runs/<id>/session/scenario`) as a new scenario in the
+      Scenario tab, which Commit… saves.
+    - **The top bar** (`VhilTopBar.vue`): in LIVE, the run, the clock
+      ("t=12.345 s · RTF 0.98×"), who controls it (Take control once it is
+      free), the idle countdown in its last five minutes with Keep alive,
+      Pause/Resume (Space) and Stop (Shift+F5), and Leave.
+    - **The Bus tab** (`VhilBus.vue`): Monitor and Trace stream (a live
+      batch bumps `replay.tick`: the Monitor folds the new frames, the
+      Trace's index grows, nothing is rebuilt); a Send view (`VhilSend.vue`)
+      composes a frame from the contract's decoded fields or raw hex and
+      sends it once or every N ms as a named periodic (a period under 5 ms
+      asks first), and lists the senders running with Stop and Stop all; a
+      banner says while any runs.
+    - **Inputs** (`VhilInputs.vue`): a board's GPIO inputs as `role="switch"`
+      buttons reading HIGH/LOW, its analog inputs as a voltage with Set, from
+      the contract's `inputs` (`vhil/stateview.py`); in the inspector, and
+      from the board's context menu ("Inputs and analog…",
+      `custom/CustomNode.vue`, a panel `VhilInputsMenu.vue`).
+    - **The canvas**: a bus rail reads its frames a second
+      (`custom/CustomNode.vue`), and a CAN wire whose bus carried frames in
+      the last second marches, four steps a second, still under
+      prefers-reduced-motion (`custom/connection/ConnectionView.vue`
+      `--traffic`, `live.css`). The State tab, the inspector's card and the
+      node pill follow the session's clock.
+    - **The bootloader's window** (`state.js`): before 2 s a card says "in
+      bootloader" and the pill "AMS · bootloader", not the app's first state
+      read from RAM that is still 0.
+    - **The status strip** (`VhilStatus.vue`): the clock, each bus's frames a
+      second, the periodic senders running and Stop all.
+
 ## Left for later
 
 - **Light theme polish** (owner decision: defined now, polished later).

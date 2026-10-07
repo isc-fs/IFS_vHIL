@@ -11,6 +11,16 @@
 const cookie = (name) => document.cookie.split('; ')
     .find((c) => c.startsWith(`${name}=`))?.slice(name.length + 1);
 
+/** The session's CSRF token (the vhil_csrf cookie), or '' in dev mode: a
+ *  live session's hello carries it to take control (vhil/server/session.py). */
+export function csrfToken() {
+    const c = cookie('vhil_csrf');
+    return c ? decodeURIComponent(c) : '';
+}
+
+/** A WebSocket URL on this origin. */
+export const wsUrl = (path) => `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}${path}`;
+
 /** A refused request: `errors` lists what the server said, `status` its code. */
 export class ApiError extends Error {
     constructor(errors, status, detail) {

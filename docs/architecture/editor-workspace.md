@@ -361,7 +361,16 @@ In the owner's order.
     session's trace exactly (on the AMS through Precharge to Run).
 15. **Live UI** (feature 3b). LIVE mode with topology locked; Transmit with
     periodic management and "stop all"; pin switches and analog set; wire
-    frames/s and a throttled dash march; Record → scenario.
+    frames/s and a throttled dash march; Record → scenario. Done: ● Live in
+    the top bar (clock with RTF, Pause/Resume, Stop, who controls it);
+    the Bus tab streams and gains Send (the Transmit of the plan: contract
+    fields or raw hex, once or periodic, the senders running with Stop all
+    and a banner); a board's inputs as switches and voltages in the
+    inspector and its context menu, from the contract's `inputs`; bus rails
+    with frames/s, CAN wires marching at 4 Hz while their bus carries
+    traffic; the State cards and node pills follow the clock, and say "in
+    bootloader" for the first 2 s; "Save as scenario…" opens the recording
+    in the Scenario tab. A second tab on the run watches.
 16. **GDB plumbing** (feature 4a). Renode GDB server per machine on demand,
     an MI proxy per board, lockstep pause in the clock heartbeat and top bar.
 17. **Debug tab** (feature 4b). Source, breakpoints, stepping, inspector

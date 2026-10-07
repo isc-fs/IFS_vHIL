@@ -6,12 +6,13 @@
  */
 
 import {
-    ws, DOCK_TABS, runNow, stopRun,
+    ws, DOCK_TABS, isLive, pauseLive, runNow, stopRun,
 } from './workspace.js';
 
 export const SHORTCUTS = [
     ['F5', 'Run the saved system'],
-    ['Shift+F5', 'Stop the run'],
+    ['Shift+F5', 'Stop the run (LIVE: the session)'],
+    ['Space', 'LIVE: pause or resume the session'],
     ['Ctrl+B', 'Show or hide the sidebar'],
     ['Ctrl+J', 'Show or hide the dock'],
     ...DOCK_TABS.map((t, i) => [`Ctrl+${i + 1} / Alt+${i + 1}`, `Dock: ${t.label}`]),
@@ -48,6 +49,12 @@ export function onKeyDown(ev) {
     }
     if (ev.key === 'Escape' && ws.picker) {
         ws.picker = null;
+        return;
+    }
+    if (ev.key === ' ' && !mod && isLive() && !typing(ev.target) && !ws.dialog
+        && !ev.target?.closest?.('button, a, [role="switch"]')) {
+        ev.preventDefault();
+        pauseLive();
         return;
     }
     if (ev.key === '?' && !mod && !typing(ev.target) && !ws.dialog) {

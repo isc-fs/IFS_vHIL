@@ -53,6 +53,7 @@ in src/vhil/.
             <VhilStatus :tick="tick" />
             <VhilRefPicker :tick="tick" />
             <VhilDialogs />
+            <VhilInputsMenu />
         </div>
     </div>
 </template>
@@ -75,6 +76,7 @@ import VhilDock from '../vhil/VhilDock.vue';
 import VhilStatus from '../vhil/VhilStatus.vue';
 import VhilRefPicker from '../vhil/VhilRefPicker.vue';
 import VhilDialogs from '../vhil/VhilDialogs.vue';
+import VhilInputsMenu from '../vhil/VhilInputsMenu.vue';
 import '../vhil/workspace.css';
 import {
     ws, refreshDirty, setCanvas, start,
@@ -95,6 +97,7 @@ export default {
         VhilStatus,
         VhilRefPicker,
         VhilDialogs,
+        VhilInputsMenu,
     },
     setup() {
         const editorManager = EditorManager.getEditorManagerInstance();

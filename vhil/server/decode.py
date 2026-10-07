@@ -58,7 +58,7 @@ def run_contract(run: dict, workspace: Path, fw_dir: Path) -> dict:
         system = System(path)
     except (OSError, SystemError) as e:
         return {"buses": {}, "boards": {}, "conflicts": [], "state": {}, "labels": {},
-                "error": f"system '{run['system']}': {e}"}
+                "inputs": {}, "error": f"system '{run['system']}': {e}"}
     return system_contract(system, board_elfs(run, system, fw_dir))
 
 
@@ -106,6 +106,8 @@ def system_contract(system: System, elfs: dict[str, Path]) -> dict:
     # labels expects and the scenario editor accept.
     out["state"] = stateview.view(system, elfs, out)
     out["labels"] = stateview.labels(system, elfs, out)
+    # What a live session's pin switches and analog inputs drive.
+    out["inputs"] = stateview.inputs(system)
     return out
 
 
