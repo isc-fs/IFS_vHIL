@@ -4,7 +4,9 @@
  * the shell's Editor page (vhil/server/static/editor.js) did around the
  * editor before it moved in here: open a system, pick firmware refs, check,
  * commit to a branch, open a PR, and Run, a normal run of the saved system
- * through POST /api/runs (shell/editor-run.js, the shell's own copy).
+ * through POST /api/runs (shell/editor-run.js, the shell's own copy). Step 9
+ * adds REPLAY of a run (openRun; replay.js), which the shell's #/runs/<id>
+ * now opens.
  */
 
 import { reactive, watch } from 'vue';

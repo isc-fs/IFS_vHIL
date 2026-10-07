@@ -78,7 +78,7 @@ def test_the_shells_runs_and_systems_redirect_into_the_workspace():
     inspect = (STATIC / "inspect.js").read_text()
     assert "`#/classic/runs/${id}/${t}`" in inspect and 'href="/editor/?run=' in inspect
     assert "#/classic/runs/" in (STATIC / "runs.js").read_text()
-    assert "'/#/classic/runs/" in (VHIL / "api.js").read_text()
+    assert "`/#/classic/runs/${id}`" in (VHIL / "api.js").read_text()
     workspace = (VHIL / "workspace.js").read_text()
     assert "const run = Number(q.get('run'));" in workspace and "await openRun(run);" in workspace
 
