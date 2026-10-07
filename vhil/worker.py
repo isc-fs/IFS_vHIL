@@ -54,6 +54,7 @@ import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import traceback
@@ -283,7 +284,25 @@ def _us(ms) -> int:
 def execute_run(sim, scenario: dict, trace: TraceWriter, *,
                 cancelled: Callable[[], bool] = lambda: False,
                 progress: Callable[[int], None] = lambda us: None,
-                state_view: bool = False, session=None) -> dict:
+                state_view: bool = False, session=None, debug_hub=None) -> dict:
+    """execute_scenario, and every board a live session debugged let go
+    before the Sim stops (docs/debugger.md). debug_hub: makes the session's
+    DebugHub from the Sim (a test's fake; default vhil.gdb.DebugHub)."""
+    hub: dict = {"dbg": None}
+    try:
+        return execute_scenario(sim, scenario, trace, cancelled=cancelled, progress=progress,
+                                state_view=state_view, session=session, debug_hub=debug_hub,
+                                hub=hub)
+    finally:
+        if hub["dbg"] is not None:
+            hub["dbg"].close_all()
+
+
+def execute_scenario(sim, scenario: dict, trace: TraceWriter, *,
+                     cancelled: Callable[[], bool] = lambda: False,
+                     progress: Callable[[int], None] = lambda us: None,
+                     state_view: bool = False, session=None, debug_hub=None,
+                     hub: Optional[dict] = None) -> dict:
     """Drive a started Sim through a `run` scenario (runs.RunScenario as a
     dict); returns the summary. Times in the scenario are virtual time from
     the system's power-on. Raises Cancelled when `cancelled()` turns true at
@@ -298,7 +317,14 @@ def execute_run(sim, scenario: dict, trace: TraceWriter, *,
     time; pause holds virtual time where it is until resume; stop ends the run
     at that slice's end; an idle session (no op for session.idle_s) stops as
     a stop does. Each slice also writes a `clock` record, and the session
-    paces virtual time to wall time."""
+    paces virtual time to wall time.
+
+    A session's `debug` ops attach GDB to a board and drive it (vhil/gdb.py,
+    docs/debugger.md): with a debugger attached each slice's RunFor runs in a
+    thread, and when a board stops (a breakpoint, a step) the whole system
+    is held where it is, the stop is written into the trace with a paused
+    `clock` record, and debug ops and controls are taken until every board
+    runs again; stimuli wait for the next slice boundary."""
     end_us = int(scenario["virtual_ms"]) * 1000
     slice_us = int(scenario.get("slice_ms", 100)) * 1000
     system = sim.system
@@ -510,11 +536,68 @@ def execute_run(sim, scenario: dict, trace: TraceWriter, *,
             return "refused", None, str(e).strip("'\"")
         return "applied", t_us, ""
 
+    # -- a live session's debugger (docs/debugger.md) ---------------------------------
+    hub = {"dbg": None} if hub is None else hub
+    inflight: set[int] = set()      # deferred debug ops, settled when the board stops
+
+    def debugger():
+        if hub["dbg"] is None:
+            if debug_hub is not None:
+                hub["dbg"] = debug_hub(sim)
+            else:
+                from vhil.gdb import DebugHub
+                hub["dbg"] = DebugHub(sim, Path(tempfile.mkdtemp(prefix="vhil-gdb-")))
+        return hub["dbg"]
+
+    def debug_op(row: dict, now: int, held: bool) -> tuple[Optional[tuple], list[dict]]:
+        """A `debug` op: (its settlement or None when deferred, trace records)."""
+        from vhil.gdb import DEFERRED, QUERY_CMDS
+        op = row["op"]
+        if live["stop"]:
+            status, result, detail, recs = "refused", None, "the session is stopping", []
+        else:
+            status, result, detail, recs = debugger().apply(op, now, held=held,
+                                                           paused=live["paused"], row=row)
+        if status == DEFERRED:
+            inflight.add(row["id"])
+            return None, recs
+        live["applied" if status == "applied" else "refused"] += 1
+        if op["cmd"] not in QUERY_CMDS or status != "applied":
+            rec = {"kind": "op", "t_us": now, "op_id": row["id"], "op": op, "status": status,
+                   "login": row.get("login", "")}
+            if detail:
+                rec["detail"] = detail
+            recs = [rec] + recs
+        return (row["id"], status, now if status == "applied" else None, detail, result), recs
+
+    def settle_deferred(settled: list, now: int) -> list[dict]:
+        """Deferred debug ops the hub settled: into the DB; their op records."""
+        out, rows = [], []
+        for row, status, result, detail in settled:
+            inflight.discard(row.get("id"))
+            live["applied" if status == "applied" else "refused"] += 1
+            rows.append((row["id"], status, now if status == "applied" else None, detail, result))
+            rec = {"kind": "op", "t_us": now, "op_id": row["id"], "op": row["op"],
+                   "status": status, "login": row.get("login", "")}
+            if detail:
+                rec["detail"] = detail
+            out.append(rec)
+        session.settle(rows)
+        return out
+
     def take_ops(now: int, t_us: int) -> None:
         """The pending ops, applied in order; their records into the trace (a
         stimulus's at its time, in the slice that reaches it)."""
         settled, now_records = [], []
         for row in session.take(now):
+            if row["id"] in inflight:
+                continue
+            if row["op"]["kind"] == "debug":
+                s, recs = debug_op(row, now, held=False)
+                if s is not None:
+                    settled.append(s)
+                now_records += recs
+                continue
             status, applied_at, detail = apply(row, now, t_us)
             live["applied" if status == "applied" else "refused"] += 1
             settled.append((row["id"], status, applied_at, detail))
@@ -550,6 +633,104 @@ def execute_run(sim, scenario: dict, trace: TraceWriter, *,
                 raise Cancelled({"frames": frames, "sent": sent, **counts,
                                  "bus_load": load_summary(loads)})
         session.pace(now, t_us)
+
+    def held(now: int, busy: bool) -> None:
+        """Service the debuggers; while a board is stopped, the system is
+        held (a halted CPU holds Renode's time source, so every board stops
+        at the next sync point and no firmware timeout fires): show the stop,
+        take the debug ops and the controls until every board runs again.
+        `busy`: a RunFor waits on the stopped board, so the monitor is busy
+        and stimuli wait for the next slice boundary."""
+        dbg = hub["dbg"]
+        settled, recs, shown = dbg.service(now)
+        recs = settle_deferred(settled, now) + recs
+        if not dbg.stopped():
+            if recs:
+                trace.write(recs)
+            return
+        while True:
+            for board, stop in shown:
+                recs.append(dbg.stop_record(now, board, stop))
+            if shown:
+                recs.append({**session.clock(now, paused=True), "debug": dbg.where()})
+            if recs:
+                trace.write(recs)
+            recs, shown = [], []
+            if not dbg.stopped():
+                break
+            out = []
+            for row in session.take(now):
+                kind = row["op"]["kind"]
+                if row["id"] in inflight or kind not in ("debug", "stop", "resume", "pause",
+                                                         "keepalive"):
+                    continue        # a stimulus waits for the next boundary
+                if kind == "debug":
+                    s, r = debug_op(row, now, held=busy)
+                    if s is not None:
+                        out.append(s)
+                    recs += r
+                    continue
+                if kind == "stop":
+                    dbg.close_all()
+                    live["stop"] = live["stop"] or "op"
+                    recs.append({"kind": "debug", "t_us": now, "board": "", "event": "detached"})
+                elif kind == "resume":
+                    live["paused"] = False
+                    dbg.resume_all()
+                elif kind == "pause":
+                    live["paused"] = True        # held after the board goes on too
+                live["applied"] += 1
+                out.append((row["id"], "applied", now, ""))
+                recs.append({"kind": "op", "t_us": now, "op_id": row["id"], "op": row["op"],
+                             "status": "applied", "login": row.get("login", "")})
+            session.settle(out)
+            if not live["stop"] and session.idle():
+                live["stop"] = "idle"
+                dbg.close_all()
+                recs.append({"kind": "log", "t_us": now,
+                             "text": f"live session idle for {session.idle_s:g} s: stopping"})
+            if dbg.stopped():
+                session.wait()
+                progress(now)
+                if cancelled():
+                    dbg.close_all()
+                    raise Cancelled({"frames": frames, "sent": sent, **counts,
+                                     "bus_load": load_summary(loads)})
+            settled, more, shown = dbg.service(now)
+            recs += settle_deferred(settled, now) + more
+        trace.write(recs + [{"kind": "debug", "t_us": now, "board": "", "event": "running"},
+                            session.clock(now, paused=live["paused"])])
+        session.rebase(now)
+
+    def run_slice(now: int, us: int) -> int:
+        """sim.run_for, or with a debugger attached, RunFor in a thread while
+        this one services the debuggers (a stopped board holds it)."""
+        if hub["dbg"] is None or not hub["dbg"].active():
+            return sim.run_for(us=us)
+        box: dict = {}
+
+        def body() -> None:
+            try:
+                box["t"] = sim.run_for(us=us)
+            except BaseException as e:  # noqa: BLE001 - raised in this thread below
+                box["e"] = e
+
+        th = threading.Thread(target=body, name="run-for", daemon=True)
+        th.start()
+        try:
+            while True:
+                th.join(0.02)
+                if hub["dbg"].active():
+                    held(now, busy=th.is_alive())
+                if not th.is_alive():
+                    break
+        finally:
+            if th.is_alive():
+                hub["dbg"].close_all()      # an error or a cancel: let the board go
+                th.join(60)
+        if "e" in box:
+            raise box["e"]
+        return box["t"]
 
     def start_samplers(now: int) -> None:
         for first, period, w in samplers:
@@ -624,7 +805,7 @@ def execute_run(sim, scenario: dict, trace: TraceWriter, *,
                     # the end of the slice they were scheduled for.
                     end_us = min(end_us, slice_end)
         target = min([end_us, slice_end] + ([events[0][0]] if events else []))
-        new = sim.run_for(us=max(target - now, 1))
+        new = run_slice(now, max(target - now, 1))
         if new <= now:
             raise RuntimeError(f"virtual time stuck at {now} us")
         now = new

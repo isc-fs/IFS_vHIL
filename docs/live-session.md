@@ -85,6 +85,7 @@ worker gives it), and four controls:
 | `pause`, `resume` | hold virtual time where it is, and go on |
 | `stop` | end the session at the end of the next slice |
 | `keepalive` | nothing, but the session is not idle |
+| `debug` | a board's debugger: breakpoints, stepping, the stack, locals and registers ([debugger.md](debugger.md)); never in the recording |
 
 **Where an op takes effect.** The API and the workers share only the
 database and the runs volume (docs/deploy.md), so an op goes through the

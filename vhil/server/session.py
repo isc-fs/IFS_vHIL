@@ -64,6 +64,11 @@ from vhil.system import System, SystemError
 
 STIMULI = ("can_send", "can_periodic", "stop_periodic", "gpio", "analog", "watch")
 CONTROLS = ("pause", "resume", "stop", "keepalive")
+# A board's debugger (docs/debugger.md; vhil/gdb.py check_op): not a
+# stimulus, never in a session's recording.
+DEBUG = "debug"
+# A settled op's result (a debug query's frames, locals...) in the database.
+MAX_RESULT = 64 << 10
 # The control lease: how long it holds without a renewal, and how often an
 # open connection renews it.
 LEASE_S = 15.0
@@ -82,7 +87,8 @@ CREATE TABLE IF NOT EXISTS session_ops (
     created REAL NOT NULL,
     state   TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('pending','applied','refused')),
     at_us   INTEGER,
-    detail  TEXT NOT NULL DEFAULT ''
+    detail  TEXT NOT NULL DEFAULT '',
+    result  TEXT
 );
 CREATE INDEX IF NOT EXISTS session_ops_run ON session_ops (run, state, id);
 CREATE TABLE IF NOT EXISTS session_control (
@@ -101,6 +107,10 @@ class SessionStore(RunStore):
         super().__init__(path)
         with self._connect() as db:
             db.executescript(_SCHEMA)
+            # A debug op's result (docs/debugger.md): a column added to a
+            # database from before the debugger.
+            if "result" not in {r[1] for r in db.execute("PRAGMA table_info(session_ops)")}:
+                db.execute("ALTER TABLE session_ops ADD COLUMN result TEXT")
 
     def _tx(self, fn):
         db = self._connect()
@@ -136,13 +146,21 @@ class SessionStore(RunStore):
             "SELECT id, op, login FROM session_ops WHERE run = ? AND state = 'pending' "
             "ORDER BY id", (run_id,))]
 
-    def settle(self, run_id: int, settled: list[tuple[int, str, Optional[int], str]]) -> None:
-        """[(op id, applied | refused, at_us, detail)], in one write."""
+    def settle(self, run_id: int, settled: list[tuple]) -> None:
+        """[(op id, applied | refused, at_us, detail[, result])], in one
+        write; a debug op's result is kept as JSON, up to MAX_RESULT bytes."""
+        def row(s):
+            op_id, st, at, detail = s[:4]
+            result = s[4] if len(s) > 4 else None
+            text = None if result is None else json.dumps(result, separators=(",", ":"))
+            if text is not None and len(text) > MAX_RESULT:
+                text = json.dumps({"error": f"the result is over {MAX_RESULT >> 10} KiB"})
+            return st, at, detail, text, op_id, run_id
         if settled:
             self._tx(lambda db: db.executemany(
-                "UPDATE session_ops SET state = ?, at_us = ?, detail = ? "
+                "UPDATE session_ops SET state = ?, at_us = ?, detail = ?, result = ? "
                 "WHERE id = ? AND run = ? AND state = 'pending'",
-                [(st, at, detail, op_id, run_id) for op_id, st, at, detail in settled]))
+                [row(s) for s in settled]))
 
     def settled_after(self, run_id: int, after: int) -> list[dict]:
         """Settled ops with an id past `after`, in order, up to the first
@@ -153,7 +171,8 @@ class SessionStore(RunStore):
         for r in rows:
             if r["state"] == "pending":
                 break
-            out.append({**r, "op": json.loads(r["op"])})
+            out.append({**r, "op": json.loads(r["op"]),
+                        "result": json.loads(r["result"]) if r.get("result") else None})
         return out
 
     def ops(self, run_id: int) -> list[dict]:
@@ -215,8 +234,15 @@ def parse_op(op, system: System) -> dict:
         if set(op) != {"kind"}:
             raise OpError(f"{kind} takes nothing but its kind")
         return {"kind": kind}
+    if kind == DEBUG:
+        from vhil.gdb import DebugError, check_op
+        try:
+            return check_op(op, list(system.boards))
+        except DebugError as e:
+            raise OpError(str(e)) from None
     if kind not in STIMULI:
-        raise OpError(f"unknown op kind {kind!r} (have {', '.join(STIMULI + CONTROLS)})")
+        raise OpError(f"unknown op kind {kind!r} (have "
+                      f"{', '.join(STIMULI + CONTROLS + (DEBUG,))})")
     body = {k: v for k, v in op.items() if k != "at_ms"}
     try:
         stim = _STIMULUS.validate_python(body)
@@ -286,6 +312,15 @@ def as_scenario(run: dict, trace: list[dict]) -> dict:
 
 
 # -- the API ------------------------------------------------------------------------------
+
+def ack(row: dict) -> dict:
+    """A settled op as the channel's `ack` (a debug op's with its result)."""
+    out = {"kind": "ack", "op_id": row["id"], "op": row["op"], "status": row["state"],
+           "at_us": row["at_us"], "detail": row["detail"], "login": row["login"]}
+    if row.get("result") is not None:
+        out["result"] = row["result"]
+    return out
+
 
 def router(settings, workspace, limits: Optional[Limits] = None) -> APIRouter:
     limits = limits or Limits.from_env()
@@ -460,9 +495,7 @@ def router(settings, workspace, limits: Optional[Limits] = None) -> APIRouter:
                     continue
                 for row in await asyncio.to_thread(store.settled_after, run_id, state["acked"]):
                     state["acked"] = row["id"]
-                    await ws.send_json({"kind": "ack", "op_id": row["id"], "op": row["op"],
-                                        "status": row["state"], "at_us": row["at_us"],
-                                        "detail": row["detail"], "login": row["login"]})
+                    await ws.send_json(ack(row))
                 if state["role"] == "control" and time.monotonic() - state["renewed"] > RENEW_S:
                     await take()
                 elif state["role"] == "view" and time.monotonic() - state["renewed"] > RENEW_S:
@@ -478,9 +511,7 @@ def router(settings, workspace, limits: Optional[Limits] = None) -> APIRouter:
                     for row in await asyncio.to_thread(store.settled_after, run_id,
                                                        state["acked"]):
                         state["acked"] = row["id"]
-                        await ws.send_json({"kind": "ack", "op_id": row["id"], "op": row["op"],
-                                            "status": row["state"], "at_us": row["at_us"],
-                                            "detail": row["detail"], "login": row["login"]})
+                        await ws.send_json(ack(row))
                     await ws.send_json({"kind": "end", "state": st})
                     await ws.close()
                     return
