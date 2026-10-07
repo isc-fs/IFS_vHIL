@@ -64,7 +64,7 @@ def test_node_shapes():
     its name and bitrate, a device card with a count pill, an empty slot for
     the live state; the classes nodes.css draws them from."""
     node = (FRONTEND / "src/custom/CustomNode.vue").read_text()
-    template = node.split("<script setup>")[0]
+    template = node.split("\n<script setup>")[0]
     for part in ('class="vhil-node-head"', 'class="vhil-node-role"', 'class="vhil-node-count"',
                  'class="vhil-node-state"', 'class="vhil-node-sub"', 'class="vhil-bus-label"',
                  'class="vhil-pin-groups"'):

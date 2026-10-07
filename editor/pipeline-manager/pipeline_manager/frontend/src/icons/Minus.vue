@@ -44,7 +44,7 @@ path {
 }
 
 .normal {
-    stroke: $white; // vHIL: --fg, so it shows on the light theme (was #ffffff)
+    stroke: $white; // vHIL: --fg, so it shows on the light theme (was white)
 }
 
 .hovered {
