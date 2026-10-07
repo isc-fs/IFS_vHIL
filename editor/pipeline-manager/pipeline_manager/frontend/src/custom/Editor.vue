@@ -987,7 +987,10 @@ export default defineComponent({
         onMounted(async () => {
             // Load specification and/or dataflow delivered via window.postMessage
             window.addEventListener('message', async (event) => {
-                // TODO: introduce mechanism for checking event.origin against allowed origins
+                // vHIL: the editor is served on the web app's origin (under
+                // /editor/), and only that origin may drive it: a message
+                // from any other is dropped, and replies go to it alone.
+                if (event.origin !== window.location.origin) return;
                 const data = event.data ?? {};
                 if (typeof data === 'string') return;
                 data.jsonrpc ??= JSONRPC;
@@ -1011,7 +1014,9 @@ export default defineComponent({
                         externalApp: externalApplicationManager.externalApp,
                     }));
 
-                if (response) event.source.postMessage(JSON.parse(JSON.stringify(response)), '*');
+                if (response) {
+                    event.source.postMessage(JSON.parse(JSON.stringify(response)), event.origin);
+                }
             });
 
             NotificationHandler.setShowNotification(false);

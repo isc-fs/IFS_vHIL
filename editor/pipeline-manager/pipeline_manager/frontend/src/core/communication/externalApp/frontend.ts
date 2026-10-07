@@ -13,6 +13,9 @@ export default class ExternalFrontendApp implements ExternalApp {
 
     public request(data: JSONRPCRequest, endpoint: EndpointType) {
         if (endpoint === 'backend-api') throw new Error('Frontend external app does not support backend endpoints');
-        this.source.postMessage(data, '*');
+        // vHIL: only a same-origin page may drive the editor (custom/Editor.vue
+        // drops other origins' messages), so the reply goes to that origin
+        // only, never '*'.
+        this.source.postMessage(data, window.location.origin);
     }
 }
