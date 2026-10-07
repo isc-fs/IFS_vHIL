@@ -165,6 +165,10 @@ scenario" records it.
             class="vhil-mode" :class="`--${ws.mode.toLowerCase()}`" role="status"
             :aria-label="`Mode: ${ws.mode}`"
         >{{ ws.mode }}</span>
+        <span
+            v-if="live && session.held" class="vhil-held" role="status"
+            :title="`Every board is paused: ${heldText(session.held)}`"
+        >· {{ heldText(session.held) }}</span>
 
         <div class="vhil-git-buttons">
             <button type="button" class="vhil-btn" :disabled="!ws.id" @click="ws.dialog = 'commit'">
@@ -195,6 +199,8 @@ import {
 } from './workspace.js';
 import { live as session, take } from './session.js';
 import { clockText, idleText } from './live.js';
+import { heldText } from './debug.js';
+import './debug.css';
 import './live.css';
 import { edited, scen } from './scenarios.js';
 import { boards, nodeName } from './graph.js';
@@ -272,6 +278,7 @@ export default defineComponent({
                 + 'bench, until you stop it',
             live,
             session,
+            heldText,
             control,
             clock,
             clockTitle,

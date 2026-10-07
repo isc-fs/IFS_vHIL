@@ -23,6 +23,7 @@ any runs, a banner says so with Stop all.
 
 <template>
     <div class="vhil-bus">
+        <VhilHeld />
         <div
             v-if="session.periodics.length && replay.live" class="vhil-periodic-banner"
             role="status"
@@ -93,6 +94,7 @@ import { filterIndices, lastAtOrBefore } from './frames.js';
 import { Monitor, meanPeriod } from './monitor.js';
 import { loadAt, replay, store } from './replay.js';
 import VhilSend from './VhilSend.vue';
+import VhilHeld from './VhilHeld.vue';
 import { cannotSend, live as session, stopAll } from './session.js';
 import './bus.css';
 import './live.css';
@@ -106,7 +108,7 @@ const BYTES = 8;
 const ms = (us) => (us / 1000).toFixed(3);
 
 export default defineComponent({
-    components: { VhilSend },
+    components: { VhilSend, VhilHeld },
     setup() {
         const view = ref('monitor');
         const views = computed(() => (replay.live ? [...VIEWS, SEND] : VIEWS));

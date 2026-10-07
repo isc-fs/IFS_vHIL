@@ -8,10 +8,15 @@
 import {
     ws, DOCK_TABS, isLive, pauseLive, runNow, stopRun,
 } from './workspace.js';
+import { live } from './session.js';
+import { dbg, resume } from './debugui.js';
 
 export const SHORTCUTS = [
-    ['F5', 'Run the saved system'],
+    ['F5', 'Run the saved system (held at a breakpoint: Continue)'],
     ['Shift+F5', 'Stop the run (LIVE: the session)'],
+    ['F10', 'Held at a breakpoint: step over (the next line)'],
+    ['F11', 'Held at a breakpoint: step into'],
+    ['Shift+F11', 'Held at a breakpoint: step out (to the caller)'],
     ['Space', 'LIVE: pause or resume the session'],
     ['Ctrl+B', 'Show or hide the sidebar'],
     ['Ctrl+J', 'Show or hide the dock'],
@@ -25,6 +30,16 @@ const typing = (el) => el && (el.isContentEditable
 
 export function onKeyDown(ev) {
     const mod = ev.ctrlKey || ev.metaKey;
+    // Held at a debugger stop (step 17): F5 continues, F10/F11/Shift+F11 step.
+    const held = isLive() && live.held && live.role === 'control';
+    const step = {
+        F5: ev.shiftKey ? null : 'continue', F10: 'next', F11: ev.shiftKey ? 'finish' : 'step',
+    }[ev.key];
+    if (held && step && !mod && !ev.altKey) {
+        ev.preventDefault();
+        resume(step, live.held.board || dbg.board);
+        return;
+    }
     if (ev.key === 'F5') {
         ev.preventDefault();
         if (ev.shiftKey) stopRun(); else runNow();
