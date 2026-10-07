@@ -86,6 +86,16 @@ jobs:
       - name: FAT tools for SD card images
         run: sudo apt-get install -y -qq dosfstools mtools >/dev/null
 
+      # The debugger's tests (tests/sim/test_debugger.py, an `other` file):
+      # the toolchain's arm-none-eabi-gdb links libncurses.so.5, which
+      # ubuntu-latest no longer has, so they use gdb-multiarch (VHIL_GDB).
+      - name: GDB for the debugger tests
+        if: startsWith(matrix.shard, 'other')
+        run: |
+          sudo apt-get update -qq >/dev/null
+          sudo apt-get install -y -qq gdb-multiarch >/dev/null
+          echo "VHIL_GDB=$(command -v gdb-multiarch)" >> "$GITHUB_ENV"
+
       - name: Run this shard of tests/sim
         env:
           RENODE: ${{ runner.temp }}/renode/renode
