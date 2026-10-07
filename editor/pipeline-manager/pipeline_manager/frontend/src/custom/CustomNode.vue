@@ -322,10 +322,14 @@ const externalApplicationManager = getExternalApplicationManager();
 // Watch properties
 Object.entries(props.node.inputs).forEach(([name, input]) => {
     if (name.startsWith('property_')) {
-        let firstWatch = true;
+        // The first change is the property's control settling on the node
+        // as it mounts. vHIL: a board's has no control on the node (it is
+        // in the inspector), so its first change is the user's.
+        const settles = !inInspector;
+        let firstWatch = settles;
         watch(input, async (value) => {
             if (!externalApplicationManager.isConnected()) {
-                firstWatch = true;
+                firstWatch = settles;
                 return;
             }
             if (firstWatch || !editorManager.notifyWhenChanged) {
