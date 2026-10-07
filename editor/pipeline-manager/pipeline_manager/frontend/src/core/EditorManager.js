@@ -6,7 +6,6 @@
 
 /* eslint-disable max-classes-per-file */
 
-import Ajv2019 from 'ajv/dist/2019.js';
 import jsonlint from 'jsonlint-webpack';
 
 import { useBaklava, useCommandHandler, useViewModel } from '@baklavajs/renderer-vue';
@@ -27,11 +26,13 @@ import unresolvedSpecificationSchema from '../../../resources/schemas/unresolved
 import specificationSchema from '../../../resources/schemas/specification_schema.json' with {type: 'json'};
 import metadataSchema from '../../../resources/schemas/metadata_schema.json' with {type: 'json'};
 import dataflowSchema from '../../../resources/schemas/dataflow_schema.json' with {type: 'json'};
-import graphSchema from '../../../resources/schemas/graph_schema.json' with {type: 'json'};
 import messageSchema from '../../../resources/schemas/message_schema.json' with {type: 'json'};
 import ConnectionRenderer from './ConnectionRenderer.js';
 import Specification from './Specification.js';
 import validateJSON from './validate-json.js';
+// vHIL: precompiled by src/vhil/build-validators.mjs (not in git).
+// eslint-disable-next-line import/no-unresolved
+import { validators as schemaValidators } from '../vhil/validators/editor.js';
 
 import globalProperties from '../globalProperties.ts';
 import { textColorToHex, isTextColor, hexToRGB } from './nodeCreation/nodeColors.js';
@@ -2712,28 +2713,14 @@ export default class EditorManager {
      * or a textual file
      * @param schema Schema to use
      * @param reference Reference to part of the schema, e.g. node, interface or property.
-     * @param additionalAjvOptions Additional options to pass to the Ajv constructor
      * @returns An array of errors. If the array is empty, the validation was successful.
+     *
+     * vHIL: the validators are precompiled with this Ajv configuration
+     * (src/vhil/build-validators.mjs), so nothing is compiled at run time
+     * and no other Ajv options can be passed.
      */
-    static validateJSONWithSchema(data, schema, reference = '', additionalAjvOptions = {}) {
-        const ajv = new Ajv2019({
-            allowUnionTypes: true,
-            // Schema used in compile() may be already included in `schemas`.
-            addUsedSchema: false,
-            formats: {
-                hex: /^0x[a-fA-F0-9]+$/,
-            },
-            schemas: [
-                unresolvedSpecificationSchema,
-                specificationSchema,
-                metadataSchema,
-                dataflowSchema,
-                graphSchema,
-            ],
-            ...additionalAjvOptions,
-        });
-        ajv.addKeyword('version');
-        return validateJSON(ajv, schema, data, reference);
+    static validateJSONWithSchema(data, schema, reference = '') {
+        return validateJSON(schemaValidators, schema, data, reference);
     }
 
     validateResolvedSpecification(specification) {
