@@ -84,7 +84,7 @@ export async function renderRuns(view, { api, esc }) {
     try {
       const out = await api("/api/runs", { method: "POST", headers: { "content-type": "application/json" },
                                            body: JSON.stringify(body) });
-      msg.innerHTML = `queued <a href="#/runs/${out.run_id}">run ${out.run_id}</a>`;
+      msg.innerHTML = `queued <a href="#/classic/runs/${out.run_id}">run ${out.run_id}</a>`;
       msg.className = "muted";
     } catch (e) {
       msg.textContent = `error: ${e.message}`;
@@ -137,7 +137,7 @@ export async function renderRuns(view, { api, esc }) {
     const runs = await api(`/api/runs?${q}`);
     if (!mounted()) return;
     table.innerHTML = runs.map((r) => `<tr>
-      <td class="num"><a href="#/runs/${r.id}">${r.id}</a></td><td><span class="badge state-${esc(r.state)}">${esc(r.state)}</span></td>
+      <td class="num"><a href="#/classic/runs/${r.id}">${r.id}</a></td><td><span class="badge state-${esc(r.state)}">${esc(r.state)}</span></td>
       <td>${esc(r.system)}${r.ref_name ? ` <span class="muted">@ ${esc(r.ref_name)}</span>` : ""}</td>
       <td>${esc(r.owner || "")}</td>
       <td class="muted">${esc(r.scenario.kind === "run" ? `run ${r.scenario.virtual_ms} ms` : `pytest ${r.scenario.select}`)}</td>

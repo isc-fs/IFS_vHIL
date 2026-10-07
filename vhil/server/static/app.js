@@ -30,11 +30,17 @@ async function api(path, opts = {}) {
 
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 
+// The shell's own pages, under #/classic/ (step 9 of
+// docs/architecture/editor-workspace.md): the editor's workspace replaces
+// them, and their old links redirect there. A run's page stays reachable
+// (#/classic/runs/<id>) while REPLAY shows only its frames and log, not its
+// signals and artifacts; the runs list keeps the pytest runs the workspace
+// can't start yet.
 const routes = {
   async systems() {
     const systems = await api("/api/systems");
     view.innerHTML = `<h2>Systems</h2><table><tr><th>System</th><th>Boards</th><th>Description</th></tr>${
-      systems.map((s) => `<tr><td><a href="#/systems/${esc(s.id)}">${esc(s.id)}</a></td>
+      systems.map((s) => `<tr><td><a href="#/classic/systems/${esc(s.id)}">${esc(s.id)}</a></td>
         <td>${esc(s.boards.join(", "))}</td><td class="muted">${esc(s.description)}</td></tr>`).join("")}</table>`;
   },
   async system(id) {
@@ -45,16 +51,36 @@ const routes = {
       <pre>${esc(s.yaml)}</pre>`;
   },
   async runs() { await renderRuns(view, { api, esc }); },
-  async editor(id) { await editorPage(view, id); },
+};
+
+// Old links into the workspace: #/systems[/<id>], #/runs[/<id>[/<tab>]] and
+// #/editor[/<id>] (and the shell's front page, #/systems by default).
+const redirects = {
+  systems: (arg) => editorPage(view, arg),
+  editor: (arg) => editorPage(view, arg),
+  runs: (arg) => (/^\d+$/.test(arg || "") ? editorPage(view, "", { run: Number(arg) })
+    : editorPage(view, "", { view: "runs" })),
 };
 
 async function route() {
-  const [, page = "systems", arg, sub] = location.hash.split("/");
+  const parts = location.hash.split("/");
+  if (loggedOut && parts[1] !== "classic") {
+    // Right after a logout (auth.py): no redirect into the workspace, whose
+    // first request would send the browser back to the login.
+    view.innerHTML = `<p>Logged out. <a href="/auth/login">Log in with GitHub</a></p>`;
+    return;
+  }
+  if (parts[1] !== "classic") {
+    const [, page = "systems", arg] = parts;
+    (redirects[page] || redirects.systems)(arg && decodeURIComponent(arg));
+    return;
+  }
+  const [, , page = "runs", arg, sub] = parts;
   document.body.dataset.page = page;
   try {
     if (page === "systems" && arg) await routes.system(decodeURIComponent(arg));
     else if (page === "runs" && /^\d+$/.test(arg || "")) await renderRun(view, { api, esc }, Number(arg), sub);
-    else await (routes[page] || routes.systems)(arg && decodeURIComponent(arg));
+    else await (routes[page] || routes.runs)(arg && decodeURIComponent(arg));
   } catch (e) {
     view.innerHTML = loggedOut ? `<p>Logged out. <a href="/auth/login">Log in with GitHub</a></p>`
       : `<p class="error">${esc(e.message)}</p>`;

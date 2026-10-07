@@ -1,4 +1,6 @@
-// The run page (M5.3, #115): #/runs/<id>[/<tab>].
+// The run page (M5.3, #115): #/classic/runs/<id>[/<tab>] (app.js: #/runs/<id>
+// opens the run in the workspace's REPLAY now, which shows its frames and log;
+// this page keeps its signals and artifacts).
 //
 // Header (system, ref, state, times, summary, cancel) and five tabs over the
 // run's trace (frames, edges, samples, log records; virtual µs) and its
@@ -82,7 +84,8 @@ export async function renderRun(view, { api, esc }, id, tab) {
       ? `${sum.tests} tests · ${sum.failures} failed · ${sum.errors} errors · ${sum.skipped} skipped` : "";
     root.querySelector(".run-head").innerHTML = `
       <h2>Run ${r.id} <span class="badge state-${esc(r.state)}">${esc(r.state)}</span>
-        ${r.can_cancel ? `<button data-cancel>Cancel</button>` : ""}</h2>
+        ${r.can_cancel ? `<button data-cancel>Cancel</button>` : ""}
+        <a class="small" href="/editor/?run=${r.id}">Replay in the workspace</a></h2>
       <dl class="meta">
         <div><dt>System</dt><dd><a href="#/systems/${esc(r.system)}">${esc(r.system)}</a></dd></div>
         <div><dt>Ref</dt><dd>${r.ref_name ? `${esc(r.ref_name)} ` : ""}<code>${esc((r.ref || "working tree").slice(0, 12))}</code></dd></div>
@@ -105,7 +108,7 @@ export async function renderRun(view, { api, esc }, id, tab) {
   // -- tabs --------------------------------------------------------------------
   function show(t) {
     S.tab = t;
-    history.replaceState(null, "", `#/runs/${id}/${t}`);
+    history.replaceState(null, "", `#/classic/runs/${id}/${t}`);
     for (const b of root.querySelectorAll("[data-tab]")) b.setAttribute("aria-selected", b.dataset.tab === t);
     for (const p of root.querySelectorAll("[data-panel]")) p.hidden = p.dataset.panel !== t;
     if (!S.built[t]) { S.built[t] = true; builders[t](panel(t)); }
