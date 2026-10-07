@@ -18,7 +18,8 @@
 #   PM_CSP    the Content-Security-Policy Pipeline Manager sends (default:
 #             vhil/server/security.py's EDITOR_CSP)
 #   PM_CSP_REPORT_ONLY  1: send it as Content-Security-Policy-Report-Only
-#             (violations reported in the browser console, not enforced)
+#             (violations reported in the browser console, not enforced);
+#             default 0, enforced
 # Logs: $LOG_DIR/pm.log and $LOG_DIR/backend.log (default ~/vhil/editor).
 set -euo pipefail
 here=$(cd "$(dirname "$0")/.." && pwd)
@@ -31,7 +32,7 @@ mkdir -p "$LOG_DIR"
 export PATH="$NODE_DIR/bin:$PATH"
 PM_CSP=${PM_CSP:-$(python -c 'import runpy, sys; print(runpy.run_path(sys.argv[1])["EDITOR_CSP"])' \
     "$here/vhil/server/security.py")}
-export PM_CSP PM_CSP_REPORT_ONLY=${PM_CSP_REPORT_ONLY:-1}
+export PM_CSP PM_CSP_REPORT_ONLY=${PM_CSP_REPORT_ONLY:-0}
 
 ( source "$PM_VENV/bin/activate"
   cd "$PM_DIR"
