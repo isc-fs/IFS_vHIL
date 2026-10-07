@@ -27,11 +27,19 @@ the scrubber. Status is always text and a glyph, never colour alone.
         <p v-if="!card.state" class="muted">No state view for {{ card.firmware || board }}.</p>
         <section v-else class="vhil-state-fsm" aria-live="polite">
             <span class="vhil-state-key muted">{{ card.state.label }}</span>
-            <span class="vhil-state-now" :class="{ '--none': !card.state.has }">
-                {{ card.state.text }}
-                <span v-if="card.state.noEnum" class="vhil-state-hint muted">raw · no enum</span>
+            <span class="vhil-state-now" :class="{ '--none': !card.state.has || card.boot }">
+                <template v-if="card.boot">
+                    <span aria-hidden="true">◔</span> in bootloader
+                    <span class="vhil-state-hint muted">the app starts at 2 s</span>
+                </template>
+                <template v-else>
+                    {{ card.state.text }}
+                    <span v-if="card.state.noEnum" class="vhil-state-hint muted">
+                        raw · no enum
+                    </span>
+                </template>
             </span>
-            <span v-if="card.state.has" class="vhil-state-since muted mono num">
+            <span v-if="card.state.has && !card.boot" class="vhil-state-since muted mono num">
                 for {{ duration(t - card.state.since) }}<template v-if="card.state.prev">
                     · was {{ card.state.prev.text }}</template>
             </span>

@@ -535,7 +535,8 @@ def execute_run(sim, scenario: dict, trace: TraceWriter, *,
             session.wait()
             progress(now)
             if cancelled():
-                raise Cancelled({"frames": frames, "sent": sent, **counts})
+                raise Cancelled({"frames": frames, "sent": sent, **counts,
+                                 "bus_load": load_summary(loads)})
         session.pace(now, t_us)
 
     now = sim.now_us()

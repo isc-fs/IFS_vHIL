@@ -5,7 +5,10 @@ Pipeline Manager's NavBar: the mark, what is open, one firmware chip per
 board (opens the ref picker), the scenario Run runs and its duration (step
 10: a scenario's own), Run and Stop, the mode, Commit… and Open PR
 (dialogs), and the theme. In REPLAY (step 9) the scenario and duration give
-way to the run's clock, a scrubber over its virtual time.
+way to the run's clock, a scrubber over its virtual time. In LIVE (step 15)
+they give way to the session's clock ("t=12.345 s · RTF 0.98×"), who
+controls it, Pause/Resume and Stop; ● Live starts one, and "Save session as
+scenario" records it.
 -->
 
 <template>
@@ -48,7 +51,46 @@ way to the run's clock, a scrubber over its virtual time.
         </div>
 
         <div
-            v-if="ws.mode === 'REPLAY'" class="vhil-scrub" role="group"
+            v-if="live" class="vhil-live" role="group" :aria-label="`Live session ${replay.id}`"
+        >
+            <span class="vhil-live-dot" aria-hidden="true" />
+            <a
+                class="vhil-scrub-run mono" :href="runPage(replay.id)"
+                target="_blank" rel="noopener" :title="`Run ${replay.id}'s page`"
+            >run {{ replay.id }}</a>
+            <output class="vhil-live-clock mono num" :title="clockTitle">{{ clock }}</output>
+            <span
+                class="vhil-live-role" :class="`--${session.role}`" :title="roleTitle"
+            >{{ roleText }}</span>
+            <button
+                v-if="canTake" type="button" class="vhil-btn --small" @click="take"
+                title="Take this session's control: its holder let it go"
+            >Take control</button>
+            <span v-if="idle" class="vhil-live-idle" role="status">
+                ▲ {{ idle }}
+                <button
+                    type="button" class="vhil-btn --small" :disabled="!control"
+                    @click="keepAlive"
+                >Keep alive</button>
+            </span>
+            <button
+                type="button" class="vhil-btn" :disabled="!control" aria-keyshortcuts="Space"
+                :title="`${session.paused ? 'Resume' : 'Pause'} virtual time (Space)`"
+                @click="pauseLive"
+            >{{ session.paused ? '▶ Resume' : '❚❚ Pause' }}</button>
+            <button
+                type="button" class="vhil-btn" :disabled="!control" aria-keyshortcuts="Shift+F5"
+                title="Stop the session (Shift+F5): it ends at the end of the next slice"
+                @click="stopLive"
+            >■ Stop</button>
+            <button
+                type="button" class="vhil-btn --small"
+                title="Leave: the session goes on without this tab until it is idle"
+                @click="exitReplay"
+            >✕ Leave</button>
+        </div>
+        <div
+            v-else-if="ws.mode === 'REPLAY'" class="vhil-scrub" role="group"
             :aria-label="`Run ${replay.id} clock`"
         >
             <a
@@ -70,7 +112,7 @@ way to the run's clock, a scrubber over its virtual time.
             >✕ Exit</button>
         </div>
         <label
-            v-if="ws.mode !== 'REPLAY'" class="vhil-top-scen"
+            v-if="ws.mode === 'DESIGN'" class="vhil-top-scen"
             title="The scenario Run runs: its stimuli, watches and expects (the Scenario tab)"
         >
             <span class="vhil-visually-hidden">Scenario</span>
@@ -85,7 +127,7 @@ way to the run's clock, a scrubber over its virtual time.
             </select>
         </label>
         <label
-            v-if="ws.mode !== 'REPLAY'"
+            v-if="ws.mode === 'DESIGN'"
             class="vhil-duration"
             title="Virtual time from power-on; each board spends its bootloader's 2 s first"
         >
@@ -98,7 +140,7 @@ way to the run's clock, a scrubber over its virtual time.
             <span class="muted">ms</span>
         </label>
 
-        <div class="vhil-run-buttons">
+        <div v-if="!live" class="vhil-run-buttons">
             <button
                 type="button" class="vhil-btn --primary" :disabled="ws.busy || running"
                 aria-keyshortcuts="F5" title="Run the saved system (F5)" @click="runNow"
@@ -107,7 +149,17 @@ way to the run's clock, a scrubber over its virtual time.
                 type="button" class="vhil-btn" :disabled="!running"
                 aria-keyshortcuts="Shift+F5" title="Stop the run (Shift+F5)" @click="stopRun"
             >■ Stop</button>
+            <button
+                type="button" class="vhil-btn" :disabled="ws.busy || running || !ws.id"
+                :title="LIVE_TITLE"
+                @click="startLive"
+            ><span class="vhil-live-dot --idle" aria-hidden="true" /> Live</button>
         </div>
+        <button
+            v-if="recorded" type="button" class="vhil-btn"
+            title="The session's ops as a new scenario of this system, in the Scenario tab"
+            @click="ws.dialog = 'save-session'"
+        >Save as scenario…</button>
 
         <span
             class="vhil-mode" :class="`--${ws.mode.toLowerCase()}`" role="status"
@@ -138,8 +190,12 @@ way to the run's clock, a scrubber over its virtual time.
 <script>
 import { computed, defineComponent } from 'vue';
 import {
-    ws, boardFirmware, cycleTheme, exitReplay, pickScenario, runActive, runNow, stopRun,
+    ws, boardFirmware, cycleTheme, exitReplay, isLive, keepAlive, pauseLive, pickScenario,
+    runActive, runNow, startLive, stopLive, stopRun,
 } from './workspace.js';
+import { live as session, take } from './session.js';
+import { clockText, idleText } from './live.js';
+import './live.css';
 import { edited, scen } from './scenarios.js';
 import { boards, nodeName } from './graph.js';
 import { replay, seconds } from './replay.js';
@@ -191,7 +247,44 @@ export default defineComponent({
             },
         });
         const step = computed(() => Math.max(100, Math.ceil(replay.end / 20000 / 100) * 100));
+        // -- LIVE ----------------------------------------------------------
+        const live = computed(() => isLive());
+        const control = computed(() => session.role === 'control' && !session.ended);
+        const clock = computed(() => clockText(replay.end, session.rtf, session.paused));
+        const clockTitle = 'Virtual time from power-on, and the real-time factor: virtual over '
+            + 'wall time over the last second (1.00× is as fast as the bench)';
+        const roleText = computed(() => {
+            if (!session.connected) return 'connecting…';
+            if (session.role === 'control') return 'you control it';
+            return session.holder ? `view only · ${session.holder} controls` : 'view only';
+        });
+        const roleTitle = computed(() => (session.role === 'control'
+            ? 'This tab sends the session\'s ops; other tabs on this run watch'
+            : 'This tab watches: one tab controls a live session'));
+        const canTake = computed(() => session.role === 'view' && session.mayControl
+            && !session.holder);
+        const idle = computed(() => idleText(session.idleLeft));
+        // A live run, now or replayed: its ops can become a scenario.
+        const recorded = computed(() => Boolean(replay.run?.scenario?.live)
+            && (live.value || ws.mode === 'REPLAY'));
         return {
+            LIVE_TITLE: 'A live session of the saved system: drive its buses and pins as on the '
+                + 'bench, until you stop it',
+            live,
+            session,
+            control,
+            clock,
+            clockTitle,
+            roleText,
+            roleTitle,
+            canTake,
+            take,
+            idle,
+            recorded,
+            startLive,
+            stopLive,
+            pauseLive,
+            keepAlive,
             ws,
             chips,
             crumbTitle,

@@ -10,7 +10,9 @@ Inherits from baklavajs/renderer-vue/src/connection/ConnectionView.vue
 
 vHIL: a wire is classed by its interface type (its width, _connection.scss),
 a CAN wire takes its bus's tint (--can-1..4), and hovering one shows what
-it is ("can_acu · 500 kbit/s · 3 nodes": src/vhil/shapes.js).
+it is ("can_acu · 500 kbit/s · 3 nodes": src/vhil/shapes.js). In LIVE a CAN
+wire whose bus carried frames in the last second marches (`--traffic`,
+src/vhil/live.css: 4 steps a second, still under prefers-reduced-motion).
 -->
 
 <template>
@@ -71,6 +73,7 @@ import EditorManager from '../../core/EditorManager';
 import {
     busTint, hideWireTip, showWireTip, wireBus, wireText, wireType,
 } from '../../vhil/shapes.js';
+import { live as vhilSession } from '../../vhil/session.js';
 
 /* eslint-disable vue/no-mutating-props,no-param-reassign */
 export default defineComponent({
@@ -102,8 +105,16 @@ export default defineComponent({
             return bus ? busTint(bus, graph.value) : null;
         });
 
+        // vHIL: in LIVE, whether the wire's bus carries traffic (frames/s, 4 Hz).
+        const traffic = computed(() => {
+            if (type !== 'can' || !vhilSession.id) return false;
+            const bus = wireBus(props.connection, graph.value);
+            return Boolean(bus && vhilSession.rates[bus.title || bus.type] > 0);
+        });
+
         const cssClasses = computed(() => ({
             ...classes.value,
+            '--traffic': traffic.value,
             '--hover': props.isHighlighted || hover.value,
             '--dashed': connectionStyle.interfaceConnectionPattern === 'dashed',
             '--dotted': connectionStyle.interfaceConnectionPattern === 'dotted',

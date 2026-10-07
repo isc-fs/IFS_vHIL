@@ -17,6 +17,11 @@
  * (state.js): what the State tab, the inspector and the node pills show at
  * the scrubber's time. The worker's `bus_load` records (one per bus and
  * slice, vhil/worker.py; #174) come with them, for the Bus tab's load.
+ *
+ * Step 15: a live session fills the same store and model as its records
+ * stream (beginLive, feedLive; session.js): `replay.live` while it runs,
+ * `replay.tick` bumped per batch (the Bus tab draws the new frames without
+ * folding the old ones again), the time following the session's clock.
  */
 
 import { markRaw, reactive } from 'vue';
@@ -46,6 +51,8 @@ export const replay = reactive({
     stateTrace: null, // the boards' state over the run (state.js; raw), once all is in
     loads: [], // the run's bus_load records, in time order (#174)
     version: 0, // bumped when the frames change
+    live: false, // a live session's records stream in (step 15)
+    tick: 0, // bumped per live batch: frames appended, nothing else changed
 });
 
 let loading = 0; // the current load: a newer one cancels an older one
@@ -68,6 +75,7 @@ function reset() {
         stateTrace: null,
         loads: [],
         version: replay.version + 1,
+        live: false,
     });
 }
 
@@ -126,7 +134,9 @@ export async function loadRun(run) {
     const edges = [];
     const samples = [];
     const loads = [];
-    const into = { log: logs, edge: edges, sample: samples, bus_load: loads };
+    const into = {
+        log: logs, edge: edges, sample: samples, bus_load: loads,
+    };
     let cursor = '';
     try {
         for (;;) {
@@ -162,6 +172,83 @@ export async function loadRun(run) {
     replay.version += 1;
 }
 
+// A live session's samples and edges kept for the views that list them
+// (the State tab's note, the scenario overlay): the newest, at most this many
+// (StateTrace keeps its own series of what the cards show).
+const LIVE_KEEP = 200000;
+
+/** Starts a live session's view of run `run`: no trace to load, its contract
+ *  fetched, its records fed as they come (feedLive). */
+export function beginLive(run) {
+    loading += 1;
+    const mine = loading;
+    reset();
+    Object.assign(replay, {
+        id: run.id,
+        run,
+        state: 'ready',
+        live: true,
+        t: run.virtual_us || 0,
+        end: run.virtual_us || 0,
+        logs: markRaw([]),
+        edges: markRaw([]),
+        samples: markRaw([]),
+        loads: markRaw([]),
+    });
+    call('GET', `/api/runs/${run.id}/contract`).then((c) => {
+        if (mine !== loading) return;
+        replay.contract = markRaw(c);
+        replay.contractNote = noteOf(c);
+        buildState();
+        replay.version += 1;
+    }).catch((e) => {
+        if (mine === loading) replay.contractNote = `no contract: ${e.message}`;
+    });
+}
+
+const trim = (list) => {
+    if (list.length > LIVE_KEEP) list.splice(0, list.length - LIVE_KEEP / 2);
+};
+
+/** A batch of a live session's records (frames, samples, edges, logs): into
+ *  the store and the boards' state. Clock and op records are session.js's. */
+export function feedLive(records) {
+    if (!replay.live) return;
+    const frames = [];
+    const tr = replay.stateTrace;
+    records.forEach((r) => {
+        if (r.kind === 'frame') {
+            frames.push(r);
+            if (tr && !r.src) tr.addFrame(r);
+        } else if (r.kind === 'sample') {
+            replay.samples.push(r);
+            if (tr) tr.add(r);
+        } else if (r.kind === 'edge') {
+            replay.edges.push(r);
+            if (tr) tr.add(r);
+        } else if (r.kind === 'log') {
+            replay.logs.push(r);
+        } else if (r.kind === 'bus_load') {
+            replay.loads.push(r);
+        }
+        if (tr && r.t_us > tr.end) tr.end = r.t_us;
+    });
+    trim(replay.samples);
+    trim(replay.edges);
+    trim(replay.logs);
+    trim(replay.loads);
+    if (frames.length) store.append(frames);
+    replay.tick += 1;
+}
+
+/** The live session ended: what streamed stays, now a replay of the run. */
+export function endLive(run) {
+    if (!replay.live) return;
+    replay.live = false;
+    if (run) replay.run = run;
+    replay.version += 1;
+}
+
 /**
  * A bus's load as of virtual time `t`: {load, peak, exact} from its last
  * bus_load record at or before `t` and the highest one so far, or null.
@@ -169,13 +256,14 @@ export async function loadRun(run) {
 export function loadAt(bus, t) {
     let last = null;
     let peak = 0;
-    for (const r of replay.loads) {
-        if (r.t_us > t) break;
+    replay.loads.some((r) => {
+        if (r.t_us > t) return true;
         if (r.bus === bus) {
             last = r;
             peak = Math.max(peak, r.load);
         }
-    }
+        return false;
+    });
     return last && { load: last.load, peak, exact: last.exact };
 }
 

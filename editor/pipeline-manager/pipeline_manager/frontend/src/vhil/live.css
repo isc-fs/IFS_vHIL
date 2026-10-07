@@ -1,0 +1,123 @@
+/* vHIL: LIVE (step 15 of docs/architecture/editor-workspace.md), on the
+   tokens: the top bar's session group, the mode pill, the Bus tab's Send
+   panel and periodic banner, a board's inputs, the canvas's traffic. Status
+   is always text and a glyph; motion stops under prefers-reduced-motion. */
+
+/* -- the top bar ---------------------------------------------------------- */
+
+.vhil-live {
+  display: flex; align-items: center; gap: var(--sp-2); flex: 0 1 auto; min-width: 0;
+  font-size: var(--fs-dense); white-space: nowrap;
+}
+.vhil-live-dot {
+  flex: none; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--status-running); animation: vhil-pulse 1.6s ease-in-out infinite;
+}
+.vhil-live-dot.--idle { display: inline-block; background: var(--status-failed); animation: none; vertical-align: 1px; }
+.vhil-live-clock { flex: none; min-width: 11.5em; color: var(--fg); }
+.vhil-live-role {
+  flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; padding: 0 var(--sp-2);
+  border: 1px solid var(--line); border-radius: var(--r-pill); color: var(--fg-muted); line-height: 20px;
+}
+.vhil-live-role.--control { color: var(--status-running); border-color: var(--status-running); }
+.vhil-live-idle { display: inline-flex; align-items: center; gap: var(--sp-1); color: var(--status-warn); }
+.vhil-mode.--live { color: var(--status-running); border-color: var(--status-running); }
+.vhil-mode.--paused { color: var(--status-warn); border-color: var(--status-warn); }
+
+@keyframes vhil-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+/* -- the Bus tab ------------------------------------------------------------ */
+
+.vhil-periodic-banner {
+  display: flex; align-items: center; gap: var(--sp-2); flex: none; flex-wrap: wrap;
+  padding: 2px var(--sp-3); font-size: var(--fs-dense); color: var(--fg);
+  background: color-mix(in srgb, var(--status-running) 14%, transparent);
+  border-bottom: 1px solid var(--line); border-left: 3px solid var(--status-running);
+}
+.vhil-periodic-banner .mono { overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1 1 10rem; white-space: nowrap; }
+.vhil-bus-send { flex: 1; min-height: 0; overflow: auto; }
+.vhil-send { display: flex; flex-direction: column; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3); font-size: var(--fs-dense); }
+.vhil-send-form { display: flex; align-items: flex-end; gap: var(--sp-2); flex-wrap: wrap; }
+.vhil-send-form > label, .vhil-send-fields label {
+  display: inline-flex; flex-direction: column; gap: 2px; color: var(--fg-muted);
+}
+.vhil-send-form .vhil-input { min-height: 26px; height: 26px; color: var(--fg); }
+.vhil-send-form .vhil-input.--id { width: 6.5rem; }
+.vhil-send-form .vhil-input.--num { width: 5.5rem; }
+.vhil-send-form .vhil-input.--name { width: 8rem; }
+.vhil-send-form > label.--grow { flex: 1 1 12rem; }
+.vhil-send-form > label.--grow .vhil-input { width: 100%; }
+.vhil-send-form > label.vhil-send-check { flex-direction: row; align-items: center; gap: var(--sp-1); height: 26px; }
+.vhil-seg-btn[role="radio"][aria-checked="true"] { color: var(--fg); background: var(--sel-bg); font-weight: 600; }
+.vhil-send-why { align-self: center; }
+.vhil-send-fields {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr)); gap: var(--sp-2);
+  margin: 0; padding: var(--sp-2); border: 1px solid var(--line); border-radius: var(--r-control);
+}
+.vhil-send-fields legend { padding: 0 var(--sp-1); color: var(--fg-muted); }
+.vhil-send-fields .vhil-input { width: 100%; }
+.vhil-send-running h4 { display: flex; align-items: center; gap: var(--sp-2); margin: var(--sp-1) 0; font-size: var(--fs-dense); }
+.vhil-send-running ul { margin: 0; padding: 0; list-style: none; }
+.vhil-send-periodic {
+  display: grid; grid-template-columns: 7rem 6rem minmax(8rem, 12rem) minmax(8rem, 1fr) 7rem 8rem auto;
+  align-items: center; gap: var(--sp-2); min-height: 26px; padding: 0 var(--sp-1);
+  border-left: 3px solid var(--status-running); white-space: nowrap;
+}
+.vhil-send-periodic > span { overflow: hidden; text-overflow: ellipsis; }
+.vhil-send-periodic:nth-child(even) { background: var(--bg-2); }
+
+/* -- a board's inputs (the inspector, the context menu's panel) ------------ */
+
+.vhil-inputs { margin: var(--sp-2) 0; }
+.vhil-inputs-title { margin: 0 0 var(--sp-1); font-size: var(--fs-dense); font-weight: 600; }
+.vhil-inputs-list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px; }
+.vhil-input-row {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2);
+  min-height: 28px; font-size: var(--fs-dense);
+}
+.vhil-input-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vhil-switch {
+  display: inline-flex; align-items: center; gap: var(--sp-1); flex: none;
+  height: 24px; padding: 0 var(--sp-2) 0 var(--sp-1); color: var(--fg); background: var(--bg-2);
+  border: 1px solid var(--border-control); border-radius: var(--r-pill); cursor: pointer; font: inherit;
+}
+.vhil-switch:disabled { cursor: not-allowed; opacity: 0.6; }
+.vhil-switch-track {
+  position: relative; width: 26px; height: 14px; border-radius: 7px;
+  background: var(--bg-3); border: 1px solid var(--border-control);
+}
+.vhil-switch-knob {
+  position: absolute; top: 1px; left: 1px; width: 10px; height: 10px; border-radius: 50%;
+  background: var(--fg-muted); transition: transform 0.12s;
+}
+.vhil-switch[aria-checked="true"] .vhil-switch-track { background: color-mix(in srgb, var(--status-ok) 35%, transparent); border-color: var(--status-ok); }
+.vhil-switch[aria-checked="true"] .vhil-switch-knob { transform: translateX(12px); background: var(--status-ok); }
+.vhil-switch-text { min-width: 3.2em; font-weight: 600; }
+.vhil-analog { display: inline-flex; align-items: center; gap: var(--sp-1); flex: none; }
+.vhil-analog .vhil-input { width: 4.5rem; min-height: 24px; height: 24px; }
+.vhil-inputs-menu {
+  position: fixed; left: 0; top: 0; z-index: 40; width: 20rem; max-width: calc(100vw - 16px);
+  padding: var(--sp-2) var(--sp-3); color: var(--fg); background: var(--bg-1);
+  border: 1px solid var(--border-control); border-radius: var(--r-panel);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--bg-0) 70%, transparent);
+}
+.vhil-inputs-menu:focus { outline: none; }
+.vhil-inputs-menu .vhil-actions { margin-top: var(--sp-1); }
+
+/* -- the canvas ------------------------------------------------------------- */
+
+/* A bus's frames a second, along its rail. */
+.vhil-bus-rate { color: var(--fg); }
+/* A CAN wire whose bus carried frames in the last second: a dash that
+   marches four steps a second (no smooth animation: a quiet canvas). */
+.baklava-connection.--t-can.--traffic {
+  stroke-dasharray: 9 5;
+  animation: vhil-march 1s steps(4) infinite;
+}
+@keyframes vhil-march { to { stroke-dashoffset: -28; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .vhil-live-dot { animation: none; }
+  .baklava-connection.--t-can.--traffic { animation: none; }
+  .vhil-switch-knob { transition: none; }
+}

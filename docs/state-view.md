@@ -83,8 +83,11 @@ pills with reason and age or ○ once cleared, key values, "stale"; and the
 history: the FSM's and the relays' lanes over the run and the transitions,
 which move the scrubber), the selected board's card in the inspector, and
 a pill on its node ("AMS · Precharge", ringed with "✕ fault" while a fault
-is active). A live session (feature 3) feeds the same model as its records
-stream.
+is active). A live session (feature 3, [live-session.md](live-session.md))
+feeds the same model as its records stream. Before 2 s from power-on, the
+bootloader's auto-jump window, a card reads "in bootloader" and the pill
+"AMS · bootloader": the app's state in RAM is still 0 then, which would
+read as its first state.
 
 ## The views
 

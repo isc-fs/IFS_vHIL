@@ -136,6 +136,34 @@ def watches(system) -> tuple[list[tuple[str, str, float]], list[tuple[str, str]]
     return symbols, pins
 
 
+def inputs(system) -> dict[str, list[dict]]:
+    """{board: [{pin, kind: gpio | analog, label}]}: what a live session
+    drives on each board (docs/live-session.md), in the role's order. The
+    pins its role's backplane routes with a car signal (the role's `pins`)
+    that are GPIOs or analog inputs, but for the state view's own pins (the
+    relays and lines the firmware drives, which the card shows), the spares,
+    and a device's chip select."""
+    selects = {dev["cs"] for dev in system.devices.values() if dev.get("cs")}
+    out = {}
+    for name, b in system.boards.items():
+        items, _ = resolve(system, name)
+        shown = {vexpect.parse_signal(it.signal).item for it in items
+                 if it.signal.startswith("pin:")}
+        rows = []
+        for pin, label in ((b.role_spec or {}).get("pins") or {}).items():
+            label = str(label)
+            if label.startswith("SPARE") or pin in shown or f"{name}.{pin}" in selects:
+                continue
+            try:
+                kind, _ = b.endpoint(pin)
+            except Exception:  # noqa: BLE001 - SystemError: not emulated
+                continue
+            if kind in ("gpio", "analog"):
+                rows.append({"pin": pin, "kind": kind, "label": label})
+        out[name] = rows
+    return out
+
+
 # -- labels ----------------------------------------------------------------------------
 
 class Labels(NamedTuple):
