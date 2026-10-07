@@ -52,6 +52,22 @@ def test_canvas_background_defaults_to_the_page_token():
     assert (name, fallback) == ("--bg-0", tokens["--bg-0"])
 
 
+def test_canvas_colours_are_tokens_with_the_dark_fallback():
+    """Wire, port, header and pill colours in the specification's metadata
+    are var()s of tokens.css (so the light theme recolours the canvas), each
+    falling back to its dark value; no literal colour is left."""
+    from vhil.editor import CANVAS_METADATA
+    tokens = _dark_tokens()
+    meta = CANVAS_METADATA
+    colours = [c for i in meta["interfaces"].values()
+               for c in (i["interfaceColor"], i["interfaceConnectionColor"])]
+    colours += [c for s in meta["styles"].values() for c in (s["color"], s["pill"]["color"])]
+    assert colours and meta["interfaces"]["can"]["interfaceConnectionColor"].startswith("var(--wire-can,")
+    for value in colours:
+        [(name, fallback)] = _fallbacks(value)
+        assert fallback == tokens[name], f"{value}: {name} is {tokens[name]}"
+
+
 def test_set_theme_procedure_matches_the_theme_module():
     spec = json.loads((PM / "resources/api_specification/specification.json").read_text())
     theme = spec["frontend_endpoints"]["vhil_set_theme"]["params"]["properties"]["theme"]

@@ -67,6 +67,17 @@ def test_the_role_is_a_select_showing_the_node_id(spec):
         "ecu (node 0x1)": "ecu", "ams (node 0x2)": "ams", "udv (node 0x3)": "udv"}
 
 
+def test_the_node_shapes_read_the_role_and_the_bitrate(spec):
+    """A board's sub-line reads its role's node ID and flash bus ("node 0x2
+    · FDCAN1"), and a bus's rail its bitrate: both from the specification
+    (src/vhil/shapes.js in the vendored Pipeline Manager)."""
+    info = _types(spec)["mainlite"]["additionalData"]["vhil"]["role_info"]
+    assert info == {name: {"node_id": r["node_id"], "flash_bus": r["flash_bus"]}
+                    for name, r in BOARD["roles"].items()}
+    assert info["ams"] == {"node_id": 2, "flash_bus": "FDCAN1"}
+    assert _types(spec)[BUS_NODE]["additionalData"]["vhil"] == {"kind": "bus", "bitrate": 500_000}
+
+
 def test_board_connectors_are_typed(spec):
     board = _ifaces(spec, "ams")
     assert board["FDCAN1 · CAN_ACU"] == "can" and board["SPI1 · LTC6820"] == "spi"
@@ -510,9 +521,9 @@ def test_rpc_replies_match_pipeline_managers_api():
     """Shapes from its api_specification/common_types.json."""
     rpc = EditorMethods()
     assert rpc.frontend_on_connect() == {}
-    for item in rpc.app_capabilities_get():
-        assert set(item) <= {"name", "stopName", "iconName", "procedureName",
-                             "allowToRunInParallelWith", "requireResponse"}
+    # No navbar buttons: the workspace has no navbar, and its Check
+    # validates (editor/pipeline-manager/CHANGELOG-VHIL.md).
+    assert rpc.app_capabilities_get() == []
     assert set(rpc.specification_get()) == {"type", "content"}
 
 
