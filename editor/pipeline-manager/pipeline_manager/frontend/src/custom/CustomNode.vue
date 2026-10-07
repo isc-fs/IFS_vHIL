@@ -156,8 +156,11 @@ from moving or deleting the nodes.
                     />
                 </div>
             </div>
-            <!-- vHIL: the rail's name and bitrate, along it -->
-            <div v-if="vhil?.kind === 'bus'" class="vhil-bus-label">{{ vhil.rail }}</div>
+            <!-- vHIL: the rail's name and bitrate, along it (in LIVE, its frames/s) -->
+            <div v-if="vhil?.kind === 'bus'" class="vhil-bus-label">
+                {{ vhil.rail }}<span v-if="busRate !== null" class="vhil-bus-rate"
+                > · {{ busRate }} fr/s</span>
+            </div>
             <!-- vHIL: a board's pins, grouped by side -->
             <div v-if="vhil?.kind === 'board'" class="vhil-pin-groups" aria-hidden="true">
                 <span>devices · analog</span><span>CAN · digital</span>
@@ -245,6 +248,7 @@ import {
 } from '../vhil/shapes.js';
 import '../vhil/nodes.css';
 import VhilNodeState from '../vhil/VhilNodeState.vue';
+import { live as vhilSession } from '../vhil/session.js';
 
 import { checkForUnsavedEditorChangesWithToast } from './node_editor/NodeSpecEditorUtils.js';
 
@@ -357,6 +361,10 @@ const vhil = computed(() => {
     }
     return shape;
 });
+// vHIL: a bus's frames a second in LIVE (session.js, updated at 4 Hz).
+const vhilLive = () => Boolean(vhilSession.id && !vhilSession.ended);
+const busRate = computed(() => (vhil.value?.kind === 'bus' && vhilLive()
+    ? vhilSession.rates[props.node.title || props.node.type] ?? 0 : null));
 const displayedProperties = computed(() => {
     if (inInspector) return bigBuses.value;
     if (editorManager.baklavaView.settings.showHiddenProperties) {
@@ -467,6 +475,10 @@ const contextMenuInterfaceItems = ref([]);
 
 const contextMenuTitleItems = computed(() => {
     const items = [];
+    // vHIL: in LIVE, a board's pin switches and analog inputs (VhilInputsMenu.vue).
+    if (vhil.value?.kind === 'board' && vhilLive()) {
+        items.push({ value: 'vhil-inputs', label: 'Inputs and analog…', endSection: true });
+    }
     items.push({ value: 'sidebar', label: 'Details', icon: icons.Sidebar, endSection: true });
 
     let shownUnconnected = false;
@@ -658,6 +670,11 @@ const runCustomContextMenuAction = async (procedureName) => {
 
 /* eslint-disable default-case */
 const onContextMenuTitleClick = async (action) => {
+    if (action === 'vhil-inputs') {
+        const r = nodeRef.value.getBoundingClientRect();
+        vhilSession.menu = { board: props.node.title || props.node.type, x: r.right + 8, y: r.top };
+        return;
+    }
     if (action.startsWith('custom:')) {
         await runCustomContextMenuAction(action.replace(/^custom:/, ''));
         return;
