@@ -101,6 +101,27 @@ namespace Antmicro.Renode.Testing
             }
         }
 
+        // Stop the machine's CPUs before their next instruction, as a GDB
+        // interrupt would, reported to GDB as SIGINT. GDB's own Ctrl-C
+        // (GdbStub: cpu.Pause()) is lost between two RunFors, when the CPUs
+        // are paused with the emulation and the next RunFor resumes them;
+        // single-step mode, as a breakpoint uses, holds until GDB steps or
+        // continues, and holds the time source with it.
+        public static void VhilGdbBreak(this IMachine machine)
+        {
+            lock(stubs)
+            {
+                if(!stubs.ContainsKey(machine))
+                {
+                    throw new RecoverableException("this machine has no GDB server");
+                }
+            }
+            foreach(var cpu in machine.SystemBus.GetCPUs().OfType<ICpuSupportingGdb>())
+            {
+                cpu.EnterSingleStepModeSafely(new HaltArguments(HaltReason.Pause, cpu, null, null));
+            }
+        }
+
         public static void StopVhilGdbServer(this IMachine machine)
         {
             lock(stubs)
