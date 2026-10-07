@@ -10,6 +10,11 @@
  *                            records into the clock
  *   /api/runs/<id>/session   ops out, acks and control in
  *
+ * Step 17: the trace's `debug` records feed the debuggers' state
+ * (replay.debug, debug.js), a paused clock record's `debug` says where the
+ * system is held (live.held), and `request` sends an op and resolves with its
+ * ack, a debug query's result in it.
+ *
  * Every tab on the run, the one that controls it and the ones that watch,
  * reads the same trace, so they show the same thing; only the controller's
  * ops are taken. Records are batched: one flush every 50 ms at most, not one
@@ -23,7 +28,7 @@ import {
 } from './live.js';
 import { feedLive, replay } from './replay.js';
 
-const KINDS = 'frame,log,edge,sample,bus_load,op,clock';
+const KINDS = 'frame,log,edge,sample,bus_load,op,clock,debug';
 const FLUSH_MS = 50;
 const RATES_MS = 250; // the wires' frames/s and dash march: 4 Hz
 
@@ -35,6 +40,7 @@ export const live = reactive({
     connected: false,
     rtf: null,
     paused: false,
+    held: null, // the system held at a debugger stop: {board, reason, func, file, line, addr}
     idleLeft: null,
     limits: {},
     periodics: [], // the senders running: {name, bus, id, ext, data, period_ms, since}
@@ -57,6 +63,7 @@ let flushTimer = 0;
 let ratesTimer = 0;
 let cid = 0;
 const waiting = new Map(); // cid or op id -> the op, until acked
+const replies = new Map(); // cid or op id -> {resolve, reject} of a request()
 let hooks = { log: () => {}, say: () => {}, onEnd: () => {} };
 
 function publish() {
@@ -88,6 +95,7 @@ function flush() {
     if (clock) {
         live.rtf = clock.rtf;
         live.paused = Boolean(clock.paused);
+        live.held = clock.paused && clock.debug ? clock.debug : null;
         live.idleLeft = clock.idle_left_s ?? null;
     }
     const last = batch.length ? batch[batch.length - 1].t_us : 0;
@@ -137,17 +145,32 @@ function onChannel(msg) {
             const op = waiting.get(msg.cid);
             waiting.delete(msg.cid);
             if (op) waiting.set(`op${msg.op_id}`, op);
+            const reply = replies.get(msg.cid);
+            replies.delete(msg.cid);
+            if (reply) replies.set(`op${msg.op_id}`, reply);
             break;
         }
-        case 'refused':
+        case 'refused': {
             waiting.delete(msg.cid);
             live.pending = Math.max(0, live.pending - 1);
-            hooks.say(`Refused: ${msg.detail}`, 'warning');
+            const reply = replies.get(msg.cid);
+            replies.delete(msg.cid);
+            if (reply) reply.reject(new Error(msg.detail));
+            else hooks.say(`Refused: ${msg.detail}`, 'warning');
             break;
-        case 'ack':
+        }
+        case 'ack': {
             if (waiting.delete(`op${msg.op_id}`)) live.pending = Math.max(0, live.pending - 1);
-            if (msg.status === 'refused') hooks.say(`Op ${msg.op_id} refused: ${msg.detail}`, 'warning');
+            const reply = replies.get(`op${msg.op_id}`);
+            replies.delete(`op${msg.op_id}`);
+            if (reply) {
+                if (msg.status === 'refused') reply.reject(new Error(msg.detail));
+                else reply.resolve(msg);
+            } else if (msg.status === 'refused') {
+                hooks.say(`Op ${msg.op_id} refused: ${msg.detail}`, 'warning');
+            }
             break;
+        }
         default:
             break;
     }
@@ -165,6 +188,8 @@ export function connect(run, {
     rates = new BusRates();
     queue = [];
     waiting.clear();
+    replies.forEach((r) => r.reject(new Error('the session changed')));
+    replies.clear();
     Object.assign(live, {
         id: run.id,
         role: 'none',
@@ -173,6 +198,7 @@ export function connect(run, {
         connected: false,
         rtf: null,
         paused: false,
+        held: null,
         idleLeft: null,
         rates: {},
         pending: 0,
@@ -217,6 +243,9 @@ export function disconnect() {
     live.connected = false;
     if (!live.ended) live.role = 'none';
     live.rates = {};
+    live.held = null;
+    replies.forEach((r) => r.reject(new Error('not connected to the session')));
+    replies.clear();
 }
 
 /** Leaves the session altogether: nothing live on the workspace. */
@@ -250,6 +279,22 @@ export function send(op) {
     live.pending += 1;
     channel.send(JSON.stringify({ kind: 'op', cid: `c${cid}`, op }));
     return true;
+}
+
+/** Sends an op and resolves with its ack ({status, at_us, result…}), or
+ *  rejects with why it was refused (a debug query's way to read a result). */
+export function request(op) {
+    const why = cannotSend();
+    if (why) return Promise.reject(new Error(why));
+    cid += 1;
+    const key = `c${cid}`;
+    waiting.set(key, op);
+    live.pending += 1;
+    const out = new Promise((resolve, reject) => {
+        replies.set(key, { resolve, reject });
+    });
+    channel.send(JSON.stringify({ kind: 'op', cid: key, op }));
+    return out;
 }
 
 /** Takes the session's control, if its holder let it go. */

@@ -28,6 +28,7 @@ import { markRaw, reactive } from 'vue';
 import { call, tracePage } from './api.js';
 import { FrameStore } from './frames.js';
 import { StateTrace } from './state.js';
+import { DebugState } from './debug.js';
 // eslint-disable-next-line import/no-unresolved, import/extensions -- copied by the build
 import { rawValue } from './shell/decode.js';
 
@@ -53,6 +54,8 @@ export const replay = reactive({
     version: 0, // bumped when the frames change
     live: false, // a live session's records stream in (step 15)
     tick: 0, // bumped per live batch: frames appended, nothing else changed
+    debug: markRaw(new DebugState()), // its debuggers, from `debug` records (step 17)
+    debugVersion: 0, // bumped when they change
 });
 
 let loading = 0; // the current load: a newer one cancels an older one
@@ -76,6 +79,8 @@ function reset() {
         loads: [],
         version: replay.version + 1,
         live: false,
+        debug: markRaw(new DebugState()),
+        debugVersion: replay.debugVersion + 1,
     });
 }
 
@@ -134,13 +139,14 @@ export async function loadRun(run) {
     const edges = [];
     const samples = [];
     const loads = [];
+    const debug = [];
     const into = {
-        log: logs, edge: edges, sample: samples, bus_load: loads,
+        log: logs, edge: edges, sample: samples, bus_load: loads, debug,
     };
     let cursor = '';
     try {
         for (;;) {
-            const q = new URLSearchParams({ kinds: 'frame,log,edge,sample,bus_load', limit: String(PAGE) });
+            const q = new URLSearchParams({ kinds: 'frame,log,edge,sample,bus_load,debug', limit: String(PAGE) });
             if (cursor) q.set('cursor', cursor);
             // eslint-disable-next-line no-await-in-loop
             const page = await tracePage(`/api/runs/${run.id}/trace?${q}`);
@@ -168,6 +174,8 @@ export async function loadRun(run) {
         samples: markRaw(samples),
         loads: markRaw(loads),
     });
+    debug.forEach((r) => replay.debug.add(r));
+    replay.debugVersion += 1;
     buildState();
     replay.version += 1;
 }
@@ -210,8 +218,9 @@ const trim = (list) => {
     if (list.length > LIVE_KEEP) list.splice(0, list.length - LIVE_KEEP / 2);
 };
 
-/** A batch of a live session's records (frames, samples, edges, logs): into
- *  the store and the boards' state. Clock and op records are session.js's. */
+/** A batch of a live session's records (frames, samples, edges, logs, the
+ *  debuggers'): into the store and the boards' state. Clock and op records
+ *  are session.js's. */
 export function feedLive(records) {
     if (!replay.live) return;
     const frames = [];
@@ -230,6 +239,9 @@ export function feedLive(records) {
             replay.logs.push(r);
         } else if (r.kind === 'bus_load') {
             replay.loads.push(r);
+        } else if (r.kind === 'debug') {
+            replay.debug.add(r);
+            replay.debugVersion += 1;
         }
         if (tr && r.t_us > tr.end) tr.end = r.t_us;
     });
