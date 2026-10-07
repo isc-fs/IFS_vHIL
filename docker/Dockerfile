@@ -31,9 +31,11 @@ ARG CAN_FLASHER_VERSION=3.1.1
 ARG CAN_FLASHER_SHA256_AMD64=8e3412b846a3ced9abd34b9a2a5665232c2fb72f089fcf55fdcccb5635c87b5e
 ARG CAN_FLASHER_SHA256_ARM64=06c731c37f2842c74d7595392e9bce2ae5f956a807c4ece1db98da24bf699549
 
+# libncurses5: the Arm GNU toolchain's arm-none-eabi-gdb links it (libncurses.so.5);
+# the live session's debugger runs it (vhil/gdb.py, docs/debugger.md).
 RUN apt-get update && apt-get install -y --no-install-recommends \
         cmake ninja-build git iproute2 can-utils xz-utils dosfstools mtools \
-        libicu72 libgtk-3-0 \
+        libicu72 libgtk-3-0 libncurses5 \
     && rm -rf /var/lib/apt/lists/*
 
 # Renode portable: linux-portable is x86_64, linux-arm64-portable aarch64.
