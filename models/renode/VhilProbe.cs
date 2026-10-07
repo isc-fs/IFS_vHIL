@@ -14,6 +14,11 @@
 //                      emulation CreateVhilGpioProbe "probe_gpio_ecu" "ecu"
 //                      probe_gpio_ecu Watch "sysbus.gpioPortB" 4
 //                      probe_gpio_ecu Drive "sysbus.gpioPortE" 3 true
+//                  It also samples firmware globals at a period, in the
+//                  emulation's own sync points, so a run need not stop
+//                  for each sample (vhil/worker.py):
+//                      probe_gpio_ecu Sample "g_x" 536870912 1 10000 0 2000000
+//                      probe_gpio_ecu Samples 100000
 //
 // Both answer the monitor in plain text, one record per line, so the Python
 // side (vhil/sim.py) parses without a serializer. Times are microseconds of
@@ -310,7 +315,7 @@ namespace Antmicro.Renode.Testing
             });
         }
 
-        private static void Schedule(ulong atUs, Action action)
+        internal static void Schedule(ulong atUs, Action action)
         {
             var now = TimeDomainsManager.Instance.GetEffectiveVirtualTimeStamp();
             var at = TimeInterval.FromMicroseconds(Math.Max(atUs, (ulong)now.TimeElapsed.TotalMicroseconds));
@@ -539,6 +544,94 @@ namespace Antmicro.Renode.Testing
             }
         }
 
+        // Sample a global (1, 2 or 4 bytes at address) at firstUs and every
+        // periodUs after it; a time already past is taken at once and the
+        // missed ones skipped, as a run stopped at each time and reading the
+        // address would (Sim.read_symbol). The reads happen at the
+        // emulation's own sync points (the master time source's synced
+        // state, as SendAt sends), where every CPU has run exactly to that
+        // time, so the run never stops for a sample; a time between two sync
+        // points is read, and stamped, at the next. nowUs is the paused
+        // emulation's time (the monitor thread's own clock reads 0): a first
+        // sample due by then is taken at once. Samples(nowUs) collects them.
+        public void Sample(string name, ulong address, int size, ulong periodUs, ulong firstUs, ulong nowUs)
+        {
+            if(periodUs == 0)
+            {
+                throw new ArgumentException("periodUs must be > 0");
+            }
+            if(size != 1 && size != 2 && size != 4)
+            {
+                throw new ArgumentException("size must be 1, 2 or 4");
+            }
+            var s = new Sampler { Name = name, Address = address, Size = size, PeriodUs = periodUs, NextUs = firstUs };
+            lock(sync)
+            {
+                samplers.Add(s);
+                TakeDue(s, nowUs);
+            }
+            // From the monitor thread: hop into the synced context once (now),
+            // as VhilCanProbe.Tick does, then follow the sampler's grid there.
+            VhilCanProbe.Schedule(0, () => Due(s));
+        }
+
+        // "t_us name value" per line: the samples taken since the last call,
+        // then forgotten. nowUs is the paused emulation's time (the monitor
+        // thread's own clock reads 0): a sample due by then that the
+        // emulation has not taken yet (due at the very time it paused) is
+        // taken now, at nowUs.
+        public string Samples(ulong nowUs)
+        {
+            var sb = new StringBuilder();
+            lock(sync)
+            {
+                foreach(var s in samplers)
+                {
+                    TakeDue(s, nowUs);
+                }
+                foreach(var t in taken)
+                {
+                    sb.Append(t.Item1).Append(' ').Append(t.Item2).Append(' ').Append(t.Item3).Append('\n');
+                }
+                taken.Clear();
+            }
+            return sb.ToString();
+        }
+
+        private void Due(Sampler s)
+        {
+            lock(sync)
+            {
+                TakeDue(s, VhilCanProbe.NowMicros());
+            }
+            VhilCanProbe.Schedule(s.NextUs, () => Due(s));
+        }
+
+        // At nowUs: a sample if one is due, then the next grid time after now.
+        private void TakeDue(Sampler s, ulong nowUs)
+        {
+            if(s.NextUs > nowUs)
+            {
+                return;
+            }
+            var bus = machine.SystemBus;
+            uint value = s.Size == 1 ? bus.ReadByte(s.Address)
+                : s.Size == 2 ? bus.ReadWord(s.Address) : bus.ReadDoubleWord(s.Address);
+            taken.Add(Tuple.Create(nowUs, s.Name, value));
+            s.NextUs += ((nowUs - s.NextUs) / s.PeriodUs + 1) * s.PeriodUs;
+        }
+
+        private class Sampler
+        {
+            public string Name;
+            public ulong Address;
+            public int Size;
+            public ulong PeriodUs;
+            public ulong NextUs;
+        }
+
+        private readonly List<Sampler> samplers = new List<Sampler>();
+        private readonly List<Tuple<ulong, string, uint>> taken = new List<Tuple<ulong, string, uint>>();
         private readonly IMachine machine;
         private readonly object sync = new object();
         private readonly List<string> channels = new List<string>();

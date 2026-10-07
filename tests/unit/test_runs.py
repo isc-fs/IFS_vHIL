@@ -454,6 +454,28 @@ class FakeIO:
     def level(self, pin):
         return self.sim.levels.get(pin, False)
 
+    def sample(self, symbol, size, period_us, first_us, now_us):
+        """As VhilGpioProbe.Sample: at first_us and every period_us after it,
+        a first time already past taken at once (at now_us)."""
+        s = [first_us, period_us, symbol, size]
+        self.sim.samplers.setdefault(self.board, []).append(s)
+        if s[0] <= now_us:
+            self._take(s, now_us)
+            s[0] += period_us * ((now_us - s[0]) // period_us + 1)
+
+    def samples(self, now_us):
+        """What the emulation sampled up to now_us, each at its time."""
+        for s in self.sim.samplers.get(self.board, []):
+            while s[0] <= now_us:
+                self._take(s, s[0])
+                s[0] += s[1]
+        out, self.sim.taken[self.board] = self.sim.taken.get(self.board, []), []
+        return out
+
+    def _take(self, s, t):
+        self.sim.calls.append(("read_symbol", t, self.board, s[2], s[3]))
+        self.sim.taken.setdefault(self.board, []).append((t, s[2], t // 1000))
+
 
 class FakeSim:
     def __init__(self, system=ECU, quantum_us=500):
@@ -462,6 +484,7 @@ class FakeSim:
         self.calls, self.scheduled, self.edge_log, self.watched = [], [], [], set()
         self.periodic = {}
         self.levels = {}
+        self.samplers, self.taken = {}, {}     # board -> FakeIO.sample's
         self.started = self.stopped = False
 
     def __enter__(self):
@@ -641,6 +664,29 @@ def test_a_watch_op_starts_recording_mid_run(tmp_path):
         {"kind": "edge", "t_us": 60_000, "board": "ecu", "pin": "PB5", "level": 1}]
     assert [(r["t_us"], r["text"]) for r in records if r["kind"] == "log"][:2] == [
         (30_000, "stimulus watch ecu.PB5"), (40_000, "stimulus watch ecu.g_x every 20 ms")]
+
+
+
+
+def _stops(scenario, tmp_path):
+    """The times a fake run of the scenario stopped at, and its trace."""
+    sim, stops = FakeSim(), []
+    run_for = sim.run_for
+    sim.run_for = lambda ms=0, us=0: stops.append(run_for(ms, us)) or stops[-1]
+    trace = TraceWriter(tmp_path / "trace.jsonl")
+    execute_run(sim, scenario, trace)
+    trace.close()
+    return sim, stops, read_trace(tmp_path / "trace.jsonl")
+
+
+def test_symbols_are_sampled_without_stopping_the_run(tmp_path):
+    """The emulation samples a watched symbol itself (BoardIO.sample): the
+    run stops only at its slices, each collecting what was sampled in it."""
+    sim, stops, trace = _stops({"kind": "run", "virtual_ms": 20, "slice_ms": 10, "watch": [
+        {"kind": "symbol", "board": "ecu", "name": "g_x", "size": 1, "period_ms": 5}]}, tmp_path)
+    assert stops == [10_000, 20_000]
+    assert [(r["t_us"], r["value"]) for r in trace if r["kind"] == "sample"] == [
+        (0, 0), (5_000, 5), (10_000, 10), (15_000, 15), (20_000, 20)]
 
 
 def test_a_watch_op_is_one_symbol_or_one_pin():
