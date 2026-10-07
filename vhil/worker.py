@@ -185,9 +185,11 @@ class TraceWriter:
 class LiveSession:
     """A live run's session channel, the worker's side (vhil/server/session.py):
     its pending ops from the DB, settled back there; when it went idle; and
-    pacing, virtual time held to `rtf` times wall time at each slice boundary,
-    with a deficit over `max_lag_s` forgiven (re-based), never repaid by
-    running flat out (as models/renode/VhilPacer.cs does for the bench)."""
+    pacing: at each slice boundary the worker waits until wall time has come
+    to the end of the slice it is about to run (at `rtf`), so virtual time
+    never leads wall time, and a deficit over `max_lag_s` is forgiven
+    (re-based), never repaid by running flat out (as
+    models/renode/VhilPacer.cs does for the bench)."""
 
     def __init__(self, store: SessionStore, run_id: int, limits: Limits, *, rtf: float = 1.0,
                  max_lag_s: float = 0.25, poll_s: float = 0.05,
@@ -231,13 +233,15 @@ class LiveSession:
         self._base = (now_us, self.clock_fn())
         self._window.clear()
 
-    def pace(self, now_us: int) -> None:
+    def pace(self, now_us: int, until_us: int) -> None:
+        """At virtual time now_us, before running the slice to until_us."""
         v0, w0 = self._base
-        ahead = (now_us - v0) / 1e6 / self.rtf - (self.clock_fn() - w0)
-        if ahead >= 0.001:
-            self.sleep(ahead)
-        elif -ahead > self.max_lag_s:
+        if (self.clock_fn() - w0) - (now_us - v0) / 1e6 / self.rtf > self.max_lag_s:
             self.rebase(now_us)        # behind: forgive, never sprint to catch up
+            v0, w0 = self._base
+        wait = (until_us - v0) / 1e6 / self.rtf - (self.clock_fn() - w0)
+        if wait >= 0.001:
+            self.sleep(wait)
 
     def clock(self, now_us: int, paused: bool = False) -> dict:
         """The slice's `clock` record: virtual time, the real-time factor over
@@ -521,7 +525,7 @@ def execute_run(sim, scenario: dict, trace: TraceWriter, *,
             progress(now)
             if cancelled():
                 raise Cancelled({"frames": frames, "sent": sent, **counts})
-        session.pace(now)
+        session.pace(now, t_us)
 
     now = sim.now_us()
     since = now          # frames/edges from here on belong to the next slice

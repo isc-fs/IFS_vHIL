@@ -123,7 +123,7 @@ class Scripted:
     def rebase(self, now_us):
         pass
 
-    def pace(self, now_us):
+    def pace(self, now_us, until_us):
         pass
 
     def clock(self, now_us, paused=False):
@@ -316,11 +316,14 @@ def test_pacing_holds_virtual_time_to_wall_time():
     LiveSession.__init__(s, store=None, run_id=1, limits=Limits(), clock=lambda: t[0],
                          wall=lambda: t[0], sleep=lambda d: slept.append(d))
     s.rebase(0)
-    s.pace(50_000)                  # 50 ms of virtual time in no wall time: wait 50 ms
+    s.pace(0, 50_000)               # the slice to 50 ms runs once 50 ms of wall time passed
     assert slept == [pytest.approx(0.05)]
+    t[0] = 0.05
+    s.pace(50_000, 100_000)
+    assert slept == [pytest.approx(0.05)] * 2
     t[0] = 1.0
-    s.pace(100_000)                 # 0.9 s behind: forgiven, not repaid
-    assert len(slept) == 1 and s._base == (100_000, 1.0)
+    s.pace(100_000, 150_000)        # 0.9 s behind: forgiven, not repaid by running flat out
+    assert slept == [pytest.approx(0.05)] * 3 and s._base == (100_000, 1.0)
 
 
 # -- the channel ----------------------------------------------------------------------------
@@ -529,6 +532,7 @@ def test_the_worker_and_the_channel_together(settings, store):
             while got[-1]["kind"] != "ack":
                 got.append(ws.receive_json())
             assert got[-1]["status"] == "applied" and got[-1]["at_us"] % 50_000 == 0
+            time.sleep(0.6)             # a dozen slices, paced
             ws.send_json({"kind": "op", "op": {"kind": "stop"}})
             while got[-1]["kind"] != "end":
                 got.append(ws.receive_json())
@@ -539,5 +543,5 @@ def test_the_worker_and_the_channel_together(settings, store):
     # Paced to wall time: the fake Sim runs far faster than real time, so
     # the real-time factor is about 1 (catching up after a slow slice may
     # take it over for a moment).
-    rtfs = sorted(r["rtf"] for r in trace if r["kind"] == "clock")[2:]
-    assert rtfs and 0.5 <= rtfs[len(rtfs) // 2] <= 1.5, rtfs
+    rtfs = sorted([r["rtf"] for r in trace if r["kind"] == "clock"][2:])
+    assert len(rtfs) >= 8 and 0.5 <= rtfs[len(rtfs) // 2] <= 1.5, rtfs

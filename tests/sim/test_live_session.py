@@ -54,7 +54,7 @@ class Scripted:
     def rebase(self, now_us):
         pass
 
-    def pace(self, now_us):
+    def pace(self, now_us, until_us):
         pass
 
     def clock(self, now_us, paused=False):
