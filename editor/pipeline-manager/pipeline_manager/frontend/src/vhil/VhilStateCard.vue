@@ -81,7 +81,7 @@ the scrubber. Status is always text and a glyph, never colour alone.
                 <dd class="mono num">
                     {{ v.text }}<span
                         v-if="v.has && v.unit" class="vhil-state-unit"
-                    > {{ v.unit }}</span>
+                    >{{ v.unit }}</span>
                     <span v-if="v.stale" class="vhil-state-hint"> stale</span>
                 </dd>
             </div>

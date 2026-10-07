@@ -41,8 +41,12 @@
 .vhil-state-since { font-size: var(--fs-dense); }
 .vhil-state-hint { font-size: var(--fs-small); font-weight: 400; }
 
-/* Contactors and relays: square pills with text, filled when closed. */
-.vhil-state-pills { display: flex; flex-wrap: wrap; gap: var(--sp-1); margin: 0; padding: 0; list-style: none; }
+/* Contactors and relays: square pills with text, filled when closed. (The
+   editor's global ul is a column with a 20 px gap: these lists say their own.) */
+.vhil-state-pills {
+  display: flex; flex-direction: row; flex-wrap: wrap; gap: var(--sp-1);
+  margin: 0; padding: 0; list-style: none;
+}
 .vhil-relay {
   display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 8px;
   border: 1px solid var(--border-control); border-radius: 3px;
@@ -76,7 +80,7 @@
 .vhil-state-value dd { margin: 0; text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .vhil-state-value.--stale dd,
 .vhil-state-value.--none dd { color: var(--fg-muted); }
-.vhil-state-unit { color: var(--fg-muted); }
+.vhil-state-unit { margin-left: 0.3em; color: var(--fg-muted); }
 
 /* History: the FSM's and each relay's lanes over the run, then the
    transitions; a click on either moves the scrubber. */
@@ -111,7 +115,10 @@
   background: var(--focus); pointer-events: none;
 }
 
-.vhil-transitions { max-height: 7.5rem; margin: 0; padding: 0; overflow: auto; list-style: none; font-size: var(--fs-dense); }
+.vhil-transitions {
+  display: block; max-height: 7.5rem; margin: 0; padding: 0; overflow: auto;
+  list-style: none; font-size: var(--fs-dense);
+}
 .vhil-transition {
   display: flex; gap: var(--sp-2); width: 100%; padding: 1px var(--sp-1);
   border: 0; border-left: 3px solid transparent; background: none;
