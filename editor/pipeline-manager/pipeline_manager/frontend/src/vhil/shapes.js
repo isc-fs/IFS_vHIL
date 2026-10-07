@@ -1,7 +1,7 @@
 /*
  * vHIL: what the node shapes and the wires show (step 8 of
  * docs/architecture/editor-workspace.md; CHANGELOG-VHIL.md). A board is a
- * card with a role band and a mono sub-line ("node 0x2 · FDCAN1"), a CAN bus
+ * card with a role band and a mono sub-line ("node 0x2"), a CAN bus
  * a thin rail tinted --can-1..4 in system order with its name and bitrate
  * on it, a device a compact dashed card with a count pill. What each reads
  * comes from the specification's additionalData.vhil (vhil/editor.py
@@ -28,10 +28,10 @@ export function roleOf(node) {
 
 const hex = (n) => `0x${Number(n).toString(16).toUpperCase()}`;
 
-/** A board's sub-line: its role's node ID and flash bus, else its type. */
+/** A board's sub-line: its role's node ID, else its type. */
 export function boardSubline(node) {
     const info = vhilOf(node.type)?.role_info?.[roleOf(node)];
-    return info ? `node ${hex(info.node_id)}${ROLE_SEP}${info.flash_bus}` : node.type;
+    return info ? `node ${hex(info.node_id)}` : node.type;
 }
 
 /** 500000 -> "500 kbit/s". */

@@ -183,8 +183,7 @@ from `git archive 04613679` except as listed below.
       place of the title label, header icon and pill, and takes the classes
       `vhil-node --vhil-<kind>` plus `--role-<role>` or `--can-<n>`. A board
       is a card with a 4 px band and a chip in its role's colour (the role as
-      text), a mono sub-line from the specification's `role_info` ("node 0x2
-      · FDCAN1"), its pin columns captioned (devices and analog left, CAN and
+      text), a mono sub-line from the specification's `role_info` ("node 0x2"), its pin columns captioned (devices and analog left, CAN and
       digital right) and an empty `vhil-node-state` slot for the live state
       pill (step 15); a bus is a thin pill-ended rail (8 px, width `auto`) in
       its tint, `--can-1..4` by its place among the graph's buses, with its

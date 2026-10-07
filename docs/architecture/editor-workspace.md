@@ -187,7 +187,7 @@ sidebar sizes are kept per viewer in `localStorage` (wrapped in try/catch).
    node tree), Systems (open one on the canvas, "View YAML" read-only),
    Scenarios, Runs (history of the open system; opening one enters REPLAY),
    Tests (scenario tests with JUnit results).
-3. **Canvas:** board nodes with role band, mono sub-line "node 0x2 · FDCAN1",
+3. **Canvas:** board nodes with role band, mono sub-line "node 0x2",
    grouped pins and a live state pill; bus rails with frames/s in LIVE,
    dimmed when silent; device cards with a count pill. Topology is editable
    only in DESIGN; values stay editable in the other modes. Context menus:
