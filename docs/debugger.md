@@ -125,6 +125,25 @@ Who can reach what:
   the trace, as they see its frames; only the controlling connection sends
   debug ops.
 
+## In the editor
+
+The Debug dock tab (step 17), on the canvas's selected board: Continue (F5),
+Step over (F10), Step into (F11), Step out (Shift+F11), Break, Detach;
+breakpoints by function, file:line or address, or from the source's gutter;
+the source at the stop, read only, from the image's checkout in the fw volume
+(`GET /api/runs/{id}/debug/source?board=&path=`, vhil/server/sources.py), or
+its disassembly; the watch list, shared with the State tab. The inspector
+shows the held board's call stack (pick a frame), locals and registers. While
+held, the Debug and Bus tabs say "Bus frozen: all boards paused at t=…" and
+the top bar "PAUSED · breakpoint in ecu (control.cpp:35)". A REPLAY says it
+can't be debugged and lists where the session stopped.
+
+There is no list of the firmware timeouts that would have fired had time not
+been held: the contracts give each frame's period, not the timeout the
+receiving firmware applies to it (those are constants in its code, e.g. the
+AMS's 200 ms VcuStale), so they can't be derived from the state view and
+contracts.
+
 ## Limits
 
 - One GDB per board, all-stop: while any board is held, the others are held

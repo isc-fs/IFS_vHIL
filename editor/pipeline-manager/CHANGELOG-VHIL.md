@@ -420,6 +420,42 @@ from `git archive 04613679` except as listed below.
     - **The status strip** (`VhilStatus.vue`): the clock, each bus's frames a
       second, the periodic senders running and Stop all.
 
+20. **The debugger** (step 17 of the editor workspace plan;
+    [debugger](../../docs/debugger.md)).
+    - **The model** (`debug.js`, pure, `tests/js/debug.test.mjs`): the
+      trace's `debug` records folded into each board's breakpoints, watches
+      and the stop it is held at (stack, locals, registers, watch values);
+      every stop, for a REPLAY; how a stop reads ("breakpoint in ecu
+      (control.cpp:35)") and what a breakpoint field's text means (a
+      function, file:line or an address). `replay.js` loads the `debug`
+      records with the trace and feeds a live session's as they come;
+      `session.js` reads a paused clock record's `debug` (`live.held`) and
+      sends an op with `request`, resolving with its ack (a query's result).
+    - **The Debug tab** (`VhilDebug.vue`, `debugui.js`), following the
+      canvas selection (else the held board): a step toolbar with labelled
+      buttons and their keys (Continue F5, Step over F10, Step into F11, Step
+      out Shift+F11, Break, Detach), breakpoints added by function, file:line
+      or address and removed from a list; the firmware source at the stop,
+      read only (`GET /api/runs/<id>/debug/source`, from the image's
+      checkout in the fw volume), a window of lines around the current one
+      (▶, highlighted, scrolled to) with a breakpoint gutter (● buttons that
+      set or clear one); a Disassembly toggle around the pc; the watch list.
+      A REPLAY says it can't be debugged and lists where the session
+      stopped (a click scrubs there). No list of the timeouts that would
+      have fired: the contracts give periods, not receivers' timeouts.
+    - **The frozen-bus banner** (`VhilHeld.vue`), in the Debug and Bus tabs:
+      "Bus frozen: all boards paused at t=… · breakpoint in ecu (…)". The top
+      bar adds where the system is held next to PAUSED; the Debug tab comes
+      up at a stop.
+    - **The inspector** (`VhilDebugInspect.vue`): a held board's call stack
+      (a click picks the frame the source and locals show), its locals and
+      its registers; with nothing selected, the held board's.
+    - **Watches** (`VhilWatches.vue`): a board's list, kept by the worker
+      (the `watches` op), in the Debug tab and the State tab alike, each with
+      its value at the board's stop.
+    - **Keys** (`shortcuts.js`): held at a stop and in control, F5
+      continues, F10 steps over, F11 steps into, Shift+F11 steps out.
+
 ## Left for later
 
 - **Light theme polish** (owner decision: defined now, polished later).
