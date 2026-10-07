@@ -45,7 +45,9 @@ def test_pedal_voltages_reach_0x701_exactly(ecu, apps1, apps2, brake):
 
 
 def test_pedal_stream_every_100_ms(ecu):
-    from vhil.sim import assert_period
+    """ControlTask's pit-diag tick: on a 100 ms grid, within a kernel tick
+    (ECU FreeRTOS tick: configTICK_RATE_HZ 1000, FreeRTOSConfig.h:67)."""
+    from vhil.sim import assert_cadence
     t = ecu.run_for(ms=1000)
-    assert_period(ecu.can("can_acu").frames(PEDALS, since_us=t - 1_000_000),
-                  period_us=100_000, tolerance_us=0, min_count=9)
+    assert_cadence(ecu.can("can_acu").frames(PEDALS, since_us=t - 1_000_000),
+                   period_us=100_000, jitter_us=1000, min_count=9)

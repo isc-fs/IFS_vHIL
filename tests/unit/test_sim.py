@@ -4,8 +4,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from vhil.sim import (BoardIO, Edge, Frame, assert_period, intervals_us, parse_edges,
-                      parse_frames)
+from vhil.sim import (BoardIO, Edge, Frame, assert_cadence, assert_period, intervals_us,
+                      parse_edges, parse_frames)
 from vhil.system import REPO, System
 
 
@@ -43,6 +43,24 @@ def test_assert_period_names_the_first_bad_interval():
 def test_assert_period_needs_enough_items():
     with pytest.raises(AssertionError, match="only 2 items"):
         assert_period(_frames([0, 10_000]), period_us=10_000, tolerance_us=0)
+
+
+def test_assert_cadence_accepts_jitter_around_a_fixed_grid():
+    assert_cadence(_frames([10_150, 20_154, 30_151, 40_150]), period_us=10_000, jitter_us=10)
+
+
+def test_assert_cadence_catches_drift_that_each_interval_hides():
+    """10 us long each period: within a 100 us tolerance interval by
+    interval, but 300 us off the grid after 30 periods."""
+    frames = _frames([k * 10_010 for k in range(31)])
+    assert_period(frames, period_us=10_000, tolerance_us=100)
+    with pytest.raises(AssertionError, match=r"by 0..300 us"):
+        assert_cadence(frames, period_us=10_000, jitter_us=100)
+
+
+def test_assert_cadence_catches_a_missing_item():
+    with pytest.raises(AssertionError, match="grid"):
+        assert_cadence(_frames([0, 10_000, 30_000, 40_000]), period_us=10_000, jitter_us=1000)
 
 
 @pytest.mark.parametrize("system, board, pin, want", [

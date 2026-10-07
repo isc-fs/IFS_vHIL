@@ -124,7 +124,7 @@ smoke)
     in_container "$prelude"'
         need_elf "$1"; need_elf "$1.bootloader"
         python -m vhil.system render "systems/$1.yaml" --firmware "$1=$(elf "$1")" \
-            --firmware "$1.bootloader=$(elf "$1.bootloader")" -o /tmp/system.resc
+            --firmware "$1.bootloader=$(elf "$1.bootloader")" --can-hub -o /tmp/system.resc
         # renode-test drives Renode through its Robot server, which listens on
         # every interface (HttpListener http://*:port/, no bind option in
         # Renode 1.17). This job runs on the default Docker network, in its own

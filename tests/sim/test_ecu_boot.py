@@ -2,6 +2,9 @@
 
 Firmware facts (IFS08-CE-ECU):
   ControlPeriodMs = 10, DiagPeriodMs = 1000          ecu_config.hpp:22-23
+  each task waits with osDelayUntil(tick += period)   control_task.cpp:426-427,
+                                                      diag_task.cpp:67-68
+  on a 1 kHz kernel tick                              FreeRTOSConfig.h:67
   0x100 every ControlTask tick, inverter or not       control_task.cpp:305-323
   0x704 health every DiagPeriodMs, ungated            diag_task.cpp:53-65
   OK_STATUS (PD14) high, ERR_STATUS (PD15) low
@@ -15,13 +18,19 @@ Firmware facts (IFS08-CE-ECU):
 """
 import pytest
 
-from vhil.sim import Sim, assert_period
+from vhil.sim import Sim, assert_cadence
 from vhil.system import REPO
 
 HEARTBEAT = 0x100
 HEALTH = 0x704
 CONTROL_PERIOD_US = 10_000
 DIAG_PERIOD_US = 1_000_000
+# osDelayUntil wakes a task on exact kernel ticks with no drift; between the
+# wake and the frame's end on the bus lie the task's compute, the CAN TX
+# task's hand-off, the wait for the bus and the frame's stuff bits. The
+# firmware puts the frame out in the tick it wakes in, so a frame's jitter
+# against the period's grid is under one tick (configTICK_RATE_HZ = 1000).
+KERNEL_TICK_US = 1000
 OK_STATUS = ("sysbus.gpioPortD", 14)
 ERR_STATUS = ("sysbus.gpioPortD", 15)
 
@@ -42,9 +51,9 @@ def booted(make_sim):
 def test_heartbeat_every_control_tick(booted):
     sim, _ = booted
     hb = sim.can("can_acu").frames(HEARTBEAT)
-    # Exact from the second frame on: the task's first wake is aligned to the
-    # scheduler start, every later one to the previous (osDelayUntil).
-    assert_period(hb[1:], period_us=CONTROL_PERIOD_US, tolerance_us=0, min_count=100)
+    # On one grid from the second frame on: the task's first wake is aligned
+    # to the scheduler start, every later one to the previous (osDelayUntil).
+    assert_cadence(hb[1:], period_us=CONTROL_PERIOD_US, jitter_us=KERNEL_TICK_US, min_count=100)
 
 
 def test_heartbeat_starts_within_two_ticks_of_the_app(booted):
@@ -65,7 +74,7 @@ def test_heartbeat_only_on_acu_bus(booted):
 def test_health_every_diag_period(booted):
     sim, _ = booted
     health = sim.can("can_acu").frames(HEALTH)
-    assert_period(health[1:], period_us=DIAG_PERIOD_US, tolerance_us=0, min_count=2)
+    assert_cadence(health[1:], period_us=DIAG_PERIOD_US, jitter_us=KERNEL_TICK_US, min_count=2)
 
 
 def test_status_leds_ok_from_first_tick(booted):
@@ -133,7 +142,7 @@ def test_uptime_counts_seconds(running):
 
 def test_traffic_on_the_other_buses_does_not_disturb_the_acu_bus(images):
     """Bus independence: 1000 frames/s on each of the inverter and dash buses
-    (IDs nothing listens to) for 5 s: 0x100 keeps its exact 10 ms, every task
+    (IDs nothing listens to) for 5 s: 0x100 keeps its 10 ms grid, every task
     keeps stepping."""
     with Sim(REPO / "systems" / "ecu.yaml", images("ecu")) as sim:
         sim.wait_for_app()
@@ -145,5 +154,5 @@ def test_traffic_on_the_other_buses_does_not_disturb_the_acu_bus(images):
         t0 = sim.now_us()
         sim.run_for(ms=5000)
         hb = sim.can("can_acu").frames(HEARTBEAT, since_us=t0)
-        assert_period(hb, period_us=CONTROL_PERIOD_US, tolerance_us=0, min_count=490)
+        assert_cadence(hb, period_us=CONTROL_PERIOD_US, jitter_us=KERNEL_TICK_US, min_count=490)
         assert {f.data[4] for f in sim.can("can_acu").frames(HEALTH, since_us=t0)} == {ALL_TASKS}
