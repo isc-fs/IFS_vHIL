@@ -60,12 +60,16 @@ export const ws = reactive({
     // The open system. saved: the signature of the graph when it was opened
     // or last saved (the dirty dot); savedYaml: the file it gave then (Run
     // refuses while the graph gives another); runRef: the commit that file
-    // is at ("" for the checked-out tree), which Run runs.
+    // is at ("" for the checked-out tree), which Run runs; base: the commit
+    // the graph was opened at or last committed as, which a commit to a new
+    // branch builds on, so the branch runs with this deployment's code
+    // (vhil/server/systems_write.py, Save.base).
     id: null,
     isNew: false,
     branch: '',
     ref: '',
     runRef: '',
+    base: '',
     saved: null,
     savedYaml: null,
     savedBranch: null,
@@ -184,6 +188,7 @@ export function open(id, { branch = '', isNew = false } = {}) {
             branch,
             ref: s.ref || '',
             runRef: branch ? s.ref : '',
+            base: s.ref || '',
             savedBranch: null,
             savedYaml: null,
             extra: entryGraph(s.dataflow).additionalData?.vhil || null,
@@ -286,6 +291,7 @@ export function commit({ takeover = false } = {}) {
         const body = {
             dataflow: currentGraph(), branch: ws.commit.branch.trim(), message: ws.commit.message,
         };
+        if (ws.base) body.base = ws.base;
         if (takeover) body.takeover = true;
         const send = (b) => (ws.isNew
             ? call('POST', '/api/systems', { id: ws.id, ...b })
@@ -303,6 +309,7 @@ export function commit({ takeover = false } = {}) {
         }
         ws.isNew = false;
         ws.runRef = out.ref;
+        ws.base = out.ref;
         ws.saved = signature(saveDataflow());
         ws.savedYaml = (await previewYaml()).yaml;
         refreshDirty();
@@ -413,7 +420,15 @@ export function runNow() {
         const body = runRequest({
             system: ws.id, ref: ws.runRef, dataflow, virtualMs,
         });
-        const out = await call('POST', '/api/runs', body);
+        let out;
+        try {
+            out = await call('POST', '/api/runs', body);
+        } catch (e) {
+            // The API says why (e.g. a branch whose code differs from this
+            // deployment's: vhil/server/runs.py).
+            say('Run refused', 'error', e.errors || [e.message]);
+            return;
+        }
         follow(out.run_id, body);
     });
 }

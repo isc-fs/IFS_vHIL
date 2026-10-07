@@ -41,6 +41,16 @@ def test_run_is_the_shells_run_request():
         REPO / "docker/editor.Dockerfile.dockerignore").read_text()
 
 
+def test_commit_builds_a_new_branch_on_the_opened_commit():
+    """As the shell's page did (#167): a commit names the commit the system
+    was opened at (or last committed as) as its base, so the new branch
+    runs with this deployment's code."""
+    workspace = (VHIL / "workspace.js").read_text()
+    assert "base: s.ref || ''" in workspace
+    assert "if (ws.base) body.base = ws.base;" in workspace
+    assert "ws.base = out.ref;" in workspace
+
+
 def test_board_properties_live_in_the_inspector():
     node = (FRONTEND / "src/custom/CustomNode.vue").read_text()
     assert "vhilKind(props.node.type) === 'board'" in node
