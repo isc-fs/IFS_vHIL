@@ -5,19 +5,24 @@ plot.js set element styles through the CSSOM, which a CSP allows), so the
 policy can be strict:
 
     default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: <avatars>;
-    connect-src 'self' ws(s)://<this host>; frame-src 'self' <editor origin>;
+    connect-src 'self' ws(s)://<this host>; frame-src 'self';
     frame-ancestors 'self'; object-src 'none'; base-uri 'none'; form-action 'self'
 
 plus X-Frame-Options, X-Content-Type-Options and Referrer-Policy. The editor
-origin comes from VHIL_EDITOR_URL (the iframe the Editor page embeds). A
-response that already carries a Content-Security-Policy keeps its own: run
-artifacts set `sandbox` (vhil/server/runs.py). FastAPI's /docs and /redoc
-pages load Swagger UI from a CDN with inline script, so they get only the
-frame and sniffing headers.
+the Editor page embeds is on this origin, under /editor/ (the proxy routes
+it to Pipeline Manager: deploy/Caddyfile), so frame-src needs no other
+origin. A response that already carries a Content-Security-Policy keeps its
+own: run artifacts set `sandbox` (vhil/server/runs.py). FastAPI's /docs and
+/redoc pages load Swagger UI from a CDN with inline script, so they get only
+the frame and sniffing headers.
+
+The editor's own policy, EDITOR_CSP, is the same with no avatars or frames;
+Pipeline Manager sends it (PM_CSP, scripts/editor.sh). Its validators are
+precompiled and its log has no inline styles, so it needs neither
+'unsafe-eval' nor 'unsafe-inline' (editor/pipeline-manager/CHANGELOG-VHIL.md).
 """
 from __future__ import annotations
 
-import os
 import re
 from urllib.parse import urlsplit
 
@@ -36,8 +41,25 @@ def origin_of(url: str) -> str | None:
     return f"{p.scheme}://{p.netloc}"
 
 
-def csp(ws_origins: list[str], editor_origin: str | None) -> str:
-    frames = " ".join(["'self'"] + ([editor_origin] if editor_origin else []))
+# The editor (Pipeline Manager under /editor/). connect-src 'self' covers its
+# same-origin socket.io WebSocket in current browsers.
+EDITOR_CSP = "; ".join([
+    "default-src 'self'",
+    "script-src 'self'",
+    "style-src 'self'",
+    "img-src 'self' data:",
+    "font-src 'self'",
+    "connect-src 'self'",
+    "worker-src 'self'",
+    "frame-src 'none'",
+    "frame-ancestors 'self'",
+    "object-src 'none'",
+    "base-uri 'none'",
+    "form-action 'self'",
+])
+
+
+def csp(ws_origins: list[str]) -> str:
     return "; ".join([
         "default-src 'self'",
         "script-src 'self'",
@@ -45,7 +67,7 @@ def csp(ws_origins: list[str], editor_origin: str | None) -> str:
         f"img-src 'self' data: {AVATARS}",
         "font-src 'self'",
         "connect-src " + " ".join(["'self'"] + ws_origins),
-        f"frame-src {frames}",
+        "frame-src 'self'",
         "frame-ancestors 'self'",
         "object-src 'none'",
         "base-uri 'none'",
@@ -56,11 +78,9 @@ def csp(ws_origins: list[str], editor_origin: str | None) -> str:
 class SecurityHeaders:
     """Pure ASGI middleware: adds the headers to every HTTP response."""
 
-    def __init__(self, app, public_url: str = "", editor_url: str | None = None):
+    def __init__(self, app, public_url: str = ""):
         self.app = app
         self.public = origin_of(public_url)
-        self.editor = origin_of(editor_url if editor_url is not None
-                                else os.environ.get("VHIL_EDITOR_URL", "http://localhost:5050"))
 
     def _ws_origins(self, scope) -> list[str]:
         # 'self' covers same-origin ws(s) in current browsers; name it too for
@@ -78,7 +98,7 @@ class SecurityHeaders:
             return await self.app(scope, receive, send)
         path = scope.get("path", "")
         docs = path in DOCS or path.startswith("/docs/")
-        policy = None if docs else csp(self._ws_origins(scope), self.editor)
+        policy = None if docs else csp(self._ws_origins(scope))
 
         async def send_with_headers(message):
             if message["type"] == "http.response.start":

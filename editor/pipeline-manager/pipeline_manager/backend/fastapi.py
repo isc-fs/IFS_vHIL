@@ -6,6 +6,7 @@
 Provides function for creating FastAPI application.
 """
 
+import os
 import shutil
 from pathlib import Path
 from typing import Optional
@@ -15,6 +16,60 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from pipeline_manager import frontend, prebuilt_frontend
+
+
+def allowed_origins() -> list:
+    """
+    vHIL: the origins allowed to call this server from another origin
+    (CORS, and socket.io's handshake), from ``PM_ALLOWED_ORIGINS``
+    (comma-separated). Upstream allowed any (``*``); by default none is,
+    as the editor is served on the web app's own origin (behind its proxy).
+
+    Returns
+    -------
+    list
+        The allowed origins (empty: same origin only).
+    """
+    return [
+        o.strip()
+        for o in os.environ.get("PM_ALLOWED_ORIGINS", "").split(",")
+        if o.strip()
+    ]
+
+
+class ContentSecurityPolicy:
+    """
+    vHIL: an ASGI middleware that sets ``PM_CSP`` (a Content-Security-Policy)
+    on every HTTP response, as ``Content-Security-Policy-Report-Only`` when
+    ``PM_CSP_REPORT_ONLY=1``. Unset, no policy is sent (upstream's
+    behaviour). vHIL's policy is vhil/server/security.py's ``editor_csp``.
+    """
+
+    def __init__(self, app, policy: str, report_only: bool = False):
+        self.app = app
+        self.header = (
+            b"content-security-policy-report-only"
+            if report_only
+            else b"content-security-policy"
+        )
+        self.policy = policy.encode("latin-1")
+
+    async def __call__(self, scope, receive, send):  # noqa: D102
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+
+        async def send_with_policy(message):
+            if message["type"] == "http.response.start":
+                headers = [
+                    (k, v)
+                    for k, v in message.get("headers") or []
+                    if k.lower() != self.header
+                ]
+                headers.append((self.header, self.policy))
+                message = {**message, "headers": headers}
+            await send(message)
+
+        return await self.app(scope, receive, send_with_policy)
 
 
 def get_default_frontend_path() -> Path:
@@ -93,12 +148,22 @@ def create_app(
         name="static",
     )
 
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_headers=["*"],
-        allow_methods=["GET"],
-        max_age=None,
-    )
+    # vHIL: only the origins PM_ALLOWED_ORIGINS names (upstream: "*").
+    origins = allowed_origins()
+    if origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=origins,
+            allow_headers=["*"],
+            allow_methods=["GET"],
+            max_age=None,
+        )
+    policy = os.environ.get("PM_CSP", "").strip()
+    if policy:
+        app.add_middleware(
+            ContentSecurityPolicy,
+            policy=policy,
+            report_only=os.environ.get("PM_CSP_REPORT_ONLY", "") == "1",
+        )
 
     return app

@@ -1,6 +1,6 @@
 """Compose systems from the browser: save, PR, firmware picker (M5.4, #116).
 
-    GET  /api/config                    editor URL, base branch, whether PRs can be opened,
+    GET  /api/config                    editor path, base branch, whether PRs can be opened,
                                         a run's default virtual time
     GET  /api/firmware                  catalogue firmware sources (repo, default ref, recipe)
     GET  /api/firmware/{id}/refs        that repo's branches and tags with their commits, and
@@ -43,6 +43,7 @@ from vhil.server.workspace import SYSTEM_ID
 from vhil.system import ID, SCHEMA, System, SystemError, built_images, image_path
 
 router = APIRouter()
+EDITOR_PATH = "/editor/"
 log = logging.getLogger("vhil.server.systems")
 
 
@@ -282,7 +283,8 @@ def _save(request: Request, system_id: str, body: Save, create: bool) -> dict:
 @router.get("/api/config")
 def config(request: Request):
     host = _host(request)
-    return {"editor_url": os.environ.get("VHIL_EDITOR_URL", "http://localhost:5050"),
+    # The editor is on this origin, behind the same proxy (deploy/Caddyfile).
+    return {"editor_url": EDITOR_PATH,
             "base_branch": _store(request).base,
             "auth": request.app.state.settings.auth,
             "can_open_pr": bool(host.token) if isinstance(host, GitHubHost) else True,

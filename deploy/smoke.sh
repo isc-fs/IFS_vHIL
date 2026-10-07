@@ -6,7 +6,8 @@
 #
 #   1. up: workspace clone, api, 1 worker, editor, proxy (plain HTTP on
 #      127.0.0.1 only, non-default ports), backup; dev auth; empty secret files
-#   2. /api/health through the proxy; the editor through the proxy's auth gate;
+#   2. /api/health through the proxy; the editor and its socket.io under /editor/
+#      on the same origin, through the proxy's auth gate, and no second port;
 #      the hardening holds: uid 10001, read-only root, no secrets in the
 #      worker, the worker reaches neither the API, the editor nor the metadata
 #      address, and only GitHub through the egress proxy; security headers
@@ -32,7 +33,6 @@ ref=${1:-dev}
 context=${VHIL_DOCKER_CONTEXT:-colima-vhil}
 project=${SMOKE_PROJECT:-ifs-vhil-smoke}
 http_port=${SMOKE_HTTP_PORT:-18080}
-editor_port=${SMOKE_EDITOR_PORT:-15443}
 fw_volume=${SMOKE_FW_VOLUME-vhil-data}
 base="http://localhost:$http_port"
 
@@ -54,12 +54,9 @@ VHIL_WORKSPACE_REF=$ref
 VHIL_AUTH=dev
 VHIL_ALLOW_DEV_ON_NETWORK=1
 VHIL_SITE=http://localhost
-VHIL_EDITOR_SITE=http://localhost:5443
 VHIL_PUBLIC_URL=$base
-VHIL_EDITOR_URL=http://localhost:$editor_port
 VHIL_HTTP_PORT=$http_port
 VHIL_HTTPS_PORT=${SMOKE_HTTPS_PORT:-18443}
-VHIL_EDITOR_PORT=$editor_port
 VHIL_WORKERS=1
 VHIL_WORKER_CPUS=${SMOKE_WORKER_CPUS:-4}
 VHIL_BACKUP_DIR=backups
@@ -100,9 +97,16 @@ say "health through the proxy"
 health=$(api "$base/api/health") || fail "no /api/health at $base"
 echo "  $health"
 [ "$(echo "$health" | json 'd["status"]')" = ok ] || fail "health: $health"
-code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:$editor_port/")
-[ "$code" = 200 ] || fail "editor through the proxy: HTTP $code"
-echo "  editor: HTTP $code"
+code=$(curl -s -o /dev/null -w '%{http_code}' "$base/editor/")
+[ "$code" = 200 ] || fail "editor through the proxy (/editor/): HTTP $code"
+echo "  editor at $base/editor/: HTTP $code"
+# Its socket.io, next to it: the handshake answers through the same gate.
+curl -fsS "$base/editor/socket.io/?EIO=4&transport=polling" | grep -q '"sid"' \
+    || fail "the editor's socket.io does not answer at $base/editor/socket.io/"
+echo "  editor socket.io at $base/editor/socket.io/: handshake ok"
+# One origin: the proxy publishes no other port (the editor had 5443).
+dc port proxy 5443 >/dev/null 2>&1 && fail "the proxy still publishes the editor's old port 5443"
+echo "  no second port"
 
 say "hardening"
 in_svc() { dc exec -T "$1" "${@:2}"; }
@@ -135,9 +139,13 @@ headers=$(curl -sS -D - -o /dev/null "$base/")
 for h in "X-Content-Type-Options: nosniff" "Referrer-Policy:" "frame-ancestors 'none'"; do
     echo "$headers" | grep -qiF "$h" || fail "the app's responses lack '$h'"
 done
-curl -sS -D - -o /dev/null "http://localhost:$editor_port/" \
-    | grep -qiF "frame-ancestors $base" || fail "the editor may be framed by other origins"
-echo "  headers: nosniff, Referrer-Policy, frame-ancestors (app: none; editor: $base)"
+editor_headers=$(curl -sS -D - -o /dev/null "$base/editor/")
+echo "$editor_headers" | grep -qiF "frame-ancestors 'self'" \
+    || fail "the editor may be framed by other origins"
+echo "$editor_headers" | grep -qiE "^content-security-policy(-report-only)?: default-src 'self'; script-src 'self'; style-src 'self'" \
+    || fail "the editor sends no script-src/style-src 'self' policy"
+echo "$editor_headers" | grep -qiF "unsafe-" && fail "the editor's policy allows an unsafe- source"
+echo "  headers: nosniff, Referrer-Policy, frame-ancestors (app: none; editor: 'self'), editor CSP"
 
 say "save an edit of systems/ecu.yaml to branch smoke/deploy"
 api "$base/api/systems/ecu" | python3 -c '

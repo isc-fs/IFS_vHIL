@@ -1,2 +1,4 @@
 # Copied from vhil/server/static/ by the image build (index.ts).
 shell/
+# Precompiled Ajv validators: src/vhil/build-validators.mjs writes them.
+validators/

@@ -65,4 +65,4 @@ jobs:
               set -e
               pip install -q pyyaml "ruamel.yaml==0.18.*" "jsonschema>=4" pytest
               python -m vhil.editor check
-              python -m pytest -q tests/unit/test_editor.py'
+              python -m pytest -q tests/unit/test_editor.py tests/unit/test_editor_csp.py'

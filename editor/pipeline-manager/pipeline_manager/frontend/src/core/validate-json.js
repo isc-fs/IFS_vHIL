@@ -4,24 +4,30 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { stringify } from 'ajv';
 import jsonMap from 'json-source-map';
 import jsonlint from 'jsonlint';
+
+// vHIL: JSON.stringify in place of Ajv's own stringify, so the bundle needs
+// nothing of Ajv but the runtime helpers its standalone code imports.
+const stringify = (value) => JSON.stringify(value);
 
 /**
  * Validates JSON according to a given schema.
  *
- * @param {import('ajv/dist/2019').Ajv2019} ajv - JSON validator.
+ * vHIL: with a validator precompiled for it (src/vhil/build-validators.mjs),
+ * looked up by the schema's $id and `reference`; nothing is compiled here,
+ * so the editor runs under a `script-src 'self'` CSP (no `new Function`).
+ *
+ * @param {Object<string, Function>} validators - Precompiled validators by key.
  * @param {Object} schema - Validation schema.
  * @param {Object|string} data - Data to validate.
  * @param {string} reference - Schema entity.
  * @returns {string[]} Validation errors.
  */
-export default function validateJSON(ajv, schema, data, reference = '') {
-    ajv.removeSchema('root').removeSchema(schema.$id).addSchema(schema, 'root');
-    const validate = ajv.getSchema(`root${reference}`);
+export default function validateJSON(validators, schema, data, reference = '') {
+    const validate = validators[`${schema.$id}${reference}`];
     if (validate === undefined) {
-        return [`Invalid value of "reference" parameter: ${reference}`];
+        return [`Invalid value of "reference" parameter: ${reference} (no precompiled validator for ${schema.$id}${reference})`];
     }
 
     const isTextFormat = typeof data === 'string';

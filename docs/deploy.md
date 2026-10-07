@@ -10,8 +10,9 @@ locally (see [Local test](#local-test)).
 ## The stack
 
 ```
-            :443  ┌──────────── proxy (Caddy 2.11.6) ────────────┐  :5443
-browser ─────────▶│ VHIL_SITE          VHIL_EDITOR_SITE          │◀──────── editor iframe
+            :443  ┌──────────── proxy (Caddy 2.11.6) ────────────┐
+browser ─────────▶│ VHIL_SITE: one origin                        │
+                  │   /  /api  /auth    /editor/ (prefix cut)    │
                   │   │                  │ forward_auth /api/me  │
                   └───┼──────────────────┼───────────────────────┘
           [frontend]  ▼        [editor]  ▼  (internal)
@@ -31,8 +32,8 @@ browser ─────────▶│ VHIL_SITE          VHIL_EDITOR_SITE   
 | `workspace` | `ifs-vhil` | One-shot, runs before the others on every `up`: clones IFS_vHIL into the `workspace` volume if empty, `git fetch`es, checks out `VHIL_WORKSPACE_REF` detached ([`deploy/workspace.sh`](../deploy/workspace.sh)) |
 | `api` | `ifs-vhil` | `python -m vhil.server`: the shell, systems read/save, runs, inspect, login. Healthcheck `GET /api/health` |
 | `worker` | `ifs-vhil` | `python -m vhil.worker`, `VHIL_WORKERS` replicas: claims queued runs, runs Renode, builds missing firmware into `fw` |
-| `editor` | `ifs-vhil-editor` | Pipeline Manager + `vhil.editor`, embedded by the shell |
-| `proxy` | `caddy:2.11.6-alpine` (by digest) | TLS, security headers, the only published ports: 80, 443 (app), 5443 (editor) |
+| `editor` | `ifs-vhil-editor` | Pipeline Manager + `vhil.editor`, at `/editor/`, embedded by the shell |
+| `proxy` | `caddy:2.11.6-alpine` (by digest) | TLS, security headers, routing (`/editor/` to the editor, the rest to the API), the only published ports: 80 and 443 |
 | `backup` | `ifs-vhil` | Snapshots the DB and the saved branches every `VHIL_BACKUP_INTERVAL_H` ([`deploy/backup.py`](../deploy/backup.py)) |
 
 Every long-running service has `restart: unless-stopped`, CPU/memory/pids
@@ -54,13 +55,26 @@ CAN links. If a scenario ever bridges to SocketCAN
 so it creates its vcan links in its own namespace; that needs the `vcan` module
 loaded on the host (a container can't load modules), but not `privileged`.
 
-**The editor** has no login of its own. Caddy serves it on a second port of
-the app's host and checks every request (WebSockets included) against the
-API's `/api/me` first: a signed-in org member (or anyone in dev mode) passes,
-everyone else gets 401. The session cookie reaches the gate because cookies
-are scoped to the host, not the port; Caddy cuts the app's `vhil_*` cookies
-from what it passes on to Pipeline Manager. The editor sits on an internal
-network shared with the proxy only, so the gate is the only way in.
+**The editor** has no login of its own. It is on the app's own origin:
+Caddy routes `/editor/` (and its socket.io, `/editor/socket.io/`) to
+Pipeline Manager with the prefix cut, and checks every such request
+(WebSockets included) against the API's `/api/me` first: a signed-in org
+member (or anyone in dev mode) passes, everyone else gets 401. Caddy cuts
+the app's `vhil_*` cookies from what it passes on to Pipeline Manager. The
+editor sits on an internal network shared with the proxy only, so the gate
+is the only way in, and there is no second port or site.
+
+**Headers.** The app's pages may be framed by nobody (`frame-ancestors
+'none'`, `X-Frame-Options: DENY`), the editor only by the app itself
+(`frame-ancestors 'self'`, `SAMEORIGIN`), from the Caddyfile. Each upstream
+adds its own full policy, so a browser enforces both: the API's
+(`vhil/server/security.py`) and the editor's, `EDITOR_CSP` there, which
+Pipeline Manager sends (`PM_CSP`, `scripts/editor.sh`): `default-src`,
+`script-src`, `style-src` and `connect-src 'self'`, no `unsafe-` source
+(its validators are precompiled, its log has no inline styles;
+`editor/pipeline-manager/CHANGELOG-VHIL.md`). Pipeline Manager allows no
+cross-origin request (`PM_ALLOWED_ORIGINS` unset) and takes postMessage
+from its own origin only.
 
 ## Hardening
 
@@ -287,8 +301,8 @@ token.
   with `echo vcan | sudo tee /etc/modules-load.d/vcan.conf`. Ubuntu cloud
   images ship it in `linux-modules-extra-$(uname -r)`. Needed only when a
   worker gets `NET_ADMIN` for SocketCAN scenarios (above).
-- **Ports**: 80 and 443 (TCP; 443/UDP for HTTP/3) and 5443 (editor) open to
-  the users. 80 must reach Caddy from the internet for Let's Encrypt's HTTP
+- **Ports**: 80 and 443 (TCP; 443/UDP for HTTP/3) open to the users (the
+  editor is under `/editor/` on the same site). 80 must reach Caddy from the internet for Let's Encrypt's HTTP
   challenge, or 443 for TLS-ALPN; behind a firewall with no inbound access
   from the internet, use a DNS challenge (Caddy plugin) or an internal CA.
 - **DNS**: an A/AAAA record for the domain (e.g. `vhil.<team-domain>`) to the
@@ -319,7 +333,9 @@ curl -fsS https://vhil.example.org/api/health
 
 `deploy/.env` is read automatically (it sits next to the compose file) and is
 git-ignored, as is `deploy/secrets/`. In `deploy/.env` at least:
-`VHIL_SITE`, `VHIL_EDITOR_SITE`, `VHIL_PUBLIC_URL`, `VHIL_EDITOR_URL`,
+`VHIL_SITE`, `VHIL_PUBLIC_URL` (the editor needs neither a site nor a URL
+of its own: it is `VHIL_PUBLIC_URL/editor/`; drop an old `VHIL_EDITOR_SITE`,
+`VHIL_EDITOR_URL` and `VHIL_EDITOR_PORT`, and close port 5443),
 `VHIL_GITHUB_CLIENT_ID`, `VHIL_GITHUB_APP_ID`, `VHIL_WORKSPACE_REF` (a tag
 or commit; the example's placeholder fails the workspace service) and
 `VHIL_TAG` (+ `VHIL_DIGEST` / `VHIL_EDITOR_DIGEST`). The secrets are the
@@ -455,13 +471,16 @@ scripts/vhil-docker.sh fw ecu      # once: ELFs it copies into the stack (no bui
 deploy/smoke.sh [workspace-ref]    # default dev
 ```
 
-It uses project `ifs-vhil-smoke`, plain HTTP on `127.0.0.1:18080` (app) and
-`:15443` (editor), dev auth, empty secret files and one worker, then:
-`/api/health` through the proxy, the editor through its auth gate, the
+It uses project `ifs-vhil-smoke` (`SMOKE_PROJECT`), plain HTTP on
+`127.0.0.1:18080` (`SMOKE_HTTP_PORT`; `SMOKE_HTTPS_PORT` 18443), dev auth,
+empty secret files and one worker, then: `/api/health` through the proxy,
+the editor and its socket.io under `/editor/` through its auth gate and no
+second port published, the
 hardening at runtime (every service uid 10001 with a read-only root and no
 capabilities; no secrets in the worker; the worker reaches neither the API,
 the editor, the metadata address nor anything off the host but GitHub through
-`egress`; the security headers), a save of `systems/ecu.yaml` to a
+`egress`; the security headers, the editor's policy with no `unsafe-`
+source and its framing), a save of `systems/ecu.yaml` to a
 branch that survives the workspace service running again, a 3 s run (past the bootloader's 2 s window) of
 `systems/ecu.yaml` queued through the API and executed by the worker (passed,
 CAN frames in its trace), a snapshot (0700/0600), one more run, a restore
@@ -470,8 +489,7 @@ services run the workspace ref's code, so to test changes to `vhil/` push the
 branch and pass it as the ref. `down -v` at the end
 (`SMOKE_KEEP=1` leaves it up). About 2 minutes after a first clone.
 
-Other local modes: `VHIL_SITE=localhost` / `VHIL_EDITOR_SITE=localhost:5443`
-give HTTPS from Caddy's internal CA (`curl -k`, or trust the root in
+Other local modes: `VHIL_SITE=localhost` gives HTTPS from Caddy's internal CA (`curl -k`, or trust the root in
 `caddy-data`); `VHIL_AUTH=github` with a throwaway OAuth client checks the
 gate (`/api/me` and the editor answer 401 without a session).
 

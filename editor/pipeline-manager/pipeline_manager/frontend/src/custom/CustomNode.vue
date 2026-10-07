@@ -891,13 +891,11 @@ const nodeTitle = computed(() => {
         return `${title}`;
     }
 
-    let styles = '';
+    // vHIL: a class, not a style attribute, which the CSP (style-src
+    // 'self') refuses in HTML (styles/_node.scss .subtitle-ellipsis).
+    const ellipsis = props.node.width !== 0 && props.node.width !== undefined;
 
-    if (props.node.width !== 0 && props.node.width !== undefined) {
-        styles = 'overflow: hidden; text-overflow: ellipsis;';
-    }
-
-    return `${title} <pre class="subtitle" style="${styles}">${type}</pre>`;
+    return `${title} <pre class="subtitle${ellipsis ? ' subtitle-ellipsis' : ''}">${type}</pre>`;
 });
 
 const select = (event) => {

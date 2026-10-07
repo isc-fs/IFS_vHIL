@@ -1,23 +1,28 @@
-# TLS reverse proxy in front of the web app (docs/deploy.md).
+# TLS reverse proxy in front of the web app (docs/deploy.md), on a host
+# (deploy/compose.prod.yaml) and locally (docker/compose.yaml).
 #
-# VHIL_SITE / VHIL_EDITOR_SITE are Caddy site addresses:
-#   vhil.example.org / vhil.example.org:5443   public: automatic HTTPS (Let's Encrypt)
-#   localhost / localhost:5443                 local: HTTPS from Caddy's internal CA
-#   http://localhost / http://localhost:5443   local: plain HTTP
+# VHIL_SITE is a Caddy site address:
+#   vhil.example.org       public: automatic HTTPS (Let's Encrypt)
+#   localhost              local: HTTPS from Caddy's internal CA
+#   http://localhost       local: plain HTTP
+#   http://:8080           local: plain HTTP on 8080, any host name (docker/compose.yaml)
 #
-# The editor (Pipeline Manager) has no login of its own. It is served on a
-# second port of the same host, so the browser sends it the app's session
-# cookie (cookies are per host, not per port), and every request to it is
-# first checked against the API's /api/me: 2xx (a signed-in org member, or
-# anyone in dev mode) passes, anything else is answered with the API's 401.
-# The app's cookies stop at the gate: they are cut from what reaches
-# Pipeline Manager.
+# One origin. The API serves the shell and /api; the editor (Pipeline
+# Manager) is under /editor/, its socket.io under /editor/socket.io/, the
+# prefix stripped on the way in. It has no login of its own: every request to
+# it is first checked against the API's /api/me, so the browser's session
+# cookie decides; 2xx (a signed-in org member, or anyone in dev mode) passes,
+# anything else is answered with the API's 401. The app's cookies stop at
+# the gate: they are cut from what reaches Pipeline Manager. The editor is
+# on no other port and in no other site.
 #
-# Response headers (both sites): nosniff, no referrer across origins, and
-# who may frame the page (CSP frame-ancestors): nobody for the app, only the
-# app (VHIL_PUBLIC_URL) for the editor, which the shell embeds. HSTS on
-# HTTPS responses, max-age VHIL_HSTS_MAX_AGE (default one year; 0 for a
-# localhost site, or the browser keeps forcing HTTPS on localhost).
+# Response headers: nosniff, no referrer across origins, and who may frame a
+# page (CSP frame-ancestors): nobody for the app, only the app itself for
+# the editor, which the shell embeds. Each upstream adds its own full CSP
+# (vhil/server/security.py: the API's, and the editor's through PM_CSP), so
+# a browser enforces both. HSTS on HTTPS responses, max-age
+# VHIL_HSTS_MAX_AGE (default one year; 0 for a localhost site, or the
+# browser keeps forcing HTTPS on localhost).
 (common) {
 	encode zstd gzip
 	log {
@@ -35,35 +40,39 @@
 
 {$VHIL_SITE} {
 	import common
-	header {
-		Content-Security-Policy "frame-ancestors 'none'; base-uri 'self'; object-src 'none'"
-		X-Frame-Options DENY
-	}
 	# System files and API bodies are small; nothing posts megabytes.
 	request_body {
 		max_size 8MB
 	}
-	reverse_proxy api:8080
-}
 
-{$VHIL_EDITOR_SITE} {
-	import common
-	header Content-Security-Policy "frame-ancestors {$VHIL_PUBLIC_URL}; base-uri 'self'; object-src 'none'"
-	request_body {
-		max_size 8MB
+	redir /editor /editor/ 308
+
+	handle_path /editor/* {
+		header {
+			Content-Security-Policy "frame-ancestors 'self'; base-uri 'none'; object-src 'none'"
+			X-Frame-Options SAMEORIGIN
+		}
+		forward_auth api:8080 {
+			uri /api/me
+			# The check is a plain GET even when the request upgrades to a
+			# WebSocket (the editor's socket.io); passed on, those headers
+			# make the API answer /api/me as a WebSocket (403).
+			header_up -Connection
+			header_up -Upgrade
+			header_up -Sec-WebSocket-*
+		}
+		reverse_proxy editor:5000 {
+			# The session (and CSRF, OAuth) cookies are for the API: Pipeline
+			# Manager never sees them. Its own cookies, if any, pass.
+			header_up Cookie "vhil_[a-z]+=[^;]*(;\s*)?" ""
+		}
 	}
-	forward_auth api:8080 {
-		uri /api/me
-		# The check is a plain GET even when the request upgrades to a
-		# WebSocket (the editor's socket.io); passed on, those headers make
-		# the API answer /api/me as a WebSocket (403).
-		header_up -Connection
-		header_up -Upgrade
-		header_up -Sec-WebSocket-*
-	}
-	reverse_proxy editor:5000 {
-		# The session (and CSRF, OAuth) cookies are for the API: Pipeline
-		# Manager never sees them. Its own cookies, if any, pass.
-		header_up Cookie "vhil_[a-z]+=[^;]*(;\s*)?" ""
+
+	handle {
+		header {
+			Content-Security-Policy "frame-ancestors 'none'; base-uri 'self'; object-src 'none'"
+			X-Frame-Options DENY
+		}
+		reverse_proxy api:8080
 	}
 }

@@ -15,7 +15,7 @@ scripts/vhil-docker.sh smoke ecu   # or ams
 scripts/vhil-docker.sh sim
 scripts/vhil-docker.sh coverage   # firmware coverage of tests/sim (below)
 scripts/vhil-docker.sh ifs-hil     # IFS_HIL's ECU smoke suite over vcan can0..can2
-scripts/vhil-docker.sh editor      # system editor on http://localhost:5050
+scripts/vhil-docker.sh editor      # system editor on http://localhost:8080/editor/
 scripts/vhil-docker.sh shell
 ```
 
@@ -128,8 +128,11 @@ vendored in [`editor/pipeline-manager/`](../../editor/pipeline-manager/README-VH
 (upstream v0.5.2), with our changes made in place and listed in its
 `CHANGELOG-VHIL.md`.
 
-In Docker: `scripts/vhil-docker.sh editor`, then open http://localhost:5050
-(not 5000: macOS's AirPlay Receiver holds that port). The image
+In Docker: `scripts/vhil-docker.sh editor`, then open
+http://localhost:8080/editor/, or the Editor page at http://localhost:8080/#/editor.
+It runs `docker/compose.yaml`'s `editor` and `proxy` (and the `api`, for the
+login check): one origin, as on a host, the editor under `/editor/` and no
+port of its own. The image
 ([`docker/editor.Dockerfile`](../../docker/editor.Dockerfile)) builds it
 from that directory (the frontend's dependencies from its lockfile, `npm
 ci`); its release's format matches `vhil/editor.py`'s `FORMAT_VERSION`. Run
@@ -153,7 +156,11 @@ it back onto the original text, comments kept. Natively:
 4. `scripts/editor.sh`, then open http://localhost:5000. Load a system with
    `python -m vhil.editor to-graph systems/ams.yaml -o ams.json` and drop the
    file on the canvas. Running a system is the web app's (below): the editor
-   has no Run of its own.
+   has no Run of its own. The web app's Editor page embeds it from its own
+   origin, under `/editor/`, which only the proxy provides
+   (`deploy/Caddyfile`; `docker/compose.yaml` runs it): for that page, use
+   Docker. `PM_CSP_REPORT_ONLY=1` sends the editor's CSP as Report-Only
+   (violations in the browser console, nothing blocked).
 
 Changes to Pipeline Manager are commits to `editor/pipeline-manager/`, each
 listed in its `CHANGELOG-VHIL.md`. The first, bus-per-instance, fixes graphs
@@ -169,7 +176,7 @@ own code, so it catches what a schema check misses. In Docker:
 `$PM_DIR` points at a checkout (the editor image).
 
 **From the web app** (`#/editor`, M5.4): the shell embeds the editor
-(`VHIL_EDITOR_URL`, default http://localhost:5050) and loads a system into it
+(same origin, `/editor/`) and loads a system into it
 over Pipeline Manager's postMessage API. Save commits `systems/<id>.yaml` on
 the branch you name, in the API's workspace, with git plumbing: no checkout
 moves, `dev`/`main` are never written, a branch checked out in the workspace

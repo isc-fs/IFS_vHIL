@@ -383,9 +383,11 @@ def test_firmware_refs_errors(env):
 
 
 def test_config_names_the_editor(env, monkeypatch):
+    """Same origin, under /editor/, whatever a deployment's old
+    VHIL_EDITOR_URL says."""
     monkeypatch.setenv("VHIL_EDITOR_URL", "http://editor.example:5050")
     c = env.client.get("/api/config").json()
-    assert c["editor_url"] == "http://editor.example:5050" and c["base_branch"] == "dev"
+    assert c["editor_url"] == "/editor/" and c["base_branch"] == "dev"
     assert c["can_open_pr"] is True     # the fake host
 
 

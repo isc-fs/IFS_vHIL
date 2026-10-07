@@ -17,16 +17,18 @@ import {
     JSONRPCErrorResponse,
     JSONRPCID,
 } from 'json-rpc-2.0';
-import Ajv2019 from 'ajv/dist/2019.js';
 import NotificationHandler from '../notifications';
 import { PMMessageType } from '../utils';
-import commonTypesSchema from '../../../../resources/api_specification/common_types.json' with { type: 'json' };
 import specificationSchema from '../../../../resources/api_specification/specification.json' with { type: 'json' };
 
 // eslint-disable-next-line import/no-cycle
 import * as remoteProcedures from './remoteProcedures';
 import { ClientParams, Endpoints, SpecType } from './utils';
 import validateJSON from '../validate-json';
+// vHIL: precompiled by src/vhil/build-validators.mjs (not in git), which
+// also checks each endpoint's schema compiles (upstream did it here).
+// eslint-disable-next-line import/no-unresolved
+import { validators } from '../../vhil/validators/rpc.js';
 
 class CustomJSONRPCServerAndClient extends JSONRPCServerAndClient<void, ClientParams> {
     customMethodRegex: RegExp | null = null;
@@ -50,12 +52,6 @@ const customMethodReplace = 'dataflow_run';
 const customDownloadMethodRegex = /^custom_download.*$/;
 const customDownloadMethodReplace = 'dataflow_export';
 
-const ajv = new Ajv2019({
-    schemas: [commonTypesSchema],
-    allowUnionTypes: true,
-    strict: true,
-});
-
 /**
  * Loads endpoints schemas and assigns $id according to a corresponding key.
  *
@@ -78,26 +74,12 @@ export const frontendEndpoints = loadEndpoints('frontend_endpoints');
 export const backendEndpoints = loadEndpoints('backend_endpoints');
 export const externalEndpoints = loadEndpoints('external_endpoints');
 
-// This should become part of the testing suite at some point
-let invalidDefinition;
-try {
-    [frontendEndpoints, backendEndpoints, externalEndpoints].forEach((endpoints) => {
-        Object.entries(endpoints).forEach(([definitionName, definition]) => {
-            invalidDefinition = definitionName;
-            ajv.compile(definition.params);
-            ajv.compile(definition.returns ?? {});
-        });
-    });
-} catch (exception) {
-    throw new Error(`Procedures specification schema '${invalidDefinition}' is incorrect: ${exception}`);
-}
-
 const validateRequestResponse = (
     schema: object,
     data: any, // eslint-disable-line @typescript-eslint/no-explicit-any
     id?: JSONRPCID,
 ): JSONRPCErrorResponse | undefined => {
-    const errors = validateJSON(ajv, schema, data);
+    const errors = validateJSON(validators, schema, data);
 
     if (!errors.length) return undefined;
 
