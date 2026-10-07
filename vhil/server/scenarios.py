@@ -72,8 +72,8 @@ def _where(loc: tuple) -> str:
     for part in loc:
         if isinstance(part, int):
             out += f"[{part}]"
-        elif part in ("can_send", "can_periodic", "stop_periodic", "gpio", "analog", "symbol",
-                      "pin") and out.endswith("]"):
+        elif part in ("can_send", "can_periodic", "stop_periodic", "gpio", "analog", "watch",
+                      "symbol", "pin") and out.endswith("]"):
             continue                        # the union's tag, not a field
         else:
             out += f".{part}" if out else str(part)
@@ -122,9 +122,9 @@ def load_text(text: str, system_id: str, name: str):
 
 
 # Keys of a row, in the order a file writes them.
-_ORDER = ("kind", "check", "name", "at_ms", "until_ms", "bus", "board", "id", "ext", "data",
-          "period_ms", "periodic", "pin", "level", "volts", "size", "signal", "op", "value",
-          "min_ms", "max_ms", "min", "max")
+_ORDER = ("kind", "check", "name", "at_ms", "until_ms", "bus", "board", "symbol", "id", "ext",
+          "data", "period_ms", "periodic", "pin", "level", "volts", "size", "signal", "op",
+          "value", "min_ms", "max_ms", "min", "max")
 _PLAIN = re.compile(r"[A-Za-z_][A-Za-z0-9_./-]*\Z")
 _YAML_WORDS = {"y", "n", "yes", "no", "on", "off", "true", "false", "null", "none", "~"}
 
@@ -212,13 +212,27 @@ def check_contract(sc: RunScenario, contract: dict, elfs: dict[str, Path]) -> tu
         sig = vexpect.parse_signal(e.signal)
         if sig.kind == "symbol":
             path = elfs.get(sig.owner)
-            if path is not None and path.is_file():
+            built = path is not None and path.is_file()
+            if built:
                 try:
                     velf.symbol(path, sig.item)
                 except KeyError:
                     errors.append(f"{where}: no symbol '{sig.item}' in {sig.owner}'s firmware")
                 except (OSError, ValueError):
                     pass
+            if isinstance(e.value, str):
+                # A label: of the symbol's enum (DWARF, or its state view's
+                # table; vhil/stateview.py), which needs the image.
+                table = vexpect.signal_labels(contract, sig)
+                if e.value not in table.values():
+                    if not built and not table:
+                        warnings.append(f"{where}: '{e.value}' is checked against "
+                                        f"{sig.owner}'s enums when the run builds its firmware")
+                    else:
+                        have = ", ".join(table.values())
+                        errors.append(f"{where}: '{e.value}' is not a label of {sig.item}"
+                                      + (f" ({have})" if have else ": it has no enum (give a "
+                                         "number, or name its enum in the state view)"))
             continue
         if sig.kind != "frame":
             continue
@@ -243,8 +257,9 @@ def check_contract(sc: RunScenario, contract: dict, elfs: dict[str, Path]) -> tu
             continue
         v = e.value
         if isinstance(v, str):
-            if vexpect.label_raw(f, v) is None:
-                have = ", ".join((f.get("values") or {}).values())
+            table = {**vexpect.signal_labels(contract, sig), **(f.get("values") or {})}
+            if vexpect.label_raw({"values": table}, v) is None:
+                have = ", ".join(table.values())
                 errors.append(f"{where}: '{v}' is not a label of {msg['name']}.{f['name']}"
                               + (f" ({have})" if have else ": it has no value table"))
         elif isinstance(v, (int, float)) and not isinstance(v, bool):

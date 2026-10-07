@@ -195,7 +195,29 @@ class StopPeriodic(_Model):
     periodic: str = Field(pattern=_ROW)
 
 
-Stimulus = Annotated[Union[CanSend, CanPeriodic, StopPeriodic, GpioSet, AnalogSet],
+class WatchOp(_Model):
+    """Starts recording a firmware global (sampled every period_ms) or a
+    pin's edges (with its level then) at at_ms, to the run's end: a `watch`
+    row that starts mid-run, and a live session's op (docs/scenarios.md)."""
+    kind: Literal["watch"]
+    name: Optional[str] = Field(None, pattern=_ROW)
+    at_ms: float = Field(0, ge=0)
+    board: str = Field(pattern=_NAME)
+    symbol: Optional[str] = Field(None, pattern=r"^[A-Za-z_]\w{0,127}$")
+    pin: Optional[str] = Field(None, pattern=_PIN)
+    size: Optional[Literal[1, 2, 4]] = None         # default: the symbol's, from the ELF
+    period_ms: Optional[float] = Field(None, ge=1, le=60_000)
+
+    @model_validator(mode="after")
+    def _one(self):
+        if (self.symbol is None) == (self.pin is None):
+            raise ValueError("a watch names a symbol or a pin, not both")
+        if self.pin is not None and (self.size is not None or self.period_ms is not None):
+            raise ValueError("a pin's watch takes no size or period_ms: it records edges")
+        return self
+
+
+Stimulus = Annotated[Union[CanSend, CanPeriodic, StopPeriodic, GpioSet, AnalogSet, WatchOp],
                      Field(discriminator="kind")]
 
 
@@ -404,6 +426,11 @@ def check_scenario(sc: RunScenario, system: System) -> list[str]:
             pin(s.board, s.pin, "gpio", where)
         elif isinstance(s, AnalogSet):
             pin(s.board, s.pin, "analog", where)
+        elif isinstance(s, WatchOp):
+            if s.pin is not None:
+                pin(s.board, s.pin, "gpio", where)
+            elif s.board not in system.boards:
+                errors.append(f"{where}: no board '{s.board}' in {system.id}")
     for i, w in enumerate(sc.watch):
         where = f"watch[{i}]"
         if isinstance(w, PinWatch):
