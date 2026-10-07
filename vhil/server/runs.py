@@ -59,7 +59,7 @@ log = logging.getLogger("vhil.server.runs")
 
 STATES = ("queued", "running", "passed", "failed", "error", "cancelled")
 TERMINAL = frozenset({"passed", "failed", "error", "cancelled"})
-TRACE_KINDS = frozenset({"frame", "edge", "sample", "log"})
+TRACE_KINDS = frozenset({"frame", "edge", "sample", "log", "bus_load"})
 TRACE = "trace.jsonl"
 # The kind of a trace's first line, which says whose trace it is (trace_header).
 HEADER_KIND = "run"
