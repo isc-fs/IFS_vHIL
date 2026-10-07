@@ -5,7 +5,7 @@
         t = sim.wait_for_app()          # the bootloader's 2 s window, then the app
         sim.run_for(ms=2000)
         hb = sim.can("can_acu").frames(0x100, since_us=t)
-        assert_period(hb, period_us=10_000, tolerance_us=100)
+        assert_cadence(hb, period_us=10_000, jitter_us=1000)
 
 Time only moves when a test says so (`run_for`, `run_until`). Between calls
 the emulation is paused, every observation carries its virtual timestamp,
@@ -605,3 +605,19 @@ def assert_period(items, period_us: int, tolerance_us: int, min_count: int = 3) 
     bad = [(i, d) for i, d in enumerate(intervals_us(items)) if abs(d - period_us) > tolerance_us]
     assert not bad, (f"{len(bad)} of {len(items) - 1} intervals outside {period_us} ± {tolerance_us} us; "
                      f"first: #{bad[0][0]} = {bad[0][1]} us")
+
+
+def assert_cadence(items, period_us: int, jitter_us: int, min_count: int = 3) -> None:
+    """The items keep a fixed cadence: each is within jitter_us of one grid
+    of period_us, so none is missing or doubled and the period does not
+    drift, however long the run. What a task woken by osDelayUntil (exact
+    kernel ticks, no drift) guarantees for a frame it posts on a bus that
+    times frames: the wake is on the grid, and the compute before the post,
+    the wait for the bus and the frame's stuff bits are jitter."""
+    items = list(items)
+    assert len(items) >= min_count, f"only {len(items)} items, need {min_count}"
+    offsets = [i.t_us - items[0].t_us - k * period_us for k, i in enumerate(items)]
+    lo, hi = min(offsets), max(offsets)
+    assert hi - lo <= jitter_us, (
+        f"{len(items)} items off a {period_us} us grid by {lo}..{hi} us, more than {jitter_us} us "
+        f"of jitter; first at #{next(k for k, o in enumerate(offsets) if o in (lo, hi))}")
