@@ -20,6 +20,11 @@
 /* eslint-disable max-classes-per-file -- a series, and the trace that holds them */
 
 const STALE_PERIODS = 3;
+// Every MainLite boots through its CAN bootloader, whose auto-jump window
+// is 2 s from power-on (CLAUDE.md invariant 5): until then the app's RAM
+// reads 0, which a state enum would show as its first state (the AMS's
+// "Start"), so a card says "in bootloader" instead.
+export const BOOT_WINDOW_US = 2e6;
 
 /** One signal's observations: times (virtual µs) and raw values, in order. */
 export class Series {
@@ -125,9 +130,10 @@ export class StateTrace {
      * `contract`: {buses, state: {board: {firmware, items, errors}}, labels};
      * `rawOf(bytes, field)`: a field's raw value (decode.js rawValue).
      */
-    constructor(contract, { rawOf } = {}) {
+    constructor(contract, { rawOf, bootUs = BOOT_WINDOW_US } = {}) {
         this.contract = contract || {};
         this.rawOf = rawOf;
+        this.bootUs = bootUs;
         this.series = new Map(); // signal -> Series
         this.frameItems = new Map(); // "bus:id" -> [{signal, field}]
         this.items = new Map(); // board -> [item, with signal parsed and field/message]
@@ -328,6 +334,9 @@ export class StateTrace {
                 });
             }
         });
+        // In the bootloader's window the app hasn't started: its state is
+        // not the app's yet.
+        card.boot = t < this.bootUs;
         card.active = card.faults.filter((f) => f.active);
         card.cleared = card.faults.filter((f) => f.cleared);
         card.faulted = card.active.length > 0;
@@ -341,9 +350,11 @@ export class StateTrace {
         const card = this.cardAt(board, t);
         const name = (card.firmware || board).toUpperCase();
         let state = '';
-        if (card.state) state = card.state.has ? card.state.text : '—';
+        if (card.boot) state = 'bootloader';
+        else if (card.state) state = card.state.has ? card.state.text : '—';
         return {
             text: state ? `${name} · ${state}` : name,
+            boot: card.boot,
             faulted: card.faulted,
             faults: card.active.map((f) => (f.reason ? `${f.label}: ${f.reason}` : f.label)),
             stale: card.stale,

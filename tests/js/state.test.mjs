@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { rawValue } from "../../vhil/server/static/decode.js";
 import {
-  Series, StateTrace, duration, formatNumber, parseSignal,
+  BOOT_WINDOW_US, Series, StateTrace, duration, formatNumber, parseSignal,
 } from "../../editor/pipeline-manager/pipeline_manager/frontend/src/vhil/state.js";
 
 // As vhil/server/decode.py system_contract gives it (shortened).
@@ -46,8 +46,9 @@ const ms = (t) => t * 1000;
 const sample = (t, name, value) => ({ kind: "sample", t_us: ms(t), board: "ams", name, value });
 const edge = (t, pin, level, initial) => ({ kind: "edge", t_us: ms(t), board: "ams", pin, level, ...(initial ? { initial } : {}) });
 
+// These traces start at the app's start: no bootloader window before it.
 function trace() {
-  const tr = new StateTrace(CONTRACT, { rawOf: rawValue });
+  const tr = new StateTrace(CONTRACT, { rawOf: rawValue, bootUs: 0 });
   for (let t = 0; t <= 300; t += 10) {
     tr.add(sample(t, "g_state", t < 100 ? 0 : t < 200 ? 1 : 3));
     tr.add(sample(t, "g_fault", t >= 250 && t < 280 ? 4 : 0));
@@ -98,7 +99,7 @@ test("relays are on or off by their pins, unknown before their first edge", () =
                    [["AIR+", false], ["PRE", true]]);
   assert.deepEqual(tr.cardAt("ams", ms(250)).relays.map((r) => [r.label, r.on]),
                    [["AIR+", true], ["PRE", false]]);
-  const fresh = new StateTrace(CONTRACT, { rawOf: rawValue });
+  const fresh = new StateTrace(CONTRACT, { rawOf: rawValue, bootUs: 0 });
   assert.deepEqual(fresh.cardAt("ams", 0).relays.map((r) => r.on), [null, null]);
   assert.equal(fresh.cardAt("ams", 0).state.text, "no data");
   assert.ok(fresh.cardAt("ams", 0).stale);
@@ -144,9 +145,22 @@ test("a source silent for three periods is stale", () => {
 
 test("the node pill: the board and its state, with its faults", () => {
   const tr = trace();
-  assert.deepEqual(tr.pillAt("ams", ms(150)), { text: "AMS · Precharge", faulted: false, faults: [], stale: false });
+  assert.deepEqual(tr.pillAt("ams", ms(150)), { text: "AMS · Precharge", boot: false, faulted: false, faults: [], stale: false });
   assert.deepEqual(tr.pillAt("ams", ms(260)).faults, ["Fault: CellUnderVoltage"]);
   assert.equal(tr.pillAt("nope", 0).text, "NOPE");
+});
+
+test("in the bootloader's 2 s window a card says so, not the app's first state", () => {
+  // A run from power-on: the app's RAM reads 0 (Start) until its bootloader
+  // jumps to it at 2 s (CLAUDE.md invariant 5).
+  const tr = new StateTrace(CONTRACT, { rawOf: rawValue });
+  for (let t = 0; t <= 2600; t += 10) tr.add(sample(t, "g_state", t < 2400 ? 0 : 1));
+  assert.equal(BOOT_WINDOW_US, 2e6);
+  assert.equal(tr.cardAt("ams", ms(1500)).boot, true);
+  assert.equal(tr.pillAt("ams", ms(1500)).text, "AMS · bootloader");
+  assert.equal(tr.cardAt("ams", ms(2100)).boot, false);
+  assert.equal(tr.pillAt("ams", ms(2100)).text, "AMS · Start");
+  assert.equal(tr.pillAt("ams", ms(2500)).text, "AMS · Precharge");
 });
 
 test("an unlabelled state shows its raw value and says it has no enum", () => {
