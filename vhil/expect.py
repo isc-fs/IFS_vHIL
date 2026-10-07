@@ -12,7 +12,7 @@ An expect names a signal and a window of virtual time, [at_ms, until_ms]
                 window's start to the first and from the last to its end
     count       the frame arrives between min and max times (max 0: never)
 
-Signals, as text (the same grammar the state view will use):
+Signals, as text (the grammar a firmware's state view uses too, vhil/stateview.py):
 
     frame:<bus>.<message>.<field>   a decoded field of the firmware's .def
                                     contract; <message> by name or 0x id
@@ -27,8 +27,10 @@ observed at the window's start. Frames the scenario sent itself (`src:
 stimulus`) are not observations: an expect checks what the boards did.
 
 Values: a number (a field's physical value, a symbol's raw value, a pin's
-0/1), a boolean, "high"/"low" for a pin, or a label of the field's value
-table (CAN_VAL), compared with its raw value (== and != only).
+0/1), a boolean, "high"/"low" for a pin, or a label, compared with its raw
+value (== and != only): of the field's value table (CAN_VAL), or, for a
+symbol, of the enum the contract's `labels` give it (its DWARF enum or a
+state view's, vhil/stateview.py): `== Precharge`.
 
 Pure: no Renode, no server. The worker (vhil/worker.py) and the scenario
 suite (tests/scenarios/) evaluate a finished trace with evaluate_trace().
@@ -112,6 +114,13 @@ def field_raw(data: bytes, f: dict) -> Optional[int]:
     return v - (1 << n) if f.get("signed") and v >> (n - 1) else v
 
 
+def signal_labels(contract: Optional[dict], sig: Signal) -> dict:
+    """{raw (as text): label} the contract gives a signal beyond its field's
+    value table: a symbol's DWARF enum, a state view's table
+    (vhil/stateview.py labels, the contract's `labels`)."""
+    return dict(((contract or {}).get("labels") or {}).get(str(sig)) or {})
+
+
 def label_raw(f: Optional[dict], label: str) -> Optional[int]:
     for raw, text in ((f or {}).get("values") or {}).items():
         if text == label:
@@ -144,6 +153,7 @@ class _Check:
         self.field: Optional[dict] = None
         self.pred = None
         self.label = ""
+        self.table: dict = {}          # raw (as text) -> label, for a label value
         try:
             self.signal = parse_signal(spec["signal"])
             self._compile(contract)
@@ -190,7 +200,9 @@ class _Check:
             if sig.kind == "pin" and value.lower() in ("high", "low"):
                 value = int(value.lower() == "high")
             else:
-                raw = label_raw(self.field, value)
+                self.table = {**(signal_labels(contract, sig) if sig.kind != "pin" else {}),
+                              **((self.field or {}).get("values") or {})}
+                raw = label_raw({"values": self.table}, value)
                 if raw is None:
                     raise ValueError(f"{value!r} is not a label of {sig}")
                 if spec.get("op", "==") not in ("==", "!="):
@@ -342,8 +354,8 @@ class _Check:
         return out
 
     def _shown(self, v):
-        if self.label and self.field is not None:
-            return ((self.field.get("values") or {}).get(str(v))) or v
+        if self.label:
+            return self.table.get(str(v)) or v
         return v
 
 

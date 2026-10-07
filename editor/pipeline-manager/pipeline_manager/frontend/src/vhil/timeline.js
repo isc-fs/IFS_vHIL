@@ -26,7 +26,7 @@ export function laneOf(list, item) {
         if (!s) return null;
         return laneId(s.kind === 'frame' ? 'bus' : 'board', s.owner);
     }
-    if (item.kind === 'gpio' || item.kind === 'analog') return laneId('board', item.board);
+    if (['gpio', 'analog', 'watch'].includes(item.kind)) return laneId('board', item.board);
     return item.bus ? laneId('bus', item.bus) : null;
 }
 
@@ -87,6 +87,10 @@ export function marksOf(doc, endMs) {
         } else if (item.kind === 'analog') {
             out.push({
                 ...base, lane, shape: 'step', label: `${item.pin} ${item.volts} V`, up: true,
+            });
+        } else if (item.kind === 'watch') {
+            out.push({
+                ...base, lane, shape: 'diamond', label: `watch ${item.symbol ?? item.pin}`,
             });
         }
     });

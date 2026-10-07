@@ -83,3 +83,21 @@ test("the server's messages and a run's results land on their rows", () => {
   const results = resultsByRow({ expects: [{ index: 1, passed: false }] });
   assert.equal(results.get("expect[1]").passed, false);
 });
+
+test("a watch op starts mid-run: a timed row of the stimuli", () => {
+  const doc = {
+    ...emptyScenario(),
+    stimuli: [{ kind: "watch", at_ms: 40, board: "ams", symbol: "g_state_telemetry", period_ms: 20 },
+              { kind: "watch", at_ms: 30, board: "ams", pin: "PB5" }],
+    watch: [{ kind: "symbol", board: "ams", name: "g_x", size: 2, period_ms: 10 },
+            { kind: "pin", board: "ams", pin: "PB7" }],
+  };
+  const rows = rowsOf(doc);
+  assert.deepEqual(rows.map((r) => [r.key, r.action, r.t]),
+                   [["watch[0]", "watch", null], ["watch[1]", "watch", null],
+                    ["stimuli[1]", "watch", 30], ["stimuli[0]", "watch", 40]]);
+  assert.deepEqual(rows.map((r) => targetOf(r)),
+                   ["ams.g_x", "pin ams.PB7", "pin ams.PB5", "ams.g_state_telemetry"]);
+  assert.deepEqual(rows.map((r) => valueOf(r)),
+                   ["2 B every 10 ms", "edges", "edges", "every 20 ms"]);
+});

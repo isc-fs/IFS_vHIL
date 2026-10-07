@@ -159,6 +159,55 @@ def test_rows_are_checked_against_the_system_and_the_contract(tmp_path):
                         "expect[3]: 70000 is outside AMS_status.min_cell_mV's range 0..65535"]
 
 
+def test_a_symbol_takes_a_label_of_its_enum(tmp_path, monkeypatch):
+    """`== Precharge` on a symbol: a label of the enum its state view names,
+    from the image's DWARF (vhil/stateview.py); numbers still do."""
+    from tests.unit.test_elf import _dwarf_elf
+    system, _, elfs = ams_contract(tmp_path)
+    elfs["ams"].parent.mkdir(parents=True)
+    _dwarf_elf(elfs["ams"])     # g_state is an ams::fsm::State, g_int an int
+    monkeypatch.setattr(sc.velf, "symbol", lambda path, name: (0x20000000, 1))  # no symtab
+    from vhil.server.decode import system_contract
+    contract = system_contract(system, elfs)
+
+    def check(signal, value):
+        run, _, errors = parsed({**SCENARIO, "expect": [
+            {"check": "eventually", "signal": signal, "value": value}]})
+        assert errors == []
+        return sc.check_rows(run, system, contract, elfs, Limits())
+
+    assert check("symbol:ams.g_state_telemetry", "Precharge")[0] == []
+    assert check("symbol:ams.g_state_telemetry", 1)[0] == []
+    assert check("symbol:ams.g_state", "Error")[0] == []         # its own DWARF type
+    assert check("symbol:ams.g_state_telemetry", "Charging")[0] == [
+        "expect[0]: 'Charging' is not a label of g_state_telemetry (Start, Precharge, Error)"]
+    assert check("symbol:ams.g_int", "On")[0] == [
+        "expect[0]: 'On' is not a label of g_int: it has no enum (give a number, or name its "
+        "enum in the state view)"]
+    # Not built here: the run checks it.
+    unbuilt = {"ams": tmp_path / "nowhere" / "AMS.elf"}
+    run, _, _ = parsed({**SCENARIO, "expect": [
+        {"check": "eventually", "signal": "symbol:ams.g_state_telemetry", "value": "Run"}]})
+    errors, warnings = sc.check_rows(run, system, system_contract(system, unbuilt), unbuilt,
+                                     Limits())
+    assert errors == [] and warnings == [
+        "expect[0]: 'Run' is checked against ams's enums when the run builds its firmware"]
+
+
+def test_a_watch_op_is_written_and_checked_as_a_row(tmp_path):
+    system, contract, elfs = ams_contract(tmp_path)
+    doc = {**SCENARIO, "stimuli": [{"kind": "watch", "at_ms": 100, "board": "ams",
+                                    "symbol": "g_x", "period_ms": 20},
+                                   {"kind": "watch", "at_ms": 200, "board": "ams", "pin": "PF7"}]}
+    run, description, errors = parsed(doc)
+    assert errors == []
+    text = sc.dump_scenario(run, "ams", description)
+    assert "  - {kind: watch, at_ms: 100, board: ams, symbol: g_x, period_ms: 20}\n" in text
+    assert sc.load_text(text, "ams", "tsms")[0] == run
+    assert sc.check_rows(run, system, contract, elfs, Limits())[0] == [
+        "stimuli[1]: ams.PF7 is analog, not gpio"]
+
+
 def test_without_a_built_contract_the_firmwares_names_are_warnings(tmp_path):
     system = System(REPO / "systems" / "ams.yaml")
     from vhil.server.decode import system_contract
@@ -310,4 +359,34 @@ def test_the_contract_without_a_run(env, tmp_path):
     out = env.client.get("/api/systems/ams/contract?fw=ams=feat/x").json()
     assert out["buses"]["can_acu"][str(0x4A0)]["name"] == "AMS_status"
     assert env.client.get("/api/systems/nope/contract").status_code == 404
+    shutil.rmtree(elf.parent.parent)
+
+
+def test_the_contract_carries_each_boards_state_view(env):
+    out = env.client.get("/api/systems/ams/contract").json()
+    view = out["state"]["ams"]
+    assert view["firmware"] == "ams" and view["errors"] == []
+    assert view["items"][0]["signal"] == "symbol:ams.g_state_telemetry"
+    assert view["items"][0]["note"] == "enum ams::fsm::State: firmware not built here"
+    assert out["labels"]["symbol:ams.g_fault_reason_telemetry"] == {"12": "FsmError"}
+
+
+def test_a_firmwares_enums(env):
+    from tests.unit.test_elf import _dwarf_elf
+    fw = env.app.state.fw_dir
+    system = System(REPO / "systems" / "ams.yaml")
+    out = env.client.get("/api/firmware/ams/enums").json()
+    assert out == {"id": "ams", "ref": "main", "built": False, "source": "none",
+                   "note": "firmware not built here", "enums": {}, "variables": {}}
+    elf = FirmwareResolver(fw, build=False).expected(system, {"ams": "feat/x"})["ams"][1]
+    elf.parent.mkdir(parents=True)
+    _dwarf_elf(elf)
+    out = env.client.get("/api/firmware/ams/enums?ref=feat/x").json()
+    assert out["built"] and out["source"] == "dwarf"
+    assert out["enums"]["ams::fsm::State"] == {"0": "Start", "1": "Precharge", "5": "Error"}
+    assert out["variables"]["g_state"] == "ams::fsm::State"
+    assert env.client.get("/api/firmware/nope/enums").status_code == 404
+    for bad in ("/api/firmware/AMS;x/enums", "/api/firmware/ams/enums?ref=-x",
+                "/api/firmware/ams/enums?ref=a..b"):
+        assert env.client.get(bad).status_code == 422, bad
     shutil.rmtree(elf.parent.parent)

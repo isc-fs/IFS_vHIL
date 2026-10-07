@@ -57,6 +57,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from vhil import expect as vexpect
+from vhil import stateview
 from vhil.server.config import Settings
 from vhil.server.runs import (HEARTBEAT_S, MAX_ATTEMPTS, RECLAIM_AFTER_S, TRACE, Limits,
                               RunStore, code_changes, materialise_system, trace_header)
@@ -181,11 +182,14 @@ class TraceWriter:
 
 def execute_run(sim, scenario: dict, trace: TraceWriter, *,
                 cancelled: Callable[[], bool] = lambda: False,
-                progress: Callable[[int], None] = lambda us: None) -> dict:
+                progress: Callable[[int], None] = lambda us: None,
+                state_view: bool = False) -> dict:
     """Drive a started Sim through a `run` scenario (runs.RunScenario as a
     dict); returns the summary. Times in the scenario are virtual time from
     the system's power-on. Raises Cancelled when `cancelled()` turns true at
-    a slice boundary."""
+    a slice boundary. With `state_view`, the symbols and pins of every
+    board's state view (vhil/stateview.py) are recorded too, as the web app's
+    runs do for their state panel."""
     end_us = int(scenario["virtual_ms"]) * 1000
     slice_us = int(scenario.get("slice_ms", 100)) * 1000
     system = sim.system
@@ -219,6 +223,24 @@ def execute_run(sim, scenario: dict, trace: TraceWriter, *,
         if kind != "gpio":
             raise ValueError(f"{board}.{pin} is {kind}, not gpio")
         return target["port"], target["pin"]
+
+    pin_names: dict[tuple[str, str], str] = {}     # (board, "port:pin") -> "PB4"
+    samplers = []                                  # [next_t_us, period_us, watch]
+    initial: list[dict] = []                       # pin levels as watching starts
+    edge_boards: set[str] = set()
+
+    def watch_pin(board: str, name: str, level: bool = True) -> None:
+        """Record a pin's edges from now on, with its level now as an
+        `initial` edge when `level` (what a value needs before the first edge)."""
+        port, pin = gpio_target(board, name)
+        io = sim.io(board)
+        key = io.watch(port, pin)
+        pin_names.setdefault((board, key), name)
+        edge_boards.add(board)
+        if level:
+            initial.append({"kind": "edge", "t_us": sim.now_us(), "board": board,
+                            "pin": pin_names[(board, key)], "level": int(io.level(key)),
+                            "initial": True})
 
     stimuli = scenario.get("stimuli", [])
     # A named can_periodic's sender, for the stop_periodic that names it.
@@ -255,15 +277,24 @@ def execute_run(sim, scenario: dict, trace: TraceWriter, *,
         elif kind == "analog":
             at(t_us, lambda b=s["board"], pin=s["pin"], v=s["volts"]: sim.io(b).set_voltage(pin, v))
             note(t_us, f"{what} {s['board']}.{s['pin']} = {s['volts']} V")
+        elif kind == "watch":
+            # Mid-run (a live session's op too): from at_ms to the run's end.
+            if s.get("symbol"):
+                w = {"kind": "symbol", "board": s["board"], "name": s["symbol"],
+                     "size": s.get("size") or symbol_size(sim, s["board"], s["symbol"]),
+                     "period_ms": s.get("period_ms") or 10}
+                at(t_us, lambda w=w, t=t_us: samplers.append([t, int(w["period_ms"] * 1000), w]))
+                note(t_us, f"{what} {s['board']}.{s['symbol']} every {w['period_ms']:g} ms")
+            else:
+                gpio_target(s["board"], s["pin"])          # refused now, not mid-run
+                at(t_us, lambda b=s["board"], p=s["pin"]: watch_pin(b, p))
+                note(t_us, f"{what} {s['board']}.{s['pin']}")
         else:
             raise ValueError(f"unknown stimulus kind '{kind}'")
 
-    pin_names: dict[tuple[str, str], str] = {}     # (board, "port:pin") -> "PB4"
-    samplers = []                                  # [next_t_us, period_us, watch]
     for w in scenario.get("watch", []):
         if w["kind"] == "pin":
-            port, pin = gpio_target(w["board"], w["pin"])
-            pin_names[(w["board"], sim.io(w["board"]).watch(port, pin))] = w["pin"]
+            watch_pin(w["board"], w["pin"], level=False)
         elif w["kind"] == "symbol":
             samplers.append([0, int(w.get("period_ms", 10) * 1000), w])
         else:
@@ -272,27 +303,43 @@ def execute_run(sim, scenario: dict, trace: TraceWriter, *,
     # the level at the start written as an `initial` edge (an expect needs a
     # pin's value before its first edge), and their symbols sampled every
     # 10 ms unless a watch already samples them.
-    initial: list[dict] = []
     expects = scenario.get("expect", [])
     for board, name in vexpect.pins(expects):
-        port, pin = gpio_target(board, name)
-        io = sim.io(board)
-        key = io.watch(port, pin)
-        pin_names.setdefault((board, key), name)
-        initial.append({"kind": "edge", "t_us": sim.now_us(), "board": board,
-                        "pin": pin_names[(board, key)], "level": int(io.level(key)),
-                        "initial": True})
+        watch_pin(board, name)
     sampled = {(w["board"], w["name"]) for w in scenario.get("watch", []) if w["kind"] == "symbol"}
     for board, name in vexpect.symbols(expects):
         if (board, name) not in sampled:
+            sampled.add((board, name))
             samplers.append([0, 10_000, {"kind": "symbol", "board": board, "name": name,
                                          "size": symbol_size(sim, board, name)}])
-    edge_boards = sorted({b for b, _ in pin_names})
+    if state_view:
+        # Every board's state view: its pins from power-on with their level,
+        # its symbols at the item's period (those the image lacks, an older
+        # firmware's, are left out and said so).
+        view_symbols, view_pins = stateview.watches(system)
+        watched = set(vexpect.pins(expects))
+        for board, name in view_pins:
+            if (board, name) not in watched:
+                watch_pin(board, name)
+        missing = []
+        for board, name, period_ms in view_symbols:
+            if (board, name) in sampled:
+                continue
+            if not has_symbol(sim, board, name):
+                missing.append(f"{board}.{name}")
+                continue
+            sampled.add((board, name))
+            samplers.append([0, int(period_ms * 1000), {"kind": "symbol", "board": board,
+                                                        "name": name,
+                                                        "size": symbol_size(sim, board, name)}])
+        if missing:
+            note(sim.now_us(), "state view: not in the firmware, not recorded: "
+                               + ", ".join(missing))
 
     now = sim.now_us()
     since = now          # frames/edges from here on belong to the next slice
     slice_end = now + slice_us
-    batch: list[dict] = initial   # this slice's records, written when it ends
+    batch: list[dict] = []        # this slice's records, written when it ends
     while True:
         while events and events[0][0] <= now:
             heapq.heappop(events)[2]()
@@ -315,7 +362,9 @@ def execute_run(sim, scenario: dict, trace: TraceWriter, *,
                     batch.append({"kind": "frame", "t_us": f.t_us, "bus": bus, "id": f.id,
                                   "ext": f.extended, "data": f.data.hex(), "src": "stimulus"})
                     sent[bus] += 1
-            for board in edge_boards:
+            batch += initial
+            initial.clear()
+            for board in sorted(edge_boards):
                 for e in sim.io(board).edges(since_us=since):
                     batch.append({"kind": "edge", "t_us": e.t_us, "board": board,
                                   "pin": pin_names.get((board, e.pin), e.pin), "level": int(e.level)})
@@ -341,6 +390,19 @@ def execute_run(sim, scenario: dict, trace: TraceWriter, *,
             raise RuntimeError(f"virtual time stuck at {now} us")
         now = new
     return {"virtual_ms": scenario["virtual_ms"], "frames": frames, "sent": sent, **counts}
+
+
+def has_symbol(sim, board: str, name: str) -> bool:
+    """Whether the board's image (sim.firmware) has the global."""
+    path = (getattr(sim, "firmware", None) or {}).get(board)
+    if path is None:
+        return False
+    from vhil import elf
+    try:
+        elf.symbol(path, name)
+    except (OSError, KeyError, ValueError):
+        return False
+    return True
 
 
 def symbol_size(sim, board: str, name: str) -> int:
@@ -589,7 +651,7 @@ class Worker:
                 sim = self.sim_factory(system_path, firmware, run_dir / "renode.log")
                 with sim:
                     summary = execute_run(sim, scenario, trace, cancelled=cancelled,
-                                          progress=on_progress)
+                                          progress=on_progress, state_view=True)
                 state, virtual_us = "passed", progress["us"]
                 if scenario.get("expect"):
                     summary.update(evaluate_expects(run_dir, scenario, system, firmware,

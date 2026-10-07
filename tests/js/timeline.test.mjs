@@ -60,3 +60,16 @@ test("zoom keeps the time under the pointer where it was", () => {
   assert.equal(zoomAround(10, 10, 0, 0).pxPerMs, 20);       // clamped
   assert.equal(fitScale(7000, 700), 0.1);
 });
+
+test("a watch op is a mark on its board's lane", () => {
+  const doc = {
+    virtual_ms: 1000,
+    stimuli: [{ kind: "watch", at_ms: 300, board: "ams", symbol: "g_state_telemetry" }],
+    expect: [],
+  };
+  assert.equal(laneOf("stimuli", doc.stimuli[0]), "board:ams");
+  const [mark] = marksOf(doc, 1000);
+  assert.equal(mark.shape, "diamond");
+  assert.equal(mark.label, "watch g_state_telemetry");
+  assert.equal(mark.lane, "board:ams");
+});

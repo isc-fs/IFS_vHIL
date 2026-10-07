@@ -1,6 +1,7 @@
 """A run's CAN contract for the browser's frame decoder (M5.3, #115).
 
-    GET /api/runs/{id}/contract -> {buses: {bus: {id: message}}, boards, conflicts}
+    GET /api/runs/{id}/contract -> {buses: {bus: {id: message}}, boards, conflicts,
+                                    state, labels}
 
 The contract is the firmware's own: the .def files of the source each board's
 image was built from (vhil/candef.py), found next to the ELF the worker ran
@@ -29,7 +30,7 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException
 
-from vhil import candef
+from vhil import candef, stateview
 from vhil.server.runs import RunStore
 from vhil.system import System, SystemError
 
@@ -56,7 +57,7 @@ def run_contract(run: dict, workspace: Path, fw_dir: Path) -> dict:
     try:
         system = System(path)
     except (OSError, SystemError) as e:
-        return {"buses": {}, "boards": {}, "conflicts": [],
+        return {"buses": {}, "boards": {}, "conflicts": [], "state": {}, "labels": {},
                 "error": f"system '{run['system']}': {e}"}
     return system_contract(system, board_elfs(run, system, fw_dir))
 
@@ -100,6 +101,11 @@ def system_contract(system: System, elfs: dict[str, Path]) -> dict:
                                              "kept": win[0], "dropped": lose[0]})
         out["buses"][bus] = {str(i): {**m.to_json(), "board": b}
                              for i, (b, m) in sorted(merged.items())}
+    # Each board's state view (vhil/stateview.py) and the value labels of the
+    # system's symbols and view frames: what the state panel shows, and the
+    # labels expects and the scenario editor accept.
+    out["state"] = stateview.view(system, elfs, out)
+    out["labels"] = stateview.labels(system, elfs, out)
     return out
 
 

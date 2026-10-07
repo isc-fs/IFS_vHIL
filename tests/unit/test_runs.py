@@ -597,6 +597,76 @@ def test_executor_watches_what_the_expects_read(tmp_path):
     assert ("read_symbol", 50_000, "ecu", "g_x", 1) in sim.calls
 
 
+def test_a_watch_op_starts_recording_mid_run(tmp_path):
+    """`watch` as a stimulus (a live session's op): a symbol sampled from
+    its at_ms, a pin's edges from its at_ms with its level then."""
+    scenario = {"kind": "run", "virtual_ms": 100, "stimuli": [
+        {"kind": "watch", "at_ms": 40, "board": "ecu", "symbol": "g_x", "period_ms": 20},
+        {"kind": "watch", "at_ms": 30, "board": "ecu", "pin": "PB5"},
+        {"kind": "gpio", "at_ms": 60, "board": "ecu", "pin": "PB5", "level": True}]}
+    sim = FakeSim()
+    trace = TraceWriter(tmp_path / "trace.jsonl")
+    summary = execute_run(sim, scenario, trace)
+    trace.close()
+    records = read_trace(tmp_path / "trace.jsonl")
+    assert [r["t_us"] for r in records if r["kind"] == "sample"] == [40_000, 60_000, 80_000,
+                                                                     100_000]
+    assert summary["samples"] == 4
+    assert [r for r in records if r["kind"] == "edge"] == [
+        {"kind": "edge", "t_us": 30_000, "board": "ecu", "pin": "PB5", "level": 0, "initial": True},
+        {"kind": "edge", "t_us": 60_000, "board": "ecu", "pin": "PB5", "level": 1}]
+    assert [(r["t_us"], r["text"]) for r in records if r["kind"] == "log"][:2] == [
+        (30_000, "stimulus watch ecu.PB5"), (40_000, "stimulus watch ecu.g_x every 20 ms")]
+
+
+def test_a_watch_op_is_one_symbol_or_one_pin():
+    from pydantic import ValidationError
+    from vhil.server.runs import RunScenario
+    ok = RunScenario.model_validate({"kind": "run", "stimuli": [
+        {"kind": "watch", "at_ms": 5, "board": "ecu", "symbol": "g_x", "size": 2}]})
+    assert ok.stimuli[0].symbol == "g_x"
+    for bad in ({"board": "ecu"}, {"board": "ecu", "symbol": "g", "pin": "PB5"},
+                {"board": "ecu", "pin": "PB5", "period_ms": 10},
+                {"board": "ecu; quit", "symbol": "g"}, {"board": "ecu", "symbol": "g x"}):
+        with pytest.raises(ValidationError):
+            RunScenario.model_validate({"kind": "run", "stimuli": [{"kind": "watch", **bad}]})
+
+
+def test_with_the_state_view_a_run_records_what_the_panel_shows(tmp_path):
+    """Every board's state view (catalog/firmware/<id>.yaml state_view): its
+    pins from power-on with their level; its symbols at their period, those
+    the image lacks left out and logged."""
+    sim = FakeSim()
+    sim.levels["sysbus.gpioPortB:4"] = True
+    trace = TraceWriter(tmp_path / "trace.jsonl")
+    execute_run(sim, {"kind": "run", "virtual_ms": 30}, trace, state_view=True)
+    trace.close()
+    records = read_trace(tmp_path / "trace.jsonl")
+    assert [(r["pin"], r["level"]) for r in records if r.get("initial")] == [
+        ("PB4", 1), ("PB6", 0)]
+    assert not [r for r in records if r["kind"] == "sample"]     # FakeSim has no image
+    log = [r["text"] for r in records if r["kind"] == "log"]
+    assert log == ["state view: not in the firmware, not recorded: ecu.g_last_ctrl_state, "
+                   "ecu.g_last_start_button, "
+                   "ecu.g_last_t11_8_9, ecu.g_discharge_fault, ecu.g_last_torque_pct, "
+                   "ecu.g_last_apps1_raw, ecu.g_last_apps2_raw, ecu.g_last_brake_raw"]
+
+
+def test_with_the_state_view_its_symbols_are_sampled_at_their_period(tmp_path, monkeypatch):
+    import vhil.worker as vw
+    monkeypatch.setattr(vw, "has_symbol", lambda sim, board, name: True)
+    sim = FakeSim()
+    trace = TraceWriter(tmp_path / "trace.jsonl")
+    execute_run(sim, {"kind": "run", "virtual_ms": 100}, trace, state_view=True)
+    trace.close()
+    times = {}
+    for r in read_trace(tmp_path / "trace.jsonl"):
+        if r["kind"] == "sample":
+            times.setdefault(r["name"], []).append(r["t_us"])
+    assert times["g_last_ctrl_state"] == list(range(0, 100_001, 10_000))
+    assert times["g_last_brake_raw"] == [0, 50_000, 100_000]
+
+
 # -- the worker --------------------------------------------------------------------
 
 class FixedResolver:
