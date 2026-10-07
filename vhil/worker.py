@@ -56,6 +56,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Callable, Optional
 
+from vhil import expect as vexpect
 from vhil.server.config import Settings
 from vhil.server.runs import (HEARTBEAT_S, MAX_ATTEMPTS, RECLAIM_AFTER_S, TRACE, Limits,
                               RunStore, code_changes, materialise_system, trace_header)
@@ -219,7 +220,11 @@ def execute_run(sim, scenario: dict, trace: TraceWriter, *,
             raise ValueError(f"{board}.{pin} is {kind}, not gpio")
         return target["port"], target["pin"]
 
-    for i, s in enumerate(scenario.get("stimuli", [])):
+    stimuli = scenario.get("stimuli", [])
+    # A named can_periodic's sender, for the stop_periodic that names it.
+    periodic = {s["name"]: (s["bus"], f"stim{i}", s["id"]) for i, s in enumerate(stimuli)
+                if s["kind"] == "can_periodic" and s.get("name")}
+    for i, s in enumerate(stimuli):
         t_us = int(s.get("at_ms", 0) * 1000)
         kind = s["kind"]
         what = f"stimulus {kind}"
@@ -238,6 +243,10 @@ def execute_run(sim, scenario: dict, trace: TraceWriter, *,
             if s.get("until_ms") is not None:
                 at(int(s["until_ms"] * 1000), lambda bus=bus, key=key: bus.stop_periodic(key))
                 note(int(s["until_ms"] * 1000), f"{what} stopped")
+        elif kind == "stop_periodic":
+            bus_name, key, can_id = periodic[s["periodic"]]
+            at(t_us, lambda bus=sim.can(bus_name), key=key: bus.stop_periodic(key))
+            note(t_us, f"{what} {s['periodic']} ({bus_name} 0x{can_id:X})")
         elif kind == "gpio":
             port, pin = gpio_target(s["board"], s["pin"])
             at(t_us, lambda b=s["board"], port=port, pin=pin, lv=s["level"]:
@@ -259,12 +268,31 @@ def execute_run(sim, scenario: dict, trace: TraceWriter, *,
             samplers.append([0, int(w.get("period_ms", 10) * 1000), w])
         else:
             raise ValueError(f"unknown watch kind '{w['kind']}'")
+    # What the expects read (vhil/expect.py): their pins are watched, with
+    # the level at the start written as an `initial` edge (an expect needs a
+    # pin's value before its first edge), and their symbols sampled every
+    # 10 ms unless a watch already samples them.
+    initial: list[dict] = []
+    expects = scenario.get("expect", [])
+    for board, name in vexpect.pins(expects):
+        port, pin = gpio_target(board, name)
+        io = sim.io(board)
+        key = io.watch(port, pin)
+        pin_names.setdefault((board, key), name)
+        initial.append({"kind": "edge", "t_us": sim.now_us(), "board": board,
+                        "pin": pin_names[(board, key)], "level": int(io.level(key)),
+                        "initial": True})
+    sampled = {(w["board"], w["name"]) for w in scenario.get("watch", []) if w["kind"] == "symbol"}
+    for board, name in vexpect.symbols(expects):
+        if (board, name) not in sampled:
+            samplers.append([0, 10_000, {"kind": "symbol", "board": board, "name": name,
+                                         "size": symbol_size(sim, board, name)}])
     edge_boards = sorted({b for b, _ in pin_names})
 
     now = sim.now_us()
     since = now          # frames/edges from here on belong to the next slice
     slice_end = now + slice_us
-    batch: list[dict] = []   # this slice's records, written when it ends
+    batch: list[dict] = initial   # this slice's records, written when it ends
     while True:
         while events and events[0][0] <= now:
             heapq.heappop(events)[2]()
@@ -313,6 +341,35 @@ def execute_run(sim, scenario: dict, trace: TraceWriter, *,
             raise RuntimeError(f"virtual time stuck at {now} us")
         now = new
     return {"virtual_ms": scenario["virtual_ms"], "frames": frames, "sent": sent, **counts}
+
+
+def symbol_size(sim, board: str, name: str) -> int:
+    """How many bytes to sample a symbol an expect reads: its size in the
+    board's ELF if 1, 2 or 4 (an enum or a counter), else 1."""
+    path = (getattr(sim, "firmware", None) or {}).get(board)
+    if path is None:
+        return 1
+    from vhil import elf
+    try:
+        size = elf.symbol(path, name)[1]
+    except (OSError, KeyError, ValueError):
+        return 1
+    return size if size in (1, 2, 4) else 1
+
+
+def evaluate_expects(run_dir: Path, scenario: dict, system: System, firmware: dict,
+                     end_us: int, trace: TraceWriter) -> dict:
+    """The scenario's expects (vhil/expect.py) over the run's trace: the
+    summary's `expects`, and one log line each at the run's end."""
+    from vhil.server.decode import system_contract
+    elfs = {b: Path(p) for b, p in firmware.items() if "." not in b and b in system.boards}
+    contract = system_contract(system, elfs)
+    results = vexpect.evaluate_trace(run_dir / TRACE, scenario["expect"], contract, end_us)
+    trace.write([{"kind": "log", "t_us": end_us,
+                  "text": f"expect {'passed' if r['passed'] else 'FAILED'} "
+                          f"{r['name'] or r['check']} {r['signal']}: {r['detail']}"}
+                 for r in results])
+    return vexpect.summary(results)
 
 
 # -- the `pytest` scenario -----------------------------------------------------------
@@ -534,6 +591,11 @@ class Worker:
                     summary = execute_run(sim, scenario, trace, cancelled=cancelled,
                                           progress=on_progress)
                 state, virtual_us = "passed", progress["us"]
+                if scenario.get("expect"):
+                    summary.update(evaluate_expects(run_dir, scenario, system, firmware,
+                                                    virtual_us, trace))
+                    if summary["expects_failed"]:
+                        state = "failed"
             elif scenario["kind"] == "pytest":
                 state, summary = execute_pytest(scenario, run_dir, Path(self.settings.workspace),
                                                 image_env(system, firmware), trace, cancelled,

@@ -448,6 +448,9 @@ class FakeIO:
     def edges(self, pin="", since_us=0):
         return [e for e in self.sim.edge_log if e.t_us >= since_us]
 
+    def level(self, pin):
+        return self.sim.levels.get(pin, False)
+
 
 class FakeSim:
     def __init__(self, system=ECU, quantum_us=500):
@@ -455,6 +458,7 @@ class FakeSim:
         self.now, self.quantum = 0, quantum_us
         self.calls, self.scheduled, self.edge_log, self.watched = [], [], [], set()
         self.periodic = {}
+        self.levels = {}
         self.started = self.stopped = False
 
     def __enter__(self):
@@ -561,6 +565,38 @@ def test_executor_rejects_a_symbol_on_the_wrong_kind_of_pin(tmp_path):
                             "watch": [{"kind": "pin", "board": "ecu", "pin": "PF7"}]})
 
 
+def test_executor_stops_a_named_periodic(tmp_path):
+    scenario = {"kind": "run", "virtual_ms": 200, "stimuli": [
+        {"kind": "stop_periodic", "at_ms": 100, "periodic": "hb"},
+        {"kind": "can_periodic", "name": "hb", "at_ms": 0, "bus": "can_dash", "id": 0x10,
+         "data": "", "period_ms": 20}]}
+    sim, summary, trace = run_fake(tmp_path, scenario)
+    assert ("stop_periodic", 100_000, "can_dash", "stim1") in sim.calls
+    assert summary["sent"]["can_dash"] == 5
+    assert (100_000, "stimulus stop_periodic hb (can_dash 0x10)") in [
+        (r["t_us"], r["text"]) for r in trace if r["kind"] == "log"]
+
+
+def test_executor_watches_what_the_expects_read(tmp_path):
+    """An expect's pin is watched from the start, its level then written as
+    an initial edge; its symbol is sampled every 10 ms."""
+    scenario = {"kind": "run", "virtual_ms": 100, "stimuli": [
+        {"kind": "gpio", "at_ms": 50, "board": "ecu", "pin": "PB5", "level": True}],
+        "expect": [{"check": "eventually", "signal": "pin:ecu.PB5", "value": 1},
+                   {"check": "eventually", "signal": "symbol:ecu.g_x", "value": 5}]}
+    sim = FakeSim()
+    sim.levels["sysbus.gpioPortB:5"] = False
+    trace = TraceWriter(tmp_path / "trace.jsonl")
+    summary = execute_run(sim, scenario, trace)
+    trace.close()
+    records = read_trace(tmp_path / "trace.jsonl")
+    assert [r for r in records if r["kind"] == "edge"] == [
+        {"kind": "edge", "t_us": 0, "board": "ecu", "pin": "PB5", "level": 0, "initial": True},
+        {"kind": "edge", "t_us": 50_000, "board": "ecu", "pin": "PB5", "level": 1}]
+    assert summary["samples"] == 11
+    assert ("read_symbol", 50_000, "ecu", "g_x", 1) in sim.calls
+
+
 # -- the worker --------------------------------------------------------------------
 
 class FixedResolver:
@@ -623,6 +659,83 @@ def test_worker_turns_a_failure_into_an_error_run(settings, store):
     run = store.get(run_id)
     assert run["state"] == "error" and "no built image" in run["summary"]["error"]
     assert (settings.results / str(run_id) / "worker-error.txt").is_file()
+
+
+def contract_firmware(tmp_path) -> dict:
+    """An ECU image whose source declares 0x100 with a value table: what the
+    worker reads the run's contract from (vhil/server/decode.py)."""
+    messages = tmp_path / "ecu@dev" / "Core" / "Inc" / "can" / "messages"
+    messages.mkdir(parents=True)
+    (messages / "hb.def").write_text(
+        'CAN_MSG(VCU_heartbeat, 0x100, 1, "VCU", 10)\n'
+        '    FIELD_LE (state, uint8_t, 0, 8, 1, 0, "enum")\n'
+        'CAN_MSG_END(VCU_heartbeat)\n'
+        'CAN_VAL(VCU_heartbeat, state, 1, "One")\n')
+    return {"ecu": tmp_path / "ecu@dev" / "build" / "ECU08.elf"}
+
+
+def expect_run(store, *expects, virtual_ms=200):
+    return store.create("ecu", "", {}, {"kind": "run", "virtual_ms": virtual_ms, "slice_ms": 100,
+                                        "name": "hb", "expect": list(expects)})
+
+
+def test_worker_passes_a_run_whose_expects_hold(settings, store, tmp_path):
+    run_id = expect_run(
+        store, {"check": "eventually", "name": "one", "signal": "frame:can_acu.VCU_heartbeat.state",
+                "value": "One", "until_ms": 50},
+        {"check": "period", "signal": "frame:can_acu.0x100", "min_ms": 9, "max_ms": 11})
+    worker = Worker(settings, sim_factory=lambda *a: FakeSim(),
+                    resolver=FixedResolver(contract_firmware(tmp_path)))
+    worker.run_once()
+    run = store.get(run_id)
+    assert run["state"] == "passed", run["summary"]
+    s = run["summary"]
+    assert s["expects_passed"] == 2 and s["expects_failed"] == 0
+    assert s["expects"][0] | {"detail": ""} == {
+        "index": 0, "name": "one", "check": "eventually",
+        "signal": "frame:can_acu.VCU_heartbeat.state", "at_us": 0, "until_us": 50_000,
+        "passed": True, "t_us": 10_000, "value": "One", "detail": ""}
+    logs = [r["text"] for r in read_trace(settings.results / str(run_id) / "trace.jsonl")
+            if r["kind"] == "log"]
+    assert any(t.startswith("expect passed one frame:can_acu.VCU_heartbeat.state") for t in logs)
+
+
+def test_worker_fails_a_run_whose_expect_does_not_hold(settings, store, tmp_path):
+    run_id = expect_run(
+        store, {"check": "never", "signal": "frame:can_acu.VCU_heartbeat.state", "value": 1},
+        {"check": "count", "signal": "frame:can_acu.0x100", "max": 0, "at_ms": 150})
+    worker = Worker(settings, sim_factory=lambda *a: FakeSim(),
+                    resolver=FixedResolver(contract_firmware(tmp_path)))
+    worker.run_once()
+    run = store.get(run_id)
+    assert run["state"] == "failed"
+    s = run["summary"]
+    assert s["expects_failed"] == 2 and s["frames"]["can_acu"] == 20
+    assert [(r["passed"], r["t_us"], r["value"]) for r in s["expects"]] == [
+        (False, 10_000, 1), (False, 150_000, 6)]
+
+
+def test_worker_fails_an_expect_the_contract_cannot_read(settings, store):
+    """No .def next to the image: a field expect fails and says why; a raw
+    id needs no contract."""
+    run_id = expect_run(
+        store, {"check": "eventually", "signal": "frame:can_acu.VCU_heartbeat.state", "value": 1},
+        {"check": "count", "signal": "frame:can_acu.0x100", "min": 1})
+    Worker(settings, sim_factory=lambda *a: FakeSim(), resolver=FixedResolver()).run_once()
+    s = store.get(run_id)["summary"]
+    assert [r["passed"] for r in s["expects"]] == [False, True]
+    assert "no message VCU_heartbeat on can_acu" in s["expects"][0]["detail"]
+
+
+def test_last_run_per_scenario(store):
+    first = expect_run(store)
+    store.create("ecu", "", {}, RUN)
+    second = expect_run(store)
+    other = store.create("ecu", "", {}, {**RUN, "name": "other"})
+    store.create("ams", "", {}, {**RUN, "name": "hb"})
+    last = store.last_by_scenario("ecu")
+    assert {k: v["id"] for k, v in last.items()} == {"hb": second, "other": other}
+    assert first < second
 
 
 # -- firmware resolution and pytest ---------------------------------------------------
