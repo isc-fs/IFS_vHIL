@@ -156,13 +156,14 @@ export default {
 
         onMounted(() => {
             setCanvas(canvas.value);
-            window.addEventListener('keydown', onKeyDown);
+            // Capture: the canvas handles (and stops) some keys itself.
+            window.addEventListener('keydown', onKeyDown, true);
             externalApplicationManager.registerConnectionHook(syncBackend);
             externalApplicationManager.registerDisconnectionHook(syncBackend);
             if (externalApplicationManager.isConnected()) syncBackend();
             start().then(changed);
         });
-        onBeforeUnmount(() => window.removeEventListener('keydown', onKeyDown));
+        onBeforeUnmount(() => window.removeEventListener('keydown', onKeyDown, true));
 
         return {
             editorManager,
