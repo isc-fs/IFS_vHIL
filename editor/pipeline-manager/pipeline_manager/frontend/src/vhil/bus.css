@@ -43,10 +43,10 @@
 .vhil-rt-rows { position: absolute; top: 0; left: 0; right: 0; }
 .vhil-rt-rows .vhil-rt-row:hover { background: var(--bg-3); }
 .--monitor .vhil-rt-row {
-  grid-template-columns: 6.5rem 6.5rem minmax(7rem, 11rem) 2.5rem 13.5rem minmax(10rem, 1fr) 4.5rem 5.5rem 5.5rem;
+  grid-template-columns: 6rem 6rem minmax(6rem, 11rem) 2.5rem 11.5rem minmax(8rem, 1fr) 4rem 5.5rem 5.5rem;
 }
 .--trace .vhil-rt-row {
-  grid-template-columns: 6rem 6.5rem 6.5rem minmax(7rem, 11rem) 2.5rem 13.5rem minmax(10rem, 1fr);
+  grid-template-columns: 5.5rem 6rem 6rem minmax(6rem, 11rem) 2.5rem 11.5rem minmax(8rem, 1fr);
 }
 .--trace .vhil-rt-rows .vhil-rt-row { cursor: pointer; }
 .vhil-c-num { text-align: right; font-variant-numeric: tabular-nums; }
