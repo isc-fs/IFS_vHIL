@@ -54,6 +54,42 @@ export function physical(raw, f) {
   return Number.isInteger(f.factor) && Number.isInteger(f.offset) ? v : Number(v.toPrecision(12));
 }
 
+// The physical values field f can carry: [min, max].
+export function fieldRange(f) {
+  const n = f.length;
+  const [lo, hi] = f.signed ? [-(2 ** (n - 1)), 2 ** (n - 1) - 1] : [0, 2 ** n - 1];
+  const a = physical(lo, f), b = physical(hi, f);
+  return [Math.min(a, b), Math.max(a, b)];
+}
+
+// The raw value a physical value is sent as: (v - offset) / factor, rounded
+// and clamped to the field's bits (the scenario editor's encoder).
+export function rawFromPhysical(v, f) {
+  const n = f.length;
+  const [lo, hi] = f.signed ? [-(2 ** (n - 1)), 2 ** (n - 1) - 1] : [0, 2 ** n - 1];
+  const raw = Math.round((Number(v) - f.offset) / f.factor);
+  return Number.isFinite(raw) ? Math.min(hi, Math.max(lo, raw)) : 0;
+}
+
+// A copy of `bytes` with field f set to `raw`, extended with zeros to hold
+// it: the inverse of rawValue, for fields up to 52 bits.
+export function encodeField(bytes, f, raw) {
+  const bits = f._bits || (f._bits = fieldBits(f));
+  const n = bits.length;
+  const need = Math.max(bytes.length, (Math.max(...bits) >> 3) + 1);
+  const out = new Uint8Array(need);
+  out.set(bytes);
+  let v = raw < 0 ? raw + 2 ** n : raw;
+  for (let i = 0; i < n; i++) {     // LSB first
+    const bit = f.be ? bits[n - 1 - i] : bits[i];
+    if (v % 2) out[bit >> 3] |= 1 << (bit & 7); else out[bit >> 3] &= ~(1 << (bit & 7));
+    v = Math.floor(v / 2);
+  }
+  return out;
+}
+
+export const bytesToHex = (bytes) => Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+
 // The contract entry for a frame record, or undefined. A standard id never
 // matches an extended frame (and the reverse).
 export function lookup(contract, rec) {

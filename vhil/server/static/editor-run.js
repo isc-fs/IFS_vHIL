@@ -29,10 +29,17 @@ export function firmwareRefs(dataflow) {
 
 // The POST /api/runs body: the system at `ref` (none: the workspace's
 // checked-out tree), the graph's firmware refs, `virtualMs` of virtual time
-// from power-on.
-export function runRequest({ system, ref, dataflow, virtualMs }) {
-  const body = { system, firmware: firmwareRefs(dataflow),
-                 scenario: { kind: "run", virtual_ms: virtualMs } };
+// from power-on. With `scenario` ({name, doc}: a scenario file's rows,
+// vhil/server/scenarios.py), the run applies its stimuli, watches and
+// expects, and is named after it.
+export function runRequest({ system, ref, dataflow, virtualMs, scenario = null }) {
+  const run = { kind: "run", virtual_ms: virtualMs };
+  if (scenario) {
+    const { stimuli = [], watch = [], expect = [], slice_ms: slice } = scenario.doc;
+    Object.assign(run, { name: scenario.name, stimuli, watch, expect });
+    if (slice) run.slice_ms = slice;
+  }
+  const body = { system, firmware: firmwareRefs(dataflow), scenario: run };
   if (ref) body.ref = ref;
   return body;
 }

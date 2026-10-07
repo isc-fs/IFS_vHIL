@@ -313,7 +313,13 @@ In the owner's order.
    signals and artifacts too.
 10. **Scenario model and table** (feature 1a). Shared stimulus/expect schema
     (the same ops that drive live), the table with contract-driven editors,
-    server-side validation, YAML through Commit/PR.
+    server-side validation, YAML through Commit/PR. Done:
+    [`docs/scenarios.md`](../scenarios.md) is the schema. Scenario files are
+    `systems/<system>.scenarios/<name>.yaml`; the rows are `RunScenario`'s
+    (`vhil/server/runs.py`), with `stop_periodic` and `expect` added, and the
+    worker evaluates expects against the trace after the run
+    (`vhil/expect.py`), a failed one failing it. A system's contract comes
+    without a run from `GET /api/systems/<id>/contract`.
 11. **Timeline and vHIL tests** (feature 1b). Lanes, drag/snap, watch gutter,
     expected-vs-actual overlay; the worker evaluates expects; a pytest
     collector and CI job (advisory) with JUnit into the Tests view, green for

@@ -423,8 +423,22 @@ def _run(**scenario):
     lambda v: _run(watch=[{"kind": "pin", "board": "ecu", "pin": v}]),
     lambda v: _run(watch=[{"kind": "symbol", "board": v, "name": "x"}]),
     lambda v: _run(watch=[{"kind": "symbol", "board": "ecu", "name": v}]),
+    lambda v: _run(stimuli=[{"kind": "can_periodic", "name": v, "bus": "can_acu", "id": 1,
+                             "period_ms": 10}]),
+    lambda v: _run(stimuli=[{"kind": "can_periodic", "name": "p", "bus": "can_acu", "id": 1,
+                             "period_ms": 10}, {"kind": "stop_periodic", "periodic": v}]),
+    lambda v: _run(expect=[{"check": "never", "signal": f"pin:{v}.PB4", "value": 1}]),
+    lambda v: _run(expect=[{"check": "never", "signal": f"pin:ecu.{v}", "value": 1}]),
+    lambda v: _run(expect=[{"check": "never", "signal": f"symbol:ecu.{v}", "value": 1}]),
+    lambda v: _run(expect=[{"check": "count", "signal": f"frame:{v}.0x100", "max": 0}]),
+    lambda v: _run(expect=[{"check": "never", "signal": f"frame:can_acu.{v}.x", "value": 1}]),
+    lambda v: _run(expect=[{"check": "never", "signal": "pin:ecu.PB4", "value": 1, "name": v}]),
+    lambda v: _run(name=v),
 ], ids=["can_send.bus", "can_periodic.bus", "gpio.board", "gpio.pin", "analog.board",
-        "analog.pin", "can.data", "pin.board", "pin.pin", "symbol.board", "symbol.name"])
+        "analog.pin", "can.data", "pin.board", "pin.pin", "symbol.board", "symbol.name",
+        "periodic.name", "stop_periodic.periodic", "expect.pin.board", "expect.pin.pin",
+        "expect.symbol", "expect.frame.bus", "expect.frame.message", "expect.name",
+        "scenario.name"])
 def test_a_hostile_scenario_name_is_refused(make, value):
     with pytest.raises(ValidationError):
         RunRequest.model_validate(make(value))

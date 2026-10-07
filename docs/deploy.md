@@ -166,7 +166,7 @@ Runs are bounded by the API ([`vhil/server/runs.py`](../vhil/server/runs.py),
 | Variable | Bounds | Refused with |
 |---|---|---|
 | `VHIL_MAX_VIRTUAL_MS` [600000] | a run's virtual time | 422 |
-| `VHIL_MAX_STIMULI` [1000] / `VHIL_MAX_WATCHES` [100] | a run scenario's stimuli / watches | 422 |
+| `VHIL_MAX_STIMULI` [1000] / `VHIL_MAX_WATCHES` [100] / `VHIL_MAX_EXPECTS` [200] | a run scenario's (or scenario file's) stimuli / watches / expects | 422 |
 | `VHIL_MAX_QUEUED` [50] | active (queued + running) runs, everyone | 429 |
 | `VHIL_MAX_QUEUED_PER_USER` [10] | active runs per login | 429 |
 | `VHIL_MAX_TRACE_MB` [512] | a run's `trace.jsonl` (worker) | the run ends `error` |

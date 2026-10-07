@@ -2,8 +2,9 @@
 // The contract entries are candef's to_json() of fixtures/candef .def files.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { decodeFrame, filterFrames, formatValue, hexId, hexToBytes, lookup, lowerBound,
-         parseIdFilter, rawValue, signalSeries } from "../../vhil/server/static/decode.js";
+import { bytesToHex, decodeFrame, encodeField, fieldRange, filterFrames, formatValue, hexId,
+         hexToBytes, lookup, lowerBound, parseIdFilter, rawFromPhysical, rawValue,
+         signalSeries } from "../../vhil/server/static/decode.js";
 
 const F = (name, be, signed, start, length, factor = 1, offset = 0, unit = "", values) =>
   ({ name, be, signed, start, length, factor, offset, unit, ...(values ? { values } : {}) });
@@ -99,4 +100,38 @@ test("lowerBound finds the first record at or after a time", () => {
   assert.equal(lowerBound(FRAMES, 2001), 2);
   assert.equal(lowerBound(FRAMES, 9999), 4);
   assert.equal(lowerBound([0, 2, 3], 2500, FRAMES), 1);   // over filtered indices
+});
+
+test("encoding a field is the inverse of decoding it, LE, BE, signed and bits", () => {
+  const frame = hexToBytes("05040a320e10ff33");
+  for (const msg of [STATUS, CURRENTS]) {
+    for (const f of msg.fields) {
+      const raw = rawValue(frame, f);
+      if (raw === null) continue;
+      const again = encodeField(new Uint8Array(frame.length), f, raw);
+      assert.equal(rawValue(again, f), raw, f.name);
+      // Only the field's own bits are touched.
+      assert.equal(bytesToHex(encodeField(frame, f, raw)), "05040a320e10ff33", f.name);
+    }
+  }
+  const torque = STATUS.fields.find((f) => f.name === "torque_cmd");
+  assert.equal(rawValue(encodeField(new Uint8Array(8), torque, -205), torque), -205);
+});
+
+test("physical values encode rounded and clamped to the field", () => {
+  const amps = CURRENTS.fields[0];                       // 0.1 A, signed 16 bits
+  assert.equal(rawFromPhysical(-12.34, amps), -123);
+  assert.equal(rawFromPhysical(1e9, amps), 32767);
+  assert.deepEqual(fieldRange(amps), [-3276.8, 3276.7]);
+  const bit = STATUS.fields.find((f) => f.name === "ok_precharge");
+  assert.deepEqual(fieldRange(bit), [0, 1]);
+  assert.equal(rawFromPhysical(2, bit), 1);
+  assert.equal(rawFromPhysical("x", bit), 0);
+});
+
+test("a field past the frame's end extends it", () => {
+  const cmd = STATUS.fields.find((f) => f.name === "torque_cmd");
+  const out = encodeField(new Uint8Array(2), cmd, 1);
+  assert.equal(out.length, 8);
+  assert.equal(rawValue(out, cmd), 1);
 });

@@ -259,6 +259,47 @@ from `git archive 04613679` except as listed below.
       signals and artifacts, which REPLAY doesn't show yet, and links to
       REPLAY; the runs list keeps its pytest runs.
 
+15. **Scenario model and table** (step 10 of the editor workspace plan). All
+    in `src/vhil/` but for the image build; no Pipeline Manager file changes.
+    - **Scenarios** (`scenarios.js`): the open system's scenario files
+      (`systems/<id>.scenarios/<name>.yaml`; `docs/scenarios.md`), listed on
+      its branch with their last runs, one selected for Run and the Scenario
+      tab, its firmware's CAN contract without a run
+      (`GET /api/systems/<id>/contract`, with the graph's firmware refs), and
+      its check on the server, 400 ms after each edit
+      (`POST .../scenarios/<name>/preview`). It imports nothing of
+      `workspace.js`, which binds the open system, branch and refs to it.
+    - **The model** (`scenario.js`, pure; `tests/js/scenario.test.mjs` under
+      node): a scenario's `stimuli`, `watch` and `expect` lists as one table
+      of rows sorted by time, each pointing at its item, edited in place;
+      what a row targets and sets; the server's messages and a run's expect
+      results by row.
+    - **The Scenario tab** (`VhilScenario.vue`, the row editor `VhilScenarioRow.vue`, `scenario.css`;
+      `VhilDock.vue` renders it): the scenario pick and `+ New`, its
+      description and virtual time, `+ Add row…` (send, periodic, stop,
+      gpio, analog, watch, expect), the state (errors, warnings, unsaved, the
+      last run's expects), the rows `t | action | target | value | result`,
+      and an editor for the selected one. A frame is edited as its message's
+      decoded fields from the contract: a value table as a select, a bit as
+      false/true, a scalar as a number with its unit, range and step, the hex
+      in sync (the shell's `decode.js`, which gains `encodeField`,
+      `rawFromPhysical`, `fieldRange` and `bytesToHex`: one copy); with no
+      contract, raw hex. An expect's signal is built from a source (frame
+      field, frame, symbol, pin), its owner and item, and its value is a
+      label select where the field has a value table.
+    - **The top bar** (`VhilTopBar.vue`): the scenario Run runs, next to the
+      run's duration, which is the scenario's own while one is selected.
+      Run (`workspace.js`) sends its rows and name with the run
+      (`shell/editor-run.js` `runRequest`'s `scenario`), and refuses while
+      the scenario has errors; when the run ends, its expect results are on
+      the rows, in the Log and in Problems.
+    - **Commit…** (`VhilDialogs.vue`) commits the system file, the selected
+      scenario or both, on one branch (the scenario on the system's new
+      commit). `?scenario=` in the URL selects one.
+    - **Problems** (`VhilDock.vue`, `VhilStatus.vue`) list the scenario's
+      check (errors, warnings) and its last run's failed expects with the
+      system's; a click shows the row.
+
 ## Left for later
 
 - **Light theme polish** (owner decision: defined now, polished later).

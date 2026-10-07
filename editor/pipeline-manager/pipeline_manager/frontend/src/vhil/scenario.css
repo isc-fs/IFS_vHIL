@@ -1,0 +1,67 @@
+/* vHIL: the Scenario tab (VhilScenario.vue), on the tokens (step 10 of
+   docs/architecture/editor-workspace.md). Its bar and notes reuse the Bus
+   tab's (bus.css). Status is text and a glyph, never colour alone. */
+
+.vhil-scen { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.vhil-scen-bar {
+  display: flex; align-items: center; gap: var(--sp-3); flex: none; flex-wrap: wrap;
+  padding: var(--sp-1) var(--sp-3); border-bottom: 1px solid var(--line); font-size: var(--fs-dense);
+}
+.vhil-scen-bar .vhil-input { min-height: 24px; height: 24px; width: auto; color: var(--fg); }
+.vhil-scen-bar .vhil-bus-field.--grow .vhil-input { width: 100%; }
+.vhil-scen-new { display: inline-flex; gap: var(--sp-1); align-items: center; }
+.vhil-scen-new .vhil-input { width: 10rem; }
+.vhil-scen-bar .vhil-scen-num { width: 6rem; text-align: right; }
+.vhil-scen-state { display: inline-flex; gap: var(--sp-2); align-items: center; margin-left: auto; white-space: nowrap; }
+.vhil-scen-ok { color: var(--status-ok); }
+.vhil-scen-msg { margin: 0; padding: 2px var(--sp-3); font-size: var(--fs-dense); font-family: var(--font-mono); }
+.vhil-scen-msg.--error { color: var(--status-failed); }
+.vhil-scen-msg.--ok { color: var(--status-ok); }
+
+.vhil-scen-body {
+  flex: 1; min-height: 0; display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(18rem, 26rem);
+}
+.vhil-scen-table { min-width: 0; min-height: 0; overflow: auto; font-size: var(--fs-dense); }
+.vhil-scen-row {
+  display: grid; align-items: center; gap: var(--sp-2); box-sizing: border-box;
+  grid-template-columns: 4.5rem 5rem minmax(7rem, 1.1fr) minmax(8rem, 1.4fr) minmax(7rem, 10rem) 2rem;
+  min-height: var(--row-dense); padding: 0 var(--sp-3); border-left: 3px solid transparent;
+  white-space: nowrap; cursor: pointer;
+}
+.vhil-scen-row.vhil-rt-head { position: sticky; top: 0; z-index: 1; cursor: default; }
+.vhil-scen-row > span { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.vhil-scen-row:not(.vhil-rt-head):hover { background: var(--bg-3); }
+.vhil-scen-row.--selected { background: var(--sel-bg); border-left-color: var(--focus); }
+.vhil-scen-row.--error { border-left-color: var(--status-failed); }
+.vhil-scen-row.--warning:not(.--error) { border-left-color: var(--status-warn); }
+.vhil-scen-row .vhil-btn.--small { height: 18px; padding: 0 4px; }
+.vhil-scen-action { font-weight: 600; }
+.vhil-scen-action.--expect { color: var(--accent); }
+.vhil-scen-action.--watch { color: var(--fg-muted); }
+.vhil-scen-result { display: inline-flex; gap: var(--sp-1); }
+
+.vhil-scen-editor {
+  min-width: 0; min-height: 0; overflow-y: auto; margin: 0; padding: var(--sp-2) var(--sp-3);
+  border-left: 1px solid var(--line); background: var(--bg-1);
+}
+.vhil-scen-editor .vhil-form-title { display: flex; gap: var(--sp-2); align-items: baseline; margin-bottom: var(--sp-2); }
+.vhil-scen-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-2); }
+.vhil-scen-grid label { display: flex; flex-direction: column; gap: 2px; min-width: 0; font-size: var(--fs-dense); color: var(--fg-muted); }
+.vhil-scen-grid .vhil-input { min-height: 24px; color: var(--fg); }
+.vhil-scen-grid .--wide { grid-column: 1 / -1; }
+.vhil-scen-grid label.vhil-scen-check { flex-direction: row; align-items: center; gap: var(--sp-1); }
+.vhil-scen-fields {
+  display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-2); margin: 0; padding: var(--sp-2);
+  border: 1px solid var(--line); border-radius: var(--r-panel);
+}
+.vhil-scen-fields legend { padding: 0 var(--sp-1); font-size: var(--fs-small); color: var(--fg-muted); }
+.vhil-scen-msgs { margin: 0 0 var(--sp-2); padding-left: var(--sp-4); color: var(--status-failed);
+  font-family: var(--font-mono); font-size: var(--fs-small); }
+.vhil-scen-editor .vhil-note { overflow-wrap: anywhere; }
+
+/* Narrow docks: the editor under the table. */
+@media (max-width: 1500px) {
+  .vhil-scen-body { grid-template-columns: minmax(0, 1fr) minmax(16rem, 22rem); }
+  .vhil-scen-row { grid-template-columns: 4rem 4.5rem minmax(6rem, 1fr) minmax(6rem, 1.2fr) minmax(5rem, 8rem) 2rem; }
+}

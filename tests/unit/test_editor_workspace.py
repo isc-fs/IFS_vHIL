@@ -166,3 +166,23 @@ def test_the_bus_tables_stay_fast_and_csp_clean():
     assert "requestAnimationFrame(draw)" in bus and "decoded.get(i)" in bus
     frames = (VHIL / "frames.js").read_text()
     assert "new Float64Array(capacity)" in frames and "this.dropped += 1;" in frames
+
+
+def test_the_scenario_tab():
+    """Step 10: the Scenario tab edits the selected scenario's rows, frames
+    through the shell's decode.js (one copy, which encodes too), checked on
+    the server on each edit; Run sends its rows; Commit… commits it."""
+    assert "<VhilScenario v-else-if=\"tab.id === 'scenario'\" />" in (
+        VHIL / "VhilDock.vue").read_text()
+    tab = (VHIL / "VhilScenario.vue").read_text() + (VHIL / "VhilScenarioRow.vue").read_text()
+    assert "from './shell/decode.js'" in tab and "dec.encodeField(" in tab
+    assert "v-html" not in tab and "innerHTML" not in tab
+    scenarios = (VHIL / "scenarios.js").read_text()
+    assert "/preview${query(c)}" in scenarios and "/contract${query(c)}" in scenarios
+    assert "from './workspace.js'" not in scenarios      # bound, not imported (no cycle)
+    workspace = (VHIL / "workspace.js").read_text()
+    assert "system: ws.id, ref: ws.runRef, dataflow, virtualMs, scenario," in workspace
+    assert "await commitScenario({" in workspace
+    run = (STATIC / "editor-run.js").read_text()
+    assert "Object.assign(run, { name: scenario.name, stimuli, watch, expect });" in run
+    assert "export function encodeField(" in (STATIC / "decode.js").read_text()
