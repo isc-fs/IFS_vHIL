@@ -1,0 +1,68 @@
+name: Editor
+
+# The editor image builds from the vendored Pipeline Manager
+# (editor/pipeline-manager/) and its frontend loads every system's graph
+# (`vhil.editor check`, what `scripts/vhil-docker.sh editor-check` runs).
+# On a plain Python base, not the vHIL image: the editor stages need only
+# Python, git and curl, and building Renode's image here would cost minutes.
+#
+# Runs only when the editor's inputs change. The filter is a job-level `if:`
+# on the `changes` job, not workflow `paths:`, so a skipped run still reports
+# the check as passed.
+
+on:
+  pull_request:
+  push:
+    branches: [dev]
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      editor: ${{ steps.diff.outputs.editor }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - id: diff
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [ -z "$BASE" ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+              echo "editor=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          changed=$(git diff --name-only "$BASE" HEAD)
+          if grep -qE '^(editor/|vhil/editor\.py$|vhil/server/|docker/editor\.Dockerfile|\.github/workflows/editor\.yml$)' <<<"$changed"; then
+              echo "editor=true" >> "$GITHUB_OUTPUT"
+          else
+              echo "editor=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  editor:
+    needs: changes
+    if: needs.changes.outputs.editor == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Build the editor image
+        # The same base docker/Dockerfile pins.
+        run: |
+          base=$(sed -n 's/^FROM \(python:[^ ]*\).*/\1/p' docker/Dockerfile)
+          docker build -t vhil-editor-ci --build-arg BASE="$base" \
+              -f docker/editor.Dockerfile .
+      - name: Pipeline Manager loads every system
+        # vhil's own dependencies (the vHIL image has them), then the
+        # frontend's validator on each system and the editor's unit tests,
+        # which include the same check now that PM_DIR is set.
+        run: |
+          docker run --rm -v "$PWD:/work" -w /work vhil-editor-ci bash -c '
+              set -e
+              pip install -q pyyaml "ruamel.yaml==0.18.*" "jsonschema>=4" pytest
+              python -m vhil.editor check
+              python -m pytest -q tests/unit/test_editor.py'

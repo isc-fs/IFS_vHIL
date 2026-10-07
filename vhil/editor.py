@@ -1003,8 +1003,10 @@ def check(systems: list[Path], pm_dir: Path, pm_python: str = "python",
         env = dict(os.environ)
         if node_dir:
             env["PATH"] = f"{node_dir / 'bin'}{os.pathsep}{env.get('PATH', '')}"
-        return subprocess.run([pm_python, "./validate", str(spec_path), *map(str, flows)],
-                              cwd=pm_dir, env=env).returncode
+        # --skip-install-deps: the frontend's dependencies are installed with
+        # it (npm ci in the editor image); a check doesn't reach the network.
+        return subprocess.run([pm_python, "./validate", "--skip-install-deps", str(spec_path),
+                               *map(str, flows)], cwd=pm_dir, env=env).returncode
 
 
 def main(argv=None) -> int:

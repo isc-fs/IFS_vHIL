@@ -1,0 +1,579 @@
+# Copyright (c) 2024-2025 Antmicro <www.antmicro.com>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""Module for building the dataflow graphs."""
+
+import copy
+import json
+import logging
+import tempfile
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Union
+
+from typing_extensions import override
+
+from pipeline_manager.dataflow_builder.data_structures import (
+    ExternalValidatorError,
+    InvalidDataflowError,
+    MissingPropertyError,
+    NoGraphSelectedError,
+    NoGraphsError,
+    NotSpecificationError,
+)
+from pipeline_manager.dataflow_builder.dataflow_graph import DataflowGraph
+from pipeline_manager.dataflow_builder.entities import convert_output, get_uuid
+from pipeline_manager.dataflow_builder.utils import (
+    is_proper_input_file,
+)
+from pipeline_manager.specification_builder import SpecificationBuilder
+from pipeline_manager.validator import validate
+
+
+class GraphBuilder:
+    """
+    Class for building dataflow graphs.
+
+    Each instance of the GraphBuilder must be associated with a single
+    specification to ensure proper validation.
+    """
+
+    def __init__(
+        self,
+        specification: Union[Path, str, Dict, SpecificationBuilder],
+        specification_version: str,
+        workspace_directory: Optional[Path] = None,
+    ) -> None:
+        """
+        Load a specification from a file, initialise an empty list of graphs.
+
+        Parameters
+        ----------
+        specification : Union[Path, str, Dict, SpecificationBuilder]
+            Path to a JSON specification file or Dict with its representation.
+            Alternatively, a SpecificationBuilder can be passed directly
+        specification_version: str
+            Version of the specification.
+        workspace_directory: Optional[Path]
+            Path to the Pipeline Manager's workspace directory
+        """
+        self.save_with_specification = False
+        self.specification_version = specification_version
+        self.workspace_directory = workspace_directory
+        self.load_specification(specification)
+        self.graphs: List[DataflowGraph] = []
+        self.entry_graph = None
+
+    def load_graphs(
+        self,
+        dataflow_source: Union[Path, str, Dict],
+        skip_validation: bool = False,
+    ):
+        """
+        Load all dataflow graphs from a file.
+
+        Parameters
+        ----------
+        dataflow_source : Union[Path, str, Dict]
+            Path to a dataflow graph or dataflow graph dictionary
+        skip_validation: bool
+            Whether validation of a dataflow graph should be omitted.
+
+        Raises
+        ------
+        InvalidDataflowError
+            Raised if a dataflow graph could not be loaded.
+        NoGraphsError
+            Raised if there are no graph in the dataflow file.
+        """
+        if isinstance(dataflow_source, (Path, str)):
+            dataflow_path = dataflow_source
+            success, reason = is_proper_input_file(
+                dataflow_path, intended_use="dataflow"
+            )
+            if not success:
+                raise InvalidDataflowError(
+                    f"Invalid `dataflow_path`: {reason}"
+                )
+            with open(dataflow_path, encoding="utf-8") as fd:
+                content = json.load(fd)
+        else:
+            content = dataflow_source
+
+        for graph in content["graphs"]:
+            dataflow_graph = DataflowGraph(
+                builder_with_spec=self._spec_builder,
+                builder_with_dataflow=self,
+                dataflow=graph,
+            )
+            self.graphs.append(dataflow_graph)
+        if len(self.graphs) < 1:
+            raise NoGraphsError(
+                f"After loading graphs from the dataflow file "
+                f"`{dataflow_path.expanduser().resolve()}`, "
+                f"{GraphBuilder.__qualname__} is empty."
+            )
+
+        if "entryGraph" in content:
+            entry_graph_id = content["entryGraph"]
+            self.entry_graph = self.get_graph_by_property("id", entry_graph_id)
+        else:
+            self.entry_graph = self.graphs[0]
+
+        if skip_validation:
+            logging.warning(
+                (
+                    "Validation was omitted. "
+                    "It may cause an invalid graph to be loaded. ",
+                    "Consider turning on the validation in %s.",
+                ),
+                self.load_graphs.__qualname__,
+            )
+        else:
+            self.validate()
+
+    def load_specification(
+        self,
+        specification: Union[Path, str, Dict, SpecificationBuilder],
+        purge_old_graphs: bool = True,
+    ):
+        """
+        Load a specification from given file or dictionary
+        to use in GraphBuilder.
+
+        The default behaviour is to remove loaded dataflow graphs when loading
+        a new specification. That is due to the fact that a dataflow graph
+        is closely linked with its specification. Notice that loading a
+        specification overrides the old one.
+
+        Parameters
+        ----------
+        specification : Union[Path, str, Dict, SpecificationBuilder]
+            Path to specification file, dictionary or the builder directly
+        purge_old_graphs : bool, optional
+            Determine if dataflow graphs loaded to memory should be purged.
+            It makes sense as after changing a specification dataflow graphs
+            may no longer be valid. By default True.
+
+        Raises
+        ------
+        NotSpecificationError
+            Raised if specification cannot be loaded or its file is invalid.
+        """
+        if isinstance(specification, SpecificationBuilder):
+            self._spec_builder = specification
+        else:
+            self.specification_file = specification
+            self._spec_builder = SpecificationBuilder(
+                spec_version=self.specification_version
+            )
+
+            if isinstance(specification, (Path, str)):
+                self.specification_file = specification
+                self.specification = None
+
+                success, reason = is_proper_input_file(self.specification_file)
+                if not success:
+                    raise NotSpecificationError(
+                        f"Invalid `specification_path`: {reason}"
+                    )
+                with open(self.specification_file, encoding="utf-8") as fd:
+                    specification = json.load(fd)
+            else:
+                self.specification_file = None
+                self.specification = specification
+            self._spec_builder.update_spec_from_other(specification)
+
+        if purge_old_graphs:
+            self.graphs = []
+            self.entry_graph = None
+
+    def create_graph(
+        self,
+        based_on: Union[Path, str, DataflowGraph, Dict, None] = None,
+        identifier: Optional[str] = None,
+    ) -> DataflowGraph:
+        """
+        Create a dataflow graph and return its instance.
+
+        Create an instance of a dataflow graph, add it to the internal
+        list and return it. The dataflow graph is based on the graph
+        provided in `based_on` parameter.
+
+        Parameters
+        ----------
+        based_on : Union[Path, str, DataflowGraph, Dict, None], optional
+            Dataflow graph, on which the new graph should be based on.
+            When `Path` or `str`, it should be a path to dataflow file in
+            a JSON format. When `Dict`, it should be a dictionary
+            representation of the dataflow. When `DataflowGraph`, it
+            should be a valid representation (as its deep copy will be
+            added). When `None`, the new dataflow graph will not
+            be based on anything, by default None.
+        identifier : Optional[str]
+            Either `id` or `name` of a dataflow graph.
+            That identifier should uniquely identify a graph
+            from the dataflow file provided in `based_on` argument.
+            If `based_on` is either `None` or of type `DataflowGraph`,
+            the value of `identifier` is not used.
+            Defaults to the graph defined as `entryGraph`
+            in the dataflow file.
+
+        Returns
+        -------
+        DataflowGraph
+            Instance a of a dataflow graph, preserved in the GraphBuilder.
+        """
+        if based_on is None:
+            self.graphs.append(DataflowGraph(self._spec_builder, self))
+            return self.graphs[-1]
+        elif isinstance(based_on, DataflowGraph):
+            graph_copy = copy.deepcopy(based_on)
+            self.graphs.append(graph_copy)
+        else:
+            self.graphs.append(
+                self._load_graph_from_dataflow_source(based_on, identifier)
+            )
+
+        return self.graphs[-1]
+
+    def _load_graph_from_dataflow_source(
+        self, source: Union[Path, str, Dict], identifier: Optional[str]
+    ) -> DataflowGraph:
+        if isinstance(source, (str, Path)):
+            source = Path(source).resolve()
+
+        if self.specification is None:
+            specification = self.specification_file
+        else:
+            specification = self.specification
+
+        another_builder = GraphBuilder(
+            specification_version=self.specification_version,
+            specification=specification,
+            workspace_directory=self.workspace_directory,
+        )
+
+        another_builder.load_graphs(dataflow_source=source)
+
+        if identifier is None:
+            return another_builder.entry_graph
+
+        try:
+            return another_builder.get_graph_by_property("id", identifier)
+        except (NoGraphSelectedError, MissingPropertyError):
+            try:
+                return another_builder.get_graph_by_property(
+                    "name", identifier
+                )
+            except (NoGraphSelectedError, MissingPropertyError) as e:
+                raise NoGraphSelectedError(
+                    f"The provided `identifier` = `{identifier}` "
+                    "matches neither `id` nor `name` of any graph."
+                ) from e
+
+    def get_graph_by_property(
+        self, property_name: str, property_value: Any
+    ) -> DataflowGraph:
+        """
+        Get the first graph with `property_name` equal to `property_value`.
+
+        Parameters
+        ----------
+        property_name: str
+            Name of the property, e.g.: `id` or `name`.
+        property_value: Any
+            Exact value to be matched.
+
+        Returns
+        -------
+        DataflowGraph
+            Dataflow graph satisfying the provided criteria.
+
+        Raises
+        ------
+        MissingPropertyError
+            Raised if any graph lacks the property.
+        NoGraphSelectedError
+            Raised if the provided property name and
+            values does not match any graph.
+        """
+        for graph in self.graphs:
+            if not hasattr(graph, property_name):
+                raise MissingPropertyError(
+                    "DataflowGraph does not have "
+                    f"the property named `{property_name}`."
+                )
+            if getattr(graph, property_name) != property_value:
+                continue
+            return graph
+
+        raise NoGraphSelectedError(
+            f"Pair `{property_name}` = `{property_value}` should "
+            "be associated with at least one graph. However, the pair "
+            "does not match any graph."
+        )
+
+    def get_graph_by_id(self, id: str) -> DataflowGraph:
+        """
+        Get a graph by its ID.
+
+        Parameters
+        ----------
+        id : str
+            ID of the graph to retrieve.
+
+        Returns
+        -------
+        DataflowGraph
+            Dataflow graph with the provided ID.
+
+        Raises
+        ------
+        NoGraphSelectedError
+            Raised if the provided ID does not match any graph
+            or matches more than one graph.
+        """
+        matching_graphs = [graph for graph in self.graphs if graph._id == id]
+        if len(matching_graphs) != 1:
+            raise NoGraphSelectedError(
+                "The ID of a graph should be associated with exactly one graph"
+                " but the provided `id` matches "
+                f"{len(matching_graphs)} graphs."
+            )
+
+        [subgraph] = matching_graphs
+        return subgraph
+
+    def get_subgraphs(self) -> List[DataflowGraph]:
+        """
+        Get a list of subgraphs.
+
+        Get a list of graphs, which are contained in some node,
+        what makes them subgraphs.
+
+        Returns
+        -------
+        List[DataflowGraph]
+            A list of subgraphs.
+        """
+        subgraphs: List[DataflowGraph] = []
+        for graph in self.graphs:
+            for node in graph._nodes.values():
+                if node.subgraph is None:
+                    continue
+                subgraphs.append(self.get_graph_by_id(node.subgraph))
+
+        return subgraphs
+
+    def get_subgraph_by_name(
+        self, name: str
+    ) -> Union[DataflowGraph, list[DataflowGraph]]:
+        """
+        Get a subgraph by the name.
+
+        Get subgraph by either the name of a subgraph or
+        name of the node containing the subgraph.
+
+        Parameters
+        ----------
+        name : str
+            Either name of the subgraph or
+            name of the node containing the subgraph.
+
+        Returns
+        -------
+        Union[DataflowGraph, list[DataflowGraph]]
+            An single instance if one graph is matched, a list of instances if
+            multiple graphs are matched.
+
+        Raises
+        ------
+        NoGraphSelectedError
+            Raised if name matches to more than one or none of graphs.
+        """
+        subgraphs = self.get_subgraphs()
+        subgraphs_by_graph_name = [
+            graph
+            for graph in subgraphs
+            if graph.name is not None and graph.name == name
+        ]
+
+        subgraphs_by_node_name = [
+            self.get_graph_by_id(node.subgraph)
+            for graph in self.graphs
+            for node in graph._nodes.values()
+            if node.subgraph is not None and node.name == name
+        ]
+
+        matching_subgraphs = list(
+            {
+                *subgraphs_by_graph_name,
+                *subgraphs_by_node_name,
+            }
+        )
+        if len(matching_subgraphs) == 0:
+            raise NoGraphSelectedError(
+                f"The name '{len(matching_subgraphs)}' should be at least with"
+                " one graph"
+            )
+        elif len(matching_subgraphs) == 1:
+            [subgraph] = matching_subgraphs
+            return subgraph
+        return matching_subgraphs
+
+    def set_save_with_specification(self, save_with_specification: bool):
+        """
+        Set whether dataflow should be saved with specification
+        or not.
+
+        Parameters
+        ----------
+        save_with_specification : bool
+            Indicate whether dataflow should be saved
+            with specification.
+        """
+        self.save_with_specification = save_with_specification
+
+    def save(
+        self,
+        json_file: Path,
+        skip_validation: bool = False,
+        save_specification: Optional[bool] = None,
+        minify: bool = False,
+    ):
+        """
+        Save graphs to a JSON file.
+
+        Saving also validates all the stored graphs.
+
+        Parameters
+        ----------
+        json_file : Path
+            Path, where an output JSON file will be created.
+        skip_validation: bool
+            Whether the validation of the script should be
+            skipped or not.
+        save_specification: Optional[bool]
+            Whether to save specification with graph data.
+        minify: bool
+            Specifies whether the returned specification
+            should be minified.
+        """
+        if not skip_validation:
+            self.validate()
+
+        if save_specification is not None:
+            last_state = self.save_with_specification
+            self.set_save_with_specification(save_specification)
+
+        with open(json_file, "wt", encoding="utf-8") as fd:
+            fd.write(self.to_json(as_str=True, minify=minify))
+
+        if save_specification is not None:
+            self.set_save_with_specification(last_state)
+
+        if not skip_validation:
+            self.validate()
+        else:
+            logging.warning(
+                (
+                    "Validation was omitted. "
+                    "It may cause an invalid graph to be saved. "
+                    "Consider turning on the validation in %s."
+                ),
+                self.save.__qualname__,
+            )
+
+    def validate(self):
+        """
+        Validate the entire dataflow file including all the included graphs.
+
+        Raises
+        ------
+        ExternalValidatorError
+            Raised if an external validator failed to validate
+            either a dataflow or specification file. An error
+            message is provided by the external validator.
+        """
+        # Save a dataflow graph to a temporary file.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            temp_dataflow_file = Path(tmpdir) / "spec.json"
+            with open(temp_dataflow_file, "wt", encoding="utf-8") as fd:
+                fd.write(self.to_json(as_str=True))
+
+            # `self.save()` cannot be used as it saves the dataflow only.
+            temp_specification_file = Path(tmpdir) / (
+                f"temp_specification_{get_uuid()}.json"
+            )
+
+            with open(temp_specification_file, "wt", encoding="utf-8") as fd:
+                specification = self._spec_builder._construct_specification(
+                    sort_spec=False
+                )
+                json.dump(specification, fd, ensure_ascii=False)
+
+            result = validate(
+                dataflow_paths=[temp_dataflow_file],
+                specification_path=temp_specification_file,
+                workspace_directory=self.workspace_directory,
+            )
+
+        if result:
+            raise ExternalValidatorError(
+                "An external validator failed. An error message has been "
+                "provided by the validator."
+            )
+
+    def disable_layers(self, layer_name: Union[str, List[str]]):
+        """
+        Disabled layers for every graph in dataflow.
+
+        Parameters
+        ----------
+        layer_name : Union[str, List[str]]
+            Name of the layer/layers to be disabled.
+        """
+        for g in self.graphs:
+            g.disable_layers(layer_name)
+
+    def enable_layers(self, layer_name: Union[str, List[str]]):
+        """
+        Enable layers for every graph in dataflow.
+
+        Parameters
+        ----------
+        layer_name : Union[str, List[str]]
+            Name of the layer/layers to be re-enabled.
+        """
+        for g in self.graphs:
+            g.enable_layers(layer_name)
+
+    @override
+    def to_json(
+        self,
+        as_str: bool = True,
+        minify: bool = False,
+        skip_validation: bool = False,
+    ) -> Union[Dict, str]:
+        if self.save_with_specification:
+            output = self._spec_builder.create_and_validate_spec(
+                skip_validation=skip_validation
+            )
+        else:
+            output = {
+                "version": self.specification_version,
+            }
+
+        output["graphs"] = [
+            graph.to_json(as_str=False) for graph in self.graphs
+        ]
+
+        if self.entry_graph is not None:
+            output["entryGraph"] = self.entry_graph.id
+
+        output["graphs"] = [
+            graph.to_json(as_str=False, minify=minify) for graph in self.graphs
+        ]
+
+        return convert_output(output, as_str, minify)

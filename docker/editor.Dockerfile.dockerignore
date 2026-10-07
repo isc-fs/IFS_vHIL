@@ -1,0 +1,8 @@
+# Build context of docker/editor.Dockerfile (the repository root): only the
+# editor's sources, never a local build's outputs.
+*
+!editor/pipeline-manager
+editor/pipeline-manager/**/node_modules
+editor/pipeline-manager/**/dist
+editor/pipeline-manager/**/__pycache__
+editor/pipeline-manager/**/.env.local

@@ -1,0 +1,137 @@
+# Copyright (c) 2022-2026 Antmicro <www.antmicro.com>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+[build-system]
+requires = ["setuptools>=80", "setuptools-scm[simple]>=9.2", "wheel", "requests>=2.28.2"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pipeline-manager"
+dynamic = ["version"]
+description = "Pipeline Manager - data-based, application-agnostic web application for creating, visualizing and managing dataflows in various applications."
+authors = [
+    {name = "Antmicro Ltd.", email = "contact@antmicro.com"},
+]
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+readme = "README.md"
+dependencies = [
+    "attrs==23.1.0",
+    "beautifulsoup4==4.12.2",
+    "click==8.1.3",
+    "fastapi[all]>=0.104.1",
+    "orjson<3.11.5",
+    "Jinja2==3.1.2",
+    "jsonschema>=4.26.0",
+    "json-rpc==1.15.0",
+    "MarkupSafe==2.1.1",
+    "pyrsistent==0.18.1",
+    "python-socketio[asyncio_client]==5.10.0",
+    "referencing==0.29.0",
+    "requests>=2.28.2",
+    "six==1.16.0",
+    "uvicorn[standard]==0.24.0.post1",
+]
+
+[project.optional-dependencies]
+test = [
+    "pexpect==4.8.0",
+    "pytest==7.4.0",
+    "pytest-asyncio==0.21.1",
+    "pytest-httpserver==1.0.10",
+    "pytest-retry==1.7.0",
+    "playwright>=1.51.0",
+]
+docs = [
+    "antmicro-sphinx-utils @ git+https://github.com/antmicro/antmicro-sphinx-utils.git",
+    "sphinxcontrib-napoleon",
+    "jsonschema2md>=1.1.0,<=1.5.2",
+]
+backend-communication = [
+    "pipeline-manager-backend-communication @ git+https://github.com/antmicro/kenning-pipeline-manager-backend-communication.git",
+]
+mirror = [
+    "deepdiff==6.7.0",
+    "pipeline-manager[backend-communication]",
+]
+to-image = [
+    "html2image"
+]
+
+[project.urls]
+homepage = "https://antmicro.github.io/kenning-pipeline-manager/"
+repository = "https://github.com/antmicro/kenning-pipeline-manager"
+
+[project.scripts]
+pipeline_manager = "pipeline_manager.__main__:main"
+
+[tool.setuptools.packages.find]
+include = [
+    "pipeline_manager*"
+]
+exclude = [
+    "examples*"
+]
+namespaces = false
+
+
+[tool.pydoclint]
+style = "numpy"
+allow_init_docstring = true
+exclude = "pipeline_manager/tests|dataflow_builder/(dataflow_graph.py|entities.py)"
+quiet = true
+check_return_types = true
+
+
+[tool.ruff]
+preview = true
+line-length = 79
+select = [
+    "I",      # enable isort
+    "D",      # docstring errors
+    "E",      # PEP8 errors
+    "E261",   # At least two spaces before inline comment
+    "E225",   # Missing whitespace around operator
+    "F",      # PEP8 warnings
+]
+
+ignore = [
+    "E203",  # Whitespace before ':'
+    "D105",  # Missing docstring in magic method
+    "D204",  # 1 blank line required after class docstring
+    "D205",  # 1 blank line required between summary line and description
+    "D200",  # One-line docstring should fit on one line
+    "D102",  # Missing docstring in public method
+    "D401",  # First line of docstring should be in imperative mood
+    "D407",  # Missing argument description in the docstring (handled by pydoclint)
+]
+
+[tool.ruff.isort]
+extra-standard-library = ["pathlib"]
+
+[tool.ruff.pydocstyle]
+convention = "numpy"
+
+[tool.ruff.extend-per-file-ignores]
+"setup.py" = ["D100"]
+"pipeline_manager/tests/*" = ["D100", "D101", "D103"]
+
+[tool.typos]
+
+[tool.typos.files]
+extend-exclude = [
+    "pipeline_manager/frontend/src/third-party/hterm_all.js"
+]
+
+[tool.typos.default]
+extend-ignore-identifiers-re = [
+    "inout",
+    "Inout",
+    "INOUT",
+    "cose"
+]

@@ -54,8 +54,12 @@ and TerminalPanel, and its colours are compile-time SCSS.
 
 ## Pipeline Manager in the repo
 
-PM v0.5.2 (commit `04613679`) is vendored as a subtree under
-`editor/pipeline-manager/`, keeping its Apache-2.0 `LICENSE` and `NOTICE`.
+PM v0.5.2 (commit `04613679`) is vendored under `editor/pipeline-manager/`
+as a plain copy of `git archive`, not a subtree: a subtree, even squashed,
+would keep upstream's 20 MB `examples/` in history, which the editor never
+uses. It keeps its Apache-2.0 `LICENSE` (upstream has no `NOTICE`);
+`README-VHIL.md` there names the commit, what was left out and how to move to
+a new release.
 
 - vHIL's changes are made in place, and every divergence from upstream is
   listed in `editor/pipeline-manager/CHANGELOG-VHIL.md`.
@@ -275,7 +279,8 @@ In the owner's order.
    `04613679` under `editor/pipeline-manager/` with its LICENSE/NOTICE,
    bus-per-instance as the first commit on top, `CHANGELOG-VHIL.md`, the
    Dockerfile building from the directory (multi-stage, `dist` and the
-   Python package only); PM's lint and Playwright in CI.
+   Python package only); a CI job that builds the editor image and runs
+   `vhil.editor check` when the editor's inputs change.
 4. **PM theme and accessibility base.** `_variables.scss` on `var(--vhil-*)`
    from `tokens.css`; no Google Fonts; `:focus-visible` rings; `?theme=` and
    `vhil_set_theme`. Playwright baselines (dark/light × 1366×768/1920×1080)

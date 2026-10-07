@@ -1,0 +1,873 @@
+# Copyright (c) 2024-2026 Antmicro <www.antmicro.com>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""Module with DataflowGraph class for representing a dataflow graph."""
+
+import logging
+from dataclasses import fields
+from enum import Enum
+from typing import Any, Dict, List, Optional, Union
+
+from typing_extensions import override
+
+from pipeline_manager.dataflow_builder.data_structures import (
+    Direction,
+    ExtraNodeAttributeError,
+    GraphRenamingError,
+    GroupExistsError,
+    GroupTooSmallError,
+    InvalidDirectionError,
+    InvalidMethodUsedError,
+    InvalidPanningError,
+    MismatchingInterfaceTypesError,
+    MissingInterfaceError,
+    MissingNodeError,
+    NodeLacksInterfacesError,
+    OutOfSpecificationInterfaceError,
+    OutOfSpecificationNodeError,
+    ScalingOutOfBoundsError,
+)
+from pipeline_manager.dataflow_builder.entities import (
+    Interface,
+    InterfaceBusStub,
+    InterfaceConnection,
+    JsonConvertible,
+    Node,
+    NodeGroup,
+    Property,
+    Vector2,
+    camel_case_to_snake_case,
+    convert_output,
+    get_uuid,
+    match_criteria,
+    snake_case_to_camel_case,
+    to_snake_case_keys,
+)
+from pipeline_manager.dataflow_builder.utils import (
+    ensure_connection_is_absent,
+    get_interface_if_present,
+    get_node_if_present,
+    get_public_attributes,
+)
+from pipeline_manager.specification_builder import SpecificationBuilder
+
+
+class AttributeType(Enum):
+    """
+    Available types of attributes that may be obtained with
+    the `DataflowGraph.get` method.
+    """
+
+    NODE = "_nodes"
+    CONNECTION = "_connections"
+    INTERFACE = "interfaces"
+    GROUP = "_groups"
+
+
+class DataflowGraph(JsonConvertible):
+    """Representation of a dataflow graph."""
+
+    _DEFAULT_NODE_WIDTH = 200
+
+    def __init__(
+        self,
+        builder_with_spec: SpecificationBuilder,
+        builder_with_dataflow: Any,
+        dataflow: Optional[Dict[str, Any]] = None,
+    ):
+        """
+        Initialise a dataflow graph with values either taken from the supplied
+        dataflow graph or empty ones.
+
+        Do not use the constructor directly.
+        Use `GraphBuilder.create_graph`, instead.
+
+        Parameters
+        ----------
+        builder_with_spec : SpecificationBuilder
+            Specification builder instance with specification file loaded.
+        builder_with_dataflow : Any
+            Dataflow graph builder creating the graph.
+        dataflow : Optional[Dict[str, Any]], optional
+            Content of a dataflow builder to load,
+            None means an empty dataflow graph, by default None.
+
+        Raises
+        ------
+        MissingInterfaceError
+            Raised if either source or target interface is missing.
+        MissingNodeError
+            Raised if node included in group is missing
+        """
+        from pipeline_manager.dataflow_builder.dataflow_builder import (
+            GraphBuilder,
+        )
+
+        self._graph_builder: GraphBuilder = builder_with_dataflow
+        self._id = (
+            dataflow["id"] if dataflow and "id" in dataflow else get_uuid()
+        )
+        self._nodes: Dict[str, Node] = {}
+        self._connections: Dict[str, InterfaceConnection] = {}
+        self._spec_builder = builder_with_spec
+        self._groups: Dict[str, NodeGroup] = {}
+        self._disabled_layers: List[str] = []
+
+        self.name: Optional[str] = None
+        self.additional_data: Optional[Dict] = None
+        self._panning: Optional[Vector2] = None
+        self._scaling: Optional[float] = None
+
+        if dataflow is None:
+            return
+
+        if "name" in dataflow:
+            self.name = dataflow["name"]
+        if "additionalData" in dataflow:
+            self.additional_data = dataflow["additionalData"]
+        if "scaling" in dataflow:
+            self.scaling = dataflow["scaling"]
+        if "panning" in dataflow:
+            self.panning = dataflow["panning"]
+        if "disabledLayers" in dataflow and isinstance(
+            self._disabled_layers, list
+        ):
+            self._disabled_layers = dataflow["disabledLayers"]
+
+        for node in dataflow.setdefault("nodes", []):
+            node_arguments = {
+                camel_case_to_snake_case(key): value
+                for key, value in node.items()
+            }
+
+            if "position" in node_arguments:
+                node_arguments["position"] = Vector2(
+                    node_arguments["position"]["x"],
+                    node_arguments["position"]["y"],
+                )
+
+            current_node = Node(
+                specification_builder=self._spec_builder,
+                for_subgraph_node="subgraph" in node,
+                **node_arguments,
+            )
+
+            self._nodes[node["id"]] = current_node
+
+        for connection in dataflow.setdefault("connections", []):
+            source = self.get_by_id(
+                AttributeType.INTERFACE, connection["from"]
+            )
+            if source is None:
+                raise MissingInterfaceError(
+                    f"Cannot create connection {connection['id']} because "
+                    f"`from_interface` with id = {connection['from']}"
+                    " is missing."
+                )
+            target = self.get_by_id(AttributeType.INTERFACE, connection["to"])
+            if target is None:
+                raise MissingInterfaceError(
+                    f"Cannot create connection {connection['id']} because "
+                    f"`to_interface` with id = {connection['to']}"
+                    " is missing."
+                )
+
+            self._connections[connection["id"]] = InterfaceConnection(
+                id=connection["id"],
+                from_interface=source,
+                to_interface=target,
+            )
+        for group in dataflow.setdefault("groups", []):
+            nodes = []
+            if "nodes" not in group:
+                continue
+
+            for node_id in group["nodes"]:
+                node = self.get_by_id(AttributeType.NODE, node_id)
+                if node is None:
+                    raise MissingNodeError(
+                        f"Cannot create group {group['id']} because "
+                        f"node of id {node_id} is not present in the graph."
+                    )
+                nodes.append(node)
+            self._groups[group["id"]] = NodeGroup(
+                id=group["id"],
+                color=group["color"] if "color" in group else None,
+                nodes=nodes,
+                name=group["name"],
+            )
+
+    def _get_interface_specification(
+        self, node_name: str, interface_name: str
+    ) -> Dict[str, Any]:
+        """
+        Get the first interface specification by matching criteria by its name.
+
+        Parameters
+        ----------
+        node_name : str
+            Name of a node.
+        interface_name : str
+            Name of a requested interface.
+
+        Returns
+        -------
+        Dict[str, Any]
+            Specification of an interface.
+
+        Raises
+        ------
+        NodeLacksInterfacesError
+            Raised if the node definition
+            does not have `interfaces` attribute.
+        OutOfSpecificationInterface
+            Raised if there is no interface with
+            the given name in the node definition.
+
+        """
+        node_spec = self._spec_builder._nodes[node_name]
+        if "interfaces" not in node_spec:
+            raise NodeLacksInterfacesError(
+                f"Interface specification named `{interface_name}` does not "
+                "define any interfaces."
+            )
+
+        for interface_spec in node_spec["interfaces"]:
+            if interface_spec["name"] == interface_name:
+                return interface_spec
+        raise OutOfSpecificationInterfaceError(
+            f"No interface specification matches name `{interface_name}`."
+        )
+
+    def create_node(
+        self, name: str, subgraph_id: str = None, **kwargs
+    ) -> Node:
+        """
+        Create the node initialized with the supplied arguments.
+
+        Use this method instead of manually adding a node.
+        Default values are taken from the specification, based on the
+        provided `name` parameter. The default values may be overridden by
+        the values supplied in `kwargs`. `id` is already initialized.
+
+        Parameters
+        ----------
+        name: str
+            Name of a node, based on which default values will be derived.
+        subgraph_id : str
+            ID of the subgraph that contained by the node, if node is subgraph.
+        kwargs
+            Keyword arguments to initialise a newly created node.
+            Check attributes of `Node` dataclass, to find all available keys.
+
+        Returns
+        -------
+        Node
+            The initialized node that belongs to the dataflow graph.
+
+        Raises
+        ------
+        InvalidMethodUsedError
+            Raised if `subgraph` attribute was present in `kwargs`.
+        ExtraNodeAttributeError
+            Raised if out-of-specification key is present
+            in the `kwargs` directory.
+        OutOfSpecificationNodeError
+            Raised if the provided name of the node does not exists in the
+            specification.
+        """
+        if "subgraph" in kwargs:
+            raise InvalidMethodUsedError(
+                "`DataflowGraph.create_node` method does not take in"
+                " subgraph argument. Please provide `subgraph_id` instead"
+            )
+        allowed_fields = [field.name for field in fields(Node)]
+        for arg_name in kwargs:
+            if arg_name not in allowed_fields:
+                raise ExtraNodeAttributeError(
+                    f"Illegal argument `{arg_name}` when creating node."
+                )
+
+        dynamic_interfaces = []
+        base_node = None
+
+        for _node in self._spec_builder._get_nodes(sort_spec=False):
+            # Not a node but a category.
+            if "name" not in _node:
+                continue
+            if name == _node["name"]:
+                base_node = _node
+
+        subgraph = (
+            self._graph_builder.get_graph_by_id(subgraph_id)
+            if subgraph_id
+            else None
+        )
+
+        if not base_node and not subgraph:
+            raise OutOfSpecificationNodeError(
+                f"Provided name of the node `{name}` "
+                "is missing in the specification."
+            )
+
+        node_id = (
+            base_node["id"] if base_node and "id" in base_node else get_uuid()
+        )
+
+        # Values for interface initialization are taken from the specification.
+        interfaces = []
+        if base_node and "interfaces" in base_node:
+            interface_fields = [f.name for f in fields(Interface)]
+            for interface in base_node["interfaces"]:
+                if isinstance(interface, Interface):
+                    interfaces.append(interface)
+                    continue
+
+                snake_cased_arguments = to_snake_case_keys(
+                    interface, interface_fields
+                )
+
+                interface_specification = self._get_interface_specification(
+                    node_name=name,
+                    interface_name=snake_cased_arguments["name"],
+                )
+
+                if "dynamic" in interface_specification:
+                    dynamic_interfaces.append(snake_cased_arguments)
+                    continue
+
+                if "direction" not in snake_cased_arguments:
+                    snake_cased_arguments[
+                        "direction"
+                    ] = interface_specification["direction"]
+
+                _interface = Interface(
+                    id=get_uuid(),
+                    **snake_cased_arguments,
+                )
+                interfaces.append(_interface)
+
+        # Values for properties initialization are taken
+        # from the specification.
+        properties = []
+        if base_node and "properties" in base_node:
+            for prop in base_node["properties"]:
+                _property = None
+                _property = Property(
+                    name=prop["name"],
+                    value=prop["default"],
+                )
+                if "hidden" in prop:
+                    _property.hidden = prop["hidden"]
+                properties.append(_property)
+
+        parameters = {
+            "specification_builder": self._spec_builder,
+            "id": node_id,
+            "name": base_node["name"] if base_node else name,
+            "width": getattr(
+                base_node, "width", DataflowGraph._DEFAULT_NODE_WIDTH
+            ),
+            "height": getattr(base_node, "height", None),
+            "enabled_interface_groups": [],
+            "instance_name": None,
+            "interfaces": interfaces,
+            "properties": properties,
+            "subgraph": subgraph,
+            "two_column": self._spec_builder._metadata["twoColumn"]
+            if "twoColumn" in self._spec_builder._metadata
+            else True,
+            "views": None,
+        }
+
+        # Override the default parameters with `kwargs`.
+        for key, value in kwargs.items():
+            parameters[key] = value
+
+        self._nodes[node_id] = Node(**parameters)
+
+        for interface_specification in dynamic_interfaces:
+            self._nodes[node_id]._create_dynamic_interfaces(
+                **interface_specification
+            )
+
+        return self._nodes[node_id]
+
+    def _create_bus_interface_stub(
+        self,
+        interface: Interface,
+        stubOffset: int,
+        stubSide: Optional[str] = None,
+        stubID: Optional[str] = None,
+    ) -> InterfaceBusStub:
+        """
+        Create a bus stub used as an endpoint when creating connections to bus
+        type interface.
+
+        An interface has to be of type Bus for stub to be successfully created.
+
+        Parameters
+        ----------
+        interface : Interface
+            The bus interface under which stub is created.
+        stubOffset: int
+            Offset of the stub in relation to the parent interface
+        stubSide: Optional[str]
+            Only used if busType of parent is 'twoSided'
+        stubID: Optional[str]
+            Id used for the stub, otherwise get_uuid() will be used
+
+        Returns
+        -------
+        InterfaceBusStub
+            Newly created stub.
+
+        Raises
+        ------
+        OutOfSpecificationInterfaceError
+            If interface passed as the first argument is not of type bus.
+        """
+        if interface.bus is None:
+            raise OutOfSpecificationInterfaceError(
+                "tried adding bus stub to interface that is not a bus"
+            )
+        if interface.bus.stubs is None:
+            interface.bus.stubs = []
+        id = stubID if stubID is not None else get_uuid()
+        interface.bus.stubs.append(
+            InterfaceBusStub(id=id, offset=stubOffset, side=stubSide)
+        )
+        return interface.bus.stubs[-1]
+
+    def create_subgraph_node(
+        self, name: str, subgraph_id: str, **kwargs
+    ) -> Node:
+        """
+        Create a node with a subgraph.
+
+        .. deprecated::
+           Use ``create_node(..., subgraph_id=...)`` instead.
+
+        A graph has to exist inside `GraphBuilder` instance
+        before creating a node containing it as a subgraph.
+
+        Parameters
+        ----------
+        name : str
+            Name of the node.
+        subgraph_id : str
+            ID of the subgraph that contained by the node.
+
+        Returns
+        -------
+        Node
+            Newly created node with a subgraph.
+        """
+        logging.warning(
+            "DEPRECATED: create_subgraph_node() is deprecated. "
+            "Use create_node(name, subgraph_id=...) instead."
+        )
+
+        return self.create_node(name, subgraph_id=subgraph_id, **kwargs)
+
+    def add_additional_data(self, additionalData: Dict) -> None:
+        """
+        Add additional data to graph.
+        Function appends graph's additional
+        data with items from additionalData
+        parameter.
+
+        Parameters
+        ----------
+        additionalData : Dict
+            Dictionary with additional data.
+        """
+        for key, value in additionalData.items():
+            self.additional_data[key] = value
+
+    def create_connection(
+        self,
+        from_interface: Union[Interface, str],
+        to_interface: Union[Interface, str],
+        connection_id: Optional[str] = None,
+        stubOffset: Optional[int] = None,
+    ) -> InterfaceConnection:
+        """
+        Create a connection between two existing interfaces.
+
+        The function performs numerous checks to verify validity
+        of the desired connection, including if the connection already exists,
+        interfaces' types are matching and so on. The connection is added,
+        given it has passed these checks.
+
+        Parameters
+        ----------
+        from_interface : Union[Interface, str]
+            Source interface, where data will flow from.
+        to_interface : Union[Interface, str]
+            Destination interface, where data will flow to.
+        connection_id : Optional[str]
+            Identifier of a connection. If not supplied,
+            one will be generated.
+        stubOffset : Optional[int]
+            Offset used to create a stub if one of the interfaces is a bus
+            type interface, ignored otherwise.
+
+        Returns
+        -------
+        InterfaceConnection
+            Created connection added to the graph.
+
+        Raises
+        ------
+        MissingInterfaceError
+            Raised if either a source or destination interface
+            does not belong to the graph.
+        InvalidDirectionError
+            Raised if either a source interface direction
+            has `input` direction or a destination interface
+            direction is `output`.
+        MismatchingInterfaceTypesError
+            Raised if a mismatch between source and destination
+            interfaces' types occurs.
+        """
+        from_interface = get_interface_if_present(from_interface, self._nodes)
+        to_interface = get_interface_if_present(to_interface, self._nodes)
+
+        if from_interface is None:
+            raise MissingInterfaceError(
+                "Source interface is "
+                "not present in the dataflow graph."
+                f"{from_interface}"
+            )
+
+        if to_interface is None:
+            raise MissingInterfaceError(
+                "Destination (drain) interface is "
+                "not present in the dataflow graph."
+                f"{to_interface}. Aborted creation a connection."
+            )
+
+        if from_interface.direction == Direction.INPUT:
+            raise InvalidDirectionError(
+                "Direction of the `from` interface cannot be `input`. "
+                "Aborted creating a connection."
+            )
+
+        if to_interface.direction == Direction.OUTPUT:
+            raise InvalidDirectionError(
+                "Direction of the `to` interface cannot be `output`. "
+                "Aborted creation a connection."
+            )
+        if from_interface.type and to_interface.type:
+            from_type = (
+                from_interface.type
+                if isinstance(from_interface.type, list)
+                else [from_interface.type]
+            )
+            to_type = (
+                to_interface.type
+                if isinstance(to_interface.type, list)
+                else [to_interface.type]
+            )
+            common_type = set(from_type).intersection(to_type)
+            if len(common_type) == 0:
+                raise MismatchingInterfaceTypesError(
+                    "Mismatch between `from` interface with type = "
+                    f"{from_interface.type} and `to` interface with type = "
+                    f"{to_interface.type}. The types have to match."
+                )
+
+        if not connection_id:
+            connection_id = get_uuid()
+        # handling if one of the interfaces is a stub
+        if from_interface.bus is not None:
+            offset = stubOffset if stubOffset else 0
+            from_interface = self._create_bus_interface_stub(
+                from_interface, offset, from_interface.side
+            )
+        if to_interface.bus is not None:
+            offset = stubOffset if stubOffset else 0
+            to_interface = self._create_bus_interface_stub(
+                to_interface, offset, to_interface.side
+            )
+
+        connection = InterfaceConnection(
+            id=connection_id,
+            from_interface=from_interface,
+            to_interface=to_interface,
+        )
+
+        ensure_connection_is_absent(
+            connection=connection,
+            connections=self._connections,
+        )
+
+        self._connections[connection_id] = connection
+        return self._connections[connection_id]
+
+    def create_group(
+        self,
+        name: str,
+        nodes: List[Union[Node, str]],
+        id: str = None,
+        color: str = None,
+    ) -> NodeGroup:
+        """
+        Create a group of existing nodes.
+
+        The function checks if nodes exist to verify validity of added group.
+
+        Parameters
+        ----------
+        name : str
+            Source interface, where data will flow from.
+        nodes : Union[Node, str]
+            List of nodes that should be contained in the group created.
+        id : Optional[str]
+            Identifier of a group. If not supplied, one will be generated.
+        color : Optional[str]
+            Color of the group in the hex format. If not supplied will be
+            randomly assigned when rendering the graph.
+
+        Returns
+        -------
+        NodeGroup
+            Created node group.
+
+        Raises
+        ------
+        MissingNodeError
+            if error included in group is not present in the graph.
+        GroupExistsError
+            if ids of two groups collide.
+        GroupTooSmallError
+            if ids of two groups collide.
+        """
+        nodes_in_group = []
+        for node in nodes:
+            n = get_node_if_present(node, self._nodes, "groupMember")
+            if n is None:
+                raise MissingNodeError(
+                    "Node is not present in the dataflow graph."
+                    f"{node}. Aborted group creation"
+                )
+            nodes_in_group.append(n)
+        if not id:
+            id = get_uuid()
+
+        if len(nodes_in_group) < 2:
+            raise GroupTooSmallError(
+                f"Group of id {id} would be created with 2 or less nodes"
+            )
+        if id in self._groups:
+            raise GroupExistsError(f"Group of id {id} already in graph.")
+
+        self._groups[id] = NodeGroup(
+            id=id,
+            color=color,
+            nodes=nodes_in_group,
+            name=name,
+        )
+
+    def disable_layers(self, layer_name: Union[str, List[str]]):
+        """
+        Disable layers for this graph.
+
+        Parameters
+        ----------
+        layer_name : Union[str, List[str]]
+            Name of the layer/layers to be disabled.
+        """
+        if isinstance(layer_name, list):
+            for layer in layer_name:
+                if layer not in self._disabled_layers:
+                    self._disabled_layers.append(layer)
+        else:
+            if layer_name not in self._disabled_layers:
+                self._disabled_layers.append(layer_name)
+
+    def enable_layers(self, layer_name: Union[str, List[str]]):
+        """
+        Enable previously disabled layers.
+
+        Parameters
+        ----------
+        layer_name : Union[str, List[str]]
+            Name of the layer/layers to be re-enabled.
+        """
+        if isinstance(layer_name, list):
+            for layer in layer_name:
+                if layer in self._disabled_layers:
+                    self._disabled_layers.remove(layer)
+        else:
+            if layer_name in self._disabled_layers:
+                self._disabled_layers.remove(layer_name)
+
+    @override
+    def to_json(
+        self, as_str: bool = True, minify: bool = False
+    ) -> Union[str, Dict]:
+        attributes = {}
+        for attr_name in get_public_attributes(self):
+            key = snake_case_to_camel_case(attr_name)
+            attr_value = getattr(self, attr_name)
+
+            # Skip empty values.
+            if attr_value is None:
+                continue
+            # Convert non-trivial objects to str with `to_json`.
+            if hasattr(attr_value, "to_json"):
+                attr_value = attr_value.to_json(as_str=False, minify=minify)
+
+            attributes[key] = attr_value
+
+        nodes = [
+            node.to_json(as_str=False, minify=minify)
+            for _, node in self._nodes.items()
+        ]
+        connections = [
+            conn.to_json(as_str=False, minify=minify)
+            for _, conn in self._connections.items()
+        ]
+        groups = [
+            group.to_json(as_str=False, minify=minify)
+            for _, group in self._groups.items()
+        ]
+        # Merge all attributes to a single dictionary.
+        attributes |= {"nodes": nodes, "connections": connections}
+        if len(groups) > 0:
+            attributes |= {"groups": groups}
+
+        if len(self._disabled_layers) > 0:
+            attributes |= {"disabledLayers": self._disabled_layers}
+
+        return convert_output(attributes, as_str, minify=minify)
+
+    def get(
+        self, type: AttributeType, **kwargs
+    ) -> Union[List[Node], List[InterfaceConnection], List[Interface]]:
+        """
+        Get items of a given type, which satisfy all the desired criteria.
+
+        Items are understood as either nodes or connections or interfaces.
+        The function finds objects by eliminating these, which do not
+        match the criteria. Thus, between all the criteria
+        is `AND` logical operator.
+
+
+        Parameters
+        ----------
+        type : AttributeType
+            Type of the output objects.
+        kwargs
+            Contains search criteria. Available:
+            - Keys: the attributes of the object of he chosen type.
+            - Values: values to be matched.
+
+        Returns
+        -------
+        Union[List[Node], List[InterfaceConnection], List[Interface]]
+            List of items satisfying the criteria.
+        """
+        # Although interfaces belong to the nodes, not to a graph.
+        # The option to find them is kept here so the API is coherent.
+        if type == AttributeType.INTERFACE:
+            return self._get_interfaces(**kwargs)
+
+        # Choose an appropriate dictionary as data source.
+        items: Dict = getattr(self, type.value)
+        items_satisfying_criteria = list(items.values())
+
+        return match_criteria(items=items_satisfying_criteria, **kwargs)
+
+    def _get_interfaces(self, **kwargs) -> List[Interface]:
+        interfaces: List[Interface] = []
+        for _, node in self._nodes.items():
+            interfaces.extend(node.interfaces)
+            for i in node.interfaces:
+                if i.bus is not None and i.bus.stubs is not None:
+                    interfaces.extend(i.bus.stubs)
+
+        return match_criteria(items=interfaces, **kwargs)
+
+    def get_by_id(
+        self, type: AttributeType, id: str
+    ) -> Optional[Union[InterfaceConnection, Node, Interface]]:
+        """
+        Fast getter, which finds an item of a supplied type and
+        with the provided id.
+
+        It has complexity of O(1) (except for interfaces) in juxtaposition
+        to the `get` method, which iterates over all items.
+
+        Parameters
+        ----------
+        type : AttributeType
+            Type of the output objects.
+        id : str
+            ID of the sought object.
+
+        Returns
+        -------
+        Optional[Union[InterfaceConnection, Node, Interface]]
+            Either an single instance of InterfaceConnection or Node
+            or Interface depending on the provided `type`.
+            If does not exist, None is returned.
+        """
+        if type == AttributeType.INTERFACE:
+            interface = self._get_interfaces(id=id)
+            return interface[0] if interface else None
+        items: Dict = getattr(self, type.value)
+        return items.get(id, None)
+
+    @property
+    def id(self) -> str:
+        """Getter to obtain the ID of the graph."""
+        return self._id
+
+    @id.setter
+    def id(self, _: str):
+        """Setter disallowing manual modification of the ID of the graph."""
+        raise GraphRenamingError("An ID of a graph cannot be changed.")
+
+    @property
+    def panning(self) -> Vector2:
+        """Getter to obtain the panning of the graph."""
+        return self._panning
+
+    @panning.setter
+    def panning(self, value: Any):
+        """Setter for `panning` attribute of the graph."""
+        if isinstance(value, Dict):
+            if "x" not in value or "y" not in value:
+                raise InvalidPanningError(
+                    "Panning has to have the following keys: x, y."
+                    f"`panning` = {str(value)}"
+                )
+            self._panning = Vector2(x=value["x"], y=value["y"])
+        elif isinstance(value, Vector2):
+            self._panning = value
+        else:
+            raise InvalidPanningError(
+                "`panning` has be either dictionary or Vector2."
+                f"Its type: {type(value)}"
+            )
+
+    @property
+    def scaling(self) -> float:
+        """Getter to obtain the scaling of the graph."""
+        return self._scaling
+
+    @scaling.setter
+    def scaling(self, value: Any):
+        """Setter for `scaling` attribute of the graph."""
+        value = float(value)
+        max_scaling = 999
+        if not (0 < value <= max_scaling):
+            raise ScalingOutOfBoundsError(
+                f"`scaling` has to be in the range (0, {max_scaling}] "
+                f"but is {value}."
+            )
+        self._scaling = value

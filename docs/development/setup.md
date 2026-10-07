@@ -123,37 +123,40 @@ installs exactly these on `ubuntu-latest`. It is the reference setup.
 ### System editor (optional)
 
 The editor UI is Antmicro's [Pipeline Manager](https://github.com/antmicro/kenning-pipeline-manager)
-(Apache-2.0) in server mode, talking to `python -m vhil.editor serve`.
+(Apache-2.0) in server mode, talking to `python -m vhil.editor serve`. It is
+vendored in [`editor/pipeline-manager/`](../../editor/pipeline-manager/README-VHIL.md)
+(upstream v0.5.2), with our changes made in place and listed in its
+`CHANGELOG-VHIL.md`.
 
 In Docker: `scripts/vhil-docker.sh editor`, then open http://localhost:5050
 (not 5000: macOS's AirPlay Receiver holds that port). The image
-([`docker/editor.Dockerfile`](../../docker/editor.Dockerfile)) pins Pipeline
-Manager to a release whose format matches `vhil/editor.py`'s
-`FORMAT_VERSION`; Run uses the images from the last `vhil-docker.sh fw`.
+([`docker/editor.Dockerfile`](../../docker/editor.Dockerfile)) builds it
+from that directory (the frontend's dependencies from its lockfile, `npm
+ci`); its release's format matches `vhil/editor.py`'s `FORMAT_VERSION`. Run
+uses the images from the last `vhil-docker.sh fw`.
 "Load file" imports a system YAML through the backend; "Save file" writes
 it back onto the original text, comments kept. Natively:
 
 1. Node.js ≥ 20.18 (the Node 22 LTS `linux-x64` tarball from nodejs.org,
    unpacked to `~/vhil-tools/node`; no sudo needed).
 2. Pipeline Manager in its own venv (it pins old dependency versions):
-   `git clone https://github.com/antmicro/kenning-pipeline-manager ~/vhil-tools/kenning-pipeline-manager`,
    `python3 -m venv ~/vhil-tools/pm-venv`, then in that venv
-   `pip install -e ~/vhil-tools/kenning-pipeline-manager` and
-   `pip install git+https://github.com/antmicro/kenning-pipeline-manager-backend-communication.git`,
-   and `PATH=~/vhil-tools/node/bin:$PATH ./build server-app` in the checkout.
+   `SETUPTOOLS_SCM_PRETEND_VERSION_FOR_PIPELINE_MANAGER=0.5.2 PIPELINE_MANAGER_SKIP_FRONTEND_BUILD=1 pip install -e editor/pipeline-manager`
+   and `pip install git+https://github.com/antmicro/kenning-pipeline-manager-backend-communication.git`;
+   then `npm ci` in `editor/pipeline-manager/pipeline_manager/frontend` and
+   `PATH=~/vhil-tools/node/bin:$PATH ./build server-app --skip-install-deps`
+   in `editor/pipeline-manager`, and `export PM_DIR=$PWD/editor/pipeline-manager`.
 3. The same backend library, and `ruamel.yaml==0.18.*`, in this repo's venv.
 4. `scripts/editor.sh`, then open http://localhost:5000. Load a system with
    `python -m vhil.editor to-graph systems/ams.yaml -o ams.json` and drop the
    file on the canvas. Run needs `VHIL_<FIRMWARE>_ELF` (e.g. `VHIL_AMS_ELF`, and
    `VHIL_CAN_BOOTLOADER_ELF` for the bootloader every MainLite boots through).
 
-The image applies our patches in [`docker/pm/`](../../docker/pm) on top of
-the pinned release before building the frontend (natively: `git apply
-docker/pm/*.patch` in the checkout before step 2's `./build`).
-`bus-per-instance.patch` fixes graphs with more than one CAN bus: v0.5.2
-shares one `bus` object between every node of a type, so on load each bus
-takes the stubs of the last and the connections to the others dangle
-("Missing dst s:can_inv:0").
+Changes to Pipeline Manager are commits to `editor/pipeline-manager/`, each
+listed in its `CHANGELOG-VHIL.md`. The first, bus-per-instance, fixes graphs
+with more than one CAN bus: v0.5.2 shares one `bus` object between every node
+of a type, so on load each bus takes the stubs of the last and the
+connections to the others dangle ("Missing dst s:can_inv:0").
 
 `python -m vhil.editor check [systems...]` runs Pipeline Manager's
 `./validate <spec> <dataflow>...` on the specification and each system's
