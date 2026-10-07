@@ -50,11 +50,13 @@ RUN cd /opt/pm/pipeline_manager/frontend && npm ci --no-audit --no-fund \
 # version comes from setuptools-scm, which has no git history here. The
 # frontend is built by ./build below, not by pip.
 COPY editor/pipeline-manager/ /opt/pm/
-# The shell's design tokens and self-hosted fonts, from their one source
+# The shell's design tokens, self-hosted fonts and what a run sends
+# (editor-run.js, the workspace's Run), from their one source
 # (vhil/server/static/, which the shell serves too), into the frontend's
 # src/vhil/shell/ (not in git); the fonts checked against the hashes they
 # were pinned with.
-COPY vhil/server/static/tokens.css /opt/pm/pipeline_manager/frontend/src/vhil/shell/
+COPY vhil/server/static/tokens.css vhil/server/static/editor-run.js \
+     /opt/pm/pipeline_manager/frontend/src/vhil/shell/
 COPY vhil/server/static/fonts/ /opt/pm/pipeline_manager/frontend/src/vhil/shell/fonts/
 RUN cd /opt/pm/pipeline_manager/frontend/src/vhil/shell/fonts && sha256sum -c --quiet SHA256SUMS
 RUN python -m venv /opt/pm-venv \

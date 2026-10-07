@@ -129,7 +129,8 @@ vendored in [`editor/pipeline-manager/`](../../editor/pipeline-manager/README-VH
 `CHANGELOG-VHIL.md`.
 
 In Docker: `scripts/vhil-docker.sh editor`, then open
-http://localhost:8080/editor/, or the Editor page at http://localhost:8080/#/editor.
+http://localhost:8080/editor/ (the shell's Editor link, and old
+`#/editor/<system>` links, go there; `?system=<id>&branch=<b>` opens a system).
 It runs `docker/compose.yaml`'s `editor` and `proxy` (and the `api`, for the
 login check): one origin, as on a host, the editor under `/editor/` and no
 port of its own. The image
@@ -147,19 +148,18 @@ it back onto the original text, comments kept. Natively:
    `SETUPTOOLS_SCM_PRETEND_VERSION_FOR_PIPELINE_MANAGER=0.5.2 PIPELINE_MANAGER_SKIP_FRONTEND_BUILD=1 pip install -e editor/pipeline-manager`
    and `pip install git+https://github.com/antmicro/kenning-pipeline-manager-backend-communication.git`;
    then `npm ci` in `editor/pipeline-manager/pipeline_manager/frontend`, the
-   shell's tokens and fonts copied in (the image build does the same:
-   `mkdir -p editor/pipeline-manager/pipeline_manager/frontend/src/vhil/shell && cp -r vhil/server/static/tokens.css vhil/server/static/fonts editor/pipeline-manager/pipeline_manager/frontend/src/vhil/shell/`,
+   shell's tokens, fonts and run request copied in (the image build does the same:
+   `mkdir -p editor/pipeline-manager/pipeline_manager/frontend/src/vhil/shell && cp -r vhil/server/static/tokens.css vhil/server/static/editor-run.js vhil/server/static/fonts editor/pipeline-manager/pipeline_manager/frontend/src/vhil/shell/`,
    git ignores the copy; redo it when they change), and
    `PATH=~/vhil-tools/node/bin:$PATH ./build server-app --skip-install-deps`
    in `editor/pipeline-manager`, and `export PM_DIR=$PWD/editor/pipeline-manager`.
 3. The same backend library, and `ruamel.yaml==0.18.*`, in this repo's venv.
 4. `scripts/editor.sh`, then open http://localhost:5000. Load a system with
    `python -m vhil.editor to-graph systems/ams.yaml -o ams.json` and drop the
-   file on the canvas. Running a system is the web app's (below): the editor
-   has no Run of its own. The web app's Editor page embeds it from its own
-   origin, under `/editor/`, which only the proxy provides
-   (`deploy/Caddyfile`; `docker/compose.yaml` runs it): for that page, use
-   Docker. `PM_CSP_REPORT_ONLY=1` sends the editor's CSP as Report-Only
+   file on the canvas. The workspace's Systems, Run, Commit and PR use the
+   web app's API on the same origin, under `/editor/`, which only the proxy
+   provides (`deploy/Caddyfile`; `docker/compose.yaml` runs it): for those,
+   use Docker. `PM_CSP_REPORT_ONLY=1` sends the editor's CSP as Report-Only
    (violations in the browser console, nothing blocked).
 
 Changes to Pipeline Manager are commits to `editor/pipeline-manager/`, each
@@ -175,9 +175,16 @@ own code, so it catches what a schema check misses. In Docker:
 `scripts/vhil-docker.sh editor-check`; `tests/unit` runs it too when
 `$PM_DIR` points at a checkout (the editor image).
 
-**From the web app** (`#/editor`, M5.4): the shell embeds the editor
-(same origin, `/editor/`) and loads a system into it
-over Pipeline Manager's postMessage API. Save commits `systems/<id>.yaml` on
+**The workspace** (`/editor/`, M5.4; laid out as in step 7 of the
+[workspace plan](../architecture/editor-workspace.md)): a 40 px top bar
+(the system and branch with a dot for unsaved edits, a firmware chip per
+board, the run's duration, Run (F5) and Stop (Shift+F5), the mode, Commit…
+and Open PR, the theme), an activity rail and sidebar (Ctrl+B: Palette,
+Systems, Runs), the canvas, an inspector (the selected node's properties;
+a board's role and firmware refs live there, not on its node), a bottom dock
+(Ctrl+J: Log and Problems, more tabs to come) and a status strip; `?` lists
+the shortcuts. Systems opens a system onto the canvas (from the checked-out
+tree or a branch) or starts a new one. Commit writes `systems/<id>.yaml` on
 the branch you name, in the API's workspace, with git plumbing: no checkout
 moves, `dev`/`main` are never written, a branch checked out in the workspace
 is refused (`vhil/server/gitstore.py`). The file is validated first as
@@ -185,20 +192,22 @@ is refused (`vhil/server/gitstore.py`). The file is validated first as
 (ECU, AMS or uDV), each choice shown with the node id it gives the bootloader
 (`ecu (node 0x1)`); changing it relabels the node's pins live (the backend
 answers Pipeline Manager's `properties_on_change`), saving writes `role: ecu`,
-and the bootloader it carries is a read-only `bootloader` property. The firmware picker sets a board's
+and the bootloader it carries is a read-only `bootloader` property. A board's firmware chip (or its
+ref in the inspector) opens a picker that sets its
 `firmware_ref` (a branch or tag of the catalogue repo, listed with `git
 ls-remote`). Open PR pushes the branch and opens a PR to `dev`; it needs
 `VHIL_GITHUB_TOKEN` (or `VHIL_GITHUB_TOKEN_FILE`; contents + pull requests write) on the API until the
 GitHub App (M5.5) replaces it. Without it the button is off and the branch
-stays local. Run (next to Open) starts a normal run, as the Runs page
+stays local. Check lists the file's errors and warnings in Problems; a click
+selects the node one is about. Run starts a normal run, as the Runs page
 does (`POST /api/runs`, `vhil/server/static/editor-run.js`): the system as
 saved, at the commit it was opened from or last saved to (the checked-out
 tree if it was opened from there), with each board's `firmware_ref` /
 `bootloader_ref` from the graph, for the virtual ms given (default 3000:
 each MainLite spends its bootloader's 2 s window first). With unsaved edits
-it refuses and says to save first; it never runs the graph in the browser.
-Its state goes to the editor's terminal and notifications, with a link to
-the run's page. Known gap: Pipeline Manager 0.5.2 rejects the graphs of the
+it refuses and says to commit first; it never runs the graph in the browser.
+Its state goes to the Log, the status strip and a notification, with a link
+to the run's page; the Runs view lists the system's runs. Known gap: Pipeline Manager 0.5.2 rejects the graphs of the
 systems with more than one CAN bus ("Missing dst s:can_inv:0": the earlier
 buses' stubs are not found), so the ECU systems don't load in the editor yet;
 single-bus systems such as `ams` do.
