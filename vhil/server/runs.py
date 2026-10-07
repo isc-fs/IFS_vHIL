@@ -34,6 +34,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import os
 import re
 import sqlite3
@@ -50,8 +51,10 @@ from typing import Annotated, Literal, Optional, Union
 
 from fastapi import APIRouter, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, Response
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (BaseModel, ConfigDict, Field, StrictBool, StrictFloat, StrictInt,
+                      field_validator, model_validator)
 
+from vhil import expect as vexpect
 from vhil.server.workspace import SYSTEM_ID
 from vhil.system import System, SystemError
 
@@ -91,6 +94,7 @@ class Limits:
     max_active_per_user: int = 10           # VHIL_MAX_QUEUED_PER_USER
     max_stimuli: int = 1000                 # VHIL_MAX_STIMULI
     max_watch: int = 100                    # VHIL_MAX_WATCHES
+    max_expect: int = 200                   # VHIL_MAX_EXPECTS
     max_trace_bytes: int = 512 << 20        # VHIL_MAX_TRACE_MB: a run's trace.jsonl
     max_output_bytes: int = 64 << 20        # VHIL_MAX_OUTPUT_MB: a pytest run's output
 
@@ -102,6 +106,7 @@ class Limits:
                    max_active_per_user=_env_int("VHIL_MAX_QUEUED_PER_USER", d.max_active_per_user),
                    max_stimuli=_env_int("VHIL_MAX_STIMULI", d.max_stimuli),
                    max_watch=_env_int("VHIL_MAX_WATCHES", d.max_watch),
+                   max_expect=_env_int("VHIL_MAX_EXPECTS", d.max_expect),
                    max_trace_bytes=_env_int("VHIL_MAX_TRACE_MB", d.max_trace_bytes >> 20) << 20,
                    max_output_bytes=_env_int("VHIL_MAX_OUTPUT_MB", d.max_output_bytes >> 20) << 20)
 
@@ -120,6 +125,10 @@ _HEX = re.compile(r"^([0-9a-fA-F]{2})*$")
 # checked here too, so nothing else can reach a monitor command.
 _NAME = r"^[A-Za-z_][A-Za-z0-9_]{0,63}$"
 _PIN = r"^[A-Za-z0-9_]{1,64}$"
+# A row's own name (a label on the timeline, what a stop_periodic names) and a
+# scenario's (its file name: systems/<system>.scenarios/<name>.yaml).
+_ROW = r"^[A-Za-z_][A-Za-z0-9_-]{0,63}$"
+SCENARIO_NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}\Z")
 
 
 # -- scenario models -------------------------------------------------------------
@@ -129,6 +138,7 @@ class _Model(BaseModel):
 
 
 class _Can(_Model):
+    name: Optional[str] = Field(None, pattern=_ROW)
     at_ms: float = Field(0, ge=0)
     bus: str = Field(pattern=_NAME)
     id: int = Field(ge=0, le=0x1FFFFFFF)
@@ -161,6 +171,7 @@ class CanPeriodic(_Can):
 
 class GpioSet(_Model):
     kind: Literal["gpio"]
+    name: Optional[str] = Field(None, pattern=_ROW)
     at_ms: float = Field(0, ge=0)
     board: str = Field(pattern=_NAME)
     pin: str = Field(pattern=_PIN)      # catalogue gpio name, e.g. "PB5"
@@ -169,13 +180,23 @@ class GpioSet(_Model):
 
 class AnalogSet(_Model):
     kind: Literal["analog"]
+    name: Optional[str] = Field(None, pattern=_ROW)
     at_ms: float = Field(0, ge=0)
     board: str = Field(pattern=_NAME)
     pin: str = Field(pattern=_PIN)      # catalogue analog_in name, e.g. "PF7"
     volts: float = Field(ge=0, le=3.6)
 
 
-Stimulus = Annotated[Union[CanSend, CanPeriodic, GpioSet, AnalogSet], Field(discriminator="kind")]
+class StopPeriodic(_Model):
+    """Stops the can_periodic named `periodic` (a live session's op too)."""
+    kind: Literal["stop_periodic"]
+    name: Optional[str] = Field(None, pattern=_ROW)
+    at_ms: float = Field(0, ge=0)
+    periodic: str = Field(pattern=_ROW)
+
+
+Stimulus = Annotated[Union[CanSend, CanPeriodic, StopPeriodic, GpioSet, AnalogSet],
+                     Field(discriminator="kind")]
 
 
 class SymbolWatch(_Model):
@@ -194,15 +215,110 @@ class PinWatch(_Model):
 
 Watch = Annotated[Union[SymbolWatch, PinWatch], Field(discriminator="kind")]
 
+# An expect's value: a number, a boolean, or a label (a field's value-table
+# entry; high/low for a pin). vhil/expect.py says how each compares.
+Label = Annotated[str, Field(pattern=f"^{vexpect.LABEL.pattern}$")]
+
+
+class Expect(_Model):
+    """What the run must show, checked against its trace in virtual time
+    (vhil/expect.py): `signal` over [at_ms, until_ms] (default: to the end)."""
+    check: Literal["eventually", "always", "never", "period", "count"]
+    name: Optional[str] = Field(None, pattern=_ROW)
+    at_ms: float = Field(0, ge=0)
+    until_ms: Optional[float] = Field(None, ge=0)
+    signal: str
+    # eventually / always / never
+    op: Optional[Literal["==", "!=", "<", "<=", ">", ">="]] = None
+    value: Optional[Union[StrictBool, StrictInt, StrictFloat, Label]] = None
+    # period
+    min_ms: Optional[float] = Field(None, ge=0, le=600_000)
+    max_ms: Optional[float] = Field(None, ge=0, le=600_000)
+    # count
+    min: Optional[int] = Field(None, ge=0)
+    max: Optional[int] = Field(None, ge=0)
+
+    @field_validator("signal")
+    @classmethod
+    def _signal(cls, v: str) -> str:
+        vexpect.parse_signal(v)
+        return v
+
+    @model_validator(mode="after")
+    def _shape(self):
+        sig = vexpect.parse_signal(self.signal)
+        if self.until_ms is not None and self.until_ms < self.at_ms:
+            raise ValueError(f"until_ms {self.until_ms:g} is before at_ms {self.at_ms:g}")
+        if isinstance(self.value, float) and not math.isfinite(self.value):
+            raise ValueError("value must be a finite number")
+        given = lambda *names: [n for n in names if getattr(self, n) is not None]  # noqa: E731
+        if self.check in vexpect.VALUE_CHECKS:
+            if sig.kind == "frame" and not sig.field:
+                raise ValueError(f"{self.check} reads a value: frame:<bus>.<message>.<field>")
+            if self.value is None:
+                raise ValueError(f"{self.check} needs a value")
+            if isinstance(self.value, str) and (self.op or "==") not in ("==", "!="):
+                raise ValueError(f"a label compares with == or != only, not {self.op}")
+            extra = given("min_ms", "max_ms", "min", "max")
+        else:
+            if sig.kind != "frame" or sig.field:
+                raise ValueError(f"{self.check} counts a frame: frame:<bus>.<message>")
+            extra = given("op", "value") + (given("min", "max") if self.check == "period"
+                                            else given("min_ms", "max_ms"))
+            want = ("min_ms", "max_ms") if self.check == "period" else ("min", "max")
+            if not given(*want):
+                raise ValueError(f"{self.check} needs {' or '.join(want)}")
+            lo, hi = (getattr(self, n) for n in want)
+            if lo is not None and hi is not None and lo > hi:
+                raise ValueError(f"{want[0]} is more than {want[1]}")
+        if extra:
+            raise ValueError(f"{self.check} takes no {', '.join(extra)}")
+        return self
+
 
 class RunScenario(_Model):
     kind: Literal["run"]
+    # The scenario file it came from (systems/<system>.scenarios/<name>.yaml),
+    # if any: the Tests view's last result for it is this run's.
+    name: Optional[str] = None
     virtual_ms: int = Field(DEFAULT_VIRTUAL_MS, ge=1, le=600_000)
     # Virtual time per slice: the trace is flushed and cancellation checked
     # after each one.
     slice_ms: int = Field(100, ge=10, le=1000)
     stimuli: list[Stimulus] = []
     watch: list[Watch] = []
+    expect: list[Expect] = []
+
+    @field_validator("name")
+    @classmethod
+    def _name(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and not SCENARIO_NAME.match(v):
+            raise ValueError("name must be a scenario name: lowercase letters, digits and '-', "
+                             "at most 64")
+        return v
+
+    @model_validator(mode="after")
+    def _rows(self):
+        """A periodic's name is unique, and a stop names a periodic started
+        no later; an expect's window ends by the run's."""
+        started: dict[str, float] = {}
+        for i, s in enumerate(self.stimuli):
+            if isinstance(s, CanPeriodic) and s.name is not None:
+                if s.name in started:
+                    raise ValueError(f"stimuli[{i}]: a second periodic named '{s.name}'")
+                started[s.name] = s.at_ms
+        for i, s in enumerate(self.stimuli):
+            if isinstance(s, StopPeriodic):
+                if s.periodic not in started:
+                    raise ValueError(f"stimuli[{i}]: no can_periodic named '{s.periodic}' to stop")
+                if s.at_ms < started[s.periodic]:
+                    raise ValueError(f"stimuli[{i}]: stops '{s.periodic}' at {s.at_ms:g} ms, "
+                                     f"before it starts at {started[s.periodic]:g} ms")
+        for i, e in enumerate(self.expect):
+            if e.until_ms is not None and e.until_ms > self.virtual_ms:
+                raise ValueError(f"expect[{i}]: until_ms {e.until_ms:g} is past the run's "
+                                 f"{self.virtual_ms} ms")
+        return self
 
 
 class PytestScenario(_Model):
@@ -258,6 +374,14 @@ def check_against_system(req: RunRequest, system: System, workspace: Path) -> li
         if not (workspace / sc.select.split("::", 1)[0]).is_file():
             errors.append(f"select: no file {sc.select.split('::', 1)[0]}")
         return errors
+    return errors + check_scenario(sc, system)
+
+
+def check_scenario(sc: RunScenario, system: System) -> list[str]:
+    """What a run scenario's rows name that the system lacks: buses, boards,
+    and pins of the right kind. (Messages and fields are the firmware's:
+    vhil/server/scenarios.py checks those against its contract.)"""
+    errors = []
 
     def pin(board: str, name: str, kind: str, where: str):
         if board not in system.boards:
@@ -286,6 +410,16 @@ def check_against_system(req: RunRequest, system: System, workspace: Path) -> li
             pin(w.board, w.pin, "gpio", where)
         elif w.board not in system.boards:
             errors.append(f"{where}: no board '{w.board}' in {system.id}")
+    for i, e in enumerate(sc.expect):
+        where = f"expect[{i}]"
+        sig = vexpect.parse_signal(e.signal)
+        if sig.kind == "frame":
+            if sig.owner not in system.buses:
+                errors.append(f"{where}: no bus '{sig.owner}' in {system.id}")
+        elif sig.kind == "pin":
+            pin(sig.owner, sig.item, "gpio", where)
+        elif sig.owner not in system.boards:
+            errors.append(f"{where}: no board '{sig.owner}' in {system.id}")
     return errors
 
 
@@ -423,6 +557,19 @@ class RunStore:
         finally:
             db.close()
         return [_row(r) for r in rows]
+
+    def last_by_scenario(self, system: str) -> dict[str, dict]:
+        """{scenario name: its latest run} of `system`'s runs that ran a
+        scenario file (RunScenario.name): the Tests view's last results."""
+        db = self._connect()
+        try:
+            rows = db.execute(
+                "SELECT * FROM runs WHERE id IN (SELECT max(id) FROM runs WHERE system = ? AND "
+                "json_extract(scenario, '$.name') IS NOT NULL "
+                "GROUP BY json_extract(scenario, '$.name'))", (system,)).fetchall()
+        finally:
+            db.close()
+        return {r["scenario"]["name"]: r for r in map(_row, rows)}
 
     def claim(self, worker: str, now: Optional[float] = None) -> Optional[dict]:
         """The oldest queued run, now running for `worker`; None when the
@@ -861,6 +1008,8 @@ def check_limits(req: RunRequest, limits: Limits) -> list[str]:
             errors.append(f"stimuli: {len(sc.stimuli)} is over the limit of {limits.max_stimuli}")
         if len(sc.watch) > limits.max_watch:
             errors.append(f"watch: {len(sc.watch)} is over the limit of {limits.max_watch}")
+        if len(sc.expect) > limits.max_expect:
+            errors.append(f"expect: {len(sc.expect)} is over the limit of {limits.max_expect}")
     return errors
 
 
