@@ -89,6 +89,13 @@ if [ -n "$fw_volume" ]; then
         sed -n "s/^[^=]*=//p" /seed/fw/built.txt | sort -u | while read -r elf; do
             [ -f "/seed${elf#/vhil}" ] || continue
             mkdir -p "$(dirname "$elf")"; cp "/seed${elf#/vhil}" "$elf"; echo "  $elf"
+            # The CAN contract (.def files) next to it, so runs decode
+            # (vhil/candef.py looks for Core/Inc/can/messages above the ELF).
+            src=${elf%%/build/*}
+            if [ -d "/seed${src#/vhil}/Core/Inc/can" ] && [ ! -d "$src/Core/Inc/can" ]; then
+                mkdir -p "$src/Core/Inc"; cp -r "/seed${src#/vhil}/Core/Inc/can" "$src/Core/Inc/"
+                echo "  $src/Core/Inc/can"
+            fi
         done
         cp /seed/fw/built.txt /vhil/fw/built.txt' || fail "firmware copy"
 fi
