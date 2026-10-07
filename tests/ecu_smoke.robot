@@ -8,7 +8,7 @@ bootloader in sector 0, whose 2 s auto-jump window comes first: the first
 frame of each case waits that much longer. The Renode script is generated
 from systems/ecu.yaml, with the flash image it provisions:
     python -m vhil.system render systems/ecu.yaml --firmware ecu=/path/to/ECU08.elf \
-        --firmware ecu.bootloader=/path/to/CAN_BL.elf -o /tmp/ecu.resc
+        --firmware ecu.bootloader=/path/to/CAN_BL.elf --can-hub -o /tmp/ecu.resc
     renode-test tests/ecu_smoke.robot --variable ELF:/path/to/ECU08.elf --variable RESC:/tmp/ecu.resc
 
 

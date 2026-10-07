@@ -207,6 +207,19 @@ def test_every_bus_of_a_committed_system_is_arbitrated(path):
     assert ("models/renode/VhilCanBus.cs" in text) == any(map(system.arbitrated, system.buses))
 
 
+@pytest.mark.parametrize("path", SYSTEMS, ids=lambda p: p.name)
+def test_render_can_hub_puts_renodes_hub_on_every_bus(tmp_path, path):
+    """`render --can-hub` is for renode-test's CAN Tester keywords (the smoke
+    suites), which attach only to Renode's CANHub."""
+    from vhil.system import main
+    out = tmp_path / "s.resc"
+    assert main(["render", str(path), "--can-hub", "-o", str(out)]) == 0
+    text = out.read_text()
+    assert "VhilCanBus" not in text
+    for bus in System(path).buses:
+        assert f'emulation CreateCANHub "{bus}"' in text
+
+
 @pytest.mark.parametrize("value", ["yes", 1, None, "true"])
 def test_arbitration_is_a_boolean(tmp_path, value):
     body = "buses:\n  a: {kind: can, nodes: [ecu.FDCAN1], arbitration: %s}\n" % (

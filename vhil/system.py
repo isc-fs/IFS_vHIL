@@ -1028,6 +1028,11 @@ def main(argv=None) -> int:
         if name == "render":
             s.add_argument("--firmware", action="append", metavar="BOARD=ELF")
             s.add_argument("--socketcan", action="store_true")
+            s.add_argument("--can-hub", action="store_true",
+                           help="Renode's CAN hub on every bus instead of the bus model, for "
+                                "renode-test's CAN Tester keywords, which attach only to a "
+                                "CANHub (renode CANKeywords.cs: TestersProvider<CANTester, "
+                                "CANHub>)")
             s.add_argument("-o", "--output", type=Path)
         if name == "build":
             s.add_argument("--workdir", type=Path, default=REPO / "build" / "fw")
@@ -1041,6 +1046,9 @@ def main(argv=None) -> int:
             for warning in system.warnings:
                 print(f"warning: {args.system}: {warning}", file=sys.stderr)
         elif args.cmd == "render":
+            if args.can_hub:
+                for spec in system.buses.values():
+                    spec["arbitration"] = False
             text = system.render_renode({k: Path(v) for k, v in _pairs(args.firmware).items()},
                                         socketcan=args.socketcan)
             if args.output:

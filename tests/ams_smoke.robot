@@ -6,7 +6,7 @@ CAN output, so the AMS is judged on what it reports about the battery it is
 given. The AMS boots through the CAN bootloader in sector 0, as on the car:
 its 2 s auto-jump window comes before the first frame. Run with:
     python -m vhil.system render systems/ams.yaml --firmware ams=/path/to/AMS.elf \
-        --firmware ams.bootloader=/path/to/CAN_BL.elf -o /tmp/ams.resc
+        --firmware ams.bootloader=/path/to/CAN_BL.elf --can-hub -o /tmp/ams.resc
     renode-test tests/ams_smoke.robot --variable ELF:/path/to/AMS.elf --variable RESC:/tmp/ams.resc
 
 
