@@ -13,8 +13,8 @@
 // Renode's STM32H7_RCC (sealed) models these registers with the STM32H743's
 // layout: it resets only the peripherals registered with it in stm32h7.repl,
 // none of the ones stm32h733.repl adds or replaces (fdcan*_h7, timer23,
-// usart10, spi1, sdmmc1, adc3_h73x), and it treats the H72x/H73x-only bits
-// (TIM23/24, USART10, UART9, I2C5, DTS, OCTOSPI2, FMAC, CORDIC, OTFDEC,
+// usart10, spi1, sdmmc1, adc3_h73x, dma1_h7), and it treats the H72x/H73x-only
+// bits (TIM23/24, USART10, UART9, I2C5, DTS, OCTOSPI2, FMAC, CORDIC, OTFDEC,
 // IOMNGR; DFSDM1 at bit 30) as reserved. This owns the nine registers through
 // the RCC's bus hooks (VhilRccHooks.cs): it holds what was written, reads it
 // back, resets the mapped peripheral models on each edge of their bit (so
@@ -199,7 +199,7 @@ namespace Antmicro.Renode.Testing
             // §8.7.28 p. 411: DMA1 0, DMA2 1, ADC12 5, ETH1MAC 15, USB1OTG 25.
             [0x80] = new Register { Name = "AHB1RSTR", Defined = 0x02008023, Bits = new Dictionary<int, string[]>
             {
-                [0] = new[] { "dma1" }, [1] = new[] { "dma2" }, [5] = new[] { "adcM1S2" },
+                [0] = new[] { "dma1_h7" }, [1] = new[] { "dma2" }, [5] = new[] { "adcM1S2" },
                 [15] = new[] { "ethernet" }, [25] = new[] { "usb1" },
             }},
             // §8.7.29 p. 412-413: DCMI_PSSI 0, CRYP 4, HASH 5, RNG 6, SDMMC2 9,
