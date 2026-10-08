@@ -96,7 +96,11 @@ scheduling a scenario row at that time gets (`execute_run`'s `schedule`), and
 settles the row (`applied` with that time, or `refused` with why). So an op
 takes effect between one and two slices (50 to 100 ms of virtual time) after
 it was sent, at a slice boundary, the same way however fast the emulation
-runs. Pause, resume and keepalive take effect at the boundary itself.
+runs. Pause, resume and keepalive take effect at the boundary itself. A
+slice end is a sync point (slices are whole ms, the quantum 500 µs), so an
+op is never moved the way a scenario row between two sync points is
+([scenarios.md](scenarios.md#times)), and its recording replays at the
+same times.
 
 **In the trace,** every op is an `op` record at the virtual time it took
 effect (a refused one at the boundary that refused it):
