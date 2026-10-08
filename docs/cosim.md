@@ -81,7 +81,9 @@ at each boundary the vHIL sends the engine `t` and the system → plant values,
 and waits for the plant → system values before stepping. That transport is
 not built yet. When MingoCIL needs it, it should be a thin adapter that
 presents the engine as one more plant, so the timing contract above stays as
-it is.
+it is. The port is one surface of the
+[integration contract](integration-contract.md), with the scenario schema,
+the session ops and the trace, and is versioned with them.
 
 ## Scripted plants today
 
