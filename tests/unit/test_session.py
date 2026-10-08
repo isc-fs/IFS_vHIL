@@ -3,6 +3,7 @@ docs/live-session.md): the session channel's ops, the worker applying them
 at slice boundaries in virtual time, ownership, the idle timeout, and the
 determinism of a recorded session replayed as a scenario. Against the fake
 Sim of test_runs.py; the real Sim is tests/sim/test_ams_live_session.py."""
+import functools
 import json
 import threading
 import time
@@ -17,11 +18,13 @@ from starlette.websockets import WebSocketDisconnect  # noqa: E402
 from tests.unit.test_runs import FakeSim, as_user, github_app  # noqa: E402
 from vhil.server import create_app  # noqa: E402
 from vhil.server import scenarios as vscen  # noqa: E402
+from vhil.server import session as vsession  # noqa: E402
 from vhil.server.config import Settings  # noqa: E402
 from vhil.server.runs import Limits, read_trace  # noqa: E402
 from vhil.server.session import (OpError, RateLimit, SessionStore, as_scenario,  # noqa: E402
                                  parse_op)
 from vhil.system import REPO, System  # noqa: E402
+from vhil import worker as vworker  # noqa: E402
 from vhil.worker import LiveSession, TraceWriter, Worker, execute_run  # noqa: E402
 
 AMS = REPO / "systems" / "ams.yaml"
@@ -298,15 +301,20 @@ def test_the_worker_applies_queued_ops_and_ends_a_stopped_session_passed(setting
     assert any(r["kind"] == "clock" for r in trace)
 
 
-def test_the_worker_stops_an_idle_session_and_refuses_ops_that_came_late(settings, store):
+def test_the_worker_stops_an_idle_session_and_refuses_ops_that_came_late(settings, store,
+                                                                         monkeypatch):
     run_id = store.create("ams", "", {}, {**LIVE, "virtual_ms": 3_600_000, "slice_ms": 50,
                                           "stimuli": [], "watch": [], "expect": []}, owner="dev")
-    # No op for a second of wall time (paced: about a second of virtual time).
-    t0 = time.monotonic()
+    # No op for a second of wall time (paced: a second of virtual time). The
+    # session's wall clock is a fake that pacing's sleeps move, so the run
+    # stops at the same virtual time however slow the runner.
+    clock = FakeClock()
+    monkeypatch.setattr(vworker, "LiveSession", functools.partial(
+        LiveSession, clock=clock, wall=clock, sleep=clock.sleep))
     live_worker(settings, live_idle_s=1).run_once()
     run = store.get(run_id)
     assert run["state"] == "passed" and run["summary"]["stopped"] == "idle"
-    assert 900_000 <= run["virtual_us"] <= 2_000_000 and time.monotonic() - t0 < 10
+    assert 1_000_000 <= run["virtual_us"] <= 1_100_000, run["virtual_us"]
 
 
 def test_pacing_holds_virtual_time_to_wall_time():
@@ -477,7 +485,24 @@ def test_a_session_starts_with_a_hello(settings):
     assert e.value.code == 4400
 
 
-def test_ops_are_rate_limited_and_capped(settings, store):
+class FakeClock:
+    """Wall time that moves only when told to (or when slept through)."""
+
+    def __init__(self):
+        self.t = 0.0
+
+    def __call__(self) -> float:
+        return self.t
+
+    def sleep(self, d: float) -> None:
+        self.t += max(0.0, d)
+
+
+def test_ops_are_rate_limited_and_capped(settings, store, monkeypatch):
+    """The bucket's clock stands still: a slow runner taking a while per op
+    must not refill it (it did, twice, with time.monotonic)."""
+    clock = FakeClock()
+    monkeypatch.setattr(vsession, "RateLimit", functools.partial(RateLimit, clock=clock))
     client = TestClient(create_app(settings))
     run_id = live_run(client)
     with client.websocket_connect(f"/api/runs/{run_id}/session") as ws:
@@ -486,7 +511,10 @@ def test_ops_are_rate_limited_and_capped(settings, store):
         for _ in range(Limits().live_ops_per_s + 5):
             ws.send_json({"kind": "op", "op": {"kind": "keepalive"}})
             kinds.append(ws.receive_json()["kind"])
-        assert kinds.count("refused") >= 4
+        assert kinds == ["queued"] * Limits().live_ops_per_s + ["refused"] * 5
+        clock.t = 1.0 / Limits().live_ops_per_s          # one token back
+        ws.send_json({"kind": "op", "op": {"kind": "keepalive"}})
+        assert ws.receive_json()["kind"] == "queued"
 
 
 def test_a_periodic_name_is_used_once_per_session(settings, store):
@@ -563,7 +591,12 @@ def test_the_worker_and_the_channel_together(settings, store):
             while got[-1]["kind"] != "ack":
                 got.append(ws.receive_json())
             assert got[-1]["status"] == "applied" and got[-1]["at_us"] % 50_000 == 0
-            time.sleep(0.6)             # a dozen slices, paced
+            # A dozen slices, paced: waited for in the trace, not slept for.
+            path = settings.results / str(run_id) / "trace.jsonl"
+            deadline = time.monotonic() + 30
+            while (sum(r["kind"] == "clock" for r in read_trace(path)) < 12
+                   and time.monotonic() < deadline):
+                time.sleep(0.02)
             ws.send_json({"kind": "op", "op": {"kind": "stop"}})
             while got[-1]["kind"] != "end":
                 got.append(ws.receive_json())
@@ -571,8 +604,8 @@ def test_the_worker_and_the_channel_together(settings, store):
     finally:
         t.join(timeout=30)
     trace = read_trace(settings.results / str(run_id) / "trace.jsonl")
-    # Paced to wall time: the fake Sim runs far faster than real time, so
-    # the real-time factor is about 1 (catching up after a slow slice may
-    # take it over for a moment).
-    rtfs = sorted([r["rtf"] for r in trace if r["kind"] == "clock"][2:])
-    assert len(rtfs) >= 8 and 0.5 <= rtfs[len(rtfs) // 2] <= 1.5, rtfs
+    # A clock record per slice. What their real-time factor reads depends on
+    # the runner's wall time; pacing itself is held exactly, on a fake clock,
+    # by test_pacing_holds_virtual_time_to_wall_time and its neighbours.
+    clocks = [r for r in trace if r["kind"] == "clock"]
+    assert len(clocks) >= 12 and all(c["t_us"] % 50_000 == 0 for c in clocks)
