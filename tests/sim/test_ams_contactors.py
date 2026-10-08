@@ -3,7 +3,7 @@ watched from reset at the pins systems/ams.yaml wires (its port: air_n
 ams.PB6, air_p ams.PB5, precharge ams.PB7, ams_ok ams.PB4), through a whole
 Car arm, Run and Error.
 
-AMS facts (IFS08-CE-AMS main, main.h:76-83, state_machine.hpp,
+AMS facts (IFS08-CE-AMS dev, main.h:74-81, state_machine.hpp,
 safety_task.cpp, relay_driver.cpp):
   PB6 AIR-, PB5 AIR+, PB7 precharge, PB4 AMS_OK; HIGH = closed / OK
   (relay_driver.cpp:46-64).

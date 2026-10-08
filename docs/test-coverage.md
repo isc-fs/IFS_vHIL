@@ -4,6 +4,11 @@
 CAN bootloader `v1.7.0` (the refs `systems/*.yaml` declare) · **Suite:**
 `tests/sim` (native tests) and `tests/scenarios` (every committed scenario).
 
+> The catalogue's AMS has since moved to `dev` (`catalog/firmware/ams.yaml`,
+> #208). The figures below were measured on AMS `main` and are not re-run;
+> on `dev` the suite reads the split-rate `.BIN` logs and the 331-column
+> `LOG.CSV`, and the AMS #553 and #599 strict xfails are gone (fixed there).
+
 The physical HIL is one bench; the vHIL's own suite is meant to stand on its
 own. This page measures how much of the firmware it runs, maps the
 firmware's requirements to the tests that check them, and lists what is

@@ -10,7 +10,7 @@ Firmware facts:
   ECU (IFS08-CE-ECU app_init_task.cpp): FDCAN2 (ACU) is the load-bearing bus;
     a dead FDCAN1 (inverter) must not take down the 0x100 heartbeat on it.
   Both: HAL_FDCAN_Init failure in MX_FDCANx_Init calls Error_Handler()
-    (AMS main.c:490, ECU fdcan.c:70).
+    (AMS main.c:504-506, ECU fdcan.c:70).
   ECU FDCAN2: prescaler 3, TSEG1 10, TSEG2 5 on the 24 MHz HSE kernel clock
     = 500 kbit/s (fdcan.c:96-99,242); a pit-diag tick (0x7E0 DE AD BE EF
     arms it) puts 15+ frames on the ACU bus at once (control_task.cpp:377-396).

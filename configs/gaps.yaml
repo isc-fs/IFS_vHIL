@@ -15,7 +15,9 @@
 #          modelled, by decision). tests/unit/test_system.py checks each exists.
 #
 # Last full runs (IFS_HIL dev fa11a25; AMS main df1c961, ECU dev 544b651),
-# AMS `full` on systems/ams.yaml and ECU `full` on systems/ecu.yaml. The tail
+# AMS `full` on systems/ams.yaml and ECU `full` on systems/ecu.yaml; the
+# catalogue's AMS has since moved to dev (#208), where the AMS notes below
+# were re-checked. The tail
 # of this file lists what IFS_HIL itself skips or deselects; those are not
 # gaps.
 
@@ -97,7 +99,7 @@
 # the cell source, later fed by the Simscape battery stacks (M9). Each case's
 # behaviour is a native test in tests/sim instead (replaced_by), driving the
 # chain model directly. A comment notes where IFS_HIL's expectation and AMS
-# main disagree; the native test asserts what the firmware intends.
+# dev disagree; the native test asserts what the firmware intends.
 - path: tests/hil/ams/test_block_b_safety.py::test_b022_bms_stale_trips_error
   replaced_by:
     - tests/sim/test_ams_chain.py::test_a_silent_chip_takes_its_module_offline_in_time[all]
@@ -110,7 +112,7 @@
   replaced_by:
     - tests/sim/test_ams_cells.py::test_cell_limits_and_reason[2790]
   why: "pico_emu: the bench's Pico LTC emulator injects it; the vHIL covers the behaviour natively on the LTC6811 chain model (#150, not planned)"
-# B-026: IFS_HIL expects Error; AMS main has TempFaultsTrusted = false, so over-temperature is no fault.
+# B-026: IFS_HIL expects Error; AMS dev has TempFaultsTrusted = false, so over-temperature is no fault.
 - path: tests/hil/ams/test_block_b_safety.py::test_b026_cell_overtemperature
   replaced_by:
     - tests/sim/test_ams_temps.py::test_out_of_range_temperatures_are_not_faults_while_untrusted
@@ -131,7 +133,7 @@
   replaced_by:
     - tests/sim/test_ams_cells.py::test_cell_limits_and_reason[4210]
   why: "pico_emu: the bench's Pico LTC emulator injects it; the vHIL covers the behaviour natively on the LTC6811 chain model (#150, not planned)"
-# B-029: IFS_HIL expects reason 7; AMS main has TempFaultsTrusted = false.
+# B-029: IFS_HIL expects reason 7; AMS dev has TempFaultsTrusted = false.
 - path: tests/hil/ams/test_block_b_safety.py::test_b029_cell_overtemp_reason
   replaced_by:
     - tests/sim/test_ams_temps.py::test_out_of_range_temperatures_are_not_faults_while_untrusted
@@ -141,7 +143,7 @@
   replaced_by:
     - tests/sim/test_ams_chain.py::test_a_silent_chip_takes_its_module_offline_in_time[all]
   why: "pico_emu: the bench's Pico LTC emulator injects it; the vHIL covers the behaviour natively on the LTC6811 chain model (#150, not planned)"
-# BAL B-01: IFS_HIL expects Auto with no 0x103; AMS main falls back to Off.
+# BAL B-01: IFS_HIL expects Auto with no 0x103; AMS dev falls back to Off.
 - path: tests/hil/ams/test_block_bal.py::test_b01_
   replaced_by:
     - tests/sim/test_ams_balancing_modes.py::test_auto_balances_in_charge
@@ -154,7 +156,7 @@
   replaced_by:
     - tests/sim/test_ams_balancing_modes.py::test_balo_suppresses_and_balx_resumes_in_charge
   why: "pico_emu: the bench's Pico LTC emulator injects it; the vHIL covers the behaviour natively on the LTC6811 chain model (#150, not planned)"
-# BAL B-04: IFS_HIL expects a stale override to revert to Auto; AMS main falls back to Off.
+# BAL B-04: IFS_HIL expects a stale override to revert to Auto; AMS dev falls back to Off.
 - path: tests/hil/ams/test_block_bal.py::test_b04_
   replaced_by:
     - tests/sim/test_ams_balancing_modes.py::test_a_silent_override_falls_back_to_off_in_charge
@@ -205,7 +207,7 @@
   replaced_by:
     - tests/sim/test_ams_chain.py::test_a_silent_module_counts_pec_errors_on_its_own_chips[module1]
   why: "pico_emu: the bench's Pico LTC emulator injects it; the vHIL covers the behaviour natively on the LTC6811 chain model (#150, not planned)"
-# K-100: IFS_HIL trips Error by over-temperature, no fault on AMS main (TempFaultsTrusted = false); the native test uses a cell under-voltage.
+# K-100: IFS_HIL trips Error by over-temperature, no fault on AMS dev (TempFaultsTrusted = false); the native test uses a cell under-voltage.
 - path: tests/hil/ams/test_block_k_encoders.py::test_k100
   replaced_by:
     - tests/sim/test_ams_fsm_car.py::test_status_and_cockpit_frames_follow_the_state
