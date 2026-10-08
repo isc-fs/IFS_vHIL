@@ -299,6 +299,11 @@ from `git archive 04613679` except as listed below.
     - **Problems** (`VhilDock.vue`, `VhilStatus.vue`) list the scenario's
       check (errors, warnings) and its last run's failed expects with the
       system's; a click shows the row.
+    - **Times between sync points** (`scenario.js` `appliedAt`,
+      `VhilScenario.vue`): a stimulus row whose time falls between two sync
+      points shows the time it runs at next to its own (`→ 5600.5`, from the
+      contract's `sync_quantum_us`), as the check's warning says
+      (docs/scenarios.md, "Times").
 
 16. **Timeline and the Tests view** (step 11 of the editor workspace plan).
     All in `src/vhil/`; no Pipeline Manager file changes.

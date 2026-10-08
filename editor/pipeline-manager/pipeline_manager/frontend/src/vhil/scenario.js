@@ -56,6 +56,19 @@ export function actionOf(list, item) {
     return list === 'watch' ? 'watch' : 'expect';
 }
 
+/**
+ * When a stimulus asked for at `tMs` takes effect: the first sync point at or
+ * after it (every `quantumUs` of virtual time from power-on; the contract's
+ * `sync_quantum_us`). The worker moves a time between two there and says so
+ * (docs/scenarios.md, "Times").
+ */
+export function appliedAt(tMs, quantumUs) {
+    const q = Number(quantumUs);
+    if (!(q > 0) || !Number.isFinite(Number(tMs))) return Number(tMs);
+    const us = Math.round(Number(tMs) * 1000);
+    return (Math.ceil(us / q) * q) / 1000;
+}
+
 /** A row's key, as the server's messages name it: "stimuli[2]". */
 export const keyOf = (list, index) => `${list}[${index}]`;
 

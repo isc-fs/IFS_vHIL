@@ -107,6 +107,10 @@ evidence, and the timeline lays them over what the run did.
                     >
                         <span role="cell" class="vhil-c-num mono">
                             {{ row.t === null ? '–' : row.t }}
+                            <span
+                                v-if="appliedOf(row) !== null" class="muted"
+                                :title="`Between sync points: runs at ${appliedOf(row)} ms`"
+                            >→ {{ appliedOf(row) }}</span>
                         </span>
                         <span role="cell" class="vhil-scen-action" :class="`--${row.action}`">
                             {{ row.action }}
@@ -150,8 +154,8 @@ evidence, and the timeline lays them over what the run did.
 <script>
 import { computed, defineComponent, ref } from 'vue';
 import {
-    ACTIONS, addRow, messagesByRow, periodicNames, removeRow, resultsByRow, rowsOf, targetOf,
-    valueOf,
+    ACTIONS, addRow, appliedAt, messagesByRow, periodicNames, removeRow, resultsByRow, rowsOf,
+    targetOf, valueOf,
 } from './scenario.js';
 import { edited, scen } from './scenarios.js';
 import { ws, createScenario, pickScenario } from './workspace.js';
@@ -248,6 +252,14 @@ export default defineComponent({
                 ? '' : `@${(r.t_us / 1000).toFixed(1)} ms`;
             return `${at}${r.value !== null && r.value !== undefined ? ` = ${r.value}` : ''}`;
         };
+        // A stimulus between two sync points runs at the next (the worker
+        // moves it; docs/scenarios.md, "Times"): that time, else null.
+        const appliedOf = (row) => {
+            const q = scen.contract?.sync_quantum_us;
+            if (row.list !== 'stimuli' || row.t === null || !q) return null;
+            const t = appliedAt(row.t, q);
+            return t === row.t ? null : t;
+        };
         const rowTitle = (row) => {
             const msgs = [...(byRow.value.errors.get(row.key) || []),
                 ...(byRow.value.warnings.get(row.key) || [])];
@@ -284,6 +296,7 @@ export default defineComponent({
             resultClass,
             resultText,
             evidence,
+            appliedOf,
             rowTitle,
         };
     },

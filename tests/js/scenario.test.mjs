@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
-  addRow, emptyScenario, expectText, findMessage, looseSignal, messagesByRow, moveItem, parseSignal,
+  addRow, appliedAt, emptyScenario, expectText, findMessage, looseSignal, messagesByRow, moveItem, parseSignal,
   periodicNames, removeRow, resultsByRow, rowsOf, signalText, snap, targetOf, valueOf,
 } from "../../editor/pipeline-manager/pipeline_manager/frontend/src/vhil/scenario.js";
 
@@ -100,4 +100,13 @@ test("a watch op starts mid-run: a timed row of the stimuli", () => {
                    ["ams.g_x", "pin ams.PB7", "pin ams.PB5", "ams.g_state_telemetry"]);
   assert.deepEqual(rows.map((r) => valueOf(r)),
                    ["2 B every 10 ms", "edges", "edges", "every 20 ms"]);
+});
+
+test("a stimulus between sync points runs at the next one", () => {
+  assert.equal(appliedAt(5600.2, 500), 5600.5);
+  assert.equal(appliedAt(5600.5, 500), 5600.5);
+  assert.equal(appliedAt(2600.75, 500), 2601);
+  assert.equal(appliedAt(0.05, 100), 0.1);
+  assert.equal(appliedAt(0.0001, 100), 0);          // whole us, as the worker rounds
+  assert.equal(appliedAt(12.3, undefined), 12.3);   // no contract yet: as written
 });
