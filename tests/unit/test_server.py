@@ -23,7 +23,7 @@ def client(tmp_path):
 
 def test_health(client):
     h = client.get("/api/health").json()
-    assert h["status"] == "ok" and h["auth"] == "dev"
+    assert h["status"] == "ok" and h["auth"] == "dev" and h["contract"] == 1
 
 
 def test_catalog_lists_boards_and_models(client):

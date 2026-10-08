@@ -1376,7 +1376,8 @@ def test_the_worker_writes_the_runs_header_first(settings, store):
     path = settings.results / str(run_id) / "trace.jsonl"
     token = store.get(run_id)["token"]
     header = json.loads(path.read_text().splitlines()[0])
-    assert header == {"kind": "run", "t_us": 0, "run": run_id, "token": token, "attempt": 1}
+    assert header == {"kind": "run", "t_us": 0, "run": run_id, "token": token, "attempt": 1,
+                      "contract": 1}
     assert read_trace(path, token=token) == read_trace(path) != []
     assert read_trace(path, token="f" * 32) == []
 
