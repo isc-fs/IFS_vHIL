@@ -799,6 +799,16 @@
                   "$ref": "#/$defs/endpoint"
                 },
                 "description": "Model analog output -> the board's analog input it drives."
+              },
+              "pins": {
+                "type": "object",
+                "propertyNames": {
+                  "$ref": "#/$defs/name"
+                },
+                "additionalProperties": {
+                  "$ref": "#/$defs/endpoint"
+                },
+                "description": "Model GPIO pin (its interface's gpio) -> the board GPIO it is wired to."
               }
             }
           }
@@ -929,6 +939,19 @@
               },
               "minItems": 1,
               "description": "Named analog outputs; a device maps each onto a board's analog input (outputs)."
+            },
+            "gpio": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/name"
+              },
+              "minItems": 1,
+              "uniqueItems": true,
+              "description": "Named GPIO pins; a device wires each to a board GPIO (pins). Which the MCU drives and which the model drives is the renode section's gpio_in / gpio_out."
+            },
+            "radio": {
+              "type": "boolean",
+              "description": "Transmits over the air: every payload sent is a `radio` trace record (the model's Payloads)."
             }
           }
         },
@@ -1010,6 +1033,28 @@
               "description": "Model parameter -> constructor argument name.",
               "additionalProperties": {
                 "type": "string"
+              }
+            },
+            "gpio_in": {
+              "type": "object",
+              "description": "For a gpio model: pin -> the model's GPIO input number, for the pins the MCU drives.",
+              "propertyNames": {
+                "$ref": "#/$defs/name"
+              },
+              "additionalProperties": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "gpio_out": {
+              "type": "object",
+              "description": "For a gpio model: pin -> the model's GPIO property, for the pins the model drives.",
+              "propertyNames": {
+                "$ref": "#/$defs/name"
+              },
+              "additionalProperties": {
+                "type": "string",
+                "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
               }
             },
             "set_also": {

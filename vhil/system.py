@@ -298,6 +298,9 @@ class System:
             for out, endpoint in dev.get("outputs", {}).items():
                 need(NAME, out, f"device '{name}': output")
                 need(ENDPOINT, endpoint, f"device '{name}': output {out}")
+            for pin, endpoint in dev.get("pins", {}).items():
+                need(NAME, pin, f"device '{name}': pin")
+                need(ENDPOINT, endpoint, f"device '{name}': pin {pin}")
             for key in dev.get("params", {}):
                 need(NAME, key, f"device '{name}': param")
         for name, spec in self.doc.get("port", {}).get("signals", {}).items():
@@ -580,6 +583,26 @@ class System:
                     raise SystemError(f"device '{name}': output {out} to '{endpoint}', "
                                       f"which is {kind}, not an analog input")
                 boards.add(board.name)
+            # GPIO pins: each of the model's wired to a board GPIO, and the
+            # model says which it drives (gpio_out) and which it reads (gpio_in).
+            want_pins = list(interface.get("gpio", []))
+            if want_pins:
+                r = doc.get("renode", {})
+                ins, outs = set(r.get("gpio_in", {})), set(r.get("gpio_out", {}))
+                if ins & outs or ins | outs != set(want_pins):
+                    raise SystemError(f"model '{doc['id']}': renode gpio_in and gpio_out must "
+                                      f"split its gpio pins {want_pins} between them")
+            if set(dev.get("pins", {})) != set(want_pins):
+                raise SystemError(f"device '{name}' ({dev['model']}) wires pins "
+                                  f"{sorted(want_pins)}, got {sorted(dev.get('pins', {}))}")
+            for pin, endpoint in dev.get("pins", {}).items():
+                board, kind, _ = self.resolve(endpoint)
+                if kind != "gpio":
+                    raise SystemError(f"device '{name}': pin {pin} to '{endpoint}', "
+                                      f"which is {kind}, not a GPIO")
+                boards.add(board.name)
+            if len(set(dev.get("pins", {}).values())) != len(dev.get("pins", {})):
+                raise SystemError(f"device '{name}': two of its pins on one board GPIO")
             if interface.get("attach"):
                 parent = self.devices.get(dev.get("attach"))
                 if parent is None:
@@ -652,6 +675,7 @@ class System:
         for dev in self.devices.values():
             used += [dev[p] for p in ("spi", "cs", "sdmmc", "i2c") if p in dev]
             used += list(dev.get("outputs", {}).values())
+            used += list(dev.get("pins", {}).values())
         for spec in self.doc.get("port", {}).get("signals", {}).values():
             used += [v for k, v in spec.items() if k not in ("can_rx", "can_tx")]
         used += [r["to"] for r in self.bench.get("dac_routes", [])]
@@ -720,7 +744,7 @@ class System:
         for port in ("spi", "cs", "sdmmc", "i2c"):
             if port in dev:
                 return self.resolve(dev[port])[0].name
-        for endpoint in dev.get("outputs", {}).values():
+        for endpoint in [*dev.get("outputs", {}).values(), *dev.get("pins", {}).values()]:
             return self.resolve(endpoint)[0].name
         return self.board_of_device(dev["attach"], _seen + (name,))
 
@@ -736,6 +760,13 @@ class System:
         for n in mine:
             visit(n)
         return ordered
+
+    def radios(self) -> list[tuple[str, str]]:
+        """(device, board) of each radio (a model with `interface.radio`),
+        whose transmitted payloads a run records. On a board's machine the
+        device is `sysbus.<device>` (placed on the system bus, _renode_device)."""
+        return [(n, self.board_of_device(n)) for n, d in self.devices.items()
+                if d["model_doc"].get("interface", {}).get("radio")]
 
     @staticmethod
     def _params(dev: dict) -> dict:
@@ -798,6 +829,19 @@ class System:
         if "cs" in dev:
             gpio = self.resolve(dev["cs"])[2]
             lines += ["", f"{local(gpio['port'])}:", f"    {int(gpio['pin'])} -> {name}@0"]
+        if dev.get("pins"):
+            # The pins the model drives, from its GPIO properties; then the
+            # ones the MCU drives, from each port's pin to the model's input.
+            for pin, prop in renode.get("gpio_out", {}).items():
+                gpio = self.resolve(dev["pins"][pin])[2]
+                lines.append(f"    {rn.ident(prop)} -> {local(gpio['port'])}@{int(gpio['pin'])}")
+            by_port: dict[str, list[str]] = {}
+            for pin, number in renode.get("gpio_in", {}).items():
+                gpio = self.resolve(dev["pins"][pin])[2]
+                by_port.setdefault(local(gpio["port"]), []).append(
+                    f"    {int(gpio['pin'])} -> {name}@{int(number)}")
+            for port, conns in by_port.items():
+                lines += ["", f"{port}:", *conns]
         return "\n".join(lines)
 
     # -- outputs ------------------------------------------------------------

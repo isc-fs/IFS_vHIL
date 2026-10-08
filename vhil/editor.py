@@ -20,7 +20,7 @@ node types:
             relabels a node when its role changes (properties_on_change). A
             board without roles has a firmware select
   CAN bus   a node with a BUS interface: connect any number of CAN connectors
-  model     a node per chip model: its host-side ports (spi, cs, sdmmc, i2c), the
+  model     a node per chip model: its host-side ports (spi, cs, sdmmc, i2c, gpio pins), the
             port it provides (an LTC6820 provides `isospi`) and the port it
             attaches to (an LTC6811 attaches to `isospi`), with count/params
 
@@ -137,7 +137,8 @@ _RIGHT = ("can", "gpio")
 # Model host-side ports: system device field -> interface type.
 _MODEL_HOST_PORTS = (("spi", "spi"), ("cs", "gpio"), ("sdmmc", "sdmmc"), ("i2c", "i2c"))
 # Field order in a written system file.
-_DEVICE_FIELDS = ("model", "spi", "cs", "sdmmc", "i2c", "outputs", "attach", "count", "params")
+_DEVICE_FIELDS = ("model", "spi", "cs", "sdmmc", "i2c", "pins", "outputs", "attach", "count",
+                  "params")
 _SYSTEM_FIELDS = ("kind", "id", "description", "time", "boards", "buses", "devices", "port",
                   "bench")
 
@@ -387,6 +388,9 @@ def specification(catalog: Path = CATALOG) -> dict:
         interfaces = [{"name": field, "type": itype, "direction": "inout", "side": "left",
                        "maxConnectionsCount": 1}
                       for field, itype in _MODEL_HOST_PORTS if iface.get(field)]
+        # GPIO pins, each wired to a board GPIO (a device's `pins`).
+        interfaces += [{"name": pin, "type": "gpio", "direction": "inout", "side": "left",
+                        "maxConnectionsCount": 1} for pin in iface.get("gpio", [])]
         if iface.get("attach"):
             interfaces.append({"name": iface["attach"], "type": iface["attach"],
                                "direction": "input", "side": "left", "maxConnectionsCount": 1})
@@ -500,6 +504,9 @@ def to_dataflow(doc: dict, spec: dict | None = None, source: str | None = None) 
             if field in dev:
                 board, pin = dev[field].split(".", 1)
                 connect(f"i:{board}:{pin}", f"i:{name}:{field}")
+        for field, endpoint in dev.get("pins", {}).items():
+            board, pin = endpoint.split(".", 1)
+            connect(f"i:{board}:{pin}", f"i:{name}:{field}")
         for out, endpoint in dev.get("outputs", {}).items():
             board, pin = endpoint.split(".", 1)
             connect(f"i:{name}:{out}", f"i:{board}:{pin}")
@@ -603,6 +610,8 @@ def from_dataflow(dataflow: dict, spec: dict | None = None) -> dict:
             model = models[devices[dev]["model"]]
             if field in model.get("interface", {}).get("analog_out", []):
                 devices[dev].setdefault("outputs", {})[field] = f"{board}.{pin}"
+            elif field in model.get("interface", {}).get("gpio", []):
+                devices[dev].setdefault("pins", {})[field] = f"{board}.{pin}"
             else:
                 devices[dev][field] = f"{board}.{pin}"
         elif ka == kb == "model":
