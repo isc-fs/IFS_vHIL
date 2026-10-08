@@ -317,6 +317,37 @@ def test_a_calibration_that_fails_validation_is_never_written(ecu):
     assert _cmd(ecu, READ_STORED).values == DEFAULTS
 
 
+APPS1_SPAN_TOO_SMALL, APPS2_SPAN_TOO_SMALL = 1 << 0, 1 << 1                     # pedal_cal.hpp:47-55
+APPS_NOT_MONOTONIC, BRAKE_SPAN_TOO_SMALL, BRAKE_ORDER = 1 << 3, 1 << 4, 1 << 5
+
+
+@pytest.mark.parametrize("rest, full, mid, flags", [
+    # APPS swept backwards (full below rest): apps_pct would divide the wrong way.
+    # span_of() of an inverted pair is 0 (pedal_cal.cpp:15-17), so both spans
+    # are also too small.
+    ((3000, 2600, 600), (2000, 1800, 3200), (2500, 2200, 600),
+     APPS_NOT_MONOTONIC | APPS1_SPAN_TOO_SMALL | APPS2_SPAN_TOO_SMALL),
+    # A brake that barely moves (span 200 < CalMinBrakeSpan 300).
+    ((2000, 1800, 600), (3000, 2600, 800), (2500, 2200, 600), BRAKE_SPAN_TOO_SMALL),
+    # A brake sensor captured inverted (pressed below rest): the re-derivation
+    # is skipped (cal_session.cpp:121-126) and rest sits above arm and pressed
+    # below dv_hard (its span is 0, too small). pedal_cal.cpp:64-74 calls the
+    # ordering load-bearing: out of order, the driverless R2D gate could fire
+    # before the brake is applied.
+    ((2000, 1800, 3200), (3000, 2600, 600), (2500, 2200, 3200), BRAKE_ORDER | BRAKE_SPAN_TOO_SMALL),
+], ids=["apps-not-monotonic", "brake-span-too-small", "brake-order"])
+def test_an_implausible_sweep_is_refused_and_never_written(ecu, rest, full, mid, flags):
+    """validate_cal() (pedal_cal.cpp:21-77) refuses the commit: Error,
+    ValidationFailed, the flag that names the fault; flash untouched and the
+    live calibration unchanged."""
+    _sweep(ecu, rest=rest, full=full, mid=mid)
+    staged = _cmd(ecu, READ_STAGED).values
+    r = _commit(ecu, staged)
+    assert (r.state, r.result, r.flags) == (ERROR, VALIDATION_FAILED, flags)
+    assert not _cal_entries(ecu)
+    assert _cmd(ecu, READ_STORED).values == DEFAULTS
+
+
 def test_precharge_keeps_the_session_shut(ecu):
     """vehicle_safe: TS up (fresh 0x020 ok_precharge) refuses ENTER; TS down opens it."""
     acu = ecu.can("can_acu")
