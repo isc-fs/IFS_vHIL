@@ -68,10 +68,11 @@ Same model as IFS_HIL.
 - **One logical change per commit.**
 - **PR body:** a 1–3 bullet **Summary** and a **Test plan** checklist.
   Reference the issue it advances (`Part of #1`).
-- **Issues and auto-close:** PRs target `dev`, but GitHub only applies
-  `Closes #N` when a PR merges into the default branch (`main`). Close an
-  issue by hand when its exit criterion is met, with a comment linking
-  the PRs that met it.
+- **Issues and auto-close:** `dev` is the repository's default branch
+  (since #197, so scheduled workflows run from it), so `Closes #N` in a PR
+  into `dev` closes the issue on merge. Use it only when the PR alone meets
+  the issue's exit criterion; otherwise close the issue by hand with a
+  comment linking the PRs that met it.
 
 ---
 
