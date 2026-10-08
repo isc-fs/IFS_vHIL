@@ -234,6 +234,23 @@ def test_rows_after_the_end_warn():
     assert warnings == ["stimuli[2]: at 5500 ms, after the run's end (5200 ms)"]
 
 
+def test_a_stimulus_between_sync_points_warns_where_it_runs():
+    """docs/scenarios.md, "Times": the AMS system syncs every 500 us, so
+    5600.2 ms runs at 5600.5 ms (the worker moves it); an expect's window
+    is the trace's, not a stop of the run, and is left alone."""
+    run, _, _ = parsed({**SCENARIO, "stimuli": [
+        {"kind": "gpio", "at_ms": 5600.2, "board": "ams", "pin": "PF9", "level": True},
+        {"kind": "can_periodic", "name": "v", "at_ms": 2500, "until_ms": 2600.75,
+         "bus": "can_acu", "id": 0x100, "data": "00", "period_ms": 10},
+        {"kind": "analog", "at_ms": 3000.5, "board": "ams", "pin": "PF7", "volts": 1.0}],
+        "expect": [{"check": "never", "at_ms": 0.1, "signal": "symbol:ams.g_x", "value": 5}]})
+    _, warnings = sc.check_rows(run, System(REPO / "systems" / "ams.yaml"), {}, {}, Limits())
+    assert warnings == [
+        "stimuli[0].at_ms: 5600.2 ms is between sync points (every 0.5 ms): it runs at 5600.5 ms",
+        "stimuli[1].until_ms: 2600.75 ms is between sync points (every 0.5 ms): it runs at "
+        "2601 ms"]
+
+
 def test_every_committed_scenario_validates():
     """What CI's unit job checks of systems/*.scenarios/: schema and system
     (the contract is the scenario suite's, tests/scenarios/, with firmware)."""

@@ -276,6 +276,24 @@ def check_contract(sc: RunScenario, contract: dict, elfs: dict[str, Path]) -> tu
     return errors, warnings
 
 
+def off_grid(sc: RunScenario, system: System) -> list[str]:
+    """A stimulus time between two sync points runs at the next one (the
+    worker moves it: docs/scenarios.md, "Times"); one warning each."""
+    q = system.sync_quantum_us()
+    out = []
+    for i, row in enumerate(sc.stimuli):
+        for key in ("at_ms", "until_ms"):
+            v = getattr(row, key, None)
+            if v is None:
+                continue
+            us = round(v * 1000)
+            g = -(-us // q) * q
+            if g != us:
+                out.append(f"stimuli[{i}].{key}: {v:g} ms is between sync points (every "
+                           f"{q / 1000:g} ms): it runs at {g / 1000:g} ms")
+    return out
+
+
 def check_rows(sc: RunScenario, system: System, contract: dict, elfs: dict[str, Path],
                limits: Limits) -> tuple[list[str], list[str]]:
     errors = check_scenario(sc, system)
@@ -289,6 +307,7 @@ def check_rows(sc: RunScenario, system: System, contract: dict, elfs: dict[str, 
     warnings = [f"{key}[{i}]: at {row.at_ms:g} ms, after the run's end ({sc.virtual_ms} ms)"
                 for key in ("stimuli", "expect") for i, row in enumerate(getattr(sc, key))
                 if row.at_ms > sc.virtual_ms]
+    warnings += off_grid(sc, system)
     if not errors:
         more, warn = check_contract(sc, contract, elfs)
         errors += more

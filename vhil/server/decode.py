@@ -108,6 +108,9 @@ def system_contract(system: System, elfs: dict[str, Path]) -> dict:
     out["labels"] = stateview.labels(system, elfs, out)
     # What a live session's pin switches and analog inputs drive.
     out["inputs"] = stateview.inputs(system)
+    # Where a stimulus takes effect: the next sync point (docs/scenarios.md,
+    # "Times"); the scenario editor shows a time between two moved there.
+    out["sync_quantum_us"] = system.sync_quantum_us()
     return out
 
 
