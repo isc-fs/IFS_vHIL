@@ -1,0 +1,20 @@
+kind: scenario
+system: ecu
+description: "AmsError: with the inverter's DC-bus report and the AMS's ok_precharge the ECU waits in WaitStartBrake; an AMS status frame saying Error (0x4A0 state 5) puts it in AmsError within two control ticks and holds it there while the Error is reported; the AMS healthy again re-arms it within two ticks, from WaitInvVdcConfig back to WaitStartBrake. The Error stream starts 10 ms after the healthy one stops, so no two 0x4A0 go out at the same instant. IFS08-CE-ECU control.cpp:149-150, 235-237, control_task.cpp:117-120; tests/sim/test_ecu_ams_gate.py (with the status LEDs, which are on-board pins a scenario cannot name)."
+virtual_ms: 6500
+stimuli:
+  - {kind: can_periodic, name: inv-vdc, at_ms: 2500, bus: can_inv, id: 0x466, data: "00005e010000", period_ms: 10}
+  - {kind: can_periodic, name: ams-ok, at_ms: 2500, bus: can_acu, id: 0x20, data: "01", period_ms: 10}
+  - {kind: can_periodic, name: ams-run, at_ms: 2500, bus: can_acu, id: 0x4a0, data: "03011f000e740e74", period_ms: 50}
+  - {kind: stop_periodic, at_ms: 4000, periodic: ams-run}
+  - {kind: can_periodic, name: ams-error, at_ms: 4010, bus: can_acu, id: 0x4a0, data: "05001f000e740e74", period_ms: 50}
+  - {kind: stop_periodic, at_ms: 5000, periodic: ams-error}
+  - {kind: can_periodic, name: ams-healthy, at_ms: 5010, bus: can_acu, id: 0x4a0, data: "03011f000e740e74", period_ms: 50}
+expect:
+  - {check: eventually, name: wait-start-brake, at_ms: 2500, until_ms: 3900, signal: "symbol:ecu.g_last_ctrl_state", value: 2}
+  - {check: never, name: no-ams-error-before, at_ms: 0, until_ms: 3990, signal: "symbol:ecu.g_last_ctrl_state", value: 6}
+  - {check: eventually, name: ams-error, at_ms: 4010, until_ms: 4040, signal: "symbol:ecu.g_last_ctrl_state", value: 6}
+  - {check: always, name: held-in-ams-error, at_ms: 4050, until_ms: 5000, signal: "symbol:ecu.g_last_ctrl_state", value: 6}
+  - {check: eventually, name: re-arms, at_ms: 5010, until_ms: 5040, signal: "symbol:ecu.g_last_ctrl_state", value: 0}
+  - {check: eventually, name: back-to-wait-start-brake, at_ms: 5000, until_ms: 6400, signal: "symbol:ecu.g_last_ctrl_state", value: 2}
+  - {check: never, name: no-ams-error-after, at_ms: 5060, until_ms: 6500, signal: "symbol:ecu.g_last_ctrl_state", value: 6}
