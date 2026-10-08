@@ -226,16 +226,12 @@ export default defineComponent({
         }
         // Whole rebuilds (uPlot is fast); while live, once a second at most;
         // none while the tab is hidden (it draws when shown).
-        let stale = true;
         function schedule() {
-            if (!visible()) {
-                stale = true;
-                return;
-            }
-            stale = false;
-            if (pending) return;
+            if (!visible() || pending) return;
             const wait = replay.live ? Math.max(0, LIVE_REDRAW_MS - (Date.now() - drawn)) : 0;
-            pending = setTimeout(() => requestAnimationFrame(draw), wait);
+            // A timer, not an animation frame: a page in the background
+            // holds its frames, and the plots would wait for it.
+            pending = setTimeout(draw, wait);
         }
 
         watch(() => ws.id, (id) => { chosen.value = id ? stored(id) : null; }, { immediate: true });
@@ -243,9 +239,10 @@ export default defineComponent({
             replay.id, ws.theme], schedule);
         watch(() => replay.tick, schedule);
         watch(() => replay.t, (t) => group?.setMarker(t));
-        // Shown again (another dock tab, a collapsed dock): draw what changed.
+        // Shown again (another dock tab, a collapsed dock): drawn afresh,
+        // at the size it has now.
         watch(visible, (shown) => {
-            if (shown && stale) schedule();
+            if (shown) schedule();
         });
         const media = window.matchMedia('(prefers-color-scheme: dark)');
         onMounted(() => {

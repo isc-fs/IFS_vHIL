@@ -3,8 +3,9 @@
    uPlot's own sheet comes from the shell (plot.js), its legend set here. */
 
 .vhil-signals { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+/* Pipeline Manager lays every ul out as a column (styles/_global.scss). */
 .vhil-signal-chips {
-  display: flex; flex-wrap: wrap; gap: var(--sp-1); margin: 0; padding: var(--sp-1) var(--sp-3);
+  display: flex; flex-direction: row; flex-wrap: wrap; gap: var(--sp-1); margin: 0; padding: var(--sp-1) var(--sp-3);
   list-style: none; flex: none;
 }
 .vhil-signal-chip {
@@ -51,6 +52,6 @@
 .vhil-outcome.--passed { color: var(--status-ok); }
 .vhil-outcome.--failed, .vhil-outcome.--error { color: var(--status-failed); }
 .vhil-outcome.--skipped { color: var(--status-cancelled); }
-.vhil-files { margin: 0; padding-left: var(--sp-4); }
+.vhil-files { display: block; margin: 0; padding-left: var(--sp-4); list-style: disc; }
 .vhil-files li { margin: 2px 0; }
 .vhil-artifacts details > summary { cursor: pointer; }

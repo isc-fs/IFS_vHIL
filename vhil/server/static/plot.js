@@ -73,6 +73,10 @@ export class PlotGroup {
     const axis = { stroke: muted, grid: { stroke: line, width: 1 }, ticks: { stroke: line } };
     // Labelled levels (sorted): the y axis holds them all, ticked at each.
     const stepLevels = format && levels?.length ? levels : null;
+    // The y axis is as wide as its longest label (an enum's name), within reason.
+    const labelWidth = stepLevels
+      ? Math.min(200, 20 + 7 * Math.max(...stepLevels.map((v) => String(format(v)).length)))
+      : format ? 96 : 60;
     const marker = {
       hooks: {
         draw: [(u) => {
@@ -109,7 +113,7 @@ export class PlotGroup {
                 ...(stepLevels ? { y: { range: [levels[0] - 0.5, levels[levels.length - 1] + 0.5] } } : {}) },
       axes: [
         { ...axis, label: "virtual time (s)", labelSize: 18, size: 36, font: "11px system-ui", labelFont: "11px system-ui", stroke: muted },
-        { ...axis, size: format ? 96 : 60, font: "11px system-ui", stroke: muted,
+        { ...axis, size: labelWidth, font: "11px system-ui", stroke: muted,
           ...(format ? { values: (u, splits) => splits.map((v) => format(v)) } : {}),
           ...(stepLevels ? { splits: () => levels } : {}) },
       ],
