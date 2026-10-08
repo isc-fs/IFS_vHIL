@@ -45,11 +45,20 @@ pins:
   co-simulation port and the bench DAC1 routes;
 - `ecu.PB5` for START and `ecu.PB4` for RTDS, through the port;
 - `ecu.PB6`, the DC-link discharge output, through the port (`discharge` in
-  `ecu.yaml`; `tests/sim/test_ecu_discharge.py`).
+  `ecu.yaml`; `tests/sim/test_ecu_discharge.py`);
+- `ecu.PB0` / `PA5` / `PA7` / `PA6` / `PC5` / `PC4` for the nRF24L01+ radio's
+  CSN, SCK, MOSI, MISO, CE and IRQ: **the radio is modelled** (`radio` in
+  `ecu.yaml` and `ecu-ams.yaml`, `catalog/models/nrf24l01p.yaml`,
+  `models/renode/Nrf24l01p.cs`). It answers the bit-banged SPI and sends what
+  the firmware loads, setting TX_DS and pulling IRQ low 130 us + time on air
+  after a CE pulse (442 us for the ECU's 32-byte payloads), so
+  `NRF24_WaitIrqAssert` returns on TX_DS, not its 10 ms timeout
+  (IFS08-CE-ECU#258). Every payload sent is a `radio` trace record
+  (`Sim.radio("radio").payloads()`; `tests/sim/test_ecu_radio.py`). No
+  receiver, ACK or RF channel is modelled.
 
-Every other routed pin is emulated too, as the board models it: PD5 and the
-nRF24's PB0/PC5/PC4 are plain GPIOs (no 1-Wire sensor or radio is modelled),
-PB7/PB8 GPIOs, PF10/PC0/PC2_C ADC3 INP6/INP10/INP0 (what `ECU.ioc` configures
+Every other routed pin is emulated too, as the board models it: PD5 is a
+plain GPIO (no 1-Wire sensor is modelled), PB7/PB8 GPIOs, PF10/PC0/PC2_C ADC3 INP6/INP10/INP0 (what `ECU.ioc` configures
 for A4/A5), and `ecu.USART10` the platform's USART10 (no GPS is modelled).
 A test drives or watches one with `Sim.io("ecu").gpio("PB6")` or
 `set_voltage("PF10", v)`.
