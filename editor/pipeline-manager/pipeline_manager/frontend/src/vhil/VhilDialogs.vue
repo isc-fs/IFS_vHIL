@@ -1,6 +1,7 @@
 <!--
-vHIL: Commit…, Open PR and the keyboard map, as modal dialogs
-(CHANGELOG-VHIL.md): what the shell's Save and PR forms did. Native
+vHIL: Commit…, Open PR, Save session as scenario, Run tests (a pytest run,
+step 18: what the shell's Runs form started) and the keyboard map, as modal
+dialogs (CHANGELOG-VHIL.md): what the shell's Save and PR forms did. Native
 <dialog>: focus moves in and back, and Escape closes it.
 -->
 
@@ -117,6 +118,43 @@ vHIL: Commit…, Open PR and the keyboard map, as modal dialogs
         </form>
     </dialog>
 
+    <dialog ref="pytestDlg" class="vhil-dialog" aria-labelledby="vhil-pytest-title" @close="closed">
+        <form class="vhil-form" @submit.prevent="doPytest">
+            <h2 id="vhil-pytest-title" class="vhil-panel-title">Run tests on {{ ws.id }}</h2>
+            <p class="muted">
+                A pytest run of the vHIL's native tests (<span class="mono">tests/sim</span>, as
+                checked out on the server) against {{ ws.id }}'s firmware. Its log streams into
+                the Log; its JUnit results and output open in the Artifacts tab when it ends.
+            </p>
+            <label>Test
+                <input
+                    v-model="ws.pytest.select" class="vhil-input mono" required
+                    list="vhil-pytest-tests" autocomplete="off" spellcheck="false"
+                    placeholder="tests/sim/test_x.py[::test_y]"
+                />
+            </label>
+            <datalist id="vhil-pytest-tests">
+                <option v-for="t in ws.pytest.tests" :key="t" :value="t" />
+            </datalist>
+            <label>Timeout (s)
+                <input
+                    v-model.number="ws.pytest.timeoutS" class="vhil-input mono" type="number"
+                    min="10" max="21600" required
+                />
+            </label>
+            <p v-if="ws.pytest.error" class="vhil-note vhil-warn">
+                ▲ The test list: {{ ws.pytest.error }} (free text works too).
+            </p>
+            <div class="vhil-actions">
+                <span class="vhil-spacer" />
+                <button type="button" class="vhil-btn" @click="close">Cancel</button>
+                <button type="submit" class="vhil-btn --primary" :disabled="ws.busy">
+                    ▶ Run tests
+                </button>
+            </div>
+        </form>
+    </dialog>
+
     <dialog ref="keysDlg" class="vhil-dialog" aria-labelledby="vhil-keys-title" @close="closed">
         <h2 id="vhil-keys-title" class="vhil-panel-title">Keyboard shortcuts</h2>
         <table class="vhil-keys">
@@ -139,7 +177,7 @@ import {
     computed, defineComponent, ref, watch,
 } from 'vue';
 import {
-    ws, check, commit, openPr, problemCount, saveSession,
+    ws, check, commit, loadTests, openPr, problemCount, runPytest, saveSession,
 } from './workspace.js';
 import { replay } from './replay.js';
 import { SHORTCUTS } from './shortcuts.js';
@@ -151,10 +189,15 @@ export default defineComponent({
         const prDlg = ref(null);
         const keysDlg = ref(null);
         const saveDlg = ref(null);
+        const pytestDlg = ref(null);
         const prUrl = ref('');
         const saveName = ref('');
         const dialogs = {
-            commit: commitDlg, pr: prDlg, shortcuts: keysDlg, 'save-session': saveDlg,
+            commit: commitDlg,
+            pr: prDlg,
+            shortcuts: keysDlg,
+            'save-session': saveDlg,
+            pytest: pytestDlg,
         };
 
         watch(() => ws.dialog, (name) => {
@@ -164,6 +207,7 @@ export default defineComponent({
             });
             if (name === 'pr') prUrl.value = '';
             if (name === 'save-session') saveName.value = `live-run-${replay.id}`;
+            if (name === 'pytest') loadTests();
         });
         const close = () => { ws.dialog = null; };
         const closed = () => {
@@ -176,6 +220,9 @@ export default defineComponent({
         };
         const doSave = async () => {
             if (await saveSession(saveName.value)) close();
+        };
+        const doPytest = async () => {
+            if (await runPytest()) close();
         };
         const doPr = async () => {
             const out = await openPr();
@@ -191,6 +238,8 @@ export default defineComponent({
             saveDlg,
             saveName,
             doSave,
+            pytestDlg,
+            doPytest,
             prUrl,
             close,
             closed,

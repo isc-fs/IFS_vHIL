@@ -162,6 +162,11 @@ select.vhil-input option { padding: 2px var(--sp-2); }
 /* REPLAY: the run's clock, a scrubber over its virtual time (step 9). */
 .vhil-scrub { display: flex; align-items: center; gap: var(--sp-2); flex: 0 1 30rem; min-width: 14rem; font-size: var(--fs-dense); }
 .vhil-scrub-run { flex: none; color: var(--status-replay); }
+/* A button that reads as a link (the run's name opens its Artifacts tab). */
+.vhil-link {
+  padding: 0; border: 0; background: none; font: inherit; cursor: pointer;
+  text-decoration: underline dotted; text-underline-offset: 2px;
+}
 .vhil-scrub-range { flex: 1; min-width: 6rem; accent-color: var(--status-replay); }
 .vhil-scrub-clock { flex: none; min-width: 7.5em; text-align: right; color: var(--fg); }
 .vhil-scrub-end { flex: none; }

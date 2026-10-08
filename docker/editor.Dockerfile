@@ -51,15 +51,18 @@ RUN cd /opt/pm/pipeline_manager/frontend && npm ci --no-audit --no-fund \
 # frontend is built by ./build below, not by pip.
 COPY editor/pipeline-manager/ /opt/pm/
 # The shell's design tokens, self-hosted fonts, what a run sends
-# (editor-run.js, the workspace's Run), and its virtual-table window and
-# frame decoder (vtable.js, decode.js: the Bus tab's), from their one source
+# (editor-run.js, the workspace's Run), its virtual-table window and frame
+# decoder (vtable.js, decode.js: the Bus tab's) and its plots (plot.js over
+# the vendored uPlot: the Signals tab's), from their one source
 # (vhil/server/static/, which the shell serves too), into the frontend's
 # src/vhil/shell/ (not in git; the editor CI job compares the image's copies
 # with the checkout); the fonts checked against the hashes they were pinned
 # with.
 COPY vhil/server/static/tokens.css vhil/server/static/editor-run.js \
      vhil/server/static/vtable.js vhil/server/static/decode.js \
+     vhil/server/static/plot.js \
      /opt/pm/pipeline_manager/frontend/src/vhil/shell/
+COPY vhil/server/static/vendor/uplot/ /opt/pm/pipeline_manager/frontend/src/vhil/shell/vendor/uplot/
 COPY vhil/server/static/fonts/ /opt/pm/pipeline_manager/frontend/src/vhil/shell/fonts/
 RUN cd /opt/pm/pipeline_manager/frontend/src/vhil/shell/fonts && sha256sum -c --quiet SHA256SUMS
 RUN python -m venv /opt/pm-venv \

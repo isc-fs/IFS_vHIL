@@ -56,7 +56,7 @@ scenario" records it.
             <span class="vhil-live-dot" aria-hidden="true" />
             <a
                 class="vhil-scrub-run mono" :href="runPage(replay.id)"
-                target="_blank" rel="noopener" :title="`Run ${replay.id}'s page`"
+                target="_blank" rel="noopener" :title="`Run ${replay.id} in a new tab (it watches)`"
             >run {{ replay.id }}</a>
             <output class="vhil-live-clock mono num" :title="clockTitle">{{ clock }}</output>
             <span
@@ -93,11 +93,11 @@ scenario" records it.
             v-else-if="ws.mode === 'REPLAY'" class="vhil-scrub" role="group"
             :aria-label="`Run ${replay.id} clock`"
         >
-            <a
-                class="vhil-scrub-run mono" :href="runPage(replay.id)"
-                target="_blank" rel="noopener"
-                :title="`Run ${replay.id}'s page: its signals, log and artifacts`"
-            >run {{ replay.id }}</a>
+            <button
+                type="button" class="vhil-scrub-run mono vhil-link"
+                :title="`Run ${replay.id}: its record, tests and files (the Artifacts tab)`"
+                @click="showArtifacts"
+            >run {{ replay.id }}</button>
             <input
                 v-model.number="replay.t"
                 type="range" min="0" :max="replay.end" :step="step"
@@ -154,6 +154,11 @@ scenario" records it.
                 :title="LIVE_TITLE"
                 @click="startLive"
             ><span class="vhil-live-dot --idle" aria-hidden="true" /> Live</button>
+            <button
+                type="button" class="vhil-btn" :disabled="ws.busy || running || !ws.id || ws.isNew"
+                title="Run the native tests (tests/sim) on this system: a pytest run"
+                @click="ws.dialog = 'pytest'"
+            >Tests…</button>
         </div>
         <button
             v-if="recorded" type="button" class="vhil-btn"
@@ -273,7 +278,12 @@ export default defineComponent({
         // A live run, now or replayed: its ops can become a scenario.
         const recorded = computed(() => Boolean(replay.run?.scenario?.live)
             && (live.value || ws.mode === 'REPLAY'));
+        const showArtifacts = () => {
+            ws.layout.dock = true;
+            ws.layout.dockTab = 'artifacts';
+        };
         return {
+            showArtifacts,
             LIVE_TITLE: 'A live session of the saved system: drive its buses and pins as on the '
                 + 'bench, until you stop it',
             live,

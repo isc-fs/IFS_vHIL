@@ -66,7 +66,18 @@ export async function tracePage(path) {
     return { data, cursor: r.headers.get('X-Trace-Cursor') || '' };
 }
 
-/** The shell's own page for a run (its signals, log and artifacts), kept
- *  under #/classic/ while REPLAY doesn't show them all
- *  (vhil/server/static/app.js). */
-export const runPage = (id) => `/#/classic/runs/${id}`;
+/** A text file (a run's artifact), as text: never parsed or rendered. */
+export async function text(path) {
+    const r = await fetch(path, { credentials: 'same-origin' });
+    if (r.status === 401) {
+        const here = window.location.pathname + window.location.search;
+        window.location.href = `/auth/login?next=${encodeURIComponent(here)}`;
+        throw new ApiError(['login required'], 401);
+    }
+    if (!r.ok) throw new ApiError([`${r.status} ${r.statusText}`], r.status);
+    return r.text();
+}
+
+/** A run's link: its REPLAY in the workspace (the shell's run page is gone;
+ *  its old links redirect here: vhil/server/static/app.js). */
+export const runPage = (id) => `/editor/?run=${id}`;

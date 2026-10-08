@@ -1,5 +1,5 @@
 <!--
-vHIL: the bottom dock (Ctrl+J; Ctrl+1..7 or Alt+1..7 picks a tab;
+vHIL: the bottom dock (Ctrl+J; Ctrl+1..8 or Alt+1..8 picks a tab;
 CHANGELOG-VHIL.md). Log is Pipeline Manager's terminal (the plain log view,
 src/vhil/LogView.vue), moved here from its own panel; Problems lists Check's
 errors and warnings, and a click selects the node one is about (or the
@@ -7,7 +7,8 @@ scenario row: its check's messages and its run's failed expects, step 10);
 Bus shows a replayed run's frames (VhilBus.vue, step 9); Scenario the
 selected scenario's rows (VhilScenario.vue, step 10); State each board's
 state card (VhilState.vue, step 13); Debug a board's debugger in a live
-session (VhilDebug.vue, step 17). Signals is a slot a later step fills.
+session (VhilDebug.vue, step 17); Signals the run's plots and Artifacts its
+record, tests and files (VhilSignals.vue, VhilArtifacts.vue, step 18).
 Collapsed, it is its tab strip, which still shows the problem count.
 -->
 
@@ -79,6 +80,8 @@ Collapsed, it is its tab strip, which still shows the problem count.
             <VhilState v-else-if="tab.id === 'state'" />
             <VhilScenario v-else-if="tab.id === 'scenario'" />
             <VhilDebug v-else-if="tab.id === 'debug'" />
+            <VhilSignals v-else-if="tab.id === 'signals'" />
+            <VhilArtifacts v-else-if="tab.id === 'artifacts'" />
             <div v-else-if="tab.id === 'problems'" class="vhil-problems">
                 <p v-if="!problems.length" class="muted">
                     {{ ws.checked ? 'No problems: the system is valid.'
@@ -103,10 +106,6 @@ Collapsed, it is its tab strip, which still shows the problem count.
                     </li>
                 </ul>
             </div>
-            <p v-else-if="tab.id === 'signals'" class="vhil-placeholder muted">
-                Signals: the FSM state and digital lanes are in the State tab's history
-                for now; analog and value plots come later.
-            </p>
             <p v-else class="vhil-placeholder muted">
                 {{ tab.label }}: comes with step {{ tab.step }} of the workspace plan.
             </p>
@@ -117,9 +116,11 @@ Collapsed, it is its tab strip, which still shows the problem count.
 <script>
 import { computed, defineComponent, onMounted } from 'vue';
 import Terminal from '../components/Terminal.vue';
+import VhilArtifacts from './VhilArtifacts.vue';
 import VhilBus from './VhilBus.vue';
 import VhilDebug from './VhilDebug.vue';
 import VhilScenario from './VhilScenario.vue';
+import VhilSignals from './VhilSignals.vue';
 import VhilState from './VhilState.vue';
 import { scen } from './scenarios.js';
 import { terminalStore, MAIN_TERMINAL } from '../core/stores.js';
@@ -129,7 +130,7 @@ import {
 
 export default defineComponent({
     components: {
-        Terminal, VhilBus, VhilDebug, VhilScenario, VhilState,
+        Terminal, VhilArtifacts, VhilBus, VhilDebug, VhilScenario, VhilSignals, VhilState,
     },
     setup() {
         const errors = computed(() => problemCount('error'));
