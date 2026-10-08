@@ -386,6 +386,15 @@ In the owner's order.
 17. **Debug tab** (feature 4b). Source, breakpoints, stepping, inspector
     registers/locals/stack, shared watches, frozen-bus banner, list of
     would-have-fired timeouts.
+    Done (`editor/pipeline-manager/CHANGELOG-VHIL.md` 20): the Debug tab
+    (step toolbar F5/F10/F11/Shift+F11, breakpoints by function, file:line
+    or address, the read-only source at the stop from the image's checkout
+    with a breakpoint gutter, a disassembly toggle), the held board's
+    stack, locals and registers in the inspector, a watch list shared with
+    the State tab, the frozen-bus banner and "PAUSED · breakpoint in …" in
+    the top bar. The would-have-fired timeouts are left out: the contracts
+    carry each frame's period, not the receiving firmware's timeout, so
+    they can't be derived (docs/debugger.md).
 18. **Cleanup before M8.** Old shell pages go (`index.html` redirects);
     `CHANGELOG-VHIL.md` complete; the session, scenario and trace schemas
     documented as the stable contract for external simulation platforms.

@@ -6,8 +6,8 @@ errors and warnings, and a click selects the node one is about (or the
 scenario row: its check's messages and its run's failed expects, step 10);
 Bus shows a replayed run's frames (VhilBus.vue, step 9); Scenario the
 selected scenario's rows (VhilScenario.vue, step 10); State each board's
-state card (VhilState.vue, step 13). Signals and Debug are slots the later
-steps of the plan fill.
+state card (VhilState.vue, step 13); Debug a board's debugger in a live
+session (VhilDebug.vue, step 17). Signals is a slot a later step fills.
 Collapsed, it is its tab strip, which still shows the problem count.
 -->
 
@@ -78,6 +78,7 @@ Collapsed, it is its tab strip, which still shows the problem count.
             <VhilBus v-else-if="tab.id === 'bus'" />
             <VhilState v-else-if="tab.id === 'state'" />
             <VhilScenario v-else-if="tab.id === 'scenario'" />
+            <VhilDebug v-else-if="tab.id === 'debug'" />
             <div v-else-if="tab.id === 'problems'" class="vhil-problems">
                 <p v-if="!problems.length" class="muted">
                     {{ ws.checked ? 'No problems: the system is valid.'
@@ -117,6 +118,7 @@ Collapsed, it is its tab strip, which still shows the problem count.
 import { computed, defineComponent, onMounted } from 'vue';
 import Terminal from '../components/Terminal.vue';
 import VhilBus from './VhilBus.vue';
+import VhilDebug from './VhilDebug.vue';
 import VhilScenario from './VhilScenario.vue';
 import VhilState from './VhilState.vue';
 import { scen } from './scenarios.js';
@@ -127,7 +129,7 @@ import {
 
 export default defineComponent({
     components: {
-        Terminal, VhilBus, VhilScenario, VhilState,
+        Terminal, VhilBus, VhilDebug, VhilScenario, VhilState,
     },
     setup() {
         const errors = computed(() => problemCount('error'));

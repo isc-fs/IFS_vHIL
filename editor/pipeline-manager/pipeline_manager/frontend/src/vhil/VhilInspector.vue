@@ -3,7 +3,9 @@ vHIL: the inspector (resizable, 320 px by default; CHANGELOG-VHIL.md). In
 DESIGN, the selected node's properties: a board's role, its firmware and the
 refs picked for it, and a bus's or a device's own; in REPLAY and LIVE, a
 board's state card above them (VhilStateCard.vue, step 13), and in LIVE its
-inputs (VhilInputs.vue, step 15: pin switches, analog voltages); with nothing selected,
+inputs (VhilInputs.vue, step 15: pin switches, analog voltages); PAUSED at a
+debugger stop, the held board's stack, locals and registers
+(VhilDebugInspect.vue, step 17), with nothing selected too; with nothing selected,
 the open system and its Check, Commit and PR, which used to be the shell's
 fixed aside. A board's properties live here, not on its node.
 -->
@@ -30,6 +32,11 @@ fixed aside. A board's properties live here, not on its node.
 
         <div v-if="node" class="vhil-inspector-body">
             <span v-if="kind" class="vhil-kind">{{ kind }}</span>
+            <!-- PAUSED at a debugger stop: the board's stack, locals, registers (step 17) -->
+            <VhilDebugInspect
+                v-if="kind === 'board' && stopOf(nodeName(node))"
+                :board="nodeName(node)" :stop="stopOf(nodeName(node))"
+            />
             <!-- In REPLAY, the board's state at the scrubber's time (step 13) -->
             <VhilStateCard
                 v-if="stateTrace && kind === 'board' && stateTrace.items.has(nodeName(node))"
@@ -94,6 +101,10 @@ fixed aside. A board's properties live here, not on its node.
         </div>
 
         <div v-else class="vhil-inspector-body">
+            <VhilDebugInspect
+                v-if="session.held && stopOf(session.held.board)"
+                :board="session.held.board" :stop="stopOf(session.held.board)"
+            />
             <template v-if="ws.id">
                 <dl class="vhil-props">
                     <dt>System</dt><dd class="mono">{{ ws.id }}{{ ws.isNew ? ' (new)' : '' }}</dd>
@@ -127,6 +138,9 @@ fixed aside. A board's properties live here, not on its node.
 import { computed, defineComponent } from 'vue';
 import VhilStateCard from './VhilStateCard.vue';
 import VhilInputs from './VhilInputs.vue';
+import VhilDebugInspect from './VhilDebugInspect.vue';
+import { stopOf } from './debugui.js';
+import { live as session } from './session.js';
 import { replay } from './replay.js';
 import {
     ws, boardFirmware, check, isLive, pickRef, refreshDirty,
@@ -142,7 +156,7 @@ const NUMERIC = ['integer', 'number', 'slider'];
 const ROLE_NOTE = 'Sets its firmware, node ID, flash bus and pin labels.';
 
 export default defineComponent({
-    components: { VhilStateCard, VhilInputs },
+    components: { VhilStateCard, VhilInputs, VhilDebugInspect },
     props: {
         tick: { type: Number, default: 0 },
     },
@@ -210,6 +224,8 @@ export default defineComponent({
 
         return {
             ws,
+            session,
+            stopOf,
             live,
             replay,
             stateTrace,

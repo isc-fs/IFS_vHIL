@@ -202,7 +202,7 @@ def test_the_timeline_and_the_tests_view():
     assert "snap(drag.t0 + (ev.clientX - drag.x0) / scale.value, snapMs.value)" in tl
     assert "if (!ev.ctrlKey && !ev.metaKey) return;" in tl
     assert "replay.t = Math.min(replay.end, r.tUs);" in tl
-    assert "kinds: 'frame,log,edge,sample,bus_load'" in (VHIL / "replay.js").read_text()
+    assert "kinds: 'frame,log,edge,sample,bus_load,debug'" in (VHIL / "replay.js").read_text()
     workspace = (VHIL / "workspace.js").read_text()
     assert "openRun(id, { tab: 'scenario' });" in workspace
     rail = (VHIL / "VhilRail.vue").read_text()
@@ -231,3 +231,26 @@ def test_the_state_tab_inspector_card_and_node_pill():
     assert "✕ fault" in (VHIL / "VhilNodeState.vue").read_text()
     for css in ("state.css", "nodes.css"):
         assert not re.search(r"#[0-9a-fA-F]{3,8}\b|rgba?\(", (VHIL / css).read_text()), css
+
+
+def test_the_debug_tab():
+    """Step 17 (docs/debugger.md): the Debug tab is a dock tab, not a slot;
+    its step buttons carry their keys as text, it draws no inline style, and
+    it sends debug ops only over the session channel."""
+    assert "{ id: 'debug', label: 'Debug' }," in (VHIL / "workspace.js").read_text()
+    assert "<VhilDebug v-else-if=\"tab.id === 'debug'\" />" in (VHIL / "VhilDock.vue").read_text()
+    template = (VHIL / "VhilDebug.vue").read_text().split("<script>")[0]
+    for label, key in (("Continue", "F5"), ("Step over", "F10"), ("Step into", "F11"),
+                       ("Step out", "Shift+F11")):
+        assert f"{label} <kbd>{key}</kbd>" in template, label
+        assert f'aria-keyshortcuts="{key}"' in template, key
+    assert "can't be debugged" in template
+    assert "Bus frozen" in (VHIL / "VhilHeld.vue").read_text()
+    ui = (VHIL / "debugui.js").read_text()
+    assert "request({ kind: 'debug', board, ...op })" in ui and "/debug/source?" in ui
+    keys = (VHIL / "shortcuts.js").read_text()
+    assert "F10: 'next'" in keys and "ev.shiftKey ? 'finish' : 'step'" in keys
+    for vue in ("VhilDebug.vue", "VhilDebugInspect.vue", "VhilWatches.vue", "VhilHeld.vue"):
+        t = (VHIL / vue).read_text().split("<script>")[0]
+        assert " style=" not in t and ":style" not in t and "v-html" not in t, vue
+    assert not re.search(r"#[0-9a-fA-F]{3,8}\b|rgba?\(", (VHIL / "debug.css").read_text())

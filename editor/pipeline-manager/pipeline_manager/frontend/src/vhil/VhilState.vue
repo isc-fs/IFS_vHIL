@@ -5,6 +5,8 @@ scrubber's time (VhilStateCard.vue), with its history; a click on a lane or
 a transition moves the scrubber. The data is the run's own trace (frames,
 samples, edges), as the worker recorded it for each board's state view; a
 live session will feed the same model (state.js) as its records stream.
+In a live session, each board's debugger watch list too (VhilWatches.vue,
+step 17): the same list as the Debug tab's, its values at the board's stop.
 -->
 
 <template>
@@ -35,6 +37,13 @@ live session will feed the same model (state.js) as its records stream.
                     @seek="seek"
                 />
             </div>
+            <section v-if="replay.live" class="vhil-state-watches" aria-label="Debugger watches">
+                <h4>Debugger watches <span class="muted">· read at each stop (Debug tab)</span></h4>
+                <div v-for="b in tr.boards" :key="b" class="vhil-state-watch">
+                    <h5 class="mono">{{ b }}</h5>
+                    <VhilWatches :board="b" />
+                </div>
+            </section>
         </template>
     </div>
 </template>
@@ -42,10 +51,12 @@ live session will feed the same model (state.js) as its records stream.
 <script>
 import { computed, defineComponent } from 'vue';
 import VhilStateCard from './VhilStateCard.vue';
+import VhilWatches from './VhilWatches.vue';
 import { replay } from './replay.js';
+import './debug.css';
 
 export default defineComponent({
-    components: { VhilStateCard },
+    components: { VhilStateCard, VhilWatches },
     setup() {
         const tr = computed(() => {
             replay.version; // eslint-disable-line no-unused-expressions

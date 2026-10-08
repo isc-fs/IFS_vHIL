@@ -60,7 +60,7 @@ export const DOCK_TABS = [
     // (step 13); the uPlot plots have no step yet.
     { id: 'signals', label: 'Signals', step: 'later' },
     { id: 'log', label: 'Log' },
-    { id: 'debug', label: 'Debug', step: 17 },
+    { id: 'debug', label: 'Debug' },
     { id: 'problems', label: 'Problems' },
 ];
 
@@ -215,6 +215,14 @@ export function exitReplay() {
     ws.mode = 'DESIGN';
     remember();
 }
+
+// Held at a debugger stop (step 17): the Debug tab comes up, once per stop.
+watch(() => session.live.held, (held, was) => {
+    if (held && !was && isLive()) {
+        ws.layout.dock = true;
+        ws.layout.dockTab = 'debug';
+    }
+});
 
 // A paused session reads PAUSED on the mode pill.
 watch(() => session.live.paused, (paused) => {

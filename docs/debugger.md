@@ -44,6 +44,15 @@ editor (Debug tab) ── WS /api/runs/{id}/session ──▶ API ── session
   each slice's RunFor in a thread and services the debuggers from its own;
   Renode's stub writes each halt's virtual time to a file, since the monitor
   is busy in that RunFor.
+- **Attaching stops the board** before its next instruction (the stub puts
+  its CPU in single-step mode when GDB connects): a breakpoint or watch that
+  attaches a board goes in there and the board runs on; an `interrupt` that
+  attaches it keeps that stop. **Break** on a board that runs puts its CPU in
+  single-step mode too (`machine VhilGdbBreak`), so it stops before its next
+  instruction and holds the time source as a breakpoint does. Not GDB's
+  Ctrl-C: Renode's stub answers it with `cpu.Pause()`, which the next RunFor
+  undoes, so between two RunFors it reported a stop while the board ran on,
+  or never stopped it.
 - A breakpoint, clear or watch set while the board runs is **deferred**: GDB
   can't change breakpoints of a running target in all-stop mode, so the
   worker interrupts the board, and when it stops for that (in the next
@@ -124,6 +133,25 @@ Who can reach what:
 - **Viewers** of a run see its `debug` records (stops, locals, registers) in
   the trace, as they see its frames; only the controlling connection sends
   debug ops.
+
+## In the editor
+
+The Debug dock tab (step 17), on the canvas's selected board: Continue (F5),
+Step over (F10), Step into (F11), Step out (Shift+F11), Break, Detach;
+breakpoints by function, file:line or address, or from the source's gutter;
+the source at the stop, read only, from the image's checkout in the fw volume
+(`GET /api/runs/{id}/debug/source?board=&path=`, vhil/server/sources.py), or
+its disassembly; the watch list, shared with the State tab. The inspector
+shows the held board's call stack (pick a frame), locals and registers. While
+held, the Debug and Bus tabs say "Bus frozen: all boards paused at t=…" and
+the top bar "PAUSED · breakpoint in ecu (control.cpp:35)". A REPLAY says it
+can't be debugged and lists where the session stopped.
+
+There is no list of the firmware timeouts that would have fired had time not
+been held: the contracts give each frame's period, not the timeout the
+receiving firmware applies to it (those are constants in its code, e.g. the
+AMS's 200 ms VcuStale), so they can't be derived from the state view and
+contracts.
 
 ## Limits
 
