@@ -1,0 +1,25 @@
+kind: model
+id: nrf24l01p
+description: >-
+  Nordic nRF24L01+ 2.4 GHz transceiver, transmit side, on six GPIOs: an SPI
+  slave (mode 0, MSB first) on CSN/SCK/MOSI/MISO for a firmware that
+  bit-bangs it, plus CE and the active-low IRQ (models/renode/Nrf24l01p.cs,
+  after the nRF24L01+ Product Specification v1.0). Register map with reset
+  values, STATUS write-1-to-clear, a 3-deep TX FIFO; a CE pulse of at least
+  10 us with PWR_UP set and PRIM_RX clear sends the head payload, which sets
+  TX_DS and pulls IRQ low 130 us of PLL settling plus its time on air later.
+  Every payload sent is recorded (a `radio` trace record). No RF channel,
+  receiver, ACK or MAX_RT: what a test sees is the transmit success path.
+  Test API (monitor): Payloads, Transmitted, ShortCePulses, Status, Register,
+  TxTimeUs.
+interface:
+  gpio: [csn, sck, mosi, miso, ce, irq]
+  radio: true
+backend: renode
+renode:
+  source: models/renode/Nrf24l01p.cs
+  type: Wireless.Nrf24l01p
+  # The pins the MCU drives, by the model's GPIO input number, and the ones
+  # the model drives, by its GPIO property.
+  gpio_in: {csn: 0, sck: 1, mosi: 2, ce: 3}
+  gpio_out: {miso: Miso, irq: Irq}

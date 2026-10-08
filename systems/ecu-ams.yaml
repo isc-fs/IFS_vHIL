@@ -21,6 +21,8 @@ buses:
   can_dash: {kind: can, nodes: [ecu.FDCAN3], host_netdev: can1}  # net CAN_H/L_SENS (stale name), J1.13/J1.14 (docs/backplanes/ecu.md)
   can_acu:  {kind: can, nodes: [ecu.FDCAN2, ams.FDCAN1], host_netdev: can2}  # ECU J1.11/J1.12 (net CAN_H/L_TEL), AMS J1.9/J1.10 (CAN_H/L_ACU, H/L swapped) (docs/backplanes/ecu.md, ams.md)
 devices:
+  # The ECU's nRF24L01+ telemetry radio, as in ecu.yaml.
+  radio: {model: nrf24l01p, pins: {csn: ecu.PB0, sck: ecu.PA5, mosi: ecu.PA7, miso: ecu.PA6, ce: ecu.PC5, irq: ecu.PC4}}  # NRF24_CS/SCK/MOSI/MISO/CE/IRQ, on board (docs/backplanes/ecu.md)
   # The AMS's, as in ams.yaml.
   isospi: {model: ltc6820, spi: ams.SPI1, cs: ams.PB9}  # SPI1 + LTC6820_CS -> U4 LTC6820 (docs/backplanes/ams.md)
   cells: {model: ltc6811, attach: isospi, count: 10}

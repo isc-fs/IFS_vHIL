@@ -19,6 +19,12 @@ buses:
   can_inv:  {kind: can, nodes: [ecu.FDCAN1], host_netdev: can0}  # CAN_H/L_INV, J1.9/J1.10 (docs/backplanes/ecu.md)
   can_dash: {kind: can, nodes: [ecu.FDCAN3], host_netdev: can1}  # net CAN_H/L_SENS (stale name), J1.13/J1.14 (docs/backplanes/ecu.md)
   can_acu:  {kind: can, nodes: [ecu.FDCAN2], host_netdev: can2}  # net CAN_H/L_TEL (stale name), J1.11/J1.12 (docs/backplanes/ecu.md)
+devices:
+  # The nRF24L01+ telemetry radio on the backplane, which the ECU bit-bangs
+  # over GPIOs (IFS08-CE-ECU dev 544b651 nrf24.c:49-79): its TelemetryTask
+  # sends the radio snapshot as five 32-byte payloads every 200 ms
+  # (telemetry_task.cpp:23-25, :233-245; tests/sim/test_ecu_radio.py).
+  radio: {model: nrf24l01p, pins: {csn: ecu.PB0, sck: ecu.PA5, mosi: ecu.PA7, miso: ecu.PA6, ce: ecu.PC5, irq: ecu.PC4}}  # NRF24_CS/SCK/MOSI/MISO/CE/IRQ, on board (docs/backplanes/ecu.md)
 port:
   # The co-simulation port (vhil/cosim.py): what the ECU's plants exchange
   # with it. Pedal sensors and START are the driver; FDCAN1 is the inverter.

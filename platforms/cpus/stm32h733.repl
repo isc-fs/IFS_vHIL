@@ -95,7 +95,34 @@ adc3: @ none
 adc3_h73x: Analog.STM32H7_ADC3 @ sysbus 0x58026000
     referenceVoltage: 3.3
     negativeInputs: "3:7"
+    // Conversion timing: the ADC kernel clock is PLL2P = 24 MHz / 2 x 16 / 2
+    // = 96 MHz on both MainLite firmwares (AMS stm32h7xx_hal_msp.c:101-110,
+    // ECU adc.c:101-110, RCC_ADCCLKSOURCE_PLL2), HCLK 264 MHz for CKMODE.
+    kernelClockFrequency: 96000000
+    busClockFrequency: 264000000
     IRQ -> nvic@127
+    // DMAMUX1 request 115 (DMA_REQUEST_ADC3, stm32h7xx_hal_dma.h:377).
+    DmaRequest -> dmamux1@115
+
+// DMA1 with half-transfer, error and circular/double-buffer modes. Our model,
+// models/renode/Stm32H7Dma.cs; stm32h7.repl's STM32DMA tags HTIE/TEIE/CIRC
+// and never ends a normal-mode transfer. DMA1_BASE = D2_AHB1PERIPH_BASE =
+// 0x40020000, DMA1_Stream0..6_IRQn = 11..17, DMA1_Stream7_IRQn = 47
+// (stm32h733xx.h:2239, 72-78, 107). As for ADC3, the base platform's is taken
+// off the bus, and DMAMUX1 channels 0-7 (DMAMUX1_BASE 0x40020800,
+// stm32h733xx.h:2241) feed this one's streams instead.
+dma1: @ none
+
+dma1_h7: DMA.STM32H7_DMA @ sysbus 0x40020000
+    [0-7] -> nvic@[11-17, 47]
+
+dmamux1:
+    [0-7] -> dma1_h7@[0-7]
+
+// DBGMCU (debug unit): IDCODE and CR, which HAL_DMA_Init and the AMS's
+// idle-WFI build touch. Our model, models/renode/Stm32H7Dbgmcu.cs.
+// DBGMCU_BASE = 0x5C001000 (stm32h733xx.h:2491).
+dbgmcu: Miscellaneous.STM32H7_DBGMCU @ sysbus 0x5C001000
 
 // SDMMC1 with its internal DMA, which the AMS's FatFs transfers use. Our
 // model, models/renode/Stm32H7Sdmmc.cs; stm32h7.repl's STM32HSDMMC only tags

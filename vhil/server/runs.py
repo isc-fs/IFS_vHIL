@@ -66,7 +66,8 @@ TERMINAL = frozenset({"passed", "failed", "error", "cancelled"})
 # live run's per-slice heartbeat (vhil/server/session.py); bus_load: a bus's
 # load over a slice (vhil/worker.py, #174); debug: a live session's debugger
 # attached, stopped, running (vhil/gdb.py, docs/debugger.md).
-TRACE_KINDS = frozenset({"frame", "edge", "sample", "log", "op", "clock", "bus_load", "debug"})
+TRACE_KINDS = frozenset({"frame", "edge", "sample", "log", "op", "clock", "bus_load", "debug",
+                         "radio"})
 TRACE = "trace.jsonl"
 # The kind of a trace's first line, which says whose trace it is (trace_header).
 HEADER_KIND = "run"

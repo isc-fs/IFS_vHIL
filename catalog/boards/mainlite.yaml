@@ -58,6 +58,9 @@ roles:
       PB0: NRF24_CS        # on board
       PC5: NRF24_CE        # on board
       PC4: NRF24_IRQ       # on board
+      PA5: NRF24_SCK       # SPI1's pins, bit-banged as GPIOs (nrf24.c:62-71)
+      PA6: NRF24_MISO
+      PA7: NRF24_MOSI
       PB7: SPARE_J3        # D4, header J3 only
       PB8: SPARE_J3        # D5, header J3 only
       PF10: SPARE_J3       # A4, header J3 only
@@ -170,11 +173,18 @@ gpio:
   # no 1-Wire device is modelled, and no firmware drives it yet.
   PD5: {port: sysbus.gpioPortD, pin: 5}
   # J4.9-J4.11: the ECU's nRF24 chip select, CE and IRQ (ECU.ioc: PB0
-  # NRF24_CS out, PC5 NRF24_CE out, PC4 NRF24_IRQ in). Plain GPIOs: no radio
-  # is modelled.
+  # NRF24_CS out, PC5 NRF24_CE out, PC4 NRF24_IRQ in). The ECU systems wire
+  # the radio (catalog/models/nrf24l01p.yaml) to them and to SPI1's pins below.
   PB0: {port: sysbus.gpioPortB, pin: 0}
   PC5: {port: sysbus.gpioPortC, pin: 5}
   PC4: {port: sysbus.gpioPortC, pin: 4}
+  # SPI1's SCK/MISO/MOSI as GPIOs, for a firmware that bit-bangs them: the
+  # ECU drives its nRF24 this way, PA5/PA7 outputs and PA6 an input
+  # (IFS08-CE-ECU dev 544b651 nrf24.c:62-71; its SPI1 reads MISO stuck high).
+  # The AMS uses them as SPI1 (the connector above).
+  PA5: {port: sysbus.gpioPortA, pin: 5}
+  PA6: {port: sysbus.gpioPortA, pin: 6}
+  PA7: {port: sysbus.gpioPortA, pin: 7}
 analog_in:
   # ADC3 inputs routed to the MainLite's connector (IFS_HIL vcu_profile.yaml).
   PF7: {adc: sysbus.adc3_h73x, channel: 3}

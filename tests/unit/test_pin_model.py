@@ -52,8 +52,9 @@ def test_hse_is_the_model_s_crystal(model):
 
 def test_the_board_has_every_pin_that_leaves_the_module(model):
     """Every backplane pin of the model is a pin of the board, or one of a
-    peripheral's (SPI1's PA5/PA6/PA7, USART10's PG11/PG12); nothing else is
-    but the on-board SDMMC1 and I2C2."""
+    peripheral's (USART10's PG11/PG12; SPI1's PA5/PA6/PA7 are both, the ECU
+    bit-banging them as GPIOs); nothing else is but the on-board SDMMC1 and
+    I2C2."""
     board = _board()
     names = [c for s in ("can", "spi", "uart", "sdmmc", "i2c", "gpio", "analog_in", "unwired")
              for c in board.get(s) or {}]
@@ -63,7 +64,7 @@ def test_the_board_has_every_pin_that_leaves_the_module(model):
     off = {n for n in names if model.status(n).cls != "backplane"}
     assert off == set(board["onboard"]) == {"SDMMC1", "I2C2"}
     pins = {n for n in names if n in model.by_port}
-    assert len(pins) == 17 and len(backplane - pins) == 3 + 2      # SPI1, USART10
+    assert len(pins) == 20 and len(backplane - pins) == 2          # USART10
     System.check_board_roles(board)
 
 

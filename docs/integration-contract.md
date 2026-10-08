@@ -62,6 +62,7 @@ sorts by `t_us`.
 | `frame` | `bus`, `id`, `ext`, `data` (hex), `src?` (`"stimulus"`: the scenario's or the session's own frame) | every frame on a bus | [`m5-web-app.md`](architecture/m5-web-app.md#api-contract-v1) |
 | `edge` | `board`, `pin`, `level`, `initial?` (the level as watching starts) | a watched pin's changes | [`scenarios.md`](scenarios.md#rows) |
 | `sample` | `board`, `name`, `value` | a watched symbol, at its period (at sync points) | [`state-view.md`](state-view.md#what-a-run-records) |
+| `radio` | `board`, `device`, `payload` (hex) | every payload a radio device (a model with `interface.radio`, e.g. the ECU's nRF24L01+) sent, at the end of its packet | [`backplanes/ecu.md`](backplanes/ecu.md#in-the-vhil) |
 | `log` | `text` | stimuli, expects' results, worker notes | |
 | `bus_load` | `bus`, `load` (0..1), `window_us`, `exact` (false on Renode's hub: an estimate) | per bus and slice | [`can-bus.md`](can-bus.md#what-the-bus-does) |
 | `op` | `op_id`, `op`, `status` (`applied`, `refused`), `login`, `detail?` | a live session's op, at the time it took effect | [`live-session.md`](live-session.md#the-channel) |
@@ -100,4 +101,5 @@ above. It is in each trace's header (`contract`), in `GET /api/health`
 
 - **1** (first): the surfaces as listed. Stimuli between sync points run at
   the next one, reported (`summary.aligned`, a `log` record, the check's
-  warning; [`scenarios.md`](scenarios.md#times)).
+  warning; [`scenarios.md`](scenarios.md#times)). Added since, an addition
+  that keeps it: the `radio` trace record (#193).

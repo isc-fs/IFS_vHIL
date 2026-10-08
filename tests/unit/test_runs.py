@@ -17,7 +17,7 @@ from vhil import canframe  # noqa: E402
 from vhil.server import create_app  # noqa: E402
 from vhil.server.config import Settings  # noqa: E402
 from vhil.server.runs import RunStore, read_trace, trace_header  # noqa: E402
-from vhil.sim import Edge, Frame  # noqa: E402
+from vhil.sim import Edge, Frame, Payload  # noqa: E402
 from vhil.system import REPO, System  # noqa: E402
 from vhil.worker import (Cancelled, FirmwareResolver, TraceWriter, Worker,  # noqa: E402
                          execute_pytest, execute_run, image_env)
@@ -492,6 +492,15 @@ class FakeIO:
         self.sim.taken.setdefault(self.board, []).append((t, s[2], t // 1000))
 
 
+class FakeRadio:
+    def __init__(self, sim, device):
+        self.sim, self.device = sim, device
+
+    def payloads(self, since_us=0):
+        """What the radio sent by now (sim.radio_log, as Nrf24l01p.cs records)."""
+        return [p for p in self.sim.radio_log if since_us <= p.t_us <= self.sim.now]
+
+
 class FakeSim:
     def __init__(self, system=ECU, quantum_us=500):
         self.system = System(system)
@@ -500,6 +509,7 @@ class FakeSim:
         self.periodic = {}
         self.levels = {}
         self.samplers, self.taken = {}, {}     # board -> FakeIO.sample's
+        self.radio_log = []                    # Payloads the ECU's radio sends
         self.started = self.stopped = False
 
     def __enter__(self):
@@ -524,6 +534,9 @@ class FakeSim:
     def io(self, board):
         return FakeIO(self, board)
 
+    def radio(self, device):
+        return FakeRadio(self, device)
+
     def read_symbol(self, board, name, size=1):
         self.calls.append(("read_symbol", self.now, board, name, size))
         return self.now // 1000
@@ -535,6 +548,21 @@ def run_fake(tmp_path, scenario, **kw):
     summary = execute_run(sim, scenario, trace, **kw)
     trace.close()
     return sim, summary, read_trace(tmp_path / "trace.jsonl")
+
+
+def test_executor_records_what_a_radio_sent(tmp_path):
+    """Every payload the system's radio (systems/ecu.yaml's nRF24L01+) sent
+    is a `radio` record, once, in the slice it was sent in
+    (docs/integration-contract.md)."""
+    sim = FakeSim()
+    sim.radio_log = [Payload(t, bytes([0xEC, 0x03, i, 5]) + bytes(28))
+                     for i, t in enumerate((40_000, 100_000, 150_500, 290_000))]
+    trace = TraceWriter(tmp_path / "trace.jsonl")
+    execute_run(sim, {"kind": "run", "virtual_ms": 300, "slice_ms": 100}, trace)
+    trace.close()
+    radio = [r for r in read_trace(tmp_path / "trace.jsonl") if r["kind"] == "radio"]
+    assert radio == [{"kind": "radio", "t_us": p.t_us, "board": "ecu", "device": "radio",
+                      "payload": p.data.hex()} for p in sim.radio_log]
 
 
 def test_executor_streams_frames_samples_and_edges_in_time_order(tmp_path):
