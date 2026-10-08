@@ -1,0 +1,17 @@
+kind: scenario
+system: ecu
+description: "AS Emergency (FSG DV): the uDV reports Emergency on 0x50A and the ECU sounds the RTDS (PB4) in 150 ms pulses for exactly 10 s, then stops although Emergency persists; pit-diag 0x707 flags the tone while it runs. Nothing sounds before the uDV is heard. IFS08-CE-ECU as_buzzer.cpp, ecu_config.hpp:40-60, udv_as_status.def; tests/sim/test_ecu_as_buzzer.py."
+virtual_ms: 15000
+stimuli:
+  - {kind: can_send, name: pit-arm, at_ms: 2500, bus: can_acu, id: 0x7e0, data: "deadbeef"}
+  - {kind: can_periodic, name: as-emergency, at_ms: 3000, bus: can_acu, id: 0x50a, data: "01", period_ms: 100}
+expect:
+  - {check: never, name: silent-before-the-udv, at_ms: 0, until_ms: 2990, signal: "pin:ecu.PB4", value: high}
+  - {check: eventually, name: tone-starts, at_ms: 3000, until_ms: 3040, signal: "pin:ecu.PB4", value: high}
+  - {check: eventually, name: first-pulse-ends, at_ms: 3170, until_ms: 3200, signal: "pin:ecu.PB4", value: low}
+  - {check: eventually, name: second-pulse, at_ms: 3320, until_ms: 3350, signal: "pin:ecu.PB4", value: high}
+  - {check: eventually, name: still-sounding-at-9s, at_ms: 12000, until_ms: 12320, signal: "pin:ecu.PB4", value: high}
+  - {check: never, name: stops-after-10s, at_ms: 13100, until_ms: 15000, signal: "pin:ecu.PB4", value: high}
+  - {check: eventually, name: flagged-on-0x707, at_ms: 3100, until_ms: 3500, signal: "frame:can_acu.PitDiag_dv.as_emergency", value: 1}
+  - {check: always, name: emergency-on-0x707, at_ms: 3500, until_ms: 12900, signal: "frame:can_acu.PitDiag_dv.as_status", value: 1}
+  - {check: always, name: tone-over-on-0x707, at_ms: 13300, until_ms: 15000, signal: "frame:can_acu.PitDiag_dv.as_emergency", value: 0}
