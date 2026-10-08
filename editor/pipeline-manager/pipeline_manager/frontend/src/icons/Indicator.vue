@@ -29,7 +29,7 @@ export default {
 
 <style lang="scss">
 .normal {
-    fill: #FFFFFF;
+    fill: $white;
 }
 
 .gray {

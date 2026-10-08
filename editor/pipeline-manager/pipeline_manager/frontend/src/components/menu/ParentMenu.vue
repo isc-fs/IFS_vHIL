@@ -68,7 +68,7 @@ export default defineComponent({
         background-color: color-mix(in srgb, #{$gray-600} 90%, transparent);
         border: 1px solid $green;
         border-radius: 10px;
-        color: white;
+        color: $white;
         user-select: none;
 
         left: 50vw;
