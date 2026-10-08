@@ -70,6 +70,12 @@ TRACE_KINDS = frozenset({"frame", "edge", "sample", "log", "op", "clock", "bus_l
 TRACE = "trace.jsonl"
 # The kind of a trace's first line, which says whose trace it is (trace_header).
 HEADER_KIND = "run"
+# The integration contract's version (docs/integration-contract.md): the
+# scenario schema, the session channel, the trace's records and the co-sim
+# port. Additions (a field, a record kind, an op) keep it; a removal or a
+# change of meaning bumps it. In every trace's header, /api/health and the
+# session's hello.
+CONTRACT_VERSION = 1
 # A held run's heartbeat period, how stale it may get before another worker
 # reclaims the run, and how many times a run is started before a lost worker
 # ends it as error instead.
@@ -77,7 +83,7 @@ HEARTBEAT_S = 10.0
 RECLAIM_AFTER_S = 60.0
 MAX_ATTEMPTS = 2
 # A `run` scenario's virtual time when the request names none, and what the
-# Runs page and the editor offer: every run counts from power-on, and each
+# editor workspace offers: every run counts from power-on, and each
 # MainLite spends its CAN bootloader's 2 s auto-jump window before its app
 # starts (CLAUDE.md invariant 5), so less than 3 s shows little of the app.
 DEFAULT_VIRTUAL_MS = 3000
@@ -752,7 +758,7 @@ def trace_header(run: dict) -> dict:
     run's token, so the API can tell the run's own trace from one left at
     its path by an earlier run with the same id."""
     return {"kind": HEADER_KIND, "t_us": 0, "run": run["id"], "token": run.get("token") or "",
-            "attempt": run.get("attempts", 0)}
+            "attempt": run.get("attempts", 0), "contract": CONTRACT_VERSION}
 
 
 def trace_start(f, token: Optional[str] = None) -> Optional[int]:
@@ -860,8 +866,8 @@ def _kinds(text: Optional[str]) -> Optional[set]:
 # run script there (stored XSS). So no artifact is ever rendered: text is
 # text/plain, anything else an attachment, and every response carries nosniff
 # and `Content-Security-Policy: sandbox` (no script, a unique origin) in case
-# a browser renders it anyway. The run page's views (JUnit, snapshots, logs)
-# fetch artifacts as text and escape them.
+# a browser renders it anyway. The workspace's Artifacts tab (JUnit, snapshots, logs)
+# fetches artifacts as text and escapes them.
 
 ARTIFACT_HEADERS = {"X-Content-Type-Options": "nosniff",
                     "Content-Security-Policy": "sandbox; default-src 'none'",

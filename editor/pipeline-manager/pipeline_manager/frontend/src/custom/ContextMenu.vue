@@ -274,7 +274,7 @@ export default defineComponent({
     transform: translate(10px);
     pointer-events: none;
     white-space: nowrap;
-    color: #fff;
+    color: $white;
     display: none;
 }
 

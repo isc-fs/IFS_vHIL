@@ -380,7 +380,7 @@ export default {
     background-color: color-mix(in srgb, #{$gray-600} 90%, transparent);
     position: absolute;
     padding: $spacing-l;
-    color: white;
+    color: $white;
     top: calc($navbar-height + 1px);
     right: -495px;
     width: $settings-width;

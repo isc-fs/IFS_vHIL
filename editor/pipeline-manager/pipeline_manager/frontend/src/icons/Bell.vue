@@ -55,7 +55,7 @@ export default {
 
 <style lang="scss" scoped>
 .normal {
-    fill: #FFFFFF;
+    fill: $white;
 }
 
 .gray {

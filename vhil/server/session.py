@@ -58,8 +58,8 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import TypeAdapter, ValidationError
 
-from vhil.server.runs import (TERMINAL, TRACE, CanPeriodic, Limits, RunScenario, RunStore,
-                              Stimulus, check_scenario, read_trace, system_at)
+from vhil.server.runs import (CONTRACT_VERSION, TERMINAL, TRACE, CanPeriodic, Limits, RunScenario,
+                              RunStore, Stimulus, check_scenario, read_trace, system_at)
 from vhil.system import System, SystemError
 
 STIMULI = ("can_send", "can_periodic", "stop_periodic", "gpio", "analog", "watch")
@@ -415,7 +415,8 @@ def router(settings, workspace, limits: Optional[Limits] = None) -> APIRouter:
             lease = await asyncio.to_thread(store.holder, run_id)
             state["holder"] = lease["login"] if lease else None
         await ws.send_json({
-            "kind": "hello", "run": run_id, "live": live, "state": run["state"],
+            "kind": "hello", "contract": CONTRACT_VERSION, "run": run_id, "live": live,
+            "state": run["state"],
             "role": state["role"], "holder": state["holder"], "may_control": state["allowed"],
             "limits": {"ops_per_s": limits.live_ops_per_s,
                        "max_periodic": limits.live_max_periodic,

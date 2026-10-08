@@ -26,7 +26,7 @@ def test_the_page_is_the_workspace_not_pipeline_managers_navbar():
 
 def test_the_keyboard_map():
     keys = (VHIL / "shortcuts.js").read_text()
-    for key in ("'F5'", "ev.shiftKey", "'b'", "'j'", "Digit([1-7])", "'?'"):
+    for key in ("'F5'", "ev.shiftKey", "'b'", "'j'", "Digit([1-8])", "'?'"):
         assert key in keys, key
 
 
@@ -98,38 +98,48 @@ def test_zoom_icons_follow_the_theme():
         assert "#ffffff" not in text and "stroke: $white;" in text, icon
 
 
-def test_the_shells_editor_route_redirects_to_the_workspace():
-    editor = (STATIC / "editor.js").read_text()
-    assert 'new URL("/editor/"' in editor and "location.replace" in editor
-    assert "<iframe" not in editor
-    assert 'href="/editor/"' in (STATIC / "index.html").read_text()
-    assert ".ed-grid" not in (STATIC / "app.css").read_text()
-
-
-def test_the_shells_runs_and_systems_redirect_into_the_workspace():
-    """Step 9: #/runs/<id> opens REPLAY, #/runs the Runs view, #/systems[/<id>]
-    a system; the shell's own pages stay under #/classic/ (a run's signals
-    and artifacts, which REPLAY doesn't show yet)."""
+def test_the_front_page_only_redirects_into_the_workspace():
+    """Step 18: the shell's own pages are gone (its run page, runs list and
+    pytest form, systems pages); / is a redirect into /editor/, which every
+    old link reaches through editor.js redirectFor (tests/js/redirect.test.mjs)."""
     app = (STATIC / "app.js").read_text()
-    assert 'editorPage(view, "", { run: Number(arg) })' in app
-    assert 'editorPage(view, "", { view: "runs" })' in app
-    assert "systems: (arg) => editorPage(view, arg)" in app
-    assert 'if (parts[1] !== "classic")' in app
-    editor = (STATIC / "editor.js").read_text()
-    assert 'u.searchParams.set("run", String(run))' in editor
-    inspect = (STATIC / "inspect.js").read_text()
-    assert "`#/classic/runs/${id}/${t}`" in inspect and 'href="/editor/?run=' in inspect
-    assert "#/classic/runs/" in (STATIC / "runs.js").read_text()
-    assert "`/#/classic/runs/${id}`" in (VHIL / "api.js").read_text()
+    assert "location.replace(redirectFor(location.hash))" in app
+    assert "innerHTML" not in app and "<iframe" not in (STATIC / "editor.js").read_text()
+    index = (STATIC / "index.html").read_text()
+    assert 'href="/editor/"' in index and "<nav" not in index
+    for gone in ("inspect.js", "runs.js"):
+        assert not (STATIC / gone).exists(), gone
+    assert ".ed-grid" not in (STATIC / "app.css").read_text()
+    assert "/editor/?run=${id}" in (VHIL / "api.js").read_text()
     workspace = (VHIL / "workspace.js").read_text()
-    assert "const run = Number(q.get('run'));" in workspace and "await openRun(run);" in workspace
+    assert "const run = Number(q.get('run'));" in workspace
+    assert "await openRun(run, { tab });" in workspace
+
+
+def test_the_workspace_covers_the_old_run_page():
+    """REPLAY shows what the shell's run page did: frames (Bus), signals
+    (Signals, on the shell's plot.js), log (Log) and artifacts (Artifacts);
+    and the runs list's pytest form is Tests… in the top bar."""
+    workspace = (VHIL / "workspace.js").read_text()
+    for tab in ("bus", "signals", "log", "artifacts"):
+        assert f"{{ id: '{tab}', label: " in workspace, tab
+    dock = (VHIL / "VhilDock.vue").read_text()
+    assert "<VhilSignals v-else-if=\"tab.id === 'signals'\" />" in dock
+    assert "<VhilArtifacts v-else-if=\"tab.id === 'artifacts'\" />" in dock
+    signals = (VHIL / "VhilSignals.vue").read_text()
+    assert "from './shell/plot.js'" in signals and "innerHTML" not in signals
+    assert "kind: 'pytest', select: tests" in workspace and "export function runPytest()" in workspace
+    assert "@click=\"ws.dialog = 'pytest'\"" in (VHIL / "VhilTopBar.vue").read_text()
+    replay = (VHIL / "replay.js").read_text()
+    assert "kinds: 'frame,log,edge,sample,bus_load,debug'" in replay
 
 
 def test_replay():
     """Opening a run enters REPLAY: the mode, the cursor-paged trace, the
     scrubber in the top bar, the Bus tab."""
     workspace = (VHIL / "workspace.js").read_text()
-    assert "ws.mode = 'REPLAY';" in workspace and "ws.layout.dockTab = tab;" in workspace
+    assert "ws.mode = 'REPLAY';" in workspace
+    assert "ws.layout.dockTab = run.scenario?.kind === 'pytest' && tab === 'bus'" in workspace
     assert "export function openRun(id, { tab = 'bus' } = {}) {" in workspace
     assert "{ id: 'bus', label: 'Bus' }," in workspace
     replay = (VHIL / "replay.js").read_text()
@@ -142,17 +152,19 @@ def test_replay():
 
 
 def test_the_bus_tab_reuses_the_shells_table_and_decoder():
-    """One copy of vtable.js and decode.js: the image build copies them into
-    src/vhil/shell/ (and the editor CI job compares the copies); no fork."""
+    """One copy of vtable.js, decode.js and plot.js: the image build copies
+    them into src/vhil/shell/ (and the editor CI job compares the copies); no
+    fork."""
     assert "from './shell/decode.js'" in (VHIL / "VhilBus.vue").read_text()
     assert "from './shell/vtable.js'" in (VHIL / "rowtable.js").read_text()
-    for name in ("vtable.js", "decode.js"):
+    for name in ("vtable.js", "decode.js", "plot.js"):
         assert not (VHIL / name).exists() and not (VHIL / "shell" / name).is_symlink()
         assert f"vhil/server/static/{name}" in (REPO / "docker/editor.Dockerfile").read_text()
         assert f"!vhil/server/static/{name}" in (
             REPO / "docker/editor.Dockerfile.dockerignore").read_text()
     ci = (REPO / ".github/workflows/editor.yml").read_text()
-    assert "for f in tokens.css editor-run.js vtable.js decode.js; do" in ci
+    assert "for f in tokens.css editor-run.js vtable.js decode.js plot.js \\" in ci
+    assert "vendor/uplot/uPlot.esm.js vendor/uplot/uPlot.min.css; do" in ci
     assert 'cmp "/opt/pm/pipeline_manager/frontend/src/vhil/shell/$f" "vhil/server/static/$f"' in ci
 
 

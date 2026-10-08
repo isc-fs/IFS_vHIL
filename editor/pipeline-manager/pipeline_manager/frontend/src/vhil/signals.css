@@ -1,0 +1,57 @@
+/* vHIL: the Signals tab (VhilSignals.vue) and the Artifacts tab
+   (VhilArtifacts.vue), on the tokens. The bar is the Bus tab's (bus.css);
+   uPlot's own sheet comes from the shell (plot.js), its legend set here. */
+
+.vhil-signals { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+/* Pipeline Manager lays every ul out as a column (styles/_global.scss). */
+.vhil-signal-chips {
+  display: flex; flex-direction: row; flex-wrap: wrap; gap: var(--sp-1); margin: 0; padding: var(--sp-1) var(--sp-3);
+  list-style: none; flex: none;
+}
+.vhil-signal-chip {
+  display: inline-flex; align-items: center; gap: var(--sp-1); padding: 0 0 0 var(--sp-2);
+  border: 1px solid var(--border-control); border-radius: var(--r-pill); font-size: var(--fs-small);
+}
+.vhil-signal-chip .vhil-btn { border: 0; background: none; min-height: 20px; }
+.vhil-signal-plots { flex: 1; min-height: 0; overflow-y: auto; padding: 0 var(--sp-3) var(--sp-3); }
+.vhil-signal-plot { margin: var(--sp-2) 0; min-width: 0; color: var(--fg); }
+.vhil-signal-plot .u-legend { font-size: var(--fs-small); font-family: var(--font-mono); color: var(--fg); }
+.vhil-signal-plot .u-legend th { font-weight: 400; }
+.vhil-signal-plot p { margin: 0; font-size: var(--fs-dense); }
+
+/* -- Artifacts -------------------------------------------------------------- */
+
+.vhil-artifacts { height: 100%; overflow-y: auto; padding: var(--sp-2) var(--sp-3); font-size: var(--fs-dense); }
+.vhil-artifacts h3 { font-size: var(--fs-title); font-weight: 600; margin: var(--sp-3) 0 var(--sp-1); }
+.vhil-artifacts h3:first-child { margin-top: 0; }
+.vhil-run-meta {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr)); gap: var(--sp-1) var(--sp-4);
+  margin: 0;
+}
+.vhil-run-meta div { display: flex; gap: var(--sp-2); min-width: 0; }
+.vhil-run-meta dt { color: var(--fg-muted); flex: none; }
+.vhil-run-meta dd { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vhil-run-state { font-weight: 600; }
+.vhil-run-state.--passed { color: var(--status-ok); }
+.vhil-run-state.--failed { color: var(--status-failed); }
+.vhil-run-state.--error { color: var(--status-error); }
+.vhil-run-state.--cancelled { color: var(--status-cancelled); }
+.vhil-run-state.--running, .vhil-run-state.--queued { color: var(--status-running); }
+.vhil-artifacts pre {
+  max-height: 24rem; overflow: auto; margin: var(--sp-1) 0; padding: var(--sp-2);
+  background: var(--bg-2); border-radius: var(--r-control); font-family: var(--font-mono);
+  font-size: var(--fs-small); white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.vhil-junit { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.vhil-junit th, .vhil-junit td {
+  text-align: left; padding: 2px var(--sp-2); border-bottom: 1px solid var(--line); vertical-align: top;
+}
+.vhil-junit th { color: var(--fg-muted); font-weight: 600; font-size: var(--fs-small); }
+.vhil-junit .num { text-align: right; white-space: nowrap; }
+.vhil-outcome { white-space: nowrap; font-weight: 600; }
+.vhil-outcome.--passed { color: var(--status-ok); }
+.vhil-outcome.--failed, .vhil-outcome.--error { color: var(--status-failed); }
+.vhil-outcome.--skipped { color: var(--status-cancelled); }
+.vhil-files { display: block; margin: 0; padding-left: var(--sp-4); list-style: disc; }
+.vhil-files li { margin: 2px 0; }
+.vhil-artifacts details > summary { cursor: pointer; }

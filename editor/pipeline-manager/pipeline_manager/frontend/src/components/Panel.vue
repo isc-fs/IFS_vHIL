@@ -35,7 +35,7 @@ export default defineComponent({
     backdrop-filter: v-bind('backdropFilter');
     position: v-bind('position');
     padding: $spacing-l;
-    color: white;
+    color: $white;
     left: 0%;
     z-index: 10;
     top: 0%;

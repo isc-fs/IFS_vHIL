@@ -7,10 +7,12 @@ editor/pipeline-manager/**/dist
 editor/pipeline-manager/**/__pycache__
 editor/pipeline-manager/**/.env.local
 editor/pipeline-manager/pipeline_manager/frontend/src/vhil/shell
-# The shell's tokens, fonts, run request, virtual-table window and frame
-# decoder, which the editor's build takes from here.
+# The shell's tokens, fonts, run request, virtual-table window, frame
+# decoder and plots (with uPlot), which the editor's build takes from here.
 !vhil/server/static/tokens.css
 !vhil/server/static/editor-run.js
 !vhil/server/static/vtable.js
 !vhil/server/static/decode.js
+!vhil/server/static/plot.js
+!vhil/server/static/vendor/uplot
 !vhil/server/static/fonts

@@ -1,6 +1,7 @@
 """M5.3 inspect (#115): a run's CAN contract (vhil/server/decode.py), the
-history filters, and the run page's static modules, including the browser
-decoder checked against vhil/candef.py under node (tests/js/)."""
+history filters, and the static modules the workspace shares with the shell
+(its run page is retired: the workspace's REPLAY shows a run), including the
+browser decoder checked against vhil/candef.py under node (tests/js/)."""
 import json
 import os
 import random
@@ -149,19 +150,18 @@ def test_history_filters_by_system_and_state(client, store):
 
 # -- static modules ------------------------------------------------------------------
 
-def test_the_run_page_modules_and_vendored_uplot_are_served(client):
-    for path in ("inspect.js", "plot.js", "decode.js", "vtable.js", "vendor/uplot/uPlot.esm.js",
+def test_the_shared_modules_and_vendored_uplot_are_served(client):
+    """The workspace's build copies these (one source); the front page only
+    redirects (app.js, editor.js)."""
+    for path in ("plot.js", "decode.js", "vtable.js", "vendor/uplot/uPlot.esm.js",
                  "vendor/uplot/uPlot.min.css", "vendor/uplot/LICENSE"):
         assert client.get(f"/static/{path}").status_code == 200, path
     assert "./vendor/uplot/uPlot.esm.js" in client.get("/static/plot.js").text
-    for path in ("inspect.js", "plot.js", "decode.js", "vtable.js", "app.js", "runs.js"):
+    for path in ("plot.js", "decode.js", "vtable.js", "app.js", "editor.js"):
         text = client.get(f"/static/{path}").text
         assert "cdn" not in text.lower() and "https://" not in text, f"{path} loads something remote"
-
-
-def test_every_fetch_goes_through_api(client):
-    for path in ("inspect.js", "runs.js"):
-        assert "fetch(" not in client.get(f"/static/{path}").text, path
+    for gone in ("inspect.js", "runs.js"):
+        assert client.get(f"/static/{gone}").status_code == 404, gone
 
 
 @pytest.mark.skipif(NODE is None, reason="node not installed (the ifs-vhil-editor image has it)")

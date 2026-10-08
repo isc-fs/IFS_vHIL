@@ -512,7 +512,8 @@ On the deployed app, in a browser, signed in as an isc-fs member:
    `python -m vhil.system validate` does and commits `systems/<id>.yaml` on
    that branch in the workspace; **Open PR** pushes it with the App token.
 2. **Run**: queue a run of the system and watch it live.
-3. **Inspect**: the run page: frames with decoding, plots, artifacts.
+3. **Inspect**: the run's REPLAY in the workspace: frames with decoding (Bus),
+   plots (Signals), log (Log), test results and files (Artifacts).
 4. **CI path**: on the pushed branch, the saved file runs unchanged:
    ```sh
    git fetch origin feat/<you>-try && git checkout FETCH_HEAD
