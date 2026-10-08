@@ -579,6 +579,60 @@ def test_executor_streams_frames_samples_and_edges_in_time_order(tmp_path):
     assert calls["set_voltage"] == ("set_voltage", 50_000, "PF7", 1.5)
 
 
+class ExactSim(FakeSim):
+    """RunFor stops where it is asked to, as Renode's does: a stop between two
+    sync points starts the next quantum there, moving every later sync point."""
+
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self.stops = []
+
+    def run_for(self, ms=0, us=0):
+        self.now += int(ms * 1000) + us
+        self.stops.append(self.now)
+        return self.now
+
+
+def test_a_stimulus_between_sync_points_runs_at_the_next(tmp_path):
+    """docs/scenarios.md, "Times": the ECU system syncs every 500 us. A pin
+    set at 120.2 ms stopped the run there and shifted every later sync point
+    (the observer effect #183 fixed for samples); it runs at 120.5 ms now,
+    and the trace and the summary say so. A frame's time is moved the same
+    way (the probe sends it at the next sync point anyway, #130)."""
+    scenario = {"kind": "run", "virtual_ms": 300, "slice_ms": 100,
+                "stimuli": [{"kind": "gpio", "at_ms": 120.2, "board": "ecu", "pin": "PB5",
+                             "level": True},
+                            {"kind": "can_periodic", "at_ms": 0, "bus": "can_dash", "id": 0x10,
+                             "data": "", "period_ms": 20, "until_ms": 150.25},
+                            {"kind": "analog", "at_ms": 50.5, "board": "ecu", "pin": "PF7",
+                             "volts": 1.5}]}
+    sim = ExactSim()
+    trace = TraceWriter(tmp_path / "trace.jsonl")
+    summary = execute_run(sim, scenario, trace)
+    trace.close()
+    recs = read_trace(tmp_path / "trace.jsonl")
+    assert all(t % 500 == 0 for t in sim.stops), sim.stops
+    calls = {c[0]: c for c in sim.calls if c[0] != "read_symbol"}
+    assert calls["set_input"] == ("set_input", 120_500, "sysbus.gpioPortB", 5, True)
+    assert calls["stop_periodic"] == ("stop_periodic", 150_500, "can_dash", "stim1")
+    assert calls["set_voltage"] == ("set_voltage", 50_500, "PF7", 1.5)   # on the grid already
+    assert summary["aligned"] == [
+        {"row": "stimuli[0].at_ms", "at_us": 120_200, "applied_us": 120_500},
+        {"row": "stimuli[1].until_ms", "at_us": 150_250, "applied_us": 150_500}]
+    logs = [(r["t_us"], r["text"]) for r in recs if r["kind"] == "log"]
+    assert (120_500, "stimuli[0].at_ms: 120.2 ms is between sync points (every 0.5 ms): "
+                     "applied at 120.5 ms") in logs
+    assert (120_500, "stimulus gpio ecu.PB5 = 1") in logs
+
+
+def test_a_scenario_on_the_grid_is_not_aligned(tmp_path):
+    _, summary, _ = run_fake(tmp_path, {"kind": "run", "virtual_ms": 200, "slice_ms": 100,
+                                        "stimuli": [{"kind": "gpio", "at_ms": 120.5,
+                                                     "board": "ecu", "pin": "PB5",
+                                                     "level": True}]})
+    assert "aligned" not in summary
+
+
 def test_executor_is_flushed_slice_by_slice(tmp_path):
     seen = []
 

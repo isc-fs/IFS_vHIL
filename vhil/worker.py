@@ -393,9 +393,31 @@ def execute_scenario(sim, scenario: dict, trace: TraceWriter, *,
     periodic = {s["name"]: (s["bus"], f"stim{i}", s["id"]) for i, s in enumerate(stimuli)
                 if s["kind"] == "can_periodic" and s.get("name")}
 
-    def schedule(s: dict, t_us: int, key: str) -> None:
+    # Every stimulus takes effect at a sync point (docs/scenarios.md,
+    # "Times"). The probe sends a CAN frame at the first one at or after its
+    # time anyway (vhil/sim.py, #130); a pin, a voltage, a periodic's stop or
+    # a watch's start stops the run at its time, and a stop between two sync
+    # points moved every later one, and with them when the firmware's frames
+    # went out: a different run (#183 for samples). So a time between two is
+    # moved to the next, said in the trace and in the summary's `aligned`.
+    quantum_us = system.sync_quantum_us()
+    aligned: list[dict] = []
+
+    def on_grid(t_us: int, where: str) -> int:
+        g = -(-t_us // quantum_us) * quantum_us
+        if g != t_us:
+            aligned.append({"row": where, "at_us": t_us, "applied_us": g})
+            note(g, f"{where}: {t_us / 1000:g} ms is between sync points (every "
+                    f"{quantum_us / 1000:g} ms): applied at {g / 1000:g} ms")
+        return g
+
+    def schedule(s: dict, t_us: int, key: str, where: Optional[str] = None) -> None:
         """One stimulus at virtual time t_us (a scenario row's, or a live op's
-        at the end of the coming slice); `key` names a periodic's sender."""
+        at the end of the coming slice), moved to the next sync point if it
+        falls between two; `key` names a periodic's sender, `where` the row
+        (for the trace)."""
+        where = where or key
+        t_us = on_grid(t_us, f"{where}.at_ms" if where.startswith("stimuli") else where)
         kind = s["kind"]
         what = f"stimulus {kind}"
         if kind in ("can_send", "can_periodic"):
@@ -410,8 +432,9 @@ def execute_scenario(sim, scenario: dict, trace: TraceWriter, *,
                               start_us=t_us, extended=s.get("ext", False))
             note(t_us, f"{what} every {s['period_ms']} ms")
             if s.get("until_ms") is not None:
-                at(_us(s["until_ms"]), lambda bus=bus, key=key: bus.stop_periodic(key))
-                note(_us(s["until_ms"]), f"{what} stopped")
+                until = on_grid(_us(s["until_ms"]), f"{where}.until_ms")
+                at(until, lambda bus=bus, key=key: bus.stop_periodic(key))
+                note(until, f"{what} stopped")
         elif kind == "stop_periodic":
             bus_name, pkey, can_id = periodic[s["periodic"]]
             at(t_us, lambda bus=sim.can(bus_name), key=pkey: bus.stop_periodic(key))
@@ -440,7 +463,7 @@ def execute_scenario(sim, scenario: dict, trace: TraceWriter, *,
             raise ValueError(f"unknown stimulus kind '{kind}'")
 
     for i, s in enumerate(stimuli):
-        schedule(s, _us(s.get("at_ms", 0)), f"stim{i}")
+        schedule(s, _us(s.get("at_ms", 0)), f"stim{i}", f"stimuli[{i}]")
 
     for w in scenario.get("watch", []):
         if w["kind"] == "pin":
@@ -531,7 +554,7 @@ def execute_scenario(sim, scenario: dict, trace: TraceWriter, *,
             elif kind == "watch" and op.get("symbol") and getattr(sim, "firmware", None) \
                     and not has_symbol(sim, op["board"], op["symbol"]):
                 raise ValueError(f"no symbol {op['symbol']} in {op['board']}'s image")
-            schedule(op, t_us, f"live{row['id']}")
+            schedule(op, t_us, f"live{row['id']}", f"op {row['id']}")
         except (KeyError, ValueError, SystemError) as e:
             return "refused", None, str(e).strip("'\"")
         return "applied", t_us, ""
@@ -811,6 +834,8 @@ def execute_scenario(sim, scenario: dict, trace: TraceWriter, *,
         now = new
     summary = {"virtual_ms": scenario["virtual_ms"], "frames": frames, "sent": sent, **counts,
                "bus_load": load_summary(loads)}
+    if aligned:
+        summary["aligned"] = aligned
     if session is not None:
         summary.update(virtual_ms=math.ceil(now / 1000), stopped=live["stop"] or "end",
                        ops_applied=live["applied"], ops_refused=live["refused"])

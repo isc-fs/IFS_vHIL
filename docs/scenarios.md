@@ -85,6 +85,29 @@ session's ops are these rows without their time
 the `watch` list's rows hold from power-on. The web app's runs also record
 every board's state view ([state-view.md](state-view.md)).
 
+## Times
+
+Times are virtual ms from the system's power-on, and a stimulus takes effect
+at a sync point: the boards meet every `time.quantum_s` of the system (500 µs
+in `systems/*.yaml`; Renode's 100 µs without it), counted from power-on. A
+row's `at_ms` or `until_ms` between two sync points runs at the next one. The
+worker moves it there (`vhil/worker.py`, `on_grid`) and says so: a log record
+at the applied time ("stimuli[2].at_ms: 5600.2 ms is between sync points
+(every 0.5 ms): applied at 5600.5 ms") and the run summary's `aligned`, one
+`{row, at_us, applied_us}` per moved time. The check warns about each, with
+the time it runs at, and the Scenario tab shows it next to the row's time
+(`→ 5600.5`, from the contract's `sync_quantum_us`).
+
+Rounding, rather than refusing the row, keeps every scenario runnable,
+a recorded live session's among them (its ops are applied at slice ends,
+on the grid already). Stopping the run between two sync points, as the
+worker did before, started the next quantum there: every later sync point
+moved, and with it when each firmware's frames went out, so the row changed
+the run it was in (the observer effect #183 fixed for samples). A CAN
+frame's time was already a sync point in effect (the probe sends at the
+first one at or after it, #130); moving it changes nothing it does. An
+expect's window is read from the trace and stops nothing: it is not moved.
+
 ## Expects
 
 An expect checks one signal over a window of virtual time,
