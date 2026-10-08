@@ -249,6 +249,64 @@ def test_unknown_catalogue_entries_are_rejected(tmp_path):
 
 # -- devices ------------------------------------------------------------------
 
+# -- GPIO devices: the ECU's nRF24L01+ (#193) ------------------------------------
+
+RADIO = ("  radio: {model: nrf24l01p, pins: {csn: ecu.PB0, sck: ecu.PA5, mosi: ecu.PA7, "
+         "miso: ecu.PA6, ce: ecu.PC5, irq: ecu.PC4}}\n")
+
+
+def test_a_gpio_device_renders_its_pins():
+    """The pins the model drives come from its GPIO properties, the ones the
+    MCU drives go from each port's pin to the model's input
+    (catalog/models/nrf24l01p.yaml gpio_in / gpio_out)."""
+    system = System(REPO / "systems" / "ecu.yaml")
+    assert system.radios() == [("radio", "ecu")]
+    block = system.render_renode().split("# device radio: nrf24l01p\n")[1].split('"""')[1]
+    assert block == ("\nradio: Wireless.Nrf24l01p @ sysbus\n"
+                     "    Miso -> gpioPortA@6\n"
+                     "    Irq -> gpioPortC@4\n\n"
+                     "gpioPortB:\n    0 -> radio@0\n\n"
+                     "gpioPortA:\n    5 -> radio@1\n    7 -> radio@2\n\n"
+                     "gpioPortC:\n    5 -> radio@3\n")
+    assert "include @" + str(REPO / "models/renode/Nrf24l01p.cs") in system.render_renode()
+
+
+@pytest.mark.parametrize("name", ["ecu.yaml", "ecu-ams.yaml"])
+def test_the_radio_changes_the_ecu_scripts_only_by_itself(tmp_path, name):
+    """systems/ecu.yaml and ecu-ams.yaml render as they did before the radio
+    (#193), plus its source and its device block, and nothing else."""
+    import difflib
+
+    path = REPO / "systems" / name
+    doc = yaml.safe_load(path.read_text())
+    del doc["devices"]["radio"]
+    if not doc["devices"]:
+        del doc["devices"]
+    before = tmp_path / name
+    before.write_text(yaml.safe_dump(doc, sort_keys=False))
+    old = System(before).render_renode().replace(f"from {name}", "from X").splitlines()
+    new = System(path).render_renode().replace(f"from {name}", "from X").splitlines()
+    added = [line for line in difflib.ndiff(old, new) if line.startswith(("+ ", "- "))]
+    assert all(line.startswith("+ ") for line in added), added
+    assert [line[2:] for line in added] == [
+        f"include @{REPO / 'models/renode/Nrf24l01p.cs'}",
+        "# device radio: nrf24l01p", 'machine LoadPlatformDescriptionFromString """',
+        "radio: Wireless.Nrf24l01p @ sysbus", "    Miso -> gpioPortA@6", "    Irq -> gpioPortC@4",
+        "", "gpioPortB:", "    0 -> radio@0", "", "gpioPortA:", "    5 -> radio@1",
+        "    7 -> radio@2", "", "gpioPortC:", "    5 -> radio@3", '"""']
+
+
+@pytest.mark.parametrize("pins, message", [
+    (RADIO.replace("ce: ecu.PC5, ", ""), "wires pins .* got"),
+    (RADIO.replace("ecu.PA5", "ecu.PF7"), "pin sck to 'ecu.PF7', which is analog, not a GPIO"),
+    (RADIO.replace("ecu.PA5", "ecu.PA7"), "two of its pins on one board GPIO"),
+    (RADIO.replace("ecu.PA5", "ecu.PA9"), "PA9"),
+])
+def test_a_gpio_device_needs_each_pin_on_its_own_gpio(tmp_path, pins, message):
+    with pytest.raises(SystemError, match=message):
+        System(_system(tmp_path, "devices:\n" + pins))
+
+
 def test_ams_renders_the_isospi_chain_in_order():
     s = System(REPO / "systems" / "ams.yaml").render_renode()
     assert s.count("models/renode/IsoSpi.cs") == 1        # shared by both models, once
@@ -473,7 +531,7 @@ PIN_LABELS = {
             "PB4": "RTDS", "PB5": "START", "PF7": "S_BRAKE", "PF8": "APPS_1", "PF9": "APPS_2",
             "PB9": "SPARE_J3", "PC1": "SPARE_J3", "PB6": "DISCHARGE", "PD5": "S_TEMP_REFRI",
             "USART10": "GPS", "PB0": "NRF24_CS", "PC5": "NRF24_CE", "PC4": "NRF24_IRQ",
-            "PB7": "SPARE_J3", "PB8": "SPARE_J3", "PF10": "SPARE_J3", "PC0": "SPARE_J3",
+            "PA5": "NRF24_SCK", "PA6": "NRF24_MISO", "PA7": "NRF24_MOSI", "PB7": "SPARE_J3", "PB8": "SPARE_J3", "PF10": "SPARE_J3", "PC0": "SPARE_J3",
             "PC2_C": "SPARE_J3"},
     "ams": {"FDCAN1": "CAN_ACU", "SPI1": "LTC6820", "PB9": "LTC6820_CS", "PB4": "AMS_OK",
             "PB5": "AIR_P", "PF7": "S_CURRENT_P", "PF8": "S_CURRENT_N", "PF9": "TSMS",

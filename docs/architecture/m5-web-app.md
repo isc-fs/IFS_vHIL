@@ -115,7 +115,8 @@ Trace record kinds: `frame {t_us, bus, id, ext, data, src?}` (`src:
 sent them; counted in the summary's `sent`, not `frames`),
 `edge {t_us, board, pin, level, initial?}` (`initial`: a pin an expect reads,
 its level when the run starts), `sample {t_us, board, name, value}`
-(read_symbol / analog values the scenario asks to watch), `log {t_us, text}`;
+(read_symbol / analog values the scenario asks to watch), `log {t_us, text}`,
+`radio {t_us, board, device, payload}` (a payload a radio device sent);
 a live session's `op {t_us, op_id, op, status, login, detail?}` and
 `clock {t_us, rtf, paused, wall_s, idle_left_s}`.
 

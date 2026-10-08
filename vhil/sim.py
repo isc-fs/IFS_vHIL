@@ -116,6 +116,23 @@ class Edge:
     level: bool
 
 
+@dataclass(frozen=True)
+class Payload:
+    """One payload a radio sent (models/renode/Nrf24l01p.cs, Payloads): t_us
+    when its packet ended and TX_DS was set."""
+    t_us: int
+    data: bytes
+
+
+def parse_payloads(text: str) -> list[Payload]:
+    out = []
+    for line in text.splitlines():
+        parts = line.split()
+        if len(parts) == 2 and parts[0].isdigit():
+            out.append(Payload(int(parts[0]), bytes.fromhex(parts[1])))
+    return out
+
+
 def parse_frames(text: str) -> list[Frame]:
     out = []
     for line in text.splitlines():
@@ -370,6 +387,35 @@ class BoardIO:
         return out
 
 
+class Radio:
+    """A radio device of the system (a model with `interface.radio`, e.g. the
+    ECU's nRF24L01+): what it sent. On its board's machine at
+    sysbus.<device> (vhil.system, _renode_device)."""
+
+    def __init__(self, sim: "Sim", device: str):
+        self.sim, self.device = sim, device
+        self.board = sim.system.board_of_device(device)
+        self.path = f"sysbus.{rn.ident(device)}"
+
+    def payloads(self, since_us: int = 0) -> list[Payload]:
+        return parse_payloads(self.sim.call(self.path, "Payloads", _int(since_us), board=self.board))
+
+    def tx_ds_cleared(self, since_us: int = 0) -> list[tuple[int, int]]:
+        """[(set_us, cleared_us)] per TX_DS the firmware cleared."""
+        out = []
+        for line in self.sim.call(self.path, "TxDsCleared", _int(since_us), board=self.board).splitlines():
+            parts = line.split()
+            if len(parts) == 2 and parts[0].isdigit():
+                out.append((int(parts[0]), int(parts[1])))
+        return out
+
+    def count(self, what: str = "Transmitted") -> int:
+        """Transmitted or ShortCePulses."""
+        if what not in ("Transmitted", "ShortCePulses"):
+            raise ValueError(f"no count {what!r}")
+        return int(self.sim.call(self.path, what, board=self.board).strip(), 0)
+
+
 class Sim:
     def __init__(self, system: Path | str, firmware: dict[str, Path | str], *,
                  renode: str = DEFAULT_RENODE, advance_immediately: bool = True,
@@ -576,6 +622,11 @@ class Sim:
         if board not in self.system.boards:
             raise KeyError(f"no board '{board}' in {self.system.id}")
         return BoardIO(self, board)
+
+    def radio(self, device: str) -> Radio:
+        if device not in dict(self.system.radios()):
+            raise KeyError(f"no radio '{device}' in {self.system.id}")
+        return Radio(self, device)
 
     def call(self, path: str, method: str, *args, board: Optional[str] = None) -> str:
         """Call a peripheral or model method, e.g.

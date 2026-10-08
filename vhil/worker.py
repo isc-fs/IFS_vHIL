@@ -7,7 +7,7 @@ executes their scenario with the same code CI runs: a `run` scenario drives
 `vhil.sim.Sim` directly, a `pytest` scenario runs pytest in a subprocess.
 
 A `run` advances virtual time in slices (slice_ms, default 100 ms). After
-each slice the frames, GPIO edges and samples it produced are appended to
+each slice the frames, GPIO edges, samples and radio payloads it produced are appended to
 `<results>/<id>/trace.jsonl` in virtual-time order and flushed, so the API's
 live WebSocket streams them while the run goes on; then the run's DB state is
 read, and a run cancelled from the API stops there. Each slice also writes a
@@ -805,6 +805,11 @@ def execute_scenario(sim, scenario: dict, trace: TraceWriter, *,
                     batch.append({"kind": "edge", "t_us": e.t_us, "board": board,
                                   "pin": pin_names.get((board, e.pin), e.pin), "level": int(e.level)})
                     counts["edges"] += 1
+            # What each radio sent (docs/integration-contract.md, `radio`).
+            for device, board in system.radios():
+                for p in sim.radio(device).payloads(since_us=since):
+                    batch.append({"kind": "radio", "t_us": p.t_us, "board": board,
+                                  "device": device, "payload": p.data.hex()})
             while notes and notes[0][0] <= now:
                 batch.append(heapq.heappop(notes)[2])
             if session is not None:
