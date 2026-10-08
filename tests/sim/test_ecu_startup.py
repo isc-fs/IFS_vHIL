@@ -116,3 +116,25 @@ def test_r2d_dwells_2_s_with_the_buzzer_on(ecu):
     edges = io.edges(pin)
     assert len(edges) >= 2 and edges[0].level and not edges[1].level
     assert abs((edges[1].t_us - edges[0].t_us) / 1000 - R2D_SOUND_MS) <= TICK_MS
+
+
+PRECHARGE_TIMEOUT_MS = 10_000       # ecu_config.hpp:33
+
+
+def test_precharge_retries_past_its_timeout(ecu):
+    """control.cpp:156-163: Precharge has a 10 s window, and on timeout it
+    re-enters Precharge (a retry, not an error state): the ECU never leaves
+    Precharge without the AMS's verdict, and a verdict arriving after the
+    first window still advances it."""
+    _vdc(ecu)
+    _ams(ecu, ok=False)
+    ecu.run_for(ms=3 * TICK_MS)
+    assert _state(ecu) == PRECHARGE
+    states = set()
+    for _ in range(int((PRECHARGE_TIMEOUT_MS + 2000) / 100)):
+        ecu.run_for(ms=100)
+        states.add(_state(ecu))
+    assert states == {PRECHARGE}, f"left Precharge with no ok_precharge: {sorted(states)}"
+    ecu.can("can_acu").update_periodic("ams", b"\x01")
+    ecu.run_for(ms=3 * TICK_MS)
+    assert _state(ecu) == WAIT_START_BRAKE

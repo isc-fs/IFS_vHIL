@@ -135,7 +135,7 @@ smoke)
 sim)
     in_container "$prelude"'
         need_elf ecu; need_elf ams
-        VHIL_ECU_ELF=$(elf ecu) VHIL_AMS_ELF=$(elf ams) VHIL_CAN_BOOTLOADER_ELF=$(elf ecu.bootloader) \
+        export VHIL_ECU_ELF=$(elf ecu) VHIL_AMS_ELF=$(elf ams) VHIL_CAN_BOOTLOADER_ELF=$(elf ecu.bootloader)
             # tests/sim unless the arguments name tests themselves
             # (sim tests/sim/test_x.py[::name] runs just those).
             paths=tests/sim
