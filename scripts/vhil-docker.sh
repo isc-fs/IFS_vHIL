@@ -9,7 +9,8 @@
 #   scripts/vhil-docker.sh fw [ecu ams ...]      build firmware from systems/<s>.yaml
 #   scripts/vhil-docker.sh unit                  tests/unit + validate every system
 #   scripts/vhil-docker.sh smoke <ecu|ams>       tests/<s>_smoke.robot
-#   scripts/vhil-docker.sh sim [pytest args]     tests/sim in virtual time
+#   scripts/vhil-docker.sh sim [pytest args]     tests/sim in virtual time (or just the
+#                                                tests/... files the args name)
 #   scripts/vhil-docker.sh scenarios [pytest args]
 #                                                every committed scenario (tests/scenarios)
 #   scripts/vhil-docker.sh coverage [glob] [pytest args]
@@ -135,7 +136,11 @@ sim)
     in_container "$prelude"'
         need_elf ecu; need_elf ams
         VHIL_ECU_ELF=$(elf ecu) VHIL_AMS_ELF=$(elf ams) VHIL_CAN_BOOTLOADER_ELF=$(elf ecu.bootloader) \
-            python -m pytest tests/sim -v --sim-log-dir results/sim-logs "$@"' "$@" ;;
+            # tests/sim unless the arguments name tests themselves
+            # (sim tests/sim/test_x.py[::name] runs just those).
+            paths=tests/sim
+            for a in "$@"; do case "$a" in tests/*) paths=; break ;; esac; done
+            python -m pytest $paths -v --sim-log-dir results/sim-logs "$@"' "$@" ;;
 scenarios)
     in_container "$prelude"'
         need_elf ecu; need_elf ams
