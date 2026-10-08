@@ -333,3 +333,55 @@ def test_silent_inverter_in_active_cuts_torque(ecu):
     assert late
     assert all(w[-1] == ("T", 0) and w[0] != TORQUE_ENABLE for w in _words(late)), \
         f"still commanding {_words(late)[-1]} {len(late)} cycles after the inverter went silent"
+
+
+INV_OFF, INV_SHUTDOWN = 0, 13
+
+
+def _to_wait_inv_standby(ecu, inv_state):
+    """R2D with the inverter reporting inv_state, to WaitInvStandby."""
+    _inv(ecu, inv_state)
+    _vdc(ecu)
+    _ams(ecu)
+    _pedals(ecu)
+    ecu.run_for(ms=1000)
+    assert _state(ecu) == WAIT_START_BRAKE
+    _pedals(ecu, brake=1.0)
+    ecu.run_for(ms=50)
+    io = ecu.io("ecu")
+    io.set_input("sysbus.gpioPortB", 5, True)
+    ecu.run_for(ms=100)
+    io.set_input("sysbus.gpioPortB", 5, False)
+    _pedals(ecu)
+    ecu.run_until(lambda: _state(ecu) == WAIT_INV_STANDBY, timeout_ms=R2D_SOUND_MS + 200)
+
+
+@pytest.mark.parametrize("inv_state, words", [
+    (INV_STANDBY, (READY, ("T", 0))),
+    (INV_OFF, (OFF, READY, ("T", 0))),
+    (INV_SHUTDOWN, (OFF, ("T", 0))),
+], ids=["standby-ready", "off-then-ready", "shutdown-off-only"])
+def test_the_climb_to_ready_speaks_each_state_s_word(ecu, inv_state, words):
+    """IFS08-CE-ECU#148/#168 (control.cpp:260-299, HANDOVER.md section 3):
+    this A16 inverter will not take Ready from Shutdown(13) or Off(0). In
+    WaitInvStandby the ECU sends, every cycle: Ready from Standby(3); the
+    IFS07 dual word Off THEN Ready from Off(0); Off alone from Shutdown(13).
+    The bench-proven TS-off recovery; 'do not simplify that block'."""
+    _to_wait_inv_standby(ecu, inv_state)
+    t = ecu.run_for(ms=50)
+    ecu.run_for(ms=500)
+    assert _state(ecu) == WAIT_INV_STANDBY
+    assert set(_words(_cycles(ecu, t))) == {words}
+
+
+def test_a_ts_off_inverter_climbs_back_through_off_to_active(ecu):
+    """The recovery the words exist for: Shutdown(13) -> Off(0) -> Standby(3)
+    -> Ready(4) as the inverter obeys, and the ECU reaches Active on Ready
+    with no driver action (control.cpp:184-186)."""
+    _to_wait_inv_standby(ecu, INV_SHUTDOWN)
+    for state in (INV_OFF, INV_STANDBY):
+        _inv(ecu, state)
+        ecu.run_for(ms=200)
+        assert _state(ecu) == WAIT_INV_STANDBY
+    _inv(ecu, INV_READY)
+    ecu.run_until(lambda: _state(ecu) == ACTIVE, timeout_ms=100)
