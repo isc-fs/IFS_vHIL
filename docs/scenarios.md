@@ -199,9 +199,8 @@ exits 1 and the job loses `continue-on-error`) when all of these hold:
   that window (a re-run that changes the verdict is a flake, and resets the
   count once its cause is fixed).
 - **The nightly actually runs.** GitHub fires `schedule` only from the
-  workflow file on the default branch (`main`), which does not carry
-  `scenarios.yml` until the next `dev` → `main` release (#197); until then
-  the "nightly" is a manual `gh workflow run scenarios.yml --ref dev`.
+  workflow file on the default branch; `dev` has been the default since
+  #197, so the nightly runs from `dev`'s `scenarios.yml`.
 
 The flip is the owner's call, tracked in #198; meeting the criteria does not
 flip it by itself.
