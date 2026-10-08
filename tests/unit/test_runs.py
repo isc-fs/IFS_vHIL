@@ -306,28 +306,43 @@ def test_a_page_reads_from_its_cursor_not_from_the_start(tmp_path):
     assert [json.loads(x) for x in rest] == recs[500:] and end == path.stat().st_size
 
 
-def test_paging_a_large_trace_is_exact_and_each_page_costs_its_size(client, settings):
+def test_paging_a_large_trace_is_exact_and_each_page_costs_its_size(client, settings,
+                                                                    monkeypatch):
     """362k records took ~6 s to page through when every page re-read the
-    file from the start. With the cursor, the last page costs what the
-    first does (bound kept loose for slow CI), and the pages add up to
-    exactly the file."""
+    file from the start. With the cursor, the last page parses what the
+    first does (counted, not timed: a wall-clock bound flaked on slow CI),
+    and the pages add up to exactly the file."""
+    from vhil.server import runs as vruns
     run_id = post(client).json()["run_id"]
     n, limit = 300_000, 50_000
     recs = big_trace(settings.results / str(run_id) / "trace.jsonl", n,
                      trace_header(RunStore(settings.db).get(run_id)))
-    times, got, cursor = [], [], ""
+    parsed = [0]
+
+    class CountingJson:
+        def __getattr__(self, name):
+            return getattr(json, name)
+
+        def loads(self, *a, **kw):
+            parsed[0] += 1
+            return json.loads(*a, **kw)
+
+    monkeypatch.setattr(vruns, "json", CountingJson())
+    costs, got, cursor = [], [], ""
     while True:
-        t0 = time.perf_counter()
+        parsed[0] = 0
         r = client.get(f"/api/runs/{run_id}/trace?limit={limit}" + (f"&cursor={cursor}" if cursor else ""))
         page = r.json()
-        times.append(time.perf_counter() - t0)
+        costs.append(parsed[0])
         got.extend(page)
         if len(page) < limit:
             break
         cursor = r.headers["x-trace-cursor"]
     assert got == recs
-    assert len(times) == n // limit + 1
-    assert times[-2] < 3 * times[0] + 0.2, times   # the last full page vs the first
+    assert len(costs) == n // limit + 1
+    # Each page parses its own records (plus the header and the run's row),
+    # never the records before its cursor.
+    assert all(c <= limit + 20 for c in costs), costs
 
 
 def test_trace_skips_a_half_written_line(settings):
@@ -1361,7 +1376,8 @@ def test_the_worker_writes_the_runs_header_first(settings, store):
     path = settings.results / str(run_id) / "trace.jsonl"
     token = store.get(run_id)["token"]
     header = json.loads(path.read_text().splitlines()[0])
-    assert header == {"kind": "run", "t_us": 0, "run": run_id, "token": token, "attempt": 1}
+    assert header == {"kind": "run", "t_us": 0, "run": run_id, "token": token, "attempt": 1,
+                      "contract": 1}
     assert read_trace(path, token=token) == read_trace(path) != []
     assert read_trace(path, token="f" * 32) == []
 

@@ -37,7 +37,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/health")
     def health():
         return {"status": "ok", "version": _version(), "auth": settings.auth,
-                "workspace_ref": ws.ref()}
+                "workspace_ref": ws.ref(), "contract": runs.CONTRACT_VERSION}
 
     @app.get("/api/catalog")
     def catalog():
