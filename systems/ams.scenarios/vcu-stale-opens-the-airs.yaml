@@ -1,0 +1,25 @@
+kind: scenario
+system: ams
+description: "VcuStale in Run (FS shutdown within 500 ms): the car armed as in tsms-precharge-run, then the ECU's 0x100 stops. 200 ms after its last frame the AMS latches Error, reason VcuStale (11), opens AIR+, AIR- and PRE and drops AMS_OK in the same tick, reports Error on 0x4A0, and stays latched. IFS08-CE-AMS safety_predicates.hpp (VcuStale), safety_task.cpp latch_error_, ams_config.hpp VcuStaleMs; tests/sim/test_ams_fsm_car.py, test_ams_contactors.py."
+virtual_ms: 9000
+stimuli:
+  - {kind: can_periodic, name: vcu, at_ms: 2500, bus: can_acu, id: 0x100, data: "000002", period_ms: 10}
+  - {kind: gpio, name: tsms-on, at_ms: 5500, board: ams, pin: PF9, level: true}
+  - {kind: gpio, name: dash-press, at_ms: 5600, board: ams, pin: PF10, level: true}
+  - {kind: gpio, name: dash-release, at_ms: 5650, board: ams, pin: PF10, level: false}
+  - {kind: stop_periodic, at_ms: 6500, periodic: vcu}
+  - {kind: can_periodic, name: vcu-link, at_ms: 6500, bus: can_acu, id: 0x100, data: "640102", period_ms: 10, until_ms: 7500}
+watch:
+  - {kind: symbol, board: ams, name: g_state_telemetry, size: 1, period_ms: 10}
+  - {kind: symbol, board: ams, name: g_fault_reason_telemetry, size: 1, period_ms: 10}
+expect:
+  - {check: eventually, name: run, at_ms: 6500, until_ms: 6800, signal: "symbol:ams.g_state_telemetry", value: 3}
+  - {check: never, name: no-error-while-fed, at_ms: 0, until_ms: 7690, signal: "symbol:ams.g_state_telemetry", value: 5}
+  - {check: eventually, name: vcu-stale-error, at_ms: 7690, until_ms: 7760, signal: "symbol:ams.g_state_telemetry", value: 5}
+  - {check: always, name: latched, at_ms: 7800, signal: "symbol:ams.g_state_telemetry", value: 5}
+  - {check: always, name: reason-vcu-stale, at_ms: 7800, signal: "symbol:ams.g_fault_reason_telemetry", value: 11}
+  - {check: always, name: air-plus-open, at_ms: 7800, signal: "pin:ams.PB5", value: low}
+  - {check: always, name: air-minus-open, at_ms: 7800, signal: "pin:ams.PB6", value: low}
+  - {check: always, name: precharge-open, at_ms: 7800, signal: "pin:ams.PB7", value: low}
+  - {check: always, name: ams-ok-dropped, at_ms: 7800, signal: "pin:ams.PB4", value: low}
+  - {check: eventually, name: error-on-can, at_ms: 7700, until_ms: 8400, signal: "frame:can_acu.AMS_status.fsm_state", value: 5}
