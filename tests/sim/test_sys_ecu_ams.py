@@ -224,3 +224,123 @@ def test_a_dead_ams_goes_stale_at_the_ecu_not_into_error(rig):
     assert first_zero is not None, "ts_active never dropped"
     assert first_zero.t_us - t0 <= 310_000, f"ts_active dropped after {(first_zero.t_us - t0) / 1000} ms"
     assert rig.ecu_state() != ECU_AMS_ERROR
+
+
+class StrandedLinkRig(Rig):
+    """The DC link with its discharge path (ECU discharge.hpp:3-23, AMS
+    acu_discharge_interlock.def:5-16): the pack charges it while AIR- and
+    PRE or AIR+ are closed; otherwise the bleed resistor drains it while the
+    shutdown circuit is open (TSMS off: the NC discharge relay drops) or the
+    ECU secures the discharge (PB6 high: its coil-interrupt relay opens the
+    discharge relay's coil); with the SDC closed and the ECU permitting,
+    nothing drains it: a stranded link. The bleed is an RC decay,
+    BLEED_TAU_MS."""
+    BLEED_TAU_MS = 300
+
+    def __init__(self, sim):
+        super().__init__(sim)
+        self.ecu_io = sim.io("ecu")
+        self.secure_pin = self.ecu_io.watch(GPIOB, 6)
+        self.tsms = False
+        self.volts = 0.0
+
+    def set_tsms(self, on):
+        self.tsms = on
+        self.ams_io.set_input(GPIOF, TSMS, on)
+
+    def run(self, ms, step_ms=10):
+        for _ in range(int(ms // step_ms)):
+            self.sim.run_for(ms=step_ms)
+            self._check_overflow()
+            closed = {n: self.ams_io.level(p) for n, p in self.pins.items()}
+            if closed["air_n"] and (closed["pre"] or closed["air_p"]):
+                self.volts = PACK_V
+            elif not self.tsms or self.ecu_io.level(self.secure_pin):
+                self.volts *= 1 - step_ms / self.BLEED_TAU_MS
+                if self.volts < 1:
+                    self.volts = 0.0
+            self._link(int(self.volts))
+
+    def press(self):
+        self.ams_io.set_input(GPIOF, DASH_CHG, True)
+        self.run(50)
+        self.ams_io.set_input(GPIOF, DASH_CHG, False)
+
+
+@pytest.fixture
+def stranded(images):
+    with Sim(REPO / "systems" / "ecu-ams.yaml", images("ecu-ams")) as sim:
+        rig = StrandedLinkRig(sim)
+        sim.wait_for_app()
+        rig.run(3000)
+        yield rig
+
+
+def test_a_stranded_link_is_drained_before_the_car_re_arms(stranded):
+    """The discharge interlock end to end, AMS and ECU on one bus (AMS
+    FMEA.md DISCHARGE-1: 'both halves exist, the pairing is unproven'). The
+    shutdown circuit is cycled in Run faster than the bleed: the AMS drops to
+    Start (not a fault), the link is left stranded at a few hundred volts.
+    The AMS reports fsm_in_start + tsms on 0x021; the ECU, seeing the charged
+    link on 0x466, secures the discharge (PB6) and reports discharge_engaged
+    on 0x100; the AMS refuses a re-arm while it is engaged (the press is
+    spent, state_machine.hpp:267-283); the ECU releases on its own reading
+    below DischargeReleaseV = 10 V; then, and only on a new press, the car
+    arms and reaches Run again. The plant's RC is uncommissioned (M8, #147):
+    sequencing is asserted, not the bleed's timing. The first arm can lose
+    the race of IFS08-CE-ECU#259 (the ECU securing into the precharge); the
+    test then waits out the ECU's 30 s timeout and goes on."""
+    rig = stranded
+    rig.set_tsms(True)
+    rig.run(100)
+    rig.press()
+    assert rig.wait_ams(RUN, 1000) is not None, f"AMS state {rig.ams()}"
+    assert rig.volts == PACK_V
+    if rig.ecu_io.level(rig.secure_pin):
+        # IFS08-CE-ECU#259: the arm's stale 0x021 let the ECU secure into the
+        # precharge (whether it does is a race of the boards' timing; the
+        # deterministic form is a strict xfail in test_ecu_discharge.py). It
+        # holds to DischargeTimeoutMs and gives up with a fault, which the
+        # SDC opening below clears; the stranded-link contract is checked
+        # from there either way.
+        for _ in range(320):
+            rig.run(100)
+            if not rig.ecu_io.level(rig.secure_pin):
+                break
+        assert not rig.ecu_io.level(rig.secure_pin), "secured past DischargeTimeoutMs"
+        assert rig.ams() == RUN
+    t_open = rig.sim.now_us()
+    rig.set_tsms(False)                                  # SDC opened ...
+    rig.run(100)
+    rig.set_tsms(True)                                   # ... and closed before the bleed ends
+    assert (rig.ams(), rig.ams("g_fault_reason_telemetry")) == (START, 0)
+    assert rig.volts > 100, f"link at {rig.volts:.0f} V: not stranded"
+    t_closed = rig.sim.now_us()
+    for _ in range(50):                                  # 0x021 every 100 ms, plus a tick
+        rig.run(10)
+        if rig.ecu_io.level(rig.secure_pin):
+            break
+    edges = rig.ecu_io.edges(rig.secure_pin, since_us=t_open)
+    assert rig.ecu_io.level(rig.secure_pin), \
+        f"the ECU never secured the stranded link: {edges} (fault {rig.sim.read_symbol('ecu', 'g_discharge_fault')})"
+    # Secured within one 0x021 period and a tick of the SDC closing (the
+    # edge's own stamp is not compared with t_closed: the boards' clocks
+    # meet only at sync points).
+    assert rig.sim.now_us() - t_closed <= 150_000, \
+        f"secured {(rig.sim.now_us() - t_closed) / 1000} ms after the SDC closed"
+    rig.run(30)
+    assert rig.acu.last(0x100).data[2] & 1, "0x100 does not report the discharge engaged"
+    rig.press()                                          # refused: the bleed is connected
+    rig.run(100)
+    assert rig.ams() == START, "the AMS armed into a connected bleed resistor"
+    for _ in range(300):
+        rig.run(10)
+        if not rig.ecu_io.level(rig.secure_pin):
+            break
+    assert not rig.ecu_io.level(rig.secure_pin), "the ECU never released the discharge"
+    assert rig.volts < 10, f"released at {rig.volts:.0f} V, above DischargeReleaseV"
+    rig.run(300)
+    assert not rig.acu.last(0x100).data[2] & 1
+    assert rig.ams() == START, "the refused press armed the car by itself"
+    rig.press()
+    assert rig.wait_ams(RUN, 1000) is not None, f"no re-arm after the drain (AMS {rig.ams()})"
