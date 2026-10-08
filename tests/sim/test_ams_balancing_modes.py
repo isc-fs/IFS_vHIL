@@ -148,3 +148,24 @@ def test_balo_in_run_changes_nothing_else(car):
     assert _dcc(car) == [0] * 10
     assert _pit(car) == (0, True)
     assert car.state() != ERROR
+
+
+@pytest.mark.xfail(strict=True, reason="isc-fs/IFS08-CE-AMS#553 (fixed on AMS dev by #594, not on "
+                   "main): 0x103 BALN forces balancing in any state, Run included")
+@pytest.mark.parametrize("magic", [b"BALN"])
+def test_a_forced_command_never_balances_in_run(car, magic):
+    """FMEA.md SEASON-3: balancing forced in Run puts the bleed resistors
+    (rated for transient duty) across cells while the pack delivers current,
+    and ranks cells by I*R under load rather than by SoC. The AMS's own
+    resolution (#553, #594 on dev: gate balancing to Start and Charge, as
+    logfs_allowed_in and reboot_allowed_in are gated) makes Run balance
+    nothing whatever 0x103 says. On ams@main BALN still sets the high
+    cell's discharge switch in Run."""
+    car.to_run()
+    _command(car, magic)
+    seen = [0] * 10
+    for _ in range(2 * UPDATE_MS // 500):               # four mask updates, looked at twice each
+        car.sim.run_for(ms=500)
+        seen = [a | b for a, b in zip(seen, _dcc(car))]
+    assert car.state() == RUN
+    assert seen == [0] * 10, f"a forced command balanced in Run: DCC {seen}"
