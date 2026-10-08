@@ -61,15 +61,31 @@
 // configuration at boot (nrf24.c:195-289), so that can't change what a test
 // sees.
 //
-// MISO's timing: the chip drives the next bit Tcd = 60 ns after SCK falls
-// (PS 8.3.2, Table 13), and the model does the same, 0.1 us later on a
-// timer. It can't drive it from inside the SCK write: Renode 1.17's STM32
-// GPIO port rewrites every pin of the port from the levels it read before a
-// BSRR write, so a level driven on PA6 while the port is still applying the
-// write to PA5 is put back to the old one (STM32_GPIOPort.WriteState).
-// Driving on a CSN (port B) edge is immediate. The pins are driven again
-// after a machine reset, which clears the ports' inputs (VhilProbe.cs), and
-// at every CSN edge.
+// Time: the radio's clock is the MCU's, the CPU's executed instructions at
+// its PerformanceInMips, read at each pin event (exact inside a sync
+// quantum, in every emulation mode). Its timeline (CE held for Thce, the
+// packet's end) is brought up to date lazily, at every CSN and CE edge and
+// STATUS write, so the firmware sees TX_DS at the time it happens whenever
+// it reads STATUS, and IRQ when it polls the pin between transfers, as the
+// ECU does (nrf24.c:724-795). Not modelled: IRQ's fall as an asynchronous
+// event (an EXTI interrupt while the firmware leaves the radio alone; no
+// firmware here uses one), and time the CPU spends halted (WFI) during a CE
+// pulse or a packet, which that clock doesn't count. The model holds no lock
+// on the CPU's path (only its records', for the monitor): a clock-source
+// timer armed under a model lock deadlocks against the timer's callback,
+// which holds the clock source's lock.
+//
+// MISO: the chip drives the next bit Tcd = 60 ns after SCK falls (PS 8.3.2,
+// Table 13); the model drives it at the falling edge. Renode 1.17's STM32
+// GPIO port, though, rewrites every pin of the port from the levels it read
+// before a BSRR write, so a level driven on PA6 while the port is still
+// applying the write to PA5 is put back to the old one
+// (STM32_GPIOPort.WriteState). So reads of MISO's port's input register
+// (IDR) read MISO as the model drives it, through a read hook installed at
+// the first synced state after load: no event or timer per bit. The pins
+// are also driven again after a machine reset, which clears the ports'
+// inputs (VhilProbe.cs), and at every CSN edge. IRQ needs none of this: the
+// model changes it outside writes to its port.
 //
 // Test API (monitor, e.g. `sysbus.radio Payloads 0`):
 //   Payloads sinceUs   "t_us hex" per transmitted payload, t_us when TX_DS
@@ -86,11 +102,12 @@
 //
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text;
 using Antmicro.Renode.Core;
 using Antmicro.Renode.Logging;
-using Antmicro.Renode.Peripherals.Timers;
-using Antmicro.Renode.Time;
+using Antmicro.Renode.Peripherals.Bus;
+using Antmicro.Renode.Peripherals.CPU;
 
 namespace Antmicro.Renode.Peripherals.Wireless
 {
@@ -101,15 +118,14 @@ namespace Antmicro.Renode.Peripherals.Wireless
             this.machine = machine;
             Miso = new GPIO();
             Irq = new GPIO();
-            ceTimer = NewTimer("ce");
-            ceTimer.LimitReached += OnCeHeld;
-            txTimer = NewTimer("tx");
-            txTimer.LimitReached += OnPacketSent;
-            misoTimer = NewTimer("miso");
-            misoTimer.LimitReached += OnMisoValid;
             // The GPIO ports clear their inputs on a machine reset, after the
             // peripherals' Reset (VhilProbe.cs): drive them again then.
             machine.MachineReset += _ => DrivePins();
+            // The pins are connected once the platform description is loaded:
+            // hook their ports then, outside any CPU access.
+            // MISO's port is known once the platform description is loaded:
+            // hook its input register then, with every CPU stopped.
+            machine.LocalTimeSource.ExecuteInNearestSyncedState(_ => HookMisoPort());
             Reset();
         }
 
@@ -118,79 +134,68 @@ namespace Antmicro.Renode.Peripherals.Wireless
 
         public void Reset()
         {
-            lock(sync)
+            foreach(var r in ResetValues)
             {
-                foreach(var r in ResetValues)
-                {
-                    regs[r.Key] = (byte[])r.Value.Clone();
-                }
-                fifo.Clear();
-                pending.Clear();
-                level = new bool[4];
-                csnLow = false;
-                bitCount = 0;
-                byteIndex = 0;
-                current = next = 0;
-                state = State.PowerDown;
-                ceHigh = false;
-                powerUpUs = 0;
-                ceTimer.Enabled = false;
-                txTimer.Enabled = false;
-                misoTimer.Enabled = false;
-                sending = null;
-                misoLevel = false;
+                regs[r.Key] = (byte[])r.Value.Clone();
             }
+            fifo.Clear();
+            pending.Clear();
+            level = new bool[4];
+            csnLow = false;
+            bitCount = 0;
+            byteIndex = 0;
+            command = -1;
+            current = next = 0;
+            state = State.PowerDown;
+            ceHigh = cePending = false;
+            sending = null;
+            misoLevel = false;
+            irqLevel = true;
             DrivePins();
         }
 
         // 0 CSN, 1 SCK, 2 MOSI, 3 CE (catalog/models/nrf24l01p.yaml gpio_in).
         public void OnGPIO(int number, bool value)
         {
-            if(number < 0 || number > 3)
+            if(number < 0 || number > 3 || level[number] == value)
             {
-                return;
+                return;   // not one of ours, or not an edge
             }
-            lock(sync)
+            level[number] = value;
+            switch(number)
             {
-                if(level[number] == value)
+            case Csn:
+                Advance();
+                if(!value)
                 {
-                    return;   // not an edge
+                    BeginCommand();
                 }
-                level[number] = value;
-                switch(number)
+                else
                 {
-                case Csn:
-                    if(!value)
-                    {
-                        BeginCommand();
-                    }
-                    else
-                    {
-                        EndCommand();
-                    }
-                    break;
-                case Sck:
-                    if(!csnLow)
-                    {
-                        break;
-                    }
-                    if(value)
-                    {
-                        ShiftIn(level[Mosi]);
-                    }
-                    else
-                    {
-                        if(bitCount == 0)
-                        {
-                            current = next;
-                        }
-                        ScheduleMiso(((current >> (7 - bitCount)) & 1) != 0);
-                    }
-                    break;
-                case Ce:
-                    OnCe(value);
+                    EndCommand();
+                }
+                break;
+            case Sck:
+                if(!csnLow)
+                {
                     break;
                 }
+                if(value)
+                {
+                    ShiftIn(level[Mosi]);
+                }
+                else
+                {
+                    if(bitCount == 0)
+                    {
+                        current = next;
+                    }
+                    DriveMiso(((current >> (7 - bitCount)) & 1) != 0);
+                }
+                break;
+            case Ce:
+                OnCe(value);
+                break;
             }
         }
 
@@ -199,7 +204,7 @@ namespace Antmicro.Renode.Peripherals.Wireless
         public string Payloads(ulong sinceUs = 0)
         {
             var sb = new StringBuilder();
-            lock(sync)
+            lock(records)
             {
                 foreach(var p in payloads)
                 {
@@ -215,7 +220,7 @@ namespace Antmicro.Renode.Peripherals.Wireless
         public string TxDsCleared(ulong sinceUs = 0)
         {
             var sb = new StringBuilder();
-            lock(sync)
+            lock(records)
             {
                 foreach(var c in cleared)
                 {
@@ -232,35 +237,14 @@ namespace Antmicro.Renode.Peripherals.Wireless
 
         public ulong ShortCePulses => shortCe;
 
-        public byte Status
-        {
-            get
-            {
-                lock(sync)
-                {
-                    return StatusByte();
-                }
-            }
-        }
+        public byte Status => StatusByte();
 
         public string Register(int reg)
         {
-            lock(sync)
-            {
-                return Hex(ReadRegister(reg & 0x1F));
-            }
+            return Hex(ReadRegister(reg & 0x1F));
         }
 
-        public double TxTimeUs
-        {
-            get
-            {
-                lock(sync)
-                {
-                    return SettleUs + AirTimeUs(fifo.Count > 0 ? fifo.Peek().Length : MaxPayload);
-                }
-            }
-        }
+        public double TxTimeUs => SettleUs + AirTimeUs(fifo.Count > 0 ? fifo.Peek().Length : MaxPayload);
 
         // -- SPI -----------------------------------------------------------------
 
@@ -281,7 +265,6 @@ namespace Antmicro.Renode.Peripherals.Wireless
         private void EndCommand()
         {
             csnLow = false;
-            misoTimer.Enabled = false;
             if(command == WTxPayload || command == WTxPayloadNoAck)
             {
                 PushPayload();
@@ -374,12 +357,17 @@ namespace Antmicro.Renode.Peripherals.Wireless
             {
                 if(k == 0)
                 {
+                    Advance();
                     if((b & regs[RegStatus][0] & TxDs) != 0)
                     {
-                        cleared.Add(Tuple.Create((ulong)Math.Round(txDsSetUs), (ulong)Math.Round(NowUs())));
-                        if(cleared.Count > MaxRecords)
+                        var at = Tuple.Create((ulong)Math.Round(txDsSetUs), (ulong)Math.Round(VirtualUs()));
+                        lock(records)
                         {
-                            cleared.RemoveRange(0, cleared.Count - MaxRecords);
+                            cleared.Add(at);
+                            if(cleared.Count > MaxRecords)
+                            {
+                                cleared.RemoveRange(0, cleared.Count - MaxRecords);
+                            }
                         }
                     }
                     regs[RegStatus][0] &= (byte)~(b & IrqFlags);   // write 1 to clear
@@ -414,8 +402,7 @@ namespace Antmicro.Renode.Peripherals.Wireless
             pending.Clear();
             if(state == State.StandbyII && ceHigh && sending == null)
             {
-                var now = NowUs();
-                StartPacket(now + SettleUs, now);   // Standby-II -> TX (PS 6.1.5)
+                StartPacket(Clock() + SettleUs);   // Standby-II -> TX (PS 6.1.5)
             }
         }
 
@@ -428,7 +415,7 @@ namespace Antmicro.Renode.Peripherals.Wireless
             if(!wasUp && isUp)
             {
                 state = State.Starting;
-                powerUpUs = NowUs();
+                powerUpUs = Clock();
             }
             else if(wasUp && !isUp)
             {
@@ -437,8 +424,7 @@ namespace Antmicro.Renode.Peripherals.Wireless
                     this.Log(LogLevel.Warning, "nRF24: PWR_UP cleared during a transmission, packet lost");
                 }
                 state = State.PowerDown;
-                ceTimer.Enabled = false;
-                txTimer.Enabled = false;
+                cePending = false;
                 sending = null;
             }
             DriveIrq();   // MASK_* may have changed
@@ -446,20 +432,18 @@ namespace Antmicro.Renode.Peripherals.Wireless
 
         private void OnCe(bool high)
         {
-            var now = NowUs();
-            ceHigh = high;
+            var now = Advance();   // with CE as it was until now
             if(high)
             {
+                ceHigh = true;
                 ceRiseUs = now;
-                if(sending == null && (regs[RegConfig][0] & PwrUp) != 0)
-                {
-                    Arm(ceTimer, ThceUs);   // after NowUs: from this instruction
-                }
+                cePending = sending == null && (regs[RegConfig][0] & PwrUp) != 0;
                 return;
             }
-            if(ceTimer.Enabled)
+            ceHigh = false;
+            if(cePending)
             {
-                ceTimer.Enabled = false;
+                cePending = false;
                 shortCe++;
                 this.Log(LogLevel.Warning, "nRF24: CE high for {0:F1} us, under the 10 us Thce minimum " +
                          "(PS Table 16): nothing sent", now - ceRiseUs);
@@ -470,45 +454,51 @@ namespace Antmicro.Renode.Peripherals.Wireless
             }
         }
 
-        // CE has been high for Thce.
+        // Bring the radio's timeline up to now: CE held for Thce, packets
+        // ended. Returns the radio clock (us).
+        private double Advance()
+        {
+            var now = Clock();
+            if(cePending && ceHigh && now - ceRiseUs >= ThceUs)
+            {
+                cePending = false;
+                OnCeHeld();
+            }
+            while(sending != null && now >= sendEndUs)
+            {
+                PacketSent(now);
+            }
+            return now;
+        }
+
         private void OnCeHeld()
         {
-            lock(sync)
+            var config = regs[RegConfig][0];
+            if((config & PwrUp) == 0)
             {
-                ceTimer.Enabled = false;
-                if(!ceHigh || sending != null)
-                {
-                    return;
-                }
-                var config = regs[RegConfig][0];
-                if((config & PwrUp) == 0)
-                {
-                    return;
-                }
-                if((config & PrimRx) != 0)
-                {
-                    LogOnce("PRIM_RX", "RX mode (PRIM_RX = 1, CE high): no receiver is modelled");
-                    return;
-                }
-                if(state == State.Starting && ceRiseUs - powerUpUs < PowerUpUs)
-                {
-                    this.Log(LogLevel.Warning, "nRF24: CE high {0:F0} us after PWR_UP, before the " +
-                             "1.5 ms Tpd2stby (PS Table 16): not in Standby-I, nothing sent", ceRiseUs - powerUpUs);
-                    return;
-                }
-                if(fifo.Count == 0)
-                {
-                    state = State.StandbyII;   // TX mode with an empty FIFO
-                    return;
-                }
-                StartPacket(ceRiseUs + SettleUs, ceRiseUs + ThceUs);
+                return;
             }
+            if((config & PrimRx) != 0)
+            {
+                LogOnce("PRIM_RX", "RX mode (PRIM_RX = 1, CE high): no receiver is modelled");
+                return;
+            }
+            if(state == State.Starting && ceRiseUs - powerUpUs < PowerUpUs)
+            {
+                this.Log(LogLevel.Warning, "nRF24: CE high {0:F0} us after PWR_UP, before the " +
+                         "1.5 ms Tpd2stby (PS Table 16): not in Standby-I, nothing sent", ceRiseUs - powerUpUs);
+                return;
+            }
+            if(fifo.Count == 0)
+            {
+                state = State.StandbyII;   // TX mode with an empty FIFO
+                return;
+            }
+            StartPacket(ceRiseUs + SettleUs);
         }
 
         // The head payload goes on air at startUs (after the PLL settled).
-        // nowUs: the time now. A timer's callback passes its own due time:
-        // it runs inside the CPU's execution, where SyncTime is not called.
-        private void StartPacket(double startUs, double nowUs)
+        private void StartPacket(double startUs)
         {
             sending = fifo.Peek();
             if((regs[RegEnAa][0] & 0x3F) != 0 || (regs[RegSetupRetr][0] & 0x0F) != 0)
@@ -518,41 +508,37 @@ namespace Antmicro.Renode.Peripherals.Wireless
             }
             state = State.Tx;
             sendEndUs = startUs + AirTimeUs(sending.Length);
-            Arm(txTimer, Math.Max(sendEndUs - nowUs, 0.1));
         }
 
-        private void OnPacketSent()
+        // The packet in the air ended at sendEndUs (<= now, the radio clock).
+        private void PacketSent(double now)
         {
-            lock(sync)
+            if(fifo.Count > 0)
             {
-                txTimer.Enabled = false;
-                if(sending == null)
-                {
-                    return;
-                }
-                if(fifo.Count > 0)
-                {
-                    fifo.Dequeue();   // sent without auto-ack: off the FIFO
-                }
-                var now = sendEndUs;
-                payloads.Add(Tuple.Create((ulong)Math.Round(now), sending));
+                fifo.Dequeue();   // sent without auto-ack: off the FIFO
+            }
+            // Stamped in virtual time: now less how long ago it ended.
+            txDsSetUs = VirtualUs() - (now - sendEndUs);
+            lock(records)
+            {
+                payloads.Add(Tuple.Create((ulong)Math.Round(txDsSetUs), sending));
                 if(payloads.Count > MaxRecords)
                 {
                     payloads.RemoveRange(0, payloads.Count - MaxRecords);
                 }
                 transmitted++;
-                sending = null;
-                regs[RegStatus][0] |= TxDs;
-                txDsSetUs = now;
-                DriveIrq();
-                if(ceHigh && fifo.Count > 0)
-                {
-                    StartPacket(now, now);   // still in TX mode: the next one follows
-                }
-                else
-                {
-                    state = ceHigh ? State.StandbyII : State.StandbyI;
-                }
+            }
+            var end = sendEndUs;
+            sending = null;
+            regs[RegStatus][0] |= TxDs;
+            DriveIrq();
+            if(ceHigh && fifo.Count > 0)
+            {
+                StartPacket(end);   // still in TX mode: the next one follows
+            }
+            else
+            {
+                state = ceHigh ? State.StandbyII : State.StandbyI;
             }
         }
 
@@ -578,22 +564,19 @@ namespace Antmicro.Renode.Peripherals.Wireless
 
         // -- pins and time ------------------------------------------------------------
 
-        // The next bit, valid Tcd after SCK's falling edge.
-        private void ScheduleMiso(bool value)
+        // An input-register read of MISO's port reads MISO as the model drives
+        // it (above, "MISO"). One hook per peripheral: it replaces any other
+        // read hook on that port (VhilProbe.cs Drive sets one, on a port a
+        // test drives an input of; nothing drives one of MISO's port here).
+        private void HookMisoPort()
         {
-            misoPending = value;
-            NowUs();
-            Arm(misoTimer, TcdUs);
-        }
-
-        private void OnMisoValid()
-        {
-            lock(sync)
+            foreach(var e in Miso.Endpoints)
             {
-                misoTimer.Enabled = false;
-                if(csnLow)
+                if(e.Receiver is IBusPeripheral port)
                 {
-                    DriveMiso(misoPending);
+                    var bit = 1u << e.Number;
+                    machine.SystemBus.SetHookAfterPeripheralRead<uint>(port, (value, offset) =>
+                        offset != GpioIdr ? value : misoLevel ? value | bit : value & ~bit);
                 }
             }
         }
@@ -608,16 +591,14 @@ namespace Antmicro.Renode.Peripherals.Wireless
         {
             var config = regs[RegConfig][0];
             var active = (regs[RegStatus][0] & IrqFlags & ~config) != 0;   // MASK_* bits 6:4
-            Drive(Irq, !active);   // active low
+            irqLevel = !active;   // active low
+            Drive(Irq, irqLevel);
         }
 
         private void DrivePins()
         {
-            lock(sync)
-            {
-                Drive(Miso, misoLevel);
-                DriveIrq();
-            }
+            Drive(Miso, misoLevel);
+            DriveIrq();
         }
 
         // Straight to the port, so a level is put back even when the GPIO
@@ -631,30 +612,36 @@ namespace Antmicro.Renode.Peripherals.Wireless
             }
         }
 
-        private double NowUs()
+        // The radio's clock, us: the CPU's instructions at its rate, summed
+        // step by step so a change of PerformanceInMips counts from then on.
+        private double Clock()
         {
-            if(machine.SystemBus.TryGetCurrentCPU(out var cpu))
+            if(cpu == null)
             {
-                cpu.SyncTime();
+                cpu = machine.SystemBus.GetCPUs().OfType<TranslationCPU>().FirstOrDefault();
+                if(cpu == null)
+                {
+                    return clockUs;
+                }
+                lastInstructions = cpu.ExecutedInstructions;
+            }
+            var instructions = cpu.ExecutedInstructions;
+            if(instructions >= lastInstructions)
+            {
+                clockUs += (instructions - lastInstructions) / (double)Math.Max(1u, cpu.PerformanceInMips);
+            }
+            lastInstructions = instructions;   // a reset may restart the count
+            return clockUs;
+        }
+
+        // Virtual time (us), for the records only: at this instruction.
+        private double VirtualUs()
+        {
+            if(machine.SystemBus.TryGetCurrentCPU(out var c))
+            {
+                c.SyncTime();
             }
             return machine.ElapsedVirtualTime.TimeElapsed.TotalMicroseconds;
-        }
-
-        private LimitTimer NewTimer(string name)
-        {
-            return new LimitTimer(machine.ClockSource, TimerHz, this, name, limit: 1,
-                                  direction: Direction.Ascending, enabled: false,
-                                  workMode: WorkMode.OneShot, eventEnabled: true);
-        }
-
-        // Callers on the CPU's MMIO path have called NowUs, which syncs the
-        // clock source to the current instruction first.
-        private void Arm(LimitTimer timer, double us)
-        {
-            timer.Enabled = false;
-            timer.Value = 0;
-            timer.Limit = (ulong)Math.Max(1, Math.Round(us * TimerHz / 1e6));
-            timer.Enabled = true;
         }
 
         private void LogOnce(string key, string text)
@@ -678,16 +665,18 @@ namespace Antmicro.Renode.Peripherals.Wireless
         private enum State { PowerDown, Starting, StandbyI, StandbyII, Tx }
 
         private readonly IMachine machine;
-        private readonly object sync = new object();
-        private readonly LimitTimer ceTimer, txTimer, misoTimer;
+        private readonly object records = new object();   // payloads, cleared, transmitted
         private readonly Dictionary<int, byte[]> regs = new Dictionary<int, byte[]>();
         private readonly Queue<byte[]> fifo = new Queue<byte[]>();
         private readonly List<byte> pending = new List<byte>();
         private readonly List<Tuple<ulong, byte[]>> payloads = new List<Tuple<ulong, byte[]>>();
         private readonly List<Tuple<ulong, ulong>> cleared = new List<Tuple<ulong, ulong>>();
         private readonly HashSet<string> logged = new HashSet<string>();
+        private TranslationCPU cpu;
+        private ulong lastInstructions;
+        private double clockUs;
         private bool[] level = new bool[4];
-        private bool csnLow, ceHigh, misoLevel, misoPending;
+        private bool csnLow, ceHigh, cePending, misoLevel, irqLevel = true;
         private int bitCount, byteIndex, command = -1;
         private byte shift, current, next;
         private State state;
@@ -697,13 +686,12 @@ namespace Antmicro.Renode.Peripherals.Wireless
 
         private const int Csn = 0, Sck = 1, Mosi = 2, Ce = 3;
         private const int MaxPayload = 32, FifoDepth = 3;
+        private const long GpioIdr = 0x10;   // GPIOx_IDR (RM0468 11.4.5)
         // A run's payloads (and TX_DS clears) kept for Payloads and
         // TxDsCleared (25 a second from the ECU: about an hour of it); the
         // oldest go first.
         private const int MaxRecords = 100000;
-        private const long TimerHz = 10000000;   // 0.1 us resolution
         private const double ThceUs = 10, SettleUs = 130, PowerUpUs = 1500;   // PS Table 16
-        private const double TcdUs = 0.1;   // Tcd 60 ns (PS Table 13), at the timer's resolution
 
         // PS 8.3.1 Table 20 (commands).
         private const int RRxPayload = 0x61, WTxPayload = 0xA0, WTxPayloadNoAck = 0xB0,
