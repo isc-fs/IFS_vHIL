@@ -81,6 +81,13 @@
   why: "a virtual power-on is slower than real time: first telemetry 4.1 s on CI, the test allows 4.0 s (#154)"
 - path: tests/hil/ams/test_block_c_fsm.py::test_c039c_charge_survives_dash_release
   why: "its wall-clock margins are tighter than the virtual bench's power-on stalls (#154)"
+# A-008 counts 0x4A2 frames in 60 s of wall time (120 ± 2 at 500 ms): an
+# emulation a few per cent below real time sends 117 on a slow runner. The
+# cadence itself holds in virtual time (tests/sim/test_ams_can.py
+# test_every_cyclic_frame_keeps_its_period); the speed that would let a wall
+# window count right comes with the idle task sleeping instead of spinning.
+- path: tests/hil/ams/test_block_a_boot.py::test_a008_cadence_60s
+  why: "counts frames in a 60 s wall-clock window; the emulation runs below real time on slow runners (117 of ~120) (#154; WFI: isc-fs/IFS08-CE-AMS#624, isc-fs/IFS08-CE-ECU#258)"
 
 - path: tests/hil/ams/test_block_k_encoders.py::test_k103
   why: "the AMS takes an IWDG reset ~98 s after boot on the virtual bench (#151)"
