@@ -2,9 +2,9 @@
 and a failed bring-up, forced through models/renode/Stm32H7Fdcan.cs.
 
 Firmware facts:
-  AMS (IFS08-CE-AMS acu_can_task.cpp:140-175): AcuCanTask polls PSR.BO each
+  AMS (IFS08-CE-AMS acu_can_task.cpp:155-179): AcuCanTask polls PSR.BO each
     loop; on bus-off it does HAL_FDCAN_Stop/Start, at most every
-    FdcanBusOffRetryMs = 100 ms (ams_config.hpp:580), and counts it in
+    FdcanBusOffRetryMs = 100 ms (ams_config.hpp:632), and counts it in
     g_fdcan1_busoff_recovery_count, sent on pit-diag 0x6C9 bytes 0-3 once
     0x7F0 DE AD BE EF arms the stream (pit_comms_health.def).
   ECU (IFS08-CE-ECU app_init_task.cpp): FDCAN2 (ACU) is the load-bearing bus;
@@ -116,9 +116,13 @@ def test_ams_keeps_recovering_when_bus_off_recurs(ams_quiet):
     assert counts[-1] - counts[19] >= 7, f"recoveries stalled: {counts}"   # 1 s at ~10/s
 
 
-@pytest.mark.xfail(strict=True, reason="IFS08-CE-AMS#604: the pit-diag burst blocks on the "
-                   "full TX FIFO, so the recovery poll never runs again")
 def test_ams_keeps_recovering_when_bus_off_recurs_during_pit_diag(ams):
+    """IFS08-CE-AMS#604 (fixed by #615): the pit-diag burst used to wait
+    unbounded for TX FIFO room, so in bus-off it never returned and the
+    recovery poll never ran again. send_or_fail_blocking now abandons the
+    rest of the scan on bus-off or after PitDiagTxWaitMaxMs = 5
+    (acu_can_task.cpp:227-262, ams_config.hpp:640): recoveries keep the
+    retry pace with the stream armed too."""
     counts = _bus_off_recurring(ams)
     assert counts[-1] - counts[19] >= 7, f"recoveries stalled: {counts}"
 
