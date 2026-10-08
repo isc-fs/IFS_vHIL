@@ -19,10 +19,26 @@ voltage while the AMS holds AIR- and either the precharge relay or AIR+
 closed, and at 0 V otherwise (an instant precharge and bleed; enough for a
 contract test, not a thermal one). A board losing power is modelled by
 halting its CPU: its controller stops transmitting, as a dead node does.
+
+The AMS image (ams@main) still carries IFS08-CE-AMS#599 (fixed on AMS dev by
+#601): CurrentSensorTask's 1 KB stack leaves 32 B below update_soc()'s
+deepest call, and an interrupt landing there (up to 104 B with FPU state)
+overflows it. vApplicationStackOverflowHook (freertos.c:77-98) names the task
+in g_stack_overflow_task_name, opens the relays, latches Error and spins until
+the IWDG resets the AMS into its bootloader. Whether an interrupt lands in
+that window is a race the interrupt timing decides, and between boards that
+timing varies from run to run. Rig.run watches the hook's global every step
+and decides the run there: #599 -> xfail; any other task -> fail. A test's own
+assertions so never read the stale RAM of an AMS that reset into its
+bootloader (g_state_telemetry still saying Run). One test forces an interrupt
+into that window instead, so #599 fails it every time: a strict xfail until
+the catalogue's AMS carries #601.
 """
 import pytest
 
+from vhil import elf
 from vhil.sim import Sim
+from vhil.snapshot import parse_bytes
 from vhil.system import REPO
 
 GPIOB, GPIOF = "sysbus.gpioPortB", "sysbus.gpioPortF"
@@ -33,6 +49,13 @@ PACK_V = 352
 START, PRECHARGE, RUN, ERROR = 0, 1, 3, 5
 VCU_STALE, UNDERVOLTAGE = 11, 4
 ECU_AMS_ERROR = 6
+OVERFLOW_TASK = "g_stack_overflow_task_name"   # char[16], freertos.c:64
+AMS_599 = "CurrentSensorTa"                    # the hook copies 15 chars (freertos.c:88)
+# IFS08-CE-AMS#599's deepest frame: ams::soc::r_int_element_ohm, reached from
+# CurrentSensorTask through update_soc -> KalmanSoc::correct.
+R_INT = "_ZN3ams3soc17r_int_element_ohmEds"
+R_INT_PROLOGUE = (0xB480, 0xB099)              # push {r7}; sub sp, #100
+ICSR, PENDSTSET = 0xE000ED04, 1 << 26          # SCB->ICSR (core_cm7.h)
 
 
 class Rig:
@@ -61,9 +84,26 @@ class Rig:
         """Advance, keeping the DC link on the AMS's contactors."""
         for _ in range(int(ms // step_ms)):
             self.sim.run_for(ms=step_ms)
+            self._check_overflow()
             closed = {n: self.ams_io.level(p) for n, p in self.pins.items()}
             energised = closed["air_n"] and (closed["pre"] or closed["air_p"])
             self._link(PACK_V if energised else 0)
+
+    def _check_overflow(self):
+        """The AMS's stack-overflow hook fired: decide the run (module doc).
+        The hook spins ~100 ms before the IWDG resets (reload 100 at LSI/32,
+        AMS main.c:564-566), so a 10 ms step reads its global before the
+        next boot's startup clears it."""
+        if not self.sim.read_symbol("ams", OVERFLOW_TASK):
+            return
+        address, _ = elf.symbol(self.sim.firmware["ams"], OVERFLOW_TASK)
+        raw = self.sim.monitor(f"sysbus ReadBytes {address:#x} 16", board="ams")
+        task = parse_bytes(raw).split(b"\0")[0].decode(errors="replace")
+        at = f"{self.sim.now_us() / 1e6:.3f} s"
+        if task == AMS_599:
+            pytest.xfail(f"isc-fs/IFS08-CE-AMS#599 at {at}: CurrentSensorTask overflowed its "
+                         "stack; the hook latches Error and the IWDG resets the AMS")
+        pytest.fail(f"the AMS's stack-overflow hook fired at {at} for task {task!r}")
 
     def ams(self, symbol="g_state_telemetry"):
         return self.sim.read_symbol("ams", symbol)
@@ -111,8 +151,33 @@ def test_the_car_arms_through_the_ecu_heartbeat(rig):
     assert rig.wait_ams(RUN, 1000) is not None, f"AMS state {rig.ams()}"
     assert rig.ams("g_mode_locked_telemetry") == 1
     rig.run(5000)
+    assert rig.sim.in_app("ams"), "the AMS reset into its bootloader"
     assert (rig.ams(), rig.ams("g_fault_reason_telemetry")) == (RUN, 0), "the AMS left Run"
     assert rig.ts_active() == 1, "the ECU does not see the AMS ready"
+
+
+@pytest.mark.xfail(strict=True, reason="isc-fs/IFS08-CE-AMS#599 (fixed on AMS dev by #601, "
+                   "not on main): an interrupt at update_soc's deepest frame overflows "
+                   "CurrentSensorTask's 1 KB stack")
+def test_an_interrupt_at_the_deepest_soc_frame_leaves_the_ams_in_run(rig):
+    """The race the arming test can lose, decided: in Run, one interrupt (a
+    pended SysTick) lands as r_int_element_ohm has reserved its frame, the
+    deepest point of CurrentSensorTask. On the car any interrupt can land
+    there (TIM23's 1 kHz HAL tick, SysTick, FDCAN RX), and its exception
+    frame (up to 104 B with FPU state) must fit the task's stack: the AMS
+    stays in Run and the ECU keeps ts_active."""
+    rig.arm()
+    assert rig.wait_ams(RUN, 1000) is not None
+    fn = elf.symbol(rig.sim.firmware["ams"], R_INT)[0] & ~1
+    prologue = tuple(int(rig.sim.monitor(f"sysbus ReadWord {fn + 2 * i:#x}", board="ams").strip(), 16)
+                     for i in range(2))
+    assert prologue == R_INT_PROLOGUE, f"{R_INT} changed: {prologue}"
+    at = fn + 4                                         # past push and sub sp
+    rig.sim.monitor(f'cpu AddHook {at:#x} "self.GetMachine().SystemBus.WriteDoubleWord('
+                    f'{ICSR:#x}, {PENDSTSET:#x}); self.RemoveHooksAt({at:#x})"', board="ams")
+    rig.run(300)                                        # correct() runs every 50 ms
+    assert rig.sim.in_app("ams") and rig.ams() == RUN, f"AMS state {rig.ams()}"
+    assert rig.ts_active() == 1
 
 
 def test_an_ams_fault_puts_the_ecu_in_ams_error(rig):
