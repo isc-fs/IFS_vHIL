@@ -35,7 +35,8 @@ AUTO_JUMP_MS = 2000
 # (name in the repl, register address, value to write, RSTR, bit). Bases from
 # stm32h733xx.h: TIM23 0x4000E000, USART10 0x40011C00, SPI1 0x40013000,
 # FDCAN1/2/3 0x4000A000/0x4000A400/0x4000D400, ADC3 0x58026000, SDMMC1
-# 0x52007000, TIM2 0x40000000, GPIOD 0x58020C00, USART3 0x40004800.
+# 0x52007000, DMA1 0x40020000, TIM2 0x40000000, GPIOD 0x58020C00, USART3
+# 0x40004800.
 CASES = [
     ("timer23",   0x4000E000 + 0x2C, 0x1234,     APB1H, 24),   # ARR
     ("usart10",   0x40011C00 + 0x0C, 0x01A1,     APB2,  7),    # BRR
@@ -45,6 +46,7 @@ CASES = [
     ("fdcan3_h7", 0x4000D400 + 0x18, 0x00000003, APB1H, 8),
     ("adc3_h73x", 0x58026000 + 0x14, 0x00000007, AHB4,  24),   # SMPR1
     ("sdmmc1",    0x52007000 + 0x08, 0x00001234, AHB3,  16),   # ARGR
+    ("dma1_h7",   0x40020000 + 0x30, 0x58026040, AHB1,  0),    # S1PAR
     ("timer2",    0x40000000 + 0x2C, 0x1234,     APB1L, 0),    # ARR, H743 bit too
     ("usart3",    0x40004800 + 0x0C, 0x01A1,     APB1L, 18),   # BRR
     ("gpioPortD", 0x58020C00 + 0x00, 0x55555555, AHB4,  3),    # MODER
