@@ -37,6 +37,8 @@ REPO = Path(__file__).resolve().parent.parent
 SCHEMA = REPO / "schemas" / "vhil.schema.json"
 CATALOG = REPO / "catalog"
 # The CAN bus model every bus uses unless it says `arbitration: false` (#174).
+# Renode's global quantum when a system sets no `time.quantum_s` (100 us).
+RENODE_DEFAULT_QUANTUM_S = 0.0001
 CAN_BUS_SOURCE = REPO / "models" / "renode" / "VhilCanBus.cs"
 
 # What a system file may name, as the schema says (schemas/vhil.schema.json):
@@ -235,6 +237,13 @@ class System:
         self.devices = {name: dict(spec, model_doc=_entry("model", spec["model"], catalog))
                         for name, spec in self.doc.get("devices", {}).items()}
         self._check()
+
+    def sync_quantum_us(self) -> int:
+        """The emulation's sync period in whole us: `time.quantum_s`, else
+        Renode's default. Boards meet at multiples of it from power-on, and a
+        stimulus takes effect at one (docs/scenarios.md, "Times")."""
+        q = self.doc.get("time", {}).get("quantum_s") or RENODE_DEFAULT_QUANTUM_S
+        return max(1, round(float(q) * 1e6))
 
     def resolve(self, endpoint: str) -> tuple[Board, str, object]:
         name, connector = endpoint.split(".", 1)
