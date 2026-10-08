@@ -456,14 +456,62 @@ from `git archive 04613679` except as listed below.
     - **Keys** (`shortcuts.js`): held at a stop and in control, F5
       continues, F10 steps over, F11 steps into, Shift+F11 steps out.
 
+21. **Signals, Artifacts, Tests… and the shell's pages retired** (step 18 of
+    the editor workspace plan).
+    - **The Signals tab** (`VhilSignals.vue`, its model `signals.js`, pure,
+      `tests/js/signals.test.mjs`; `signals.css`; `VhilDock.vue` renders
+      it): one plot per signal over the run's virtual time, stacked on one
+      axis, with the shell's `plot.js` over uPlot (copied into
+      `src/vhil/shell/` by the image build with `vendor/uplot/`, and its
+      sheet bundled: one source, as `decode.js`). A signal is a board's
+      state-view FSM state or relay lane (`state.js` `lanesOf`, its values
+      read as their labels on the axis and in the legend: the default,
+      every board's), a decoded field of a CAN message the run carried (an
+      enum or a bit as labelled steps), or a sampled global; the list is
+      kept per system in `localStorage`. The scrubber is a line on every
+      plot and a click on one moves it. Plots rebuild whole, once a second
+      at most while live, and not while the tab is hidden. `plot.js` gains
+      `format`/`levels` (labelled step values) and `cssProvided()`.
+    - **The State tab** (`VhilStateCard.vue`, `VhilState.vue`, `state.css`):
+      its HTML lanes moved to Signals ("Lanes in Signals →"); the
+      transitions stay.
+    - **The Artifacts tab** (`VhilArtifacts.vue`, its model `artifacts.js`,
+      pure, `tests/js/artifacts.test.mjs`): the run's record (state, system
+      and ref, owner, what it ran, virtual and wall time, worker, frames per
+      bus, tests, stimuli moved to a sync point, firmware, its error; Cancel
+      while it may), a pytest run's JUnit cases with their failure snapshots
+      (opened in place), the worker's error, the end of `pytest.txt`, and
+      every file, fetched as text (`api.js` `text`) and never rendered. The
+      run's name in the top bar opens it.
+    - **Tests…** (`VhilTopBar.vue`, a dialog in `VhilDialogs.vue`,
+      `workspace.js` `runPytest`): a pytest run of `tests/sim` on the open
+      system (the test list from `GET /api/tests` as a datalist, a
+      timeout), what the shell's Runs form started; its log streams into the
+      Log and it opens on the Artifacts tab when it ends. A pytest run opened
+      from Runs opens there too.
+    - **Links** (`api.js` `runPage`): a run's link is its replay,
+      `/editor/?run=<id>`, and `?tab=` picks the dock tab (`workspace.js`
+      `start`). The shell's run page, runs list and systems pages are gone
+      (`vhil/server/static/inspect.js`, `runs.js`); `/` redirects here, and
+      every old link with it (`static/editor.js` `redirectFor`).
+    - **Keys** (`shortcuts.js`): Ctrl/Alt+1..8, the eighth tab Artifacts.
+    - **Light theme** (step 4's leftovers): text and icon fills hard-coded
+      white in Pipeline Manager's own components are `$white` (`--fg`):
+      `components/Settings.vue`, `GraphDetails.vue`, `Panel.vue`,
+      `menu/ParentMenu.vue`, `custom/LinkMenu.vue`, `ContextMenu.vue`,
+      `RectangleGrouping.vue`, `styles/_markdown_style.scss`, and the
+      `.normal` fill or stroke of `icons/Backend.vue`, `Bell.vue`, `Buy.vue`,
+      `Cogwheel.vue`, `Cube.vue`, `Indicator.vue`, `Magnifier.vue`,
+      `Save.vue`, `Sidebar.vue`, `VerticalEllipsis.vue`. White set as an SVG
+      attribute (a `color="white"` prop) is `src/vhil/theme.css`'s, as
+      before.
+
 ## Left for later
 
-- **Light theme polish** (owner decision: defined now, polished later).
-  About twenty components hard-code `white` in their styles (`fill: white`,
-  `color: white`: the sidebar tabs, several icons, the terminal), unreadable
-  on the light surfaces; `src/vhil/theme.css` covers only SVG attributes.
-  (The canvas itself follows the theme since step 8: nodes, wires and the
-  zoom buttons are on the tokens.)
+- **Light theme contrast on coloured pills.** `custom/Editor.js`
+  `getTextColor` picks white or black text from a pill's hex colour; a
+  token `var()` isn't hex, so it reads white. vHIL's own nodes draw their
+  heads themselves (step 8) and show no such pill.
 - **HTML from the specification** (node titles and pills in
   `custom/CustomNode.vue`, palette entries: `v-html` through DOMPurify): a
   `style` attribute in it is refused by the CSP. vHIL's specification puts

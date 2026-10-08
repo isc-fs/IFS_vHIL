@@ -1,10 +1,11 @@
 <!--
 vHIL: the dock's State tab (step 13 of docs/architecture/editor-workspace.md;
 docs/state-view.md): a card per board of the run in REPLAY at the
-scrubber's time (VhilStateCard.vue), with its history; a click on a lane or
-a transition moves the scrubber. The data is the run's own trace (frames,
-samples, edges), as the worker recorded it for each board's state view; a
-live session will feed the same model (state.js) as its records stream.
+scrubber's time (VhilStateCard.vue), with its transitions (a click moves the
+scrubber); its FSM and relay lanes are plotted in the Signals tab. The data
+is the run's own trace (frames, samples, edges), as the worker recorded it
+for each board's state view; a live session feeds the same model (state.js)
+as its records stream.
 In a live session, each board's debugger watch list too (VhilWatches.vue,
 step 17): the same list as the Debug tab's, its values at the board's stop.
 -->
@@ -34,7 +35,7 @@ step 17): the same list as the Debug tab's, its values at the board's stop.
                     v-for="b in tr.boards" :key="b"
                     :trace="tr" :board="b" :t="replay.t" :end="replay.end"
                     :version="replay.version" history
-                    @seek="seek"
+                    @seek="seek" @lanes="toSignals"
                 />
             </div>
             <section v-if="replay.live" class="vhil-state-watches" aria-label="Debugger watches">
@@ -53,6 +54,7 @@ import { computed, defineComponent } from 'vue';
 import VhilStateCard from './VhilStateCard.vue';
 import VhilWatches from './VhilWatches.vue';
 import { replay } from './replay.js';
+import { ws } from './workspace.js';
 import './debug.css';
 
 export default defineComponent({
@@ -73,8 +75,12 @@ export default defineComponent({
             return out;
         });
         const seek = (t) => { replay.t = Math.max(0, Math.min(replay.end, t)); };
+        const toSignals = () => {
+            ws.layout.dock = true;
+            ws.layout.dockTab = 'signals';
+        };
         return {
-            replay, tr, notes, seek,
+            replay, tr, notes, seek, toSignals,
         };
     },
 });

@@ -59,7 +59,7 @@ export default defineComponent({
 
 <style lang='scss' scoped>
 a {
-    color: white;
+    color: $white;
     text-decoration: none;
     word-wrap: normal;
     width: 100%;

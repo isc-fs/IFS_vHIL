@@ -11,7 +11,8 @@
  * adds LIVE: a live session of the saved system (startLive, openRun of a
  * running live run; session.js), its topology locked, PAUSED while paused,
  * REPLAY of the same records once it ends, and its recording saved as a
- * scenario (saveSession).
+ * scenario (saveSession). Step 18 takes in the last of the shell's pages:
+ * a pytest run of tests/sim (runPytest; its results in the Artifacts tab).
  */
 
 import { reactive, watch } from 'vue';
@@ -56,12 +57,11 @@ export const DOCK_TABS = [
     { id: 'scenario', label: 'Scenario' },
     { id: 'state', label: 'State' },
     { id: 'bus', label: 'Bus' },
-    // The FSM and digital lanes are in the State tab's history for now
-    // (step 13); the uPlot plots have no step yet.
-    { id: 'signals', label: 'Signals', step: 'later' },
+    { id: 'signals', label: 'Signals' },
     { id: 'log', label: 'Log' },
     { id: 'debug', label: 'Debug' },
     { id: 'problems', label: 'Problems' },
+    { id: 'artifacts', label: 'Artifacts' },
 ];
 
 const LAYOUT = {
@@ -115,7 +115,12 @@ export const ws = reactive({
     selectedId: null,
     layout: { ...LAYOUT, ...(stored(LAYOUT_KEY) || {}) },
     picker: null, // the open ref picker: {nodeId, anchor}
-    dialog: null, // 'commit' | 'pr' | 'shortcuts' | 'save-session'
+    dialog: null, // 'commit' | 'pr' | 'shortcuts' | 'save-session' | 'pytest'
+    // A pytest run's form (runPytest): the selection, its timeout, the tests
+    // the server collects.
+    pytest: {
+        select: '', timeoutS: 3600, tests: [], error: '',
+    },
 });
 
 /** LIVE or PAUSED: a live session on the workspace. */
@@ -203,6 +208,7 @@ function remember() {
     if (scen.name && !scen.isNew) u.searchParams.set('scenario', scen.name);
     else u.searchParams.delete('scenario');
     u.searchParams.delete('view');
+    u.searchParams.delete('tab');
     window.history.replaceState(null, '', u);
 }
 
@@ -512,7 +518,8 @@ export function openRun(id, { tab = 'bus' } = {}) {
         setLocked(false);
         ws.mode = 'REPLAY';
         ws.layout.dock = true;
-        ws.layout.dockTab = tab;
+        // A pytest run's results are its JUnit and output, not its frames.
+        ws.layout.dockTab = run.scenario?.kind === 'pytest' && tab === 'bus' ? 'artifacts' : tab;
         // A scenario's run: the scenario selected, its expect results on it.
         const name = run.scenario?.name;
         if (name && scen.name !== name && scen.list.some((s) => s.name === name)) {
@@ -642,8 +649,10 @@ export function saveSession(name) {
 // (not the scenario's own), its log lines into the Log.
 function follow(id, body) {
     const at = body.ref ? ` @ ${body.ref.slice(0, 8)}` : '';
-    const fw = Object.entries(body.firmware).map(([k, v]) => `${k}=${v}`).join(', ');
-    const what = `${body.system}${at}, ${body.scenario.virtual_ms} ms${fw ? `, ${fw}` : ''}`;
+    const fw = Object.entries(body.firmware || {}).map(([k, v]) => `${k}=${v}`).join(', ');
+    const length = body.scenario.kind === 'pytest' ? `pytest ${body.scenario.select}`
+        : `${body.scenario.virtual_ms} ms`;
+    const what = `${body.system}${at}, ${length}${fw ? `, ${fw}` : ''}`;
     const run = reactive({
         id, state: 'queued', counts: {}, what,
     });
@@ -673,6 +682,10 @@ function follow(id, body) {
             loadRuns();
             // eslint-disable-next-line no-use-before-define
             if (body.scenario.name) scenarioRunEnded(id);
+            // A pytest run's results are its JUnit and output: the Artifacts tab.
+            else if (body.scenario.kind === 'pytest' && ws.mode !== 'REPLAY' && !isLive()) {
+                openRun(id, { tab: 'artifacts' });
+            }
             return;
         }
         if (run.state === 'queued') {
@@ -751,6 +764,55 @@ export function runNow() {
     });
 }
 
+/** The test files and node ids a pytest run can select (GET /api/tests,
+ *  tests/sim as checked out, cached on the server), once. */
+let testList = null;
+export function loadTests() {
+    if (!testList) {
+        testList = call('GET', '/api/tests').then((t) => {
+            ws.pytest.tests = [...t.files, ...t.tests];
+            ws.pytest.error = t.error || '';
+        }).catch((e) => {
+            testList = null;
+            ws.pytest.error = e.message;
+        });
+    }
+    return testList;
+}
+
+/**
+ * Runs native tests (tests/sim) against the open system's firmware: a
+ * `pytest` run (what the shell's Runs form started). It reads the checked-out
+ * tests and systems, so no ref: HEAD only (vhil/server/runs.py). Its log
+ * streams into the Log; when it ends, its JUnit and output are in the
+ * Artifacts tab.
+ */
+export function runPytest() {
+    return guarded('pytest', async () => {
+        if (isLive()) throw new Error(`live session ${replay.id} is on: stop it first`);
+        if (runActive()) throw new Error(`run ${ws.run.id} is still ${ws.run.state}: stop it first`);
+        const tests = ws.pytest.select.trim();
+        if (!ws.id || ws.isNew) throw new Error('open a saved system first');
+        if (!tests) throw new Error('name a test file or node id under tests/sim');
+        const body = {
+            system: ws.id,
+            scenario: {
+                kind: 'pytest', select: tests, timeout_s: Number(ws.pytest.timeoutS) || 3600,
+            },
+        };
+        let out;
+        try {
+            out = await call('POST', '/api/runs', body);
+        } catch (e) {
+            say('pytest run refused', 'error', e.errors || [e.message]);
+            return false;
+        }
+        exitReplay();
+        follow(out.run_id, body);
+        return true;
+    });
+}
+
 export function stopRun() {
     return guarded('Stop', async () => {
         if (isLive()) {
@@ -806,7 +868,10 @@ export async function start() {
         });
     }
     if (run > 0) {
-        await openRun(run);
+        // ?tab=: the dock tab to replay it on (the shell's old run-page links
+        // name one: vhil/server/static/app.js).
+        const tab = DOCK_TABS.some((t) => t.id === q.get('tab')) ? q.get('tab') : 'bus';
+        await openRun(run, { tab });
     } else if (!id) {
         // Nothing to show yet: offer the systems (or the runs, from the
         // shell's #/runs).

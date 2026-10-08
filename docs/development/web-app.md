@@ -41,10 +41,11 @@ starts. Never set it on a host.
   marks them cross-site (`Origin` not this site, or `Sec-Fetch-Site:
   cross-site`), in both modes. In github mode they must also carry
   `X-CSRF-Token`: a token derived from the session, in the `vhil_csrf` cookie
-  and in `GET /api/me`. The shell's `api(path, {method, ...})` helper in
-  `static/app.js` adds it; use that helper for writes.
+  and in `GET /api/me`. The workspace's `call(method, path, body)` helper in
+  `editor/pipeline-manager/pipeline_manager/frontend/src/vhil/api.js` adds
+  it; use that helper for writes.
 - **Ownership**: a run records who started it (`owner`: the login; `dev` in
-  dev mode), shown in the history and on the run page. Only its owner or an
+  dev mode), shown in the history and in its Artifacts tab. Only its owner or an
   admin (`VHIL_ADMINS`) may cancel it (403 otherwise; an admin's cancel is
   logged). A save records its saver as a `Vhil-User: <login>` trailer on the
   commit (`vhil/server/gitstore.py`); a save that would move a branch whose

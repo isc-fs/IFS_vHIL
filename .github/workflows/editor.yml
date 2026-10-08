@@ -73,7 +73,8 @@ jobs:
         run: |
           docker run --rm -v "$PWD:/work" -w /work vhil-editor-ci bash -c '
               set -e
-              for f in tokens.css editor-run.js vtable.js decode.js; do
+              for f in tokens.css editor-run.js vtable.js decode.js plot.js \
+                       vendor/uplot/uPlot.esm.js vendor/uplot/uPlot.min.css; do
                   cmp "/opt/pm/pipeline_manager/frontend/src/vhil/shell/$f" "vhil/server/static/$f"
               done
               echo "shell modules: the image holds the checkout copies"'

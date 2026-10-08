@@ -37,7 +37,7 @@ export default {
 
 <style lang="scss" scoped>
 .normal {
-    fill: #ffffff;
+    fill: $white;
 }
 .hovered {
     fill: $green;

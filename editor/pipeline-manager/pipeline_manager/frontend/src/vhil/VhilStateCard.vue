@@ -6,8 +6,10 @@ and the one before; contactors and relays as square pills with text
 (filled = closed); active faults as pills with their reason and age,
 cleared ones outlined; key values with units; "stale" when its state's
 source went silent. In the State tab (`history`) it adds the history: the
-FSM and relay lanes over the run and the transitions, where a click moves
-the scrubber. Status is always text and a glyph, never colour alone.
+transitions, where a click moves the scrubber, and a way to the FSM and
+relay lanes over the run, plotted in the Signals tab (step 18; they were
+drawn here until it came). Status is always text and a glyph, never colour
+alone.
 -->
 
 <template>
@@ -95,30 +97,15 @@ the scrubber. Status is always text and a glyph, never colour alone.
             </div>
         </dl>
 
-        <section v-if="history && lanes.length" class="vhil-state-history" aria-label="History">
-            <div class="vhil-lanes">
-                <div
-                    v-for="lane in lanes" :key="lane.label" class="vhil-lane"
-                    :class="`--${lane.kind}`"
-                >
-                    <span class="vhil-lane-label">{{ lane.label }}</span>
-                    <!-- Pointer only: the transitions below are the keyboard's way -->
-                    <div
-                        class="vhil-lane-track" aria-hidden="true"
-                        :title="`${lane.label} over the run: click to move the scrubber`"
-                        @click="(ev) => seekAt(ev)"
-                    >
-                        <span
-                            v-for="(s, i) in lane.segments" :key="i"
-                            class="vhil-lane-seg"
-                            :class="segClass(lane, s)"
-                            :style="segStyle(s)"
-                            :title="`${s.text}: ${seconds(s.t0)} – ${seconds(s.t1)}`"
-                        >{{ lane.kind === 'state' ? s.text : '' }}</span>
-                        <span class="vhil-lane-cursor" :style="cursorStyle" aria-hidden="true" />
-                    </div>
-                </div>
-            </div>
+        <section
+            v-if="history && card.state?.history?.length" class="vhil-state-history"
+            aria-label="History"
+        >
+            <button
+                type="button" class="vhil-btn --small vhil-state-lanes"
+                title="The FSM state and relay lanes over the run, plotted (the Signals tab)"
+                @click="$emit('lanes')"
+            >Lanes in Signals →</button>
             <ol class="vhil-transitions" aria-label="Transitions">
                 <li v-for="h in card.state?.history || []" :key="h.t">
                     <button
@@ -152,28 +139,12 @@ export default defineComponent({
         version: { type: Number, default: 0 },
         history: { type: Boolean, default: false },
     },
-    emits: ['seek'],
-    setup(props, { emit }) {
+    emits: ['seek', 'lanes'],
+    setup(props) {
         const card = computed(() => {
             props.version; // eslint-disable-line no-unused-expressions
             return props.trace.cardAt(props.board, props.t);
         });
-        const span = computed(() => Math.max(1, props.end || props.trace.end));
-        const lanes = computed(() => {
-            props.version; // eslint-disable-line no-unused-expressions
-            return props.history ? props.trace.lanesOf(props.board, span.value) : [];
-        });
-        // Positions as percentages of the run, set through the CSSOM (Vue's
-        // :style objects): the editor's CSP is style-src 'self'.
-        const pct = (us) => `${Math.max(0, Math.min(100, (100 * us) / span.value))}%`;
-        const segStyle = (s) => ({ left: pct(s.t0), width: pct(Math.max(0, s.t1 - s.t0)) });
-        const cursorStyle = computed(() => ({ left: pct(props.t) }));
-        // The state lane's segments take the series colours by value (with
-        // their text on them); a relay's are filled when closed.
-        const segClass = (lane, s) => {
-            if (lane.kind === 'state') return `--s${(Math.abs(Number(s.raw)) % 6) + 1}`;
-            return s.raw ? '--on' : '--off';
-        };
         // A relay as a pill: closed (filled ■), open (□) or not yet seen.
         const LOOKS = {
             on: {
@@ -191,11 +162,6 @@ export default defineComponent({
             if (r.on !== null) look = r.on ? LOOKS.on : LOOKS.off;
             return { ...r, look };
         }));
-        const seekAt = (ev) => {
-            const r = ev.currentTarget.getBoundingClientRect();
-            const x = Math.max(0, Math.min(1, (ev.clientX - r.left) / r.width));
-            emit('seek', Math.round(x * span.value));
-        };
         const staleTitle = computed(() => {
             const s = card.value.state;
             if (!s?.has) return 'no state yet';
@@ -204,11 +170,6 @@ export default defineComponent({
         return {
             card,
             relays,
-            lanes,
-            segStyle,
-            cursorStyle,
-            segClass,
-            seekAt,
             staleTitle,
             duration,
             seconds,

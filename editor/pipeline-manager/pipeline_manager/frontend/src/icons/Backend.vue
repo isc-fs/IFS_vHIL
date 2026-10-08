@@ -92,7 +92,7 @@ export default {
 
 .__inactive {
     > .highlighted, > .normal {
-        fill: #FFFFFF;
+        fill: $white;
     }
 
     &:hover > .highlighted {

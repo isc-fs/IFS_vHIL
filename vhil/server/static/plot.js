@@ -1,7 +1,9 @@
 // Time plots over virtual time with the vendored uPlot (static/vendor/uplot,
-// 1.6.32). One plot per series, stacked, in a group that shares the x range
-// (zoom/pan one, all follow), the hover cursor, and a marker at the time
-// selected anywhere on the run page (a frame row, a click on a plot).
+// 1.6.32), for the editor workspace's Signals tab (its build copies this file
+// and uPlot into src/vhil/shell/: docker/editor.Dockerfile). One plot per
+// series, stacked, in a group that shares the x range (zoom/pan one, all
+// follow), the hover cursor, and a marker at the time selected anywhere in
+// the workspace (the scrubber, a click on a plot).
 //
 //   drag: zoom to a range · ctrl/cmd-wheel or pinch: zoom around the cursor
 //   shift-drag: pan
@@ -9,6 +11,8 @@
 import uPlot from "./vendor/uplot/uPlot.esm.js";
 
 let cssLoaded = false;
+// The page bundles uPlot's sheet itself (the editor's build): no <link>.
+export function cssProvided() { cssLoaded = true; }
 function loadCss() {
   if (cssLoaded) return;
   cssLoaded = true;
@@ -59,12 +63,20 @@ export class PlotGroup {
     this.plots = [];
   }
 
-  // A plot of one series {x: [t_s], y: [v]} in `el`.
-  add(el, { label, unit = "", x, y, stepped = true, color = palette()[0], height = 140 }) {
+  // A plot of one series {x: [t_s], y: [v]} in `el`. `format(v)`: how a
+  // value reads (an enum's label), on the y axis at `levels` and in the legend.
+  add(el, { label, unit = "", x, y, stepped = true, color = palette()[0], height = 140,
+            format = null, levels = null }) {
     loadCss();
     const group = this;
     const fg = token("--fg", "#222"), muted = token("--fg-muted", "#888"), line = token("--line", "#ddd");
     const axis = { stroke: muted, grid: { stroke: line, width: 1 }, ticks: { stroke: line } };
+    // Labelled levels (sorted): the y axis holds them all, ticked at each.
+    const stepLevels = format && levels?.length ? levels : null;
+    // The y axis is as wide as its longest label (an enum's name), within reason.
+    const labelWidth = stepLevels
+      ? Math.min(200, 20 + 7 * Math.max(...stepLevels.map((v) => String(format(v)).length)))
+      : format ? 96 : 60;
     const marker = {
       hooks: {
         draw: [(u) => {
@@ -97,14 +109,18 @@ export class PlotGroup {
       legend: { show: true, live: true },
       cursor: { sync: { key: this.key, setSeries: false }, drag: { x: true, y: false },
                 bind: { dblclick: () => null } },   // ours: reset the whole group
-      scales: { x: { time: false } },
+      scales: { x: { time: false },
+                ...(stepLevels ? { y: { range: [levels[0] - 0.5, levels[levels.length - 1] + 0.5] } } : {}) },
       axes: [
         { ...axis, label: "virtual time (s)", labelSize: 18, size: 36, font: "11px system-ui", labelFont: "11px system-ui", stroke: muted },
-        { ...axis, size: 60, font: "11px system-ui", stroke: muted },
+        { ...axis, size: labelWidth, font: "11px system-ui", stroke: muted,
+          ...(format ? { values: (u, splits) => splits.map((v) => format(v)) } : {}),
+          ...(stepLevels ? { splits: () => levels } : {}) },
       ],
       series: [
         { label: "t (s)", value: (u, v) => (v == null ? "–" : v.toFixed(6)) },
         { label: unit ? `${label} [${unit}]` : label, stroke: color, width: 1.5,
+          ...(format ? { value: (u, v) => (v == null ? "–" : format(v)) } : {}),
           fill: color + "18", spanGaps: true, points: { show: x.length < 200, size: 4 },
           paths: stepped ? uPlot.paths.stepped({ align: 1 }) : undefined },
       ],

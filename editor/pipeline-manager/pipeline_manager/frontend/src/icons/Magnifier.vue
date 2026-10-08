@@ -53,7 +53,7 @@ export default {
 
 <style lang="scss" scoped>
 .normal {
-    stroke: #ffffff;
+    stroke: $white;
     fill: $gray-600;
 }
 

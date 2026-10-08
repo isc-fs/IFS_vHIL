@@ -147,7 +147,9 @@ the Scenario tab, ▶ runs it).
                         class="vhil-list-item vhil-run-row"
                         :class="{ '--current': r.id === replay.id }"
                         :aria-current="r.id === replay.id ? 'true' : undefined"
-                        :title="`Replay run ${r.id}: its frames in the Bus tab`"
+                        :title="r.scenario?.kind === 'pytest'
+                            ? `Run ${r.id}: pytest ${r.scenario.select} (the Artifacts tab)`
+                            : `Replay run ${r.id}: its frames in the Bus tab`"
                         @click="openRun(r.id)"
                     >
                         <span class="mono num">#{{ r.id }}</span>
@@ -158,8 +160,8 @@ the Scenario tab, ▶ runs it).
                     </button>
                     <a
                         class="vhil-run-page" :href="runPage(r.id)" target="_blank" rel="noopener"
-                        :aria-label="`Run ${r.id}'s page: signals, log and artifacts`"
-                        :title="`Run ${r.id}'s page: signals, log and artifacts (new tab)`"
+                        :aria-label="`Replay run ${r.id} in a new tab`"
+                        :title="`Replay run ${r.id} in a new tab (a link to share)`"
                     >↗</a>
                 </li>
             </ul>

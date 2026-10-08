@@ -1,8 +1,8 @@
 /*
  * vHIL: the workspace's keyboard map (step 7 of
  * docs/architecture/editor-workspace.md; CHANGELOG-VHIL.md). `?` lists it.
- * Ctrl is Cmd on a Mac. Browsers keep Ctrl+1..7 for their own tabs in some
- * setups, so Alt+1..7 picks a dock tab too.
+ * Ctrl is Cmd on a Mac. Browsers keep Ctrl+1..8 for their own tabs in some
+ * setups, so Alt+1..8 picks a dock tab too.
  */
 
 import {
@@ -55,7 +55,7 @@ export function onKeyDown(ev) {
         ws.layout.dock = !ws.layout.dock;
         return;
     }
-    const digit = /^Digit([1-7])$/.exec(ev.code);
+    const digit = /^Digit([1-8])$/.exec(ev.code);
     if (digit && (mod || ev.altKey) && !ev.shiftKey) {
         ev.preventDefault();
         ws.layout.dockTab = DOCK_TABS[Number(digit[1]) - 1].id;

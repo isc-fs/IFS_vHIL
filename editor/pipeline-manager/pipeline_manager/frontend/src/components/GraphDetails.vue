@@ -116,7 +116,7 @@ export default {
     max-width: $settings-maxwidth;
 
     background-color: color-mix(in srgb, #{$gray-600} 90%, transparent);
-    color: white;
+    color: $white;
 
     z-index: 4;
     overflow-y: auto;

@@ -144,7 +144,7 @@ export default defineComponent({
     padding: 2px 8px;
     font-size: $fs-large;
     font-weight: 600;
-    color: #ffffff;
+    color: $white;
     background-color: #{$gray-600};
     border-radius: 4px;
     white-space: nowrap;
