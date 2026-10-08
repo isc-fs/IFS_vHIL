@@ -20,7 +20,7 @@ own messages carry (ECU "VCU", AMS "AMS"). Declarations that disagree are
 listed under `conflicts`: that is drift between two firmwares' contracts.
 
 Parsing is cached per firmware source (candef.load), so the browser can fetch
-this for every run page.
+this for every replayed run.
 """
 from __future__ import annotations
 
