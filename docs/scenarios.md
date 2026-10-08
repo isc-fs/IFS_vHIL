@@ -186,12 +186,34 @@ python -m pytest tests/scenarios -o junit_family=xunit1 --junitxml=scenarios.xml
 CI runs it in `.github/workflows/scenarios.yml` with `full-ci`, nightly on
 `dev` and on dispatch. It is **advisory** for now (owner decision): a
 failing scenario is a warning annotation and a row of the step summary's
-table, not a failed check. The seeds, which pass against the firmware the
-systems declare:
+table, not a failed check.
+
+### Promotion to a gate
+
+The suite becomes a required check (the workflow's `Advisory verdict` step
+exits 1 and the job loses `continue-on-error`) when all of these hold:
+
+- **10 clean nightlies in a row** on `dev`: the scheduled run completes, every
+  scenario passes, and none is skipped for a missing image.
+- **No flakes:** no scenario has failed and then passed on the same commit in
+  that window (a re-run that changes the verdict is a flake, and resets the
+  count once its cause is fixed).
+- **The nightly actually runs.** GitHub fires `schedule` only from the
+  workflow file on the default branch (`main`), which does not carry
+  `scenarios.yml` until the next `dev` → `main` release (#197); until then
+  the "nightly" is a manual `gh workflow run scenarios.yml --ref dev`.
+
+The flip is the owner's call, tracked in #198; meeting the criteria does not
+flip it by itself.
+
+The seeds, which pass against the firmware the systems declare:
 
 | Scenario | What it checks |
 |---|---|
 | `ams/tsms-precharge-run` | Car mode: TSMS and a DASH_CHG press arm Precharge (AIR- and PRE close, `g_state_telemetry` 1); the link following to the pack gives Run (AIR+ closes, PRE opens; `AMS_status.fsm_state` 3 and `AMS_relay_status.air_positive` on CAN); never Error; AMS_OK held; `AMS_status` every 500 ms |
+| `ams/vcu-stale-opens-the-airs` | Armed to Run, then the ECU's `0x100` stops: 200 ms later Error, reason VcuStale (11), AIR+, AIR- and PRE open and AMS_OK low, latched; `AMS_status.fsm_state` 5 on CAN |
+| `ecu/ams-error-inhibit` | A fresh `0x4A0` saying Error puts the ECU in AmsError within two ticks and holds it there; the AMS healthy again re-arms from WaitInvVdcConfig back to WaitStartBrake |
+| `ecu/as-emergency` | `0x50A` Emergency: the RTDS sounds 150 ms pulses for exactly 10 s and stops although Emergency persists; silent before the uDV is heard; `PitDiag_dv` flags the tone |
 | `ecu/heartbeat-r2d` | Nothing on the bus in the bootloader's window; `0x100` every 10 ms on the ACU bus only, `0x704` every second; the inverter's DC-bus report and the AMS's `ok_precharge` reach WaitStartBrake; START without the brake sounds no RTDS; with it, R2dDelay and 2 s of RTDS, then WaitInvStandby |
 
 ## In the editor
