@@ -633,17 +633,33 @@ namespace Antmicro.Renode.Tools.Network
                 return;
             }
             wakeNs = at;
-            At(node, at, () =>
+            At(node, at, () => Wake(node, at));
+        }
+
+        // A wake runs in the board's clock source, which holds its own lock
+        // meanwhile; another thread may hold the bus and be waiting for that
+        // clock source (Decide scheduling an effect in the board). So the
+        // wake never waits for the bus: when it is taken, it tries again a
+        // microsecond later (#193: that wait deadlocked ecu-ams).
+        private void Wake(Node node, ulong at)
+        {
+            if(!System.Threading.Monitor.TryEnter(sync))
             {
-                lock(sync)
+                node.Machine.ScheduleAction(TimeInterval.FromTicks(RetryNs), _ => Wake(node, at), "vhil-can");
+                return;
+            }
+            try
+            {
+                if(wakeNs == at)
                 {
-                    if(wakeNs == at)
-                    {
-                        wakeNs = null;
-                    }
+                    wakeNs = null;
                 }
-                AdvanceInMachine(at);
-            });
+                AdvanceInMachine(at);   // re-enters the bus lock held here
+            }
+            finally
+            {
+                System.Threading.Monitor.Exit(sync);
+            }
         }
 
         // From the board's own thread: up to `now`, but not the next sync
@@ -759,6 +775,7 @@ namespace Antmicro.Renode.Tools.Network
         private readonly HashSet<uint> warnedSameId = new HashSet<uint>();
         private readonly HashSet<Tuple<int, int>> warnedRate = new HashSet<Tuple<int, int>>();
         private bool eager = true;
+        private const ulong RetryNs = 1000;   // a wake that found the bus taken (Wake)
         private ulong busFreeNs;
         private ulong? wakeNs;
         private long framesOk;
