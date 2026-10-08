@@ -129,10 +129,10 @@ vendored in [`editor/pipeline-manager/`](../../editor/pipeline-manager/README-VH
 `CHANGELOG-VHIL.md`.
 
 In Docker: `scripts/vhil-docker.sh editor`, then open
-http://localhost:8080/editor/ (the shell's links, and old `#/editor/<system>`,
-`#/systems[/<id>]` and `#/runs[/<id>]` links, go there; `?system=<id>&branch=<b>`
-opens a system, `?run=<id>` replays a run; the shell's own pages are under
-`#/classic/`).
+http://localhost:8080/editor/ (`/` redirects there, and so do old
+`#/editor/<system>`, `#/systems[/<id>]`, `#/runs[/<id>[/<tab>]]` and
+`#/classic/…` links; `?system=<id>&branch=<b>` opens a system, `?run=<id>`
+replays a run, `&tab=<dock tab>` on it; the shell's own pages are retired).
 It runs `docker/compose.yaml`'s `editor` and `proxy` (and the `api`, for the
 login check): one origin, as on a host, the editor under `/editor/` and no
 port of its own. The image
@@ -201,15 +201,17 @@ ls-remote`). Open PR pushes the branch and opens a PR to `dev`; it needs
 `VHIL_GITHUB_TOKEN` (or `VHIL_GITHUB_TOKEN_FILE`; contents + pull requests write) on the API until the
 GitHub App (M5.5) replaces it. Without it the button is off and the branch
 stays local. Check lists the file's errors and warnings in Problems; a click
-selects the node one is about. Run starts a normal run, as the Runs page
-does (`POST /api/runs`, `vhil/server/static/editor-run.js`): the system as
+selects the node one is about. Run starts a normal run
+(`POST /api/runs`, `vhil/server/static/editor-run.js`): the system as
 saved, at the commit it was opened from or last saved to (the checked-out
 tree if it was opened from there), with each board's `firmware_ref` /
 `bootloader_ref` from the graph, for the virtual ms given (default 3000:
 each MainLite spends its bootloader's 2 s window first). With unsaved edits
 it refuses and says to commit first; it never runs the graph in the browser.
 Its state goes to the Log, the status strip and a notification, with a link
-to the run's page; the Runs view lists the system's runs. Known gap: Pipeline Manager 0.5.2 rejects the graphs of the
+to its replay; the Runs view lists the system's runs. Tests… in the top bar
+runs the native tests (`tests/sim`, a pytest run) on the open system; its
+JUnit results and output open in the Artifacts tab. Known gap: Pipeline Manager 0.5.2 rejects the graphs of the
 systems with more than one CAN bus ("Missing dst s:can_inv:0": the earlier
 buses' stubs are not found), so the ECU systems don't load in the editor yet;
 single-bus systems such as `ams` do.

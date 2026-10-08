@@ -127,7 +127,9 @@ a live session's `op {t_us, op_id, op, status, login, detail?}` and
    writer, live WebSocket, cancel.
 3. **Inspect**: run history and run page: frame table with filters and
    decoding against the boards' `.def`/DBC, signal plots, snapshots,
-   coverage, JUnit.
+   coverage, JUnit. (The shell's run page is retired: the editor
+   workspace's REPLAY shows all of it; [editor-workspace.md](editor-workspace.md),
+   step 18.)
 4. **Editor + git**: the shell embeds Pipeline Manager; save writes the system
    file to a branch in the workspace; firmware picker (repo/ref) from the
    boards' firmware sources; PR creation. A MainLite is one node type with

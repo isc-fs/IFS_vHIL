@@ -196,11 +196,11 @@ sidebar sizes are kept per viewer in `localStorage` (wrapped in try/catch).
    role, firmware, bootloader, write-protect; LIVE/REPLAY — the board's State
    card, watches, faults; PAUSED — registers, locals, stack; a bus — bitrate,
    netdev, IDs seen with their senders.
-5. **Bottom dock (Ctrl+J, Ctrl+1..7), 38 % by default:** Scenario, State, Bus
+5. **Bottom dock (Ctrl+J, Ctrl+1..8), 38 % by default:** Scenario, State, Bus
    (Monitor, Trace, Transmit), Signals (uPlot: analog, state and digital
    lanes on one axis), Log (PM's terminal, moved here, plus UART/Renode log),
-   Debug, Problems (validate output, click to jump to the node); Artifacts and
-   Tests when the run has them. Collapsed, it is a 28 px strip that still
+   Debug, Problems (validate output, click to jump to the node), Artifacts
+   (the run's record, JUnit, snapshots, files). Collapsed, it is a 28 px strip that still
    shows the fault count.
 6. **Status strip, 24 px:** virtual vs wall time, emulation speed, WS lag,
    frames/s and drops (`aria-live` polite, 1 Hz), active periodic stimuli
@@ -310,7 +310,7 @@ In the owner's order.
    reuse, visible-only decode; perf test: 5k frames/s replay, p95 frame time
    under 16 ms. The shell's run page stays at `#/classic/runs/<id>` (and its
    runs list at `#/classic/runs`, for pytest runs) until REPLAY shows a run's
-   signals and artifacts too.
+   signals and artifacts too (step 18 retired them).
 10. **Scenario model and table** (feature 1a). Shared stimulus/expect schema
     (the same ops that drive live), the table with contract-driven editors,
     server-side validation, YAML through Commit/PR. Done:
@@ -345,7 +345,7 @@ In the owner's order.
     (`state.js` `StateTrace`, fed record by record, so LIVE feeds it the
     same way); with no Signals tab yet, the FSM and digital lanes are the
     State tab's history (HTML lanes, not `plot.js`), and they move to
-    Signals with it.
+    Signals with it (step 18 moved them).
 14. **Session channel** (feature 3a). `/runs/{id}/session`, acks echoed into
     the trace, slice-boundary application, clock heartbeat, 50 ms poll; tests
     for mid-run ops and the determinism of a recorded session. Done:
@@ -398,6 +398,23 @@ In the owner's order.
 18. **Cleanup before M8.** Old shell pages go (`index.html` redirects);
     `CHANGELOG-VHIL.md` complete; the session, scenario and trace schemas
     documented as the stable contract for external simulation platforms.
+    Done (`editor/pipeline-manager/CHANGELOG-VHIL.md` 21): the gaps closed
+    first, then the pages retired. The Signals tab plots, on the shell's
+    `plot.js` (uPlot, copied into the build like `decode.js`), each board's
+    state-view FSM and relay lanes (with their labels; the State tab's HTML
+    lanes moved here, its transitions stay), decoded CAN fields and sampled
+    globals, sharing the scrubber; the Artifacts tab shows the run's record,
+    a pytest run's JUnit cases with their failure snapshots, the worker's
+    error, pytest's output and every file; Tests… in the top bar starts a
+    pytest run, which opens on Artifacts when it ends. The shell's run page,
+    runs list and systems pages (`inspect.js`, `runs.js`) are gone: `/` is a
+    redirect into `/editor/`, and every old link (`#/runs/<id>[/<tab>]`,
+    `#/classic/…`, `#/systems[/<id>]`, `#/editor/<id>`) lands where its
+    content is now (`vhil/server/static/editor.js` `redirectFor`). The
+    contract for external platforms is
+    [`docs/integration-contract.md`](../integration-contract.md), versioned
+    by `CONTRACT_VERSION`. The light theme's hard-coded white text and icon
+    fills in Pipeline Manager's own components follow `--fg` now.
 
 ## Avoid
 
