@@ -617,6 +617,27 @@ from `git archive 04613679` except as listed below.
       its options have `v-memo`.
     - The board's own dropdowns (`VhilBoardControls.vue`) and the dock's
       selects don't re-render on pointer events, and stay as they were.
+27. **Live logs** (the Log tab shows what a run says as it runs: the
+    worker, the firmware build, Renode and each board's UARTs;
+    `vhil/runlog.py`, [`docs/live-session.md`](../../docs/live-session.md#logs)).
+    - `src/vhil/runlog.js` (new): a run's `log` record as a Log entry
+      (`{ text, source, level }`: virtual time, or the wall time before
+      power-on; source; level; text) and the source filter.
+      `workspace.js` (a followed run, a replay) and `session.js` (a live
+      session) log those entries instead of a formatted string.
+    - `src/vhil/LogView.vue`: an entry may be such an object (its text
+      shown); a warning or error row is coloured (`$gold`, `$red`); a
+      `hidden` prop drops the entries of those sources (a change rebuilds
+      the view).
+    - `src/vhil/VhilLog.vue` (new) in place of `components/Terminal.vue` in
+      the dock's Log tab (`VhilDock.vue`): a chip (a toggle button, not a
+      select: change 26) per source to hide or show its lines, remembered
+      in the layout (`logHidden`), and a link to download the run's whole
+      `renode.log`.
+    - `src/core/stores.js` `terminalStore.add`: the main terminal keeps at
+      most 40 000 entries in memory and saves its last 2 000 to
+      localStorage at most twice a second (upstream re-serialised the whole
+      log on every line, which a streaming run makes quadratic).
 
 ## Left for later
 

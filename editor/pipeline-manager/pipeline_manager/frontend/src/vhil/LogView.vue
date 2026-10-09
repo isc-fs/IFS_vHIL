@@ -8,6 +8,10 @@ long log costs what fits on screen. It follows the end while scrolled to the
 bottom and stays put once scrolled up. Lines are plain text: terminal
 escape sequences (colours, cursor moves) are dropped. A writable terminal
 (terminal_add with readonly false) gets an input line; Enter sends it.
+
+An entry is a string (the editor's own message) or a run's log record as
+runlog.js logEntry makes it ({ text, source, level }): a warning or an error
+row is coloured, and `hidden` drops the entries of those sources.
 -->
 
 <template>
@@ -23,7 +27,12 @@ escape sequences (colours, cursor moves) are dropped. A writable terminal
         >
             <div class="vhil-log-spacer" :style="{ height: `${total * ROW}px` }">
                 <div class="vhil-log-rows" :style="{ transform: `translateY(${first * ROW}px)` }">
-                    <div v-for="(line, i) in visible" :key="first + i" class="vhil-log-row">{{ line }}</div>
+                    <div
+                        v-for="(line, i) in visible"
+                        :key="first + i"
+                        class="vhil-log-row"
+                        :class="line.level !== 'info' && `--${line.level}`"
+                    >{{ line.text }}</div>
                 </div>
             </div>
         </div>
@@ -40,6 +49,7 @@ escape sequences (colours, cursor moves) are dropped. A writable terminal
 import {
     defineComponent, ref, computed, watch, nextTick, onMounted, onBeforeUnmount,
 } from 'vue';
+import { levelOf, sourceOf, textOf } from './runlog.js';
 
 const ROW = 18;          // px: the row height in the stylesheet below
 const OVERSCAN = 10;     // rows rendered beyond each edge of the view
@@ -48,7 +58,7 @@ const ESCAPES = /\u001b(\[[0-9;:?<=>]*[ -/]*[@-~]|\][^\u0007\u001b]*(\u0007|\u00
 
 /** Plain lines of a log entry: escape sequences and carriage returns dropped. */
 export function toLines(entry) {
-    return String(entry).replace(ESCAPES, '').replace(/\r\n?/g, '\n').split('\n');
+    return textOf(entry).replace(ESCAPES, '').replace(/\r\n?/g, '\n').split('\n');
 }
 
 export default defineComponent({
@@ -59,6 +69,8 @@ export default defineComponent({
         label: { type: String, default: 'Log' },
         // At most this many lines are kept; the oldest go first.
         maxLines: { type: Number, default: 20000 },
+        // Sources whose entries are not shown (runlog.js sourceOf).
+        hidden: { type: Array, default: () => [] },
     },
     emits: ['input'],
     setup(props, { emit }) {
@@ -75,8 +87,15 @@ export default defineComponent({
 
         const rebuild = () => {
             const { entries } = props;
+            const hidden = new Set(props.hidden);
             if (entries.length < consumed) { lines = []; consumed = 0; }   // cleared
-            for (; consumed < entries.length; consumed += 1) lines.push(...toLines(entries[consumed]));
+            for (; consumed < entries.length; consumed += 1) {
+                const entry = entries[consumed];
+                if (!hidden.has(sourceOf(entry))) {
+                    const level = levelOf(entry);
+                    toLines(entry).forEach((text) => lines.push({ text, level }));
+                }
+            }
             if (lines.length > props.maxLines) lines = lines.slice(lines.length - props.maxLines);
             total.value = lines.length;
         };
@@ -104,6 +123,12 @@ export default defineComponent({
             if (follow) { await nextTick(); toEnd(); }
         });
         watch(() => props.entries, () => { lines = []; consumed = 0; rebuild(); });
+        watch(() => props.hidden.join('\n'), async () => {
+            lines = [];
+            consumed = 0;
+            rebuild();
+            if (follow) { await nextTick(); toEnd(); }
+        });
 
         let observer;
         onMounted(() => {
@@ -156,6 +181,14 @@ export default defineComponent({
     font-family: $roboto-mono;
     font-size: 12px;
     white-space: pre;
+
+    &.--warning {
+        color: $gold;
+    }
+
+    &.--error {
+        color: $red;
+    }
 }
 
 .vhil-log-input input {
