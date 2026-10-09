@@ -2,7 +2,7 @@
 vHIL: the workspace's top bar, 40 px (step 7 of
 docs/architecture/editor-workspace.md; CHANGELOG-VHIL.md), in place of
 Pipeline Manager's NavBar: the mark, what is open, one firmware chip per
-board (opens the ref picker), the scenario Run runs and its duration (step
+board (shows it on the canvas, where its dropdowns pick the refs), the scenario Run runs and its duration (step
 10: a scenario's own), Run and Stop, the mode, Commit… and Open PR
 (dialogs), and the theme. In REPLAY (step 9) the scenario and duration give
 way to the run's clock, a scrubber over its virtual time. In LIVE (step 15)
@@ -41,9 +41,9 @@ scenario" records it.
                 type="button"
                 class="vhil-chip"
                 :class="{ '--picked': chip.picked, '--none': !chip.fw }"
-                :aria-label="`${chip.name} firmware: ${chip.label}. Pick a ref`"
-                :aria-expanded="ws.picker?.nodeId === chip.id"
-                @click="(ev) => openPicker(chip.id, ev)"
+                :aria-label="`${chip.name} firmware: ${chip.label}. Show the board`"
+                :title="`${chip.name}: pick its firmware on the board`"
+                @click="showBoard(chip.id)"
             >
                 <span class="vhil-chip-board">{{ chip.name }}</span>
                 <span class="vhil-chip-ref mono">{{ chip.label }}</span>
@@ -116,9 +116,12 @@ scenario" records it.
             title="The scenario Run runs: its stimuli, watches and expects (the Scenario tab)"
         >
             <span class="vhil-visually-hidden">Scenario</span>
+            <!-- v-memo: re-rendered only when what it shows changes, so an open
+                 popup's options are never re-patched (src/vhil/stable.js) -->
             <select
+                v-memo="[scen.name, ws.id, scenarioKey]"
                 :value="scen.name" :disabled="!ws.id" aria-label="Scenario for Run"
-                @change="(ev) => pickScenario(ev.target.value)"
+                @change="(ev) => pickFromSelect(ev.target)"
             >
                 <option value="">no scenario</option>
                 <option v-for="s in scen.list" :key="s.name" :value="s.name">
@@ -197,10 +200,12 @@ scenario" records it.
 </template>
 
 <script>
-import { computed, defineComponent } from 'vue';
+import {
+    computed, defineComponent, inject, ref,
+} from 'vue';
 import {
     ws, boardFirmware, cycleTheme, exitReplay, isLive, keepAlive, pauseLive, pickScenario,
-    runActive, runNow, startLive, stopLive, stopRun,
+    runActive, runNow, showBoard, startLive, stopLive, stopRun,
 } from './workspace.js';
 import { live as session, take } from './session.js';
 import { clockText, idleText } from './live.js';
@@ -211,17 +216,17 @@ import { edited, scen } from './scenarios.js';
 import { boards, nodeName } from './graph.js';
 import { replay, seconds } from './replay.js';
 import { runPage } from './api.js';
+import { keep } from './stable.js';
 
 export default defineComponent({
-    props: {
-        // Bumped when the graph changes, so the chips follow it.
-        tick: { type: Number, default: 0 },
-    },
-    setup(props) {
-        const chips = computed(() => {
-            props.tick; // eslint-disable-line no-unused-expressions
-            if (!ws.id) return [];
-            return boards().map((node) => {
+    setup() {
+        // Bumped when the graph changes, so the chips follow it (Home.vue).
+        const tick = inject('vhilTick', ref(0));
+        // The same chips as before keep the top bar from re-rendering.
+        const chips = computed((old) => {
+            tick.value; // eslint-disable-line no-unused-expressions
+            if (!ws.id) return keep(old, []);
+            return keep(old, boards().map((node) => {
                 const app = boardFirmware(node).find((f) => f.what === 'app');
                 let label = 'no firmware';
                 if (app?.fw) label = app.ref || app.fw.ref;
@@ -233,18 +238,25 @@ export default defineComponent({
                     label,
                     picked: Boolean(app?.ref),
                 };
-            });
+            }));
         });
+        // What the scenario dropdown lists, for its v-memo.
+        const scenarioKey = computed(() => scen.list
+            .map((s) => `${s.name}${s.unsaved ? ' (new)' : ''}`).join('\n'));
+        // A pick the workspace refused (its scenario didn't load) shows
+        // what is selected: v-memo keeps the select from re-syncing itself.
+        const pickFromSelect = async (el) => {
+            try {
+                await pickScenario(el.value);
+            } finally {
+                el.value = scen.name; // eslint-disable-line no-param-reassign
+            }
+        };
         const crumbTitle = computed(() => (ws.id
             ? `${ws.id} @ ${ws.branch || 'the checked-out tree'}${ws.ref ? ` (${ws.ref.slice(0, 8)})` : ''}${ws.dirty ? ': unsaved edits' : ''}`
             : ''));
         const running = computed(() => Boolean(runActive()));
         const themeGlyph = computed(() => ({ dark: '◐', light: '◑', auto: '◒' })[ws.theme] || '◐');
-        const openPicker = (nodeId, ev) => {
-            const r = ev.currentTarget.getBoundingClientRect();
-            ws.picker = ws.picker?.nodeId === nodeId ? null
-                : { nodeId, x: r.left, y: r.bottom + 4 };
-        };
         // 100 µs a step, coarser over a long run (at most ~20000 steps).
         // The selected scenario's own virtual time, else the run's.
         const duration = computed({
@@ -307,7 +319,7 @@ export default defineComponent({
             crumbTitle,
             running,
             themeGlyph,
-            openPicker,
+            showBoard,
             runNow,
             stopRun,
             cycleTheme,
@@ -317,7 +329,8 @@ export default defineComponent({
             exitReplay,
             runPage,
             scen,
-            pickScenario,
+            scenarioKey,
+            pickFromSelect,
             duration,
         };
     },

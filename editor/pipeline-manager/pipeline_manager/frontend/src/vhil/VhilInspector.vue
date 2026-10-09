@@ -7,7 +7,8 @@ inputs (VhilInputs.vue, step 15: pin switches, analog voltages); PAUSED at a
 debugger stop, the held board's stack, locals and registers
 (VhilDebugInspect.vue, step 17), with nothing selected too; with nothing selected,
 the open system and its Check, Commit and PR, which used to be the shell's
-fixed aside. A board's properties live here, not on its node.
+fixed aside. A board's role, firmware and bootloader are edited on its node
+(VhilBoardControls.vue) and only shown here, so one place edits each.
 -->
 
 <template>
@@ -52,26 +53,21 @@ fixed aside. A board's properties live here, not on its node.
                         </label>
                     </dt>
                     <dd>
-                        <!-- a ref: the picker, as the top bar's chip -->
-                        <button
-                            v-if="p.ref"
-                            :id="`vhil-prop-${p.name}`"
-                            type="button"
-                            class="vhil-btn vhil-ref-button mono"
-                            :disabled="!p.fw"
-                            :title="refTitle(p)"
-                            @click="(ev) => openPicker(ev)"
-                        >{{ p.value || (p.fw ? `${p.fw.ref} (catalogue)` : 'none') }}</button>
                         <output
-                            v-else-if="p.type === 'constant' || p.readonly"
+                            v-if="p.type === 'constant' || p.readonly"
                             :id="`vhil-prop-${p.name}`" class="mono"
                         >{{ p.value }}</output>
+                        <!-- v-pick and v-memo: a re-render leaves an open popup's
+                             options alone (src/vhil/stable.js) -->
                         <select
                             v-else-if="p.type === 'select'"
+                            v-pick="p.value"
                             :id="`vhil-prop-${p.name}`" class="vhil-input"
-                            :value="p.value" @change="(ev) => set(p.name, ev.target.value)"
+                            @change="(ev) => set(p.name, ev.target.value)"
                         >
-                            <option v-for="v in p.values" :key="v" :value="v">{{ v }}</option>
+                            <option v-for="v in p.values" :key="v" v-memo="[v]" :value="v">
+                                {{ v }}
+                            </option>
                         </select>
                         <input
                             v-else-if="p.type === 'bool'"
@@ -135,7 +131,9 @@ fixed aside. A board's properties live here, not on its node.
 </template>
 
 <script>
-import { computed, defineComponent } from 'vue';
+import {
+    computed, defineComponent, inject, ref,
+} from 'vue';
 import VhilStateCard from './VhilStateCard.vue';
 import VhilInputs from './VhilInputs.vue';
 import VhilDebugInspect from './VhilDebugInspect.vue';
@@ -143,31 +141,34 @@ import { stopOf } from './debugui.js';
 import { live as session } from './session.js';
 import { replay } from './replay.js';
 import {
-    ws, boardFirmware, check, isLive, pickRef, refreshDirty,
+    ws, boardFirmware, check, isLive, refreshDirty,
 } from './workspace.js';
 import {
     nodeById, nodeName, prop, setProp, specNode, vhilKind,
 } from './graph.js';
+import { keep, vPick } from './stable.js';
 
 const LABELS = {
     firmware_ref: 'app ref', bootloader_ref: 'bootloader ref', host_netdev: 'host netdev',
 };
 const NUMERIC = ['integer', 'number', 'slider'];
-const ROLE_NOTE = 'Sets its firmware, node ID, flash bus and pin labels.';
+// A board's: edited by its dropdowns on the node (VhilBoardControls.vue).
+const ON_NODE = ['role', 'firmware', 'firmware_ref', 'bootloader', 'bootloader_ref'];
+const ON_NODE_NOTE = 'Pick the role, firmware and bootloader on the board.';
 
 export default defineComponent({
     components: { VhilStateCard, VhilInputs, VhilDebugInspect },
-    props: {
-        tick: { type: Number, default: 0 },
-    },
-    setup(props) {
+    directives: { pick: vPick },
+    setup() {
+        // Bumped when the graph changes (Home.vue).
+        const tick = inject('vhilTick', ref(0));
         const stateTrace = computed(() => {
             replay.version; // eslint-disable-line no-unused-expressions
             return ws.mode === 'REPLAY' || isLive() ? replay.stateTrace : null;
         });
         const live = computed(() => isLive());
         const node = computed(() => {
-            props.tick; // eslint-disable-line no-unused-expressions
+            tick.value; // eslint-disable-line no-unused-expressions
             return ws.selectedId ? nodeById(ws.selectedId) ?? null : null;
         });
         const kind = computed(() => (node.value ? vhilKind(node.value.type) : null));
@@ -175,25 +176,28 @@ export default defineComponent({
         // The node's properties as its type declares them (vhil/editor.py
         // specification()), with the values on the canvas; hidden ones (a
         // system's write_protect) stay hidden.
-        const properties = computed(() => {
-            props.tick; // eslint-disable-line no-unused-expressions
+        // The same rows as before keep the inspector from re-rendering.
+        const properties = computed((old) => {
+            tick.value; // eslint-disable-line no-unused-expressions
             const n = node.value;
-            if (!n) return [];
+            if (!n) return keep(old, []);
             const fw = Object.fromEntries(boardFirmware(n).map((f) => [f.refProp, f]));
-            return (specNode(n.type)?.properties ?? [])
+            return keep(old, (specNode(n.type)?.properties ?? [])
                 .filter((p) => !p.hidden && prop(n, p.name))
                 .map((p) => {
                     const f = fw[p.name];
+                    let { value } = prop(n, p.name);
+                    // A ref left empty runs the catalogue's.
+                    if (f && !value) value = f.fw ? `${f.fw.ref} (catalogue)` : 'none';
+                    const onNode = kind.value === 'board' && ON_NODE.includes(p.name);
                     return {
                         ...p,
                         label: LABELS[p.name] ?? p.name.replace(/_/g, ' '),
-                        value: prop(n, p.name).value,
-                        ref: f ? f.what : null,
-                        fw: f?.fw ?? null,
-                        fwId: f?.fwId,
-                        note: p.name === 'role' ? ROLE_NOTE : '',
+                        value,
+                        readonly: p.readonly || onNode,
+                        note: onNode && p.name === 'role' ? ON_NODE_NOTE : '',
                     };
-                });
+                }));
         });
         const nodeProblems = computed(() => ws.problems.filter((p) => p.nodeId === ws.selectedId));
 
@@ -201,11 +205,6 @@ export default defineComponent({
             setProp(node.value, name, value);
             refreshDirty();
         };
-        const openPicker = (ev) => {
-            const r = ev.currentTarget.getBoundingClientRect();
-            ws.picker = { nodeId: node.value.id, x: r.left - 40, y: r.bottom + 4 };
-        };
-        const refTitle = (p) => (p.fw ? `Pick a ${p.ref} ref` : `No ${p.fwId} firmware in the catalogue`);
 
         // Width: drag the left edge, or arrow keys on it.
         const clamp = (w) => Math.max(260, Math.min(560, Math.round(w)));
@@ -235,11 +234,8 @@ export default defineComponent({
             nodeProblems,
             nodeName,
             set,
-            openPicker,
-            refTitle,
             NUMERIC,
             check,
-            pickRef,
             resizeBy,
             startResize,
         };

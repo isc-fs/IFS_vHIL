@@ -58,6 +58,40 @@
   border-top: 4px solid var(--vhil-role, var(--border-control)); border-radius: var(--r-panel);
 }
 .baklava-node.vhil-node.--vhil-board > .__title { border-radius: 0; }
+/* Its role, bootloader and firmware dropdowns (VhilBoardControls.vue): role
+   and bootloader side by side, the firmware under them across the card. */
+.vhil-board-controls {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px;
+  padding: 8px 12px; border-bottom: 1px solid var(--line); cursor: default;
+}
+.vhil-board-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.vhil-board-row.--app { grid-column: 1 / -1; flex-wrap: wrap; row-gap: 4px; }
+.vhil-board-key {
+  flex: none; color: var(--fg-muted); font-size: 10px; font-weight: 600;
+  letter-spacing: 0.06em; text-transform: uppercase;
+}
+.vhil-board-fw {
+  min-width: 0; margin-left: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: var(--fs-small);
+}
+.vhil-board-fw .muted { color: var(--fg-muted); }
+.vhil-board-select {
+  flex: 1; min-width: 0; height: 24px; padding: 0 4px; box-sizing: border-box;
+  color: var(--fg); background: var(--bg-0);
+  border: 1px solid var(--border-control); border-radius: var(--r-control);
+  font-family: inherit; font-size: var(--fs-dense); text-overflow: ellipsis;
+}
+.vhil-board-select.mono { font-family: var(--font-mono); }
+.vhil-board-select.--wide { flex-basis: 100%; }
+.vhil-board-select:disabled { color: var(--fg-muted); }
+.vhil-board-select option, .vhil-board-select optgroup { color: var(--fg); background: var(--bg-1); }
+.vhil-board-info {
+  flex-basis: 100%; min-height: 14px; margin: 0; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; color: var(--fg-muted); font-size: var(--fs-small);
+}
+.vhil-board-info > span { margin-left: 6px; }
+.vhil-board-warn { margin: 0; color: var(--status-warn); font-family: var(--font-ui); font-size: var(--fs-small); }
+p.vhil-board-warn { flex-basis: 100%; white-space: normal; }
 .vhil-pin-groups {
   display: grid; grid-template-columns: 1fr 1fr; padding: 6px 12px 0;
   color: var(--fg-muted); font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase;

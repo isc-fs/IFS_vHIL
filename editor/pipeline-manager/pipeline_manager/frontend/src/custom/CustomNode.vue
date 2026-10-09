@@ -161,6 +161,8 @@ from moving or deleting the nodes.
                 {{ vhil.rail }}<span v-if="busRate !== null" class="vhil-bus-rate"
                 > · {{ busRate }} fr/s</span>
             </div>
+            <!-- vHIL: a board's role, firmware and bootloader (src/vhil/VhilBoardControls.vue) -->
+            <VhilBoardControls v-if="vhil?.kind === 'board'" :node="node" />
             <!-- vHIL: a board's pins, grouped by side -->
             <div v-if="vhil?.kind === 'board'" class="vhil-pin-groups" aria-hidden="true">
                 <span>devices · analog</span><span>CAN · digital</span>
@@ -248,6 +250,7 @@ import {
 } from '../vhil/shapes.js';
 import '../vhil/nodes.css';
 import VhilNodeState from '../vhil/VhilNodeState.vue';
+import VhilBoardControls from '../vhil/VhilBoardControls.vue';
 import { live as vhilSession } from '../vhil/session.js';
 
 import { checkForUnsavedEditorChangesWithToast } from './node_editor/NodeSpecEditorUtils.js';
@@ -333,11 +336,12 @@ const sidebarProperties = computed(() => [...Object.values((props.node.inputs))
 ...bigBuses.value],
 );
 // vHIL: the node shapes (CHANGELOG-VHIL.md, src/vhil/shapes.js). A board,
-// bus or device draws its own head, and its properties (a board's role,
-// firmware and refs, a bus's netdev, a device's count and parameters) are
-// in the workspace's inspector, not on its node.
+// bus or device draws its own head and shows none of Pipeline Manager's
+// property rows: a board's role, firmware and bootloader are its own
+// dropdowns (src/vhil/VhilBoardControls.vue), a bus's netdev and a device's
+// count and parameters are in the workspace's inspector.
 const vhilType = vhilOf(props.node.type);
-const inInspector = vhilType !== null;
+const noPropertyRows = vhilType !== null;
 const DEVICE_WIDTH = 232;
 const vhil = computed(() => {
     if (!vhilType) return null;
@@ -366,7 +370,7 @@ const vhilLive = () => Boolean(vhilSession.id && !vhilSession.ended);
 const busRate = computed(() => (vhil.value?.kind === 'bus' && vhilLive()
     ? vhilSession.rates[props.node.title || props.node.type] ?? 0 : null));
 const displayedProperties = computed(() => {
-    if (inInspector) return bigBuses.value;
+    if (noPropertyRows) return bigBuses.value;
     if (editorManager.baklavaView.settings.showHiddenProperties) {
         return sidebarProperties.value;
     }
@@ -384,9 +388,10 @@ const externalApplicationManager = getExternalApplicationManager();
 Object.entries(props.node.inputs).forEach(([name, input]) => {
     if (name.startsWith('property_')) {
         // The first change is the property's control settling on the node
-        // as it mounts. vHIL: a board's has no control on the node (it is
-        // in the inspector), so its first change is the user's.
-        const settles = !inInspector;
+        // as it mounts. vHIL: a shaped node has no such control (a board's
+        // dropdowns set the property, nothing settles), so its first change
+        // is the user's.
+        const settles = !noPropertyRows;
         let firstWatch = settles;
         watch(input, async (value) => {
             if (!externalApplicationManager.isConnected()) {

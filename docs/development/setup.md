@@ -217,14 +217,16 @@ tree or a branch) or starts a new one. Commit writes `systems/<id>.yaml` on
 the branch you name, in the API's workspace, with git plumbing: no checkout
 moves, `dev`/`main` are never written, a branch checked out in the workspace
 is refused (`vhil/server/gitstore.py`). The file is validated first as
-`python -m vhil.system validate` would. A MainLite node has a `role` select
-(ECU, AMS or uDV), each choice shown with the node id it gives the bootloader
-(`ecu (node 0x1)`); changing it relabels the node's pins live (the backend
-answers Pipeline Manager's `properties_on_change`), saving writes `role: ecu`,
-and the bootloader it carries is a read-only `bootloader` property. A board's firmware chip (or its
-ref in the inspector) opens a picker that sets its
-`firmware_ref` (a branch or tag of the catalogue repo, listed with `git
-ls-remote`). Open PR pushes the branch and opens a PR to `dev`; it needs
+`python -m vhil.system validate` would. A MainLite node carries its own
+dropdowns: **Role** (ECU, AMS or uDV), each choice shown with the node id it
+gives the bootloader (`ecu (node 0x1)`); changing it relabels the node's pins
+live (the backend answers Pipeline Manager's `properties_on_change`) and puts
+the app back on the catalogue's ref, and saving writes `role: ecu`.
+**Firmware** shows the role's firmware and repo (set by the role, not picked)
+and picks its `firmware_ref` from the repo's active branches, newest first
+("Show all branches and tags…" lists the rest); **Bootloader** picks the
+`bootloader_ref` tag. The inspector shows them read-only, and a board's
+firmware chip in the top bar shows the board. Open PR pushes the branch and opens a PR to `dev`; it needs
 `VHIL_GITHUB_TOKEN` (or `VHIL_GITHUB_TOKEN_FILE`; contents + pull requests write) on the API until the
 GitHub App (M5.5) replaces it. Without it the button is off and the branch
 stays local. Check lists the file's errors and warnings in Problems; a click

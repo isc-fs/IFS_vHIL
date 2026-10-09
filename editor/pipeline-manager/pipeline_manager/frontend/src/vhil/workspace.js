@@ -15,7 +15,7 @@
  * a pytest run of tests/sim (runPytest; its results in the Artifacts tab).
  */
 
-import { reactive, watch } from 'vue';
+import { nextTick, reactive, watch } from 'vue';
 import { call, runPage } from './api.js';
 import {
     centerOn, entryGraph, loadGraph, nodeById, nodeName, nodeOfMessage, prop,
@@ -114,7 +114,6 @@ export const ws = reactive({
     busy: false,
     selectedId: null,
     layout: { ...LAYOUT, ...(stored(LAYOUT_KEY) || {}) },
-    picker: null, // the open ref picker: {nodeId, anchor}
     dialog: null, // 'commit' | 'pr' | 'shortcuts' | 'save-session' | 'pytest'
     // A pytest run's form (runPytest): the selection, its timeout, the tests
     // the server collects.
@@ -248,7 +247,6 @@ export function open(id, {
         if (isNew) q.set('new', 'true');
         const s = await call('GET', `/api/systems/${encodeURIComponent(id)}/dataflow?${q}`);
         ws.selectedId = null;
-        ws.picker = null;
         await loadGraph(s.dataflow);
         Object.assign(ws, {
             id,
@@ -352,9 +350,9 @@ export function createScenario(name) {
 
 // -- firmware refs --------------------------------------------------------------
 
-// One refs request per firmware (and listing) while a picker is open (the
-// API caches ls-remote and the GitHub API). `all`: every branch, not just
-// the active ones.
+// One refs request per firmware (and listing) for every board's dropdowns
+// (VhilBoardControls.vue; the API caches ls-remote and the GitHub API).
+// `all`: every branch, not just the active ones.
 const refsCache = new Map();
 export function refsOf(fwId, all = false) {
     const key = `${fwId}${all ? '?all' : ''}`;
@@ -571,7 +569,6 @@ async function liveEnded(state) {
 /** LIVE on run `run` (a running live session): its records stream into the
  *  Bus, State and Log; this tab controls it if the server gives it control. */
 function enterLive(run) {
-    ws.picker = null;
     beginLive(run);
     ws.mode = 'LIVE';
     setLocked(true);
@@ -838,6 +835,17 @@ export function select(nodeId, { center = false } = {}) {
     selectNode(node);
     ws.selectedId = node?.id ?? null;
     if (node && center) centerOn(node, canvasEl);
+}
+
+/** A board's firmware chip (top bar): the board selected and centred, its
+ *  firmware dropdown (VhilBoardControls.vue) focused, else its role's. */
+export async function showBoard(nodeId) {
+    select(nodeId, { center: true });
+    await nextTick();
+    const el = document.querySelector(`.baklava-node[data-node-id="${CSS.escape(nodeId)}"]`);
+    const control = el?.querySelector('.vhil-board-row.--app select')
+        ?? el?.querySelector('.vhil-board-controls select');
+    control?.focus({ preventScroll: true });
 }
 
 // -- start ----------------------------------------------------------------------

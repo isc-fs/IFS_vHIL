@@ -556,6 +556,68 @@ from `git archive 04613679` except as listed below.
     1a2b3c4d5e6f` from the run's resolved commits. The panel is
     `min(380px, 100vw - 16px)` wide (was 340px).
 
+25. **Role, firmware and bootloader on the board's node** (owner decision:
+    in the board's rectangle, not on the right). Supersedes change 12's "A
+    board's properties are in the inspector" and change 24's picker.
+    - `custom/CustomNode.vue` renders `src/vhil/VhilBoardControls.vue` (new)
+      on a board, between its head and its pin columns: **Role** and
+      **Bootloader** side by side, **Firmware** under them across the card
+      (its firmware id and repo, set by the role and shown, not picked; the
+      ref dropdown; a line with the ref's commit, age, author, and
+      `▲ not built`). Native `<select>`s, not Pipeline Manager's property
+      rows: one look for the three rows, and a select the node's property
+      watcher sees only when the user changes it (a property row's control
+      "settles" on mount, the change the watcher skips). The role sets the
+      property as its control would, so the backend relabels the node and
+      puts the app on the catalogue's ref (`vhil/editor.py` `switch_role`)
+      as before. A uDV reads "▲ No udv firmware in the catalogue yet".
+      Disabled in LIVE (the topology is locked).
+    - The firmware dropdown lists what change 24's picker did, from the same
+      `GET /api/firmware/{id}/refs` (`workspace.js` `refsOf`, cached per
+      firmware across boards): the catalogue's ref (the empty value, so the
+      file keeps no ref), the active branches newest first
+      (`name · 3 d ago · author · #PR · not built`), a picked ref the list
+      doesn't show (`not active`, `not found`), and "Show all branches and
+      tags…" (an option that toggles the listing; `:show-all` can't be a git
+      ref). The bootloader lists tags. What they list is
+      `src/vhil/refs.js` (new, pure; `tests/js/refs.test.mjs`).
+    - Dragging and keys: the controls carry `no-drag="true"`, which
+      `startDragWrapper` already skips, so a press on a dropdown selects the
+      node without dragging it; `@keydown.stop` keeps keys out of the
+      canvas's hotkeys (Delete) and `@dblclick.stop` from opening the
+      sidebar. Classes only (`src/vhil/nodes.css`), no style attribute.
+    - The node's "settles" flag is `noPropertyRows` (was `inInspector`).
+    - **One place edits each field:** the inspector (`VhilInspector.vue`)
+      shows a board's role, firmware and refs read-only (an empty ref as
+      `<catalogue ref> (catalogue)`); `src/vhil/VhilRefPicker.vue` and its
+      CSS (`workspace.css` `.vhil-picker*`, `.vhil-ref-button`) are gone, and
+      `ws.picker` with them. The top bar's firmware chip shows the board
+      (`workspace.js` `showBoard`: selected, centred, its firmware dropdown
+      focused).
+
+26. **Native selects keep a pick** (Chrome and Safari on macOS: the top
+    bar's scenario dropdown opened, but clicking an option did nothing).
+    `components/Home.vue` bumps `tick` on every pointerup, keyup and change
+    (and 800 ms later), and passed it to the top bar and the inspector as a
+    prop: a prop change re-renders a component whole, and Vue re-patches
+    every `:value` on each render (it always patches `value`, and since 3.5
+    also sets the attribute), so an open select's options were re-written
+    under its popup, which drops the pick. Now:
+    - `Home.vue` provides `tick` (`inject('vhilTick')`) instead of passing
+      it to `VhilTopBar.vue` and `VhilInspector.vue`; they read it in the
+      computeds that follow the graph (the chips, the node's properties),
+      which keep their old value when they recompute to the same data
+      (`src/vhil/stable.js` `keep`, new, pure; `tests/js/stable.test.mjs`).
+      A pointer event no longer re-renders the top bar.
+    - The top bar's scenario select has `v-memo` (re-rendered only when the
+      scenario, the system or the list changes) and, after a pick, shows
+      what is selected (a refused pick goes back). The inspector's select
+      (inside a `v-for`, where `v-memo` can't go) takes its value through
+      `v-pick` (`stable.js`), which writes the DOM only when it differs, and
+      its options have `v-memo`.
+    - The board's own dropdowns (`VhilBoardControls.vue`) and the dock's
+      selects don't re-render on pointer events, and stay as they were.
+
 ## Left for later
 
 - **Dependabot alerts with no fix.** `showdown` ≤ 2.1.0 (three: ReDoS and
