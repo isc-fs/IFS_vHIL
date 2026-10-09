@@ -31,7 +31,7 @@ in src/vhil/.
             @keyup.capture="changed"
             @change.capture="changed"
         >
-            <VhilTopBar :tick="tick" />
+            <VhilTopBar />
             <VhilRail />
             <main ref="canvas" class="vhil-canvas" aria-label="Canvas">
                 <Editor
@@ -48,7 +48,7 @@ in src/vhil/.
                 </Editor>
                 <CustomSidebar />
             </main>
-            <VhilInspector v-show="ws.layout.inspector" :tick="tick" />
+            <VhilInspector v-show="ws.layout.inspector" />
             <VhilDock />
             <VhilStatus :tick="tick" />
             <VhilDialogs />
@@ -59,7 +59,7 @@ in src/vhil/.
 
 <script>
 import {
-    ref, computed, provide, onMounted, onBeforeUnmount, watch,
+    ref, readonly, computed, provide, onMounted, onBeforeUnmount, watch,
 } from 'vue';
 import EditorManager from '../core/EditorManager.js';
 import LoadingScreen from './LoadingScreen.vue';
@@ -131,6 +131,11 @@ export default {
         // recomputed after each interaction, and again once the backend has
         // had time to answer one (a role change comes back as a new graph).
         const tick = ref(0);
+        // The top bar and the inspector read it in their computeds, not as a
+        // prop: a prop change re-renders a component whole, and a re-render
+        // re-patches its selects' options, which drops the pick of an open
+        // native select (Chrome, Safari; src/vhil/stable.js).
+        provide('vhilTick', readonly(tick));
         const syncSelection = () => {
             const selected = liveGraph()?.selectedNodes ?? [];
             ws.selectedId = selected.length === 1 ? selected[0].id : null;
