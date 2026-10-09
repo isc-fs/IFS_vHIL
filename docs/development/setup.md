@@ -86,6 +86,7 @@ function; its counter outlives resets, so the next boot runs clean.
 |---|---|
 | `sim.fail_malloc(board, call=1)` | its `call`-th `pvPortMalloc` from now asks for more than the heap holds: heap_4 returns NULL and calls `vApplicationMallocFailedHook` |
 | `sim.bus_fault_at(board, function, register=0, call=1)` | the pointer in `r<register>` at `function`'s entry points at the platform's reserved range (`BUS_ERROR_ADDRESS`): its first load is a precise BusFault (`models/renode/VhilBusError.cs`) |
+| `sim.return_to(board, function, address, call=1)` | `function`'s return address (LR) at entry becomes `address`, as a stack overwrite gives: from `XN_ADDRESS` (peripheral space) its return is a MemManage with CFSR.IACCVIOL (`models/renode/VhilExecuteNever.cs`) |
 | `sim.fault_status(board)` | SHCSR, CFSR, HFSR, MMFAR and BFAR |
 | `sim.function_at(board)` | the function the PC is in, e.g. `HardFault_Handler` |
 
@@ -93,9 +94,13 @@ The CPU model routes a fault as ARMv7-M does: with SHCSR's
 MEMFAULTENA/BUSFAULTENA/USGFAULTENA clear (as the AMS and ECU leave them) a
 MemManage, BusFault or UsageFault escalates to HardFault with HFSR.FORCED;
 set, each takes its own handler. Renode models the PMSAv7 MPU, so a test can
-program a region to get a MemManage. Not modelled: an instruction fetch from
-an XN region of the default memory map (a jump into peripheral space) aborts
-the Renode machine instead of raising MemManage (#239).
+program a region to get a MemManage; with the MPU off, an instruction fetch
+from an XN region of the default memory map (a jump into peripheral space) is
+a MemManage with IACCVIOL too (#239). Not modelled: a fetch from a reserved
+range, a BusFault (IBUSERR) on the chip, aborts the Renode machine. Any
+machine abort fails the run at once: the monitor command waiting on it raises
+`vhil.renode.MachineAborted` (`models/renode/VhilMonitor.cs`), where a
+`RunFor` would otherwise never return.
 
 ### Firmware coverage
 

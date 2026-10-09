@@ -67,11 +67,17 @@ the bottom of DiagTask's stack overwritten, nothing above them.
     sets SHCSR's MEMFAULTENA/BUSFAULTENA/USGFAULTENA, so on the chip the
     BusFault escalates to HardFault (ARMv7-M ARM B1.5.8) and the MemManage/
     BusFault/UsageFault handlers (stm32h7xx_it.c:105-145) never run.
+#239 adds a jump into peripheral space (Sim.return_to): Watchdog::refresh's
+return address points at XN_ADDRESS, Execute Never in the default memory map
+(the ECU programs no MPU region; ARMv7-M ARM B3.1 Table B3-1), so its return
+is a MemManage with CFSR.IACCVIOL (models/renode/VhilExecuteNever.cs),
+escalated to HardFault like the BusFault.
 """
 import pytest
 
 from vhil import canframe, elf
-from vhil.sim import BUS_ERROR_ADDRESS, Frame, Sim, assert_cadence
+from vhil.renode import MachineAborted
+from vhil.sim import BUS_ERROR_ADDRESS, XN_ADDRESS, Frame, Sim, assert_cadence
 from vhil.system import REPO
 
 HEARTBEAT, HEALTH, PIT_STATUS = 0x100, 0x704, 0x700
@@ -89,6 +95,9 @@ LATCH_TAG = 0xFA170000                 # error_latch.hpp:32, FaultLatch::encode
 RTC_BKP1R = 0x58004000 + 0x50 + 4      # RTC_BASE + BKP0R (stm32h733xx.h), BKP1R
 FAULT_ENABLES = 0x7 << 16              # SHCSR MEM/BUS/USGFAULTENA (core_cm7.h)
 FORCED, PRECISERR, BFARVALID = 1 << 30, 1 << 9, 1 << 15   # HFSR, CFSR (core_cm7.h)
+IACCVIOL, MMARVALID = 1 << 0, 1 << 7                       # CFSR (core_cm7.h)
+MEMFAULTENA = 1 << 16                                      # SHCSR (core_cm7.h)
+MPU_CTRL, PRIVDEFENA, MPU_ENABLE = 0xE000ED94, 1 << 2, 1 << 0   # ARMv7-M ARM B3.5.5
 NO_FAULT_ENABLES = pytest.mark.xfail(strict=True, reason=(
     "isc-fs/IFS08-CE-ECU#264: nothing sets SHCSR MEMFAULTENA/BUSFAULTENA/USGFAULTENA, "
     "so a BusFault escalates to HardFault (ARMv7-M B1.5.8): BusFault_Handler "
@@ -375,6 +384,54 @@ def test_with_the_fault_enables_each_class_lands_in_its_own_handler(ecu, fault, 
     assert _land(ecu) == f"{fault}_Handler"
     assert not ecu.fault_status("ecu")["HFSR"] & FORCED
     assert _fault_report_after_reset(ecu) == code
+
+
+WATCHDOG_REFRESH = "_ZN3ecu8Watchdog7refreshEv"
+
+
+def test_a_jump_into_peripheral_space_escalates_to_hardfault(ecu):
+    """#239, what the car does: a return address corrupted into peripheral
+    space (XN) is a MemManage on the fetch, CFSR.IACCVIOL with MMFAR not
+    valid; MEMFAULTENA is clear, so it escalates to HardFault
+    (HFSR.FORCED); 0xF1 after the watchdog reset."""
+    assert ecu.fault_status("ecu")["SHCSR"] & FAULT_ENABLES == 0
+    ecu.return_to("ecu", WATCHDOG_REFRESH, XN_ADDRESS)
+    assert _land(ecu) == "HardFault_Handler"
+    regs = ecu.fault_status("ecu")
+    assert regs["HFSR"] & FORCED
+    assert regs["CFSR"] & (IACCVIOL | MMARVALID) == IACCVIOL, f"CFSR {regs['CFSR']:#x}"
+    assert _fault_report_after_reset(ecu) == HARD_FAULT
+
+
+@pytest.mark.parametrize("mpu", ["off", "on"])
+def test_with_memfaultena_a_jump_into_peripheral_space_lands_in_memmanage(ecu, mpu):
+    """The vHIL side of #239: MEMFAULTENA written here, as a firmware that
+    set it would (the ECU doesn't, IFS08-CE-ECU#264). The same fetch lands
+    in MemManage_Handler with IACCVIOL, nothing escalated, with the MPU off
+    (the default map) or on with no region and PRIVDEFENA (the default map
+    as its background, ARMv7-M ARM B3.5.1), and 0xF2 reaches 0x704."""
+    ecu.monitor(f"sysbus WriteDoubleWord 0xE000ED24 {MEMFAULTENA:#x}")
+    if mpu == "on":
+        ecu.monitor(f"sysbus WriteDoubleWord {MPU_CTRL:#x} {PRIVDEFENA | MPU_ENABLE:#x}")
+    ecu.return_to("ecu", WATCHDOG_REFRESH, XN_ADDRESS)
+    assert _land(ecu) == "MemManage_Handler"
+    regs = ecu.fault_status("ecu")
+    assert not regs["HFSR"] & FORCED
+    assert regs["CFSR"] & (IACCVIOL | MMARVALID) == IACCVIOL, f"CFSR {regs['CFSR']:#x}"
+    assert _fault_report_after_reset(ecu) == MEM_MANAGE
+
+
+def test_a_fetch_from_a_reserved_range_fails_the_run_at_once(ecu):
+    """Not modelled: on the chip a fetch from a reserved range is a BusFault
+    (IBUSERR); Renode 1.17 aborts the machine, and tlib has no instruction-
+    side bus fault to raise instead (models/renode/VhilExecuteNever.cs).
+    The run fails at once with MachineAborted, rather than hang in a RunFor
+    whose machine never comes back (#239)."""
+    ecu.return_to("ecu", WATCHDOG_REFRESH, BUS_ERROR_ADDRESS)
+    with pytest.raises(MachineAborted, match="machine 'ecu' aborted"):
+        _land(ecu)
+    with pytest.raises(MachineAborted):
+        ecu.run_for(ms=1)
 
 
 # -- TX overload -------------------------------------------------------------------

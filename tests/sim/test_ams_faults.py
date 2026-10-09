@@ -39,12 +39,19 @@ fault lands in the safety task itself, in Run.
     and UsageFault handlers and their reason codes 5-7 are unreachable. The
     tests that reach those handlers write SHCSR themselves, as a firmware
     that enabled them would, and say so.
+  A jump into peripheral space (#239): Sim.return_to points
+    ams_watchdog_refresh's return address at XN_ADDRESS, so its
+    `pop {r7, pc}` fetches from the Peripheral region, Execute Never in the
+    default memory map the AMS runs with (it programs no MPU region; ARMv7-M
+    ARM B3.1 Table B3-1): a MemManage with CFSR.IACCVIOL and no MMFAR
+    (models/renode/VhilExecuteNever.cs), escalated to HardFault like the
+    BusFault above.
 """
 import pytest
 
 from ams_car import AIR_N, AIR_P, ERROR, GPIOB, PRECHARGE_RELAY, RUN, START, Car
 from vhil import elf
-from vhil.sim import BUS_ERROR_ADDRESS, Sim
+from vhil.sim import BUS_ERROR_ADDRESS, XN_ADDRESS, Sim
 from vhil.system import REPO
 
 FW_HEALTH = 0x6CA
@@ -55,11 +62,12 @@ MALLOC_HOOK = "vApplicationMallocFailedHook"
 ERROR_LATCH = 0xA115EE51                 # RTC BKP1R (ams_config.hpp:1027-1028)
 RTC_BKP1R = 0x58004000 + 0x50 + 4       # RTC_BASE + BKP0R (stm32h733xx.h), BKP1R
 # SCB fields (CMSIS core_cm7.h): SHCSR MEMFAULTENA 16, BUSFAULTENA 17,
-# USGFAULTENA 18; HFSR FORCED 30; CFSR MMARVALID 7, DACCVIOL 1, BFARVALID 15,
-# PRECISERR 9.
+# USGFAULTENA 18; HFSR FORCED 30; CFSR MMARVALID 7, DACCVIOL 1, IACCVIOL 0,
+# BFARVALID 15, PRECISERR 9.
 FAULT_ENABLES = 0x7 << 16
+MEMFAULTENA = 1 << 16
 FORCED = 1 << 30
-MMARVALID, DACCVIOL, BFARVALID, PRECISERR = 1 << 7, 1 << 1, 1 << 15, 1 << 9
+MMARVALID, DACCVIOL, IACCVIOL, BFARVALID, PRECISERR = 1 << 7, 1 << 1, 1 << 0, 1 << 15, 1 << 9
 # AMS issues behind the strict xfails below.
 NO_FAULT_ENABLES = pytest.mark.xfail(strict=True, reason=(
     "isc-fs/IFS08-CE-AMS#633: nothing sets SHCSR MEMFAULTENA/BUSFAULTENA/USGFAULTENA, "
@@ -310,3 +318,46 @@ def test_with_the_fault_enables_each_class_lands_in_its_own_handler(car, fault):
     reset = _reboot(car)
     health = sim.can("can_acu").frames(FW_HEALTH, since_us=reset)
     assert health and health[0].data[7] == LAST_FAULT[handler]
+
+# -- #239: a jump into peripheral space --------------------------------------------
+
+def test_a_jump_into_peripheral_space_escalates_to_hardfault(car):
+    """What the car does: a return address corrupted into peripheral space
+    (XN) is a MemManage on the fetch, CFSR.IACCVIOL with MMFAR not valid;
+    MEMFAULTENA is clear, so it escalates to HardFault (HFSR.FORCED). The
+    landing opens the contactors at once, and the next boot reports
+    HardFault (1)."""
+    sim = car.sim
+    pins = _contactors(car)
+    car.to_run()
+    sim.run_for(ms=200)
+    assert sim.fault_status("ams")["SHCSR"] & FAULT_ENABLES == 0
+    sim.return_to("ams", "ams_watchdog_refresh", XN_ADDRESS)
+    handler, t = _landed(sim, set(LAST_FAULT), timeout_ms=50)
+    assert handler == "HardFault_Handler"
+    regs = sim.fault_status("ams")
+    assert regs["HFSR"] & FORCED
+    assert regs["CFSR"] & (IACCVIOL | MMARVALID) == IACCVIOL, f"CFSR {regs['CFSR']:#x}"
+    _assert_opened_at(car, pins, t, handler)
+    reset = _reboot(car)
+    health = sim.can("can_acu").frames(FW_HEALTH, since_us=reset)
+    assert health and health[0].data[7] == LAST_FAULT["HardFault_Handler"]
+    assert (car.state(), car.reason()) == (START, 0)
+
+
+def test_with_memfaultena_a_jump_into_peripheral_space_lands_in_memmanage(car):
+    """The vHIL side of #239: with SHCSR.MEMFAULTENA set (written here, as a
+    firmware that enabled it would; the AMS doesn't, IFS08-CE-AMS#633) the
+    same fetch lands in MemManage_Handler with IACCVIOL, nothing escalated,
+    and stamps MemManage (5) for the next boot's 0x6CA."""
+    sim = car.sim
+    sim.monitor(f"sysbus WriteDoubleWord 0xE000ED24 {MEMFAULTENA:#x}", board="ams")
+    sim.return_to("ams", "ams_watchdog_refresh", XN_ADDRESS)
+    handler, _ = _landed(sim, set(LAST_FAULT), timeout_ms=50)
+    assert handler == "MemManage_Handler"
+    regs = sim.fault_status("ams")
+    assert not regs["HFSR"] & FORCED
+    assert regs["CFSR"] & (IACCVIOL | MMARVALID) == IACCVIOL, f"CFSR {regs['CFSR']:#x}"
+    reset = _reboot(car)
+    health = sim.can("can_acu").frames(FW_HEALTH, since_us=reset)
+    assert health and health[0].data[7] == LAST_FAULT["MemManage_Handler"]

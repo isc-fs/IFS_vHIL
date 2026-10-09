@@ -44,6 +44,11 @@ TRACE_SOURCE = REPO / "models" / "renode" / "VhilTrace.cs"
 # The first address of the stm32h733 platform's reserved range, where every
 # access is a bus error (platforms/cpus/stm32h733.repl, reservedAxi).
 BUS_ERROR_ADDRESS = 0x24050000
+# An address in the Peripheral region of the ARMv7-M default memory map,
+# Execute Never (ARMv7-M ARM B3.1, Table B3-1): TIM2, the first peripheral
+# (stm32h733xx.h: TIM2_BASE = D2_APB1PERIPH_BASE = PERIPH_BASE 0x40000000).
+# A fetch from it is a MemManage (models/renode/VhilExecuteNever.cs, #239).
+XN_ADDRESS = 0x40000000
 # A pvPortMalloc request no FreeRTOS heap on the MainLite can satisfy (Sim.fail_malloc).
 HEAP_NEVER_FITS = 0x00100000
 # SCB fault registers, offsets from SCB_BASE (CMSIS core_cm7.h SCB_Type).
@@ -732,6 +737,16 @@ class Sim:
         return self._hook_once(board, self._function(board, function),
                                f"self.SetRegister({_int(register)}, RegisterValue.Create("
                                f"{BUS_ERROR_ADDRESS:#x}, 32))", call)
+
+    def return_to(self, board: str, function: str, address: int, call: int = 1) -> int:
+        """On the `call`-th entry to `function` from now on, its return
+        address (LR) becomes `address`, in Thumb state: a stack overwrite of
+        the saved return address. When the function returns, the CPU fetches
+        from there; from XN_ADDRESS (peripheral space) that is a MemManage
+        with CFSR.IACCVIOL (models/renode/VhilExecuteNever.cs). Returns the
+        hook's address."""
+        return self._hook_once(board, self._function(board, function),
+                               f"self.SetRegister(14, RegisterValue.Create({_int(address) | 1:#x}, 32))", call)
 
     def remove_hooks(self, board: str, at: int) -> None:
         self.monitor(f"cpu RemoveHooksAt {_int(at):#x}", board=board)
