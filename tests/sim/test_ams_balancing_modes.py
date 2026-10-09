@@ -4,11 +4,12 @@ discharge (DCC) bits read from the models and from pit-diag. Replaces IFS_HIL
 Block BAL (B-01..B-06), which needs the bench's Pico LTC emulator for the
 imbalance.
 
-AMS facts (IFS08-CE-AMS main: balance_controller.hpp, vehicle_service.cpp,
+AMS facts (IFS08-CE-AMS dev: balance_controller.hpp, vehicle_service.cpp,
 acu_can_task.cpp, bms_poll_task.cpp):
-  0x103 "BALO" Off, "BALN" On (any state), "BALX" Auto (Charge only); never
-    seen or older than BalanceOverrideFreshMs (5 s): Off
-    (VehicleService::effective_balance_cmd). IFS_HIL's Block BAL predates
+  0x103 "BALO" Off, "BALN" On (Start or Charge), "BALX" Auto (Charge only),
+    never in Precharge, Transition, Run or Error (balance_controller.hpp:18-20,
+    :112-118, #553/#594); never seen or older than BalanceOverrideFreshMs
+    (5 s): Off (VehicleService::effective_balance_cmd, vehicle_service.cpp:106-117). IFS_HIL's Block BAL predates
     this: it expects Auto when no 0x103 is fresh (drift).
   0x6C0 byte 2 bit 2 (balance_override): the effective command is Off,
     fresh BALO or the dead-man fallback (acu_can_task.cpp:315-320).
@@ -150,8 +151,6 @@ def test_balo_in_run_changes_nothing_else(car):
     assert car.state() != ERROR
 
 
-@pytest.mark.xfail(strict=True, reason="isc-fs/IFS08-CE-AMS#553 (fixed on AMS dev by #594, not on "
-                   "main): 0x103 BALN forces balancing in any state, Run included")
 @pytest.mark.parametrize("magic", [b"BALN"])
 def test_a_forced_command_never_balances_in_run(car, magic):
     """FMEA.md SEASON-3: balancing forced in Run puts the bleed resistors
@@ -159,8 +158,8 @@ def test_a_forced_command_never_balances_in_run(car, magic):
     and ranks cells by I*R under load rather than by SoC. The AMS's own
     resolution (#553, #594 on dev: gate balancing to Start and Charge, as
     logfs_allowed_in and reboot_allowed_in are gated) makes Run balance
-    nothing whatever 0x103 says. On ams@main BALN still sets the high
-    cell's discharge switch in Run."""
+    nothing whatever 0x103 says. (AMS main, without #594, still sets the high
+    cell's discharge switch in Run.)"""
     car.to_run()
     _command(car, magic)
     seen = [0] * 10

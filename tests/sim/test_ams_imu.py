@@ -1,6 +1,6 @@
 """The AMS's ImuTask against the MainLite's BMI088 on I2C2 (#59).
 
-Firmware facts (IFS08-CE-AMS, the image's source):
+Firmware facts (IFS08-CE-AMS dev, 1508d13):
   ImuTask: init_sensor reads ACC_CHIP_ID (0x18, reg 0x00, want 0x1E) then
     GYRO_CHIP_ID (0x68, reg 0x00, want 0x0F) with blocking HAL_I2C_Mem_Read,
     powers the accelerometer up (ACC_PWR_CONF 0x7C <- 0x00, 5 ms, ACC_PWR_CTRL
@@ -9,16 +9,21 @@ Firmware facts (IFS08-CE-AMS, the image's source):
     reads the four back (GYRO_BANDWIDTH masked 0x7F)     imu_task.cpp:97-130
   then every 10 ms two 6-byte HAL_I2C_Mem_Read_DMA bursts (accel 0x12,
     gyro 0x02), RX on DMA1 Stream0                       imu_task.cpp:196-212,
-                                                         stm32h7xx_hal_msp.c:298
+                                                         stm32h7xx_hal_msp.c:311
   any failure: reset_bus and re-init after ImuRetryPeriodMs = 1000 ms, a
-    5 ms transfer timeout              imu_task.cpp:181-205, ams_config.hpp:350-353
+    5 ms transfer timeout              imu_task.cpp:181-205, ams_config.hpp:357-360
   ImuState: 0 Init, 1 Running, 2 NotFound, 3 BusError; fail step 1 = the
     accelerometer chip ID                       imu_task.h:22-27, imu_task.cpp:59-63
-  rows go to IMUnnnn.CSV beside LOGnnnn.CSV, sealed with a .CRC sidecar
-    (orphans at the next mount): tick_ms, ax/ay/az in g, gx/gy/gz in rad/s,
-    4 decimals; g = counts * 60000 / 32768, rad/s = counts * 872664626 /
-    327680000, rounded half away from zero    imu_record.hpp:362-426,
-                                              sd_logger_task.cpp:247-253, 704-722
+  samples go to IMUnnnn.BIN beside LOGnnnn.CSV (split-rate logging,
+    IFS08-CE-AMS #596/#598/#601/#603; dev): a 512-byte header, then one
+    16-byte ImuSample per sample (tick_ms u32, acc i16 x3, gyr i16 x3, raw
+    counts; scales +/-6 g and +/-500 dps over +/-32768 in the schema)
+                                              imu_record.hpp:28-33,
+                                              bin_log.hpp:104-117
+  sealed to .BIN with a .CRC sidecar over the whole file, header included;
+    an orphan .TMP is sealed at the next mount
+                                              sd_logger_task.cpp:227-290,
+                                              :342-385, ams_config.hpp:367-369
   HAL_I2C_ERROR_AF 0x04 (NACK), HAL_I2C_ERROR_TIMEOUT 0x20
                                               stm32h7xx_hal_i2c.h:166, 169
 """
@@ -29,6 +34,7 @@ from pathlib import Path
 
 import pytest
 
+import ams_binlog as binlog
 from vhil import peripheral_guard as guard
 from vhil.sim import Sim
 from vhil.system import REPO
@@ -74,28 +80,15 @@ def respond(sim, alive: bool):
     sim.call(GYR, "Respond", alive)
 
 
-# -- what the firmware should write, from its own integer arithmetic ------------
+# -- what the firmware should log ----------------------------------------------
 
-def _fixed4(v: int) -> str:
-    return f"{'-' if v < 0 else ''}{abs(v) // 10000}.{abs(v) % 10000:04d}"
-
-
-def expected_row(motion) -> list[str]:
-    """The six CSV fields for a motion: datasheet conversion to counts at
-    +/-6 g and +/-500 dps (65.536 LSB/dps), then the firmware's scaling."""
+def expected_counts(motion) -> list[int]:
+    """The six raw counts for a motion, as the BMI088 reports them at +/-6 g
+    and +/-500 dps (65.536 LSB/dps): what an IMU record carries."""
     (mg, dps) = motion
     acc = [max(-32768, min(32767, round(a / 6000 * 32768))) for a in mg]
     gyr = [max(-32768, min(32767, round(r / 500 * 32768))) for r in dps]
-    out = [_fixed4(_trunc_round(c * 60000, 32768)) for c in acc]
-    out += [_fixed4(_trunc_round(c * 872664626, 327680000)) for c in gyr]
-    return out
-
-
-def _trunc_round(p: int, den: int) -> int:
-    """(p + sign(p) * den/2) / den with C's truncating division."""
-    half = den // 2 if p >= 0 else -(den // 2)
-    q = abs(p + half) // den
-    return q if p + half >= 0 else -q
+    return acc + gyr
 
 
 # -- a logged run on a card ----------------------------------------------------
@@ -143,6 +136,7 @@ def run(tmp_path_factory, images, request):
     seen = {}
     with Sim(REPO / "systems" / "ams.yaml", images("ams"),
              params={"sd": {"image": str(img)}}, card_dirs=[img.parent], log_path=log) as sim:
+        seen["split_rate"] = binlog.split_rate(sim)
         move(sim, MOTION_1)
         sim.wait_for_app()
         sim.run_for(ms=PHASE_1_MS)
@@ -179,7 +173,7 @@ def test_the_imu_task_reads_both_chip_ids_and_runs(run):
 
 
 def test_the_sensor_is_configured_as_the_firmware_intends(run):
-    """imu_record.hpp:328-345: accelerometer active and on, OSR4 at 400 Hz,
+    """imu_record.hpp:55-71: accelerometer active and on, OSR4 at 400 Hz,
     +/-6 g; gyroscope +/-500 dps, 400 Hz / 47 Hz, normal mode."""
     assert run["registers"] == {"ACC_PWR_CONF": 0x00, "ACC_PWR_CTRL": 0x04, "ACC_CONF": 0x8A,
                                 "ACC_RANGE": 0x01, "GYRO_RANGE": 0x02,
@@ -207,28 +201,45 @@ def test_the_imu_path_touches_only_modelled_hardware(run):
     assert not findings, guard.report(findings)
 
 
-def test_the_card_holds_the_imu_log_with_its_crc(run):
+@pytest.fixture(scope="module")
+def imu_log(run):
+    if not run["split_rate"]:
+        pytest.skip("this AMS build logs the IMU to IMUnnnn.CSV (pre split-rate, main)")
+    return binlog.decode(_read(run["card"], "IMU0000.BIN"))
+
+
+def test_the_card_holds_the_imu_log_with_its_crc(run, imu_log):
     files = _ls(run["card"])
-    assert {"IMU0000.CSV", "IMU0000.CRC", "LOG0000.CSV"} <= set(files), files
-    csv = _read(run["card"], "IMU0000.CSV")
+    assert {"IMU0000.BIN", "IMU0000.CRC", "LOG0000.CSV"} <= set(files), files
+    data = _read(run["card"], "IMU0000.BIN")
     crc = _read(run["card"], "IMU0000.CRC").decode().strip()
-    assert int(crc, 16) == zlib.crc32(csv), f"IMU0000.CRC {crc} vs {zlib.crc32(csv):08X}"
+    assert int(crc, 16) == zlib.crc32(data), f"IMU0000.CRC {crc} vs {zlib.crc32(data):08X}"
+    h = imu_log
+    assert (h.version, h.stream, h.index, h.record_size) == (binlog.FORMAT_VERSION, "IMU", 0, 16)
+    assert h.schema == binlog.IMU_SCHEMA, h.schema
+    assert h.tail == 0, f"{h.tail} bytes of a partial record"
 
 
-def test_the_logged_rows_carry_what_the_sensor_measured(run):
-    lines = _read(run["card"], "IMU0000.CSV").decode().splitlines()
-    assert lines[0] == "tick_ms,ax_g,ay_g,az_g,gx_rad_s,gy_rad_s,gz_rad_s"
-    rows = [line.split(",") for line in lines[1:]]
-    ticks = [int(r[0]) for r in rows]
+def test_the_logged_rows_carry_what_the_sensor_measured(run, imu_log):
+    rows = imu_log.records
+    ticks = [r["tick_ms"] for r in rows]
     assert ticks == sorted(ticks) and set(b - a for a, b in zip(ticks, ticks[1:])) == {10}, \
-        "rows every 10 ms with none missing"
+        "records every 10 ms with none missing"
+    assert imu_log.open_tick_ms <= ticks[0]
     switch = run["switch_ms"]
-    before = {tuple(r[1:]) for r in rows if int(r[0]) < switch}
-    after = {tuple(r[1:]) for r in rows if int(r[0]) > switch + 10}
-    assert before == {tuple(expected_row(MOTION_1))}, before
-    assert after == {tuple(expected_row(MOTION_2))}, after
+    before = {tuple(r["a"] + r["g"]) for r in rows if r["tick_ms"] < switch}
+    after = {tuple(r["a"] + r["g"]) for r in rows if r["tick_ms"] > switch + 10}
+    assert before == {tuple(expected_counts(MOTION_1))}, before
+    assert after == {tuple(expected_counts(MOTION_2))}, after
+    # The schema's scales give back the motion, to one count.
+    last = rows[-1]
+    (mg, dps) = MOTION_2
+    for got, want in zip(binlog.scaled(imu_log, "a", last["a"]), mg):
+        assert abs(got - want / 1000) <= 6 / 32768, (got, want)
+    for got, want in zip(binlog.scaled(imu_log, "g", last["g"]), dps):
+        assert abs(got - want * 3.141592653589793 / 180) <= 8.73 / 32768, (got, want)
     # Synced at least once (LogSyncPeriodMs) after the switch, before the cut.
-    assert max(ticks) > switch + 1000, f"last row at {max(ticks)} ms, switch at {switch} ms"
+    assert max(ticks) > switch + 1000, f"last record at {max(ticks)} ms, switch at {switch} ms"
 
 
 # -- a dead IMU, and one that dies and comes back --------------------------------
