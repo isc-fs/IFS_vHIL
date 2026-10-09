@@ -3,8 +3,9 @@
     GET  /api/config                    editor path, base branch, whether PRs can be opened,
                                         a run's default virtual time
     GET  /api/firmware                  catalogue firmware sources (repo, default ref, recipe)
-    GET  /api/firmware/{id}/refs        that repo's branches and tags with their commits, and
-                                        whether each is built (ls-remote, cached)
+    GET  /api/firmware/{id}/refs        that repo's active branches (?all=1: every branch) and
+                                        its tags, with their commits, and whether each commit
+                                        is built (ls-remote + the GitHub API, cached)
     GET  /api/systems/{id}/dataflow     a system as a Pipeline Manager graph (?branch=, ?new=)
     POST /api/systems/{id}/preview      {yaml | dataflow} -> {yaml, errors}, nothing saved
     PUT  /api/systems/{id}              {yaml | dataflow, message, branch, base?} -> {ref, branch}
@@ -31,18 +32,20 @@ import tempfile
 from pathlib import Path
 
 import yaml
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from vhil import editor
 from vhil.server.config import env_secret
-from vhil.server.githost import (CachedRefs, GitHost, GitHubHost, HostError, HostUnavailable,
-                                 LsRemote, RefLister, repo_slug)
+from vhil.server.githost import (BranchDetails, CachedRefs, GitHost, GitHubBranches, GitHubHost,
+                                 HostError, HostUnavailable, LsRemote, RefLister,
+                                 active_branches, commit_of, repo_slug)
 from vhil.server.gitstore import (OWNER_TRAILER, TAKEOVER_TRAILER, BadBranch, Conflict, GitError,
                                   GitStore)
 from vhil.server.runs import DEFAULT_VIRTUAL_MS
 from vhil.server.workspace import SYSTEM_ID
-from vhil.system import ID, REF, SCHEMA, System, SystemError, built_images, image_path
+from vhil.system import (ID, REF, SCHEMA, System, SystemError, built_images, find_build,
+                         image_path, newest_build)
 
 router = APIRouter()
 EDITOR_PATH = "/editor/"
@@ -122,6 +125,25 @@ def _refs(request: Request) -> RefLister:
         st.ref_lister = CachedRefs(LsRemote(env_secret("VHIL_GITHUB_TOKEN") or None, token_for),
                                    float(os.environ.get("VHIL_REFS_TTL_S", "300")))
     return st.ref_lister
+
+
+def _details(request: Request) -> BranchDetails:
+    st = request.app.state
+    if getattr(st, "branch_details", None) is None:
+        app = getattr(st, "github_app", None)
+        token_for = (lambda repo: app.token_for(repo)) if app is not None else None
+        st.branch_details = GitHubBranches(env_secret("VHIL_GITHUB_TOKEN") or None, token_for,
+                                           ttl_s=float(os.environ.get("VHIL_BRANCHES_TTL_S",
+                                                                      "120")))
+    return st.branch_details
+
+
+def active_days() -> float:
+    """How recent a branch's head commit makes it active (VHIL_FIRMWARE_ACTIVE_DAYS, 30)."""
+    try:
+        return max(0.0, float(os.environ.get("VHIL_FIRMWARE_ACTIVE_DAYS", "30")))
+    except ValueError:
+        return 30.0
 
 
 def _author(request: Request, body: Save) -> tuple[str, str]:
@@ -335,17 +357,36 @@ def firmware(request: Request):
              "build": d["build"]} for d in _firmware_docs(request).values()]
 
 
+def ref_image(fw_dir: Path, fw: dict, ref: str) -> Path:
+    """The image the editor reads a ref's contract and enums from before a
+    run: the newest build a run made of that ref name (a commit build,
+    vhil.system newest_build), else a build at the ref name
+    (`vhil.system build` without --commit). It may be an older commit than
+    the branch's head: the run itself builds the head."""
+    return newest_build(fw_dir, fw, ref) or image_path(fw_dir, fw, ref).resolve()
+
+
 def _fw_dir(request: Request) -> Path:
     from vhil.worker import DEFAULT_FW_DIR
     return Path(getattr(request.app.state, "fw_dir", None) or DEFAULT_FW_DIR)
 
 
 @router.get("/api/firmware/{firmware_id}/refs")
-def firmware_refs(firmware_id: str, request: Request):
-    """The firmware's repo's branches and tags, each with its commit and
-    whether the firmware volume holds a build of it (`built`: else the first
-    run at that ref builds it). Names the remote gives that a system file
-    couldn't hold are left out (githost.parse_ls_remote)."""
+def firmware_refs(firmware_id: str, request: Request,
+                  every: bool = Query(False, alias="all")):
+    """The firmware's repo's active branches (every branch with ?all=1) and
+    its tags, each with its commit and whether the firmware volume holds a
+    build of that commit with today's recipe (`built`: else the first run at
+    it builds it; the worker keys builds by commit, vhil.worker). Names the
+    remote gives that a system file couldn't hold are left out
+    (githost.parse_ls_remote).
+
+    Active (githost.active_branches): the repo's default branch, dev and
+    main, the catalogue's ref, a branch with an open PR, and one whose head
+    commit is within VHIL_FIRMWARE_ACTIVE_DAYS (30), most recent first, each
+    with its date, author and PRs. Those come from the GitHub API
+    (`details: "github"`); when it can't be asked (`details: "ls-remote"`,
+    `note` says why) every branch is listed, as git ls-remote gives them."""
     if not ID.fullmatch(firmware_id):
         raise HTTPException(422, {"errors": [f"{firmware_id!r} is not a catalogue id"]})
     doc = _firmware_docs(request).get(firmware_id)
@@ -355,20 +396,36 @@ def firmware_refs(firmware_id: str, request: Request):
         refs = _refs(request).refs(doc["repo"])
     except HostError as e:
         raise HTTPException(502, str(e))
+    details, note = None, None
+    try:
+        details = _details(request).details(doc["repo"], refs["branches"])
+    except (HostError, HostUnavailable) as e:
+        note = f"branch dates and PRs unavailable ({e}): every branch is listed"
+    days = active_days()
+    branches = active_branches(refs["branches"], details, catalogue_ref=doc["ref"], days=days)
+    hidden = 0
+    if details is not None and not every:
+        shown = [b for b in branches if b["active"]]
+        hidden, branches = len(branches) - len(shown), shown
+    elif details is None:
+        branches.sort(key=lambda b: b["name"])
     # The worker reuses a build listed in built.txt (vhil.worker.FirmwareResolver).
     fw_dir = _fw_dir(request)
     built = built_images(fw_dir)
 
-    def is_built(ref: str) -> bool:
+    def is_built(sha: str | None) -> bool:
         try:
-            elf = image_path(fw_dir, doc, ref).resolve()
-        except (OSError, KeyError, TypeError):
+            return bool(sha) and find_build(fw_dir, doc, sha, built) is not None
+        except (OSError, KeyError, TypeError, SystemError):
             return False
-        return elf in built and elf.is_file()
-    out = {kind: [{**r, "built": is_built(r["name"])} for r in refs[kind]]
-           for kind in ("branches", "tags")}
+    out = {"branches": [{**b, "built": is_built(b["sha"])} for b in branches],
+           "tags": [{**t, "built": is_built(t["sha"])} for t in refs["tags"]]}
+    default_commit = commit_of(refs, doc["ref"])
     return {"id": firmware_id, "repo": doc["repo"], "default": doc["ref"],
-            "default_built": is_built(doc["ref"]), **out}
+            "default_commit": default_commit, "default_built": is_built(default_commit),
+            "default_branch": (details or {}).get("default_branch") or None,
+            "details": "github" if details is not None else "ls-remote", "note": note,
+            "active_days": days, "all": every or details is None, "hidden": hidden, **out}
 
 
 @router.get("/api/firmware/{firmware_id}/enums")
@@ -387,7 +444,7 @@ def firmware_enums(firmware_id: str, request: Request, ref: str | None = None):
         raise HTTPException(404, f"no firmware '{firmware_id}' in the catalogue")
     from vhil import stateview
     ref = ref or doc["ref"]
-    elf = image_path(_fw_dir(request), doc, ref)
+    elf = ref_image(_fw_dir(request), doc, ref)
     return {"id": firmware_id, "ref": ref, "built": elf.is_file(),
             **stateview.enums_of(elf)}
 

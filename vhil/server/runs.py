@@ -420,6 +420,17 @@ class RunRequest(_Model):
         return v
 
 
+def firmware_commits(request, system: System, refs: dict) -> dict[str, dict]:
+    """image key -> {ref, commit}: the run's firmware refs resolved now, by
+    a fresh git ls-remote (the API's ref lister, vhil/server/systems_write.py).
+    An image whose commit can't be told gets commit None, and the worker
+    tries again (vhil.worker.resolve_commits)."""
+    from vhil.server.systems_write import _refs
+    from vhil.worker import resolve_commits
+    return resolve_commits(system, {k: v for k, v in refs.items() if v}, _refs(request),
+                           log=lambda m: log.warning("run firmware: %s", m))
+
+
 def check_against_system(req: RunRequest, system: System, workspace: Path) -> list[str]:
     """What the scenario names that the system (or the workspace) lacks."""
     errors = []
@@ -510,7 +521,8 @@ CREATE TABLE IF NOT EXISTS runs (
     attempts   INTEGER NOT NULL DEFAULT 0,
     ref_name   TEXT NOT NULL DEFAULT '',
     owner      TEXT NOT NULL DEFAULT '',
-    token      TEXT NOT NULL DEFAULT ''
+    token      TEXT NOT NULL DEFAULT '',
+    firmware_commits TEXT NOT NULL DEFAULT '{}'
 );
 CREATE INDEX IF NOT EXISTS runs_state ON runs (state, id);
 """
@@ -518,7 +530,7 @@ CREATE INDEX IF NOT EXISTS runs_state ON runs (state, id);
 # gets them on open.
 _ADDED = {"heartbeat": "REAL", "attempts": "INTEGER NOT NULL DEFAULT 0",
           "ref_name": "TEXT NOT NULL DEFAULT ''", "owner": "TEXT NOT NULL DEFAULT ''",
-          "token": "TEXT NOT NULL DEFAULT ''"}
+          "token": "TEXT NOT NULL DEFAULT ''", "firmware_commits": "TEXT NOT NULL DEFAULT '{}'"}
 
 
 class RunStore:
@@ -570,10 +582,13 @@ class RunStore:
 
     def create(self, system: str, ref: str, firmware: dict, scenario: dict,
                ref_name: str = "", owner: str = "", max_active: Optional[int] = None,
-               max_active_per_user: Optional[int] = None) -> int:
+               max_active_per_user: Optional[int] = None,
+               firmware_commits: Optional[dict] = None) -> int:
         """A queued run. `ref`: the workspace commit its system file is read
         at ("" outside git); `ref_name`: the branch/tag/commit it was asked as;
-        `owner`: the login of who started it ("dev" in dev mode). Each run gets
+        `owner`: the login of who started it ("dev" in dev mode);
+        `firmware_commits`: image key -> {ref, commit} its firmware refs
+        resolved to (vhil.worker.resolve_commits). Each run gets
         a random token, which its trace's header must carry for the API to
         serve the trace (trace_header). Raises QueueFull when the active runs
         (queued or running) already number `max_active`, or `max_active_per_user`
@@ -595,9 +610,10 @@ class RunStore:
                                     "queued or running runs: wait for one to finish or cancel one")
                 row = db.execute(
                     "INSERT INTO runs (state, system, ref, firmware, scenario, created, ref_name, "
-                    "owner, token) VALUES ('queued', ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+                    "owner, token, firmware_commits) VALUES ('queued', ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                    "RETURNING id",
                     (system, ref, json.dumps(firmware), json.dumps(scenario), now_iso(), ref_name,
-                     owner, uuid.uuid4().hex)).fetchone()
+                     owner, uuid.uuid4().hex, json.dumps(firmware_commits or {}))).fetchone()
                 db.execute("COMMIT")
             except BaseException:
                 db.execute("ROLLBACK")
@@ -739,7 +755,7 @@ def _now(now: Optional[float]) -> float:
 
 def _row(row: sqlite3.Row) -> dict:
     d = dict(row)
-    for key in ("firmware", "scenario", "summary"):
+    for key in ("firmware", "scenario", "summary", "firmware_commits"):
         if key in d:
             d[key] = json.loads(d[key]) if d[key] else {}
     return d
@@ -1153,11 +1169,15 @@ def router(settings, workspace, limits: Optional[Limits] = None) -> APIRouter:
         errors = check_against_system(req, system, workspace.root)
         if errors:
             raise HTTPException(422, errors)
+        # Each image's ref as the commit it is at now: the run builds and
+        # runs that commit, whatever the branch does next (vhil.worker).
+        fw_commits = firmware_commits(request, system, req.firmware)
         try:
             run_id = store.create(req.system, commit, req.firmware, req.scenario.model_dump(),
                                   ref_name=req.ref or "", owner=login(request),
                                   max_active=limits.max_active,
-                                  max_active_per_user=limits.max_active_per_user)
+                                  max_active_per_user=limits.max_active_per_user,
+                                  firmware_commits=fw_commits)
         except QueueFull as e:
             raise HTTPException(429, str(e))
         return {"run_id": run_id}

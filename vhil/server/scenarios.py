@@ -364,7 +364,7 @@ def _fw_refs(fw: list[str], system: System) -> dict[str, str]:
 def router(settings, workspace, limits: Optional[Limits] = None) -> APIRouter:
     from vhil.server import systems_write as sw
     from vhil.server.decode import system_contract
-    from vhil.worker import FirmwareResolver
+    from vhil.worker import image_ref
 
     limits = limits or Limits.from_env()
     runs = RunStore(settings.db)
@@ -408,9 +408,11 @@ def router(settings, workspace, limits: Optional[Limits] = None) -> APIRouter:
             return sorted(f[:-5] for f in files if f.endswith(".yaml") and SCENARIO_NAME.match(f[:-5]))
 
         def elfs(self, fw: dict[str, str]) -> dict[str, Path]:
-            want = FirmwareResolver(sw._fw_dir(self.request), build=False).expected(self.system,
-                                                                                    fw)
-            return {b: want[b][1] for b in self.system.boards if b in want}
+            # The newest build of each board's ref (systems_write.ref_image):
+            # no network here, and the run builds the ref's head itself.
+            fw_dir = sw._fw_dir(self.request)
+            return {b: sw.ref_image(fw_dir, *image_ref(self.system, b, fw))
+                    for b in self.system.boards}
 
         def close(self) -> None:
             self._tmp.cleanup()

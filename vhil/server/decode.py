@@ -6,7 +6,7 @@
 The contract is the firmware's own: the .def files of the source each board's
 image was built from (vhil/candef.py), found next to the ELF the worker ran
 (the run summary's `firmware`, or, before the run has finished, the path the
-worker's FirmwareResolver gives the run's refs). A .def does not say which
+worker's FirmwareResolver gives the run's refs and the commits they resolved to). A .def does not say which
 bus a frame rides; the catalogue firmware does (`can.contract`: the board
 connectors the contract rides, System.contract_buses), so a board's
 messages apply on those buses only: the ECU's on its ACU bus, not on the
@@ -42,7 +42,8 @@ def board_elfs(run: dict, system: System, fw_dir: Path) -> dict[str, Path]:
     missing = [b for b in system.boards if b not in out]
     if missing:
         from vhil.worker import FirmwareResolver
-        expected = FirmwareResolver(fw_dir, build=False).expected(system, run.get("firmware") or {})
+        expected = FirmwareResolver(fw_dir, build=False).expected(
+            system, run.get("firmware") or {}, run.get("firmware_commits") or {})
         out.update({b: expected[b][1] for b in missing if b in expected})
     return out
 

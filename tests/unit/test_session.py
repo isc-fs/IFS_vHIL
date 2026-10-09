@@ -276,7 +276,10 @@ def test_a_recorded_session_replayed_as_a_scenario_gives_the_same_trace(tmp_path
 # -- the worker --------------------------------------------------------------------------
 
 class FixedResolver:
-    def resolve(self, system, refs):
+    def commits(self, system, refs, known=None, log=None):
+        return {}
+
+    def resolve(self, system, refs, commits=None):
         return {}
 
 
