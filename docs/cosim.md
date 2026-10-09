@@ -110,3 +110,12 @@ setters at each step boundary: one more plant, with the chain's chips (module
 `m` = chips `2m` and `2m + 1`) as its signals. The model keeps no other
 writer, so tests and the plant don't contend; a test that sets a cell is a
 scripted stand-in for that plant.
+
+Failures of the link are not the battery's and stay test API: a chip that
+stops answering or a cut cable (`Respond`, `BreakDownstream`, `StopReply`), a
+reply with a bad PEC (`CorruptPec`, `CorruptNextReplies`), a WRCFGA a chip
+discards (`CorruptConfigWrites`, `CorruptNextConfigWrites`: its DCC bits
+stay as they were), and on the host side an SPI1 transfer that never runs
+(`sysbus.spi1 Stall` / `StallNextTransfers n`, `models/renode/Stm32H7Spi.cs`:
+the HAL times out). `tests/sim/test_ams_chain.py` and
+`tests/sim/test_ams_spi_faults.py` use them.

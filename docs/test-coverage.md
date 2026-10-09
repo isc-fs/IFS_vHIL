@@ -110,7 +110,7 @@ What the before-run never executed, weight ≥ 2:
 - **AMS:**
   - every Cortex-M fault handler and `ams_fault_landing` (the relays-first landing);
   - `vApplicationMallocFailedHook`;
-  - the SPI/isoSPI error returns in `bms_poll_task.cpp` and `ltc6820.cpp` (a failed transfer, a failed balance quiesce or restore);
+  - the SPI/isoSPI error returns in `bms_poll_task.cpp` and `ltc6820.cpp` (a failed transfer, a failed balance quiesce or restore; reached since by `test_ams_spi_faults.py`, #196, below);
   - the defensive branches of `state_machine.hpp` (`step()` entered in Error, an Undecided mode in Transition) and `safety_predicates.hpp`.
 - **ECU:**
   - `AsBuzzer::trigger_` (no test ever raised AS Emergency);
@@ -121,6 +121,14 @@ What the before-run never executed, weight ≥ 2:
   - the MemManage/BusFault/UsageFault handlers;
   - `vApplicationMallocFailedHook`;
   - the `TorqueCap` clamp, a bring-up toggle that is compiled out (100).
+
+Since, on AMS `dev` @ `ec8ab44` (#196 section 1, `test_ams_spi_faults.py`
+against `test_ams_chain.py`, `test_ams_balancing.py`, `test_ams_temps.py`
+and `test_ams_open_wire.py`): `bms_poll_task.cpp` 182 → 192/195 lines,
+`ltc6820.cpp` 44 → 45/46. Every bus-error return is now run. Left:
+`bms_poll_task.cpp:268` (a CelFrame with no current mark), `:903-904` (the
+event group gone, defensive) and `ltc6820.cpp:133` (receive-only, which
+nothing calls).
 
 ## 3. Behaviour → test matrix
 
@@ -156,6 +164,7 @@ Requirements come from the firmware's own documentation:
 | A17 | SD logging: mount, 4 Hz rows, seal + `.CRC`, power cut, dead/absent card | 1 | `test_ams_sd.py`, `test_ams_imu.py` | |
 | A18 | **LOGFS: session, read-only, pull = card bytes + CRC, refused with the TS live, served in Error** (diag_dispatch.hpp) | 1* | *New* `test_ams_logfs.py` | |
 | A19 | Pit-diag, fw health, SoC, IMU | 1 | `test_ams_can.py`, `test_ams_telemetry.py`, `test_ams_imu.py` | |
+| A20 | **isoSPI transfer errors** (SPI1 HAL timeout): each bus error in the voltage poll, open-wire scan and temperature sweep counted and retried or its channel skipped; a dead bus → BmsStale (3) < 500 ms and chain recovery; a failed balance quiesce holds the selector, a failed restore or mask write is redone next update (FMEA BALANCE-1) | 3 | *New* `test_ams_spi_faults.py` (strict xfails AMS#631, #632) | |
 
 \* LOGFS is diagnostics, but its vehicle-state gate is a safety
 property: 0x012 out-prioritises 0x100, so a pull in Run could starve the VCU
@@ -214,7 +223,7 @@ Left, ranked (each needs a model or hook the vHIL doesn't have; issues filed in 
 
 | Rank | Gap | Why it matters | What it needs |
 |---|---|---|---|
-| 1 | AMS SPI/isoSPI transfer failures: `bms_poll_task.cpp` error returns, a failed balance quiesce (FMEA BALANCE-1: bled voltages reach the predicates), a failed chain recovery | The paths the AMS takes when the isoSPI link itself errors, rather than goes silent or returns a bad PEC | A fault hook on SPI1 / the LTC6820 model (HAL error, stuck DCC): #196 |
+| 1 | ~~AMS SPI/isoSPI transfer failures~~ **Filled** (A20, #196 section 1): an SPI1 transfer that never runs (`Stm32H7Spi.cs`) and an LTC6811 WRCFGA that does not take (`IsoSpi.cs`). It found AMS#631 and #632, below | | |
 | 2 | Contactor and DC-link physics: welded AIR or PRE (FMEA RELAY-2), precharge against a real R·C, BusCollapse with real AIRs, `DischargeReleaseV` against the inverter's sense floor | Timing assertions need commissioned parameters | M8 TS-1 plant, #147 (parked) |
 | 3 | Malloc-failed hooks (AMS and ECU) | Same landing as the overflow hook | Heap-exhaustion injection; #196 covers it |
 | 4 | MemManage/BusFault (ECU and AMS) | Same landing as HardFault; their own reason codes | An MPU or bus-error injection hook (the INVSTATE fault the tests inject escalates to HardFault: UsageFault is not enabled); #196 |
@@ -229,7 +238,11 @@ Some lines are unreachable by design, and are not gaps:
   which never return.
 
 **Firmware issues this work filed:** isc-fs/IFS08-CE-ECU#259 (the discharge
-secured into a precharge; fixed by ECU#263). The new tests also pin, as strict xfails, the
+secured into a precharge; fixed by ECU#263). The isoSPI fault hooks (#196)
+filed isc-fs/IFS08-CE-AMS#631 (after a failed quiesce the open-wire scan
+runs on a bleeding chain, FMEA BALANCE-1 point 2) and #632 (the quiesce is
+never verified: a WRCFGA a chip rejects counts as a quiesce, and the poll
+converts under bleed unflagged), both pinned as strict xfails. The new tests also pin, as strict xfails, the
 already-filed IFS08-CE-AMS#553 (forced balancing in Run; fixed on AMS dev, not
 on main). The strict xfails the suite already carried are unchanged:
 ECU #245, #246, #247, #248, #249, #251, #252; AMS #599, #604, #616, #619,
