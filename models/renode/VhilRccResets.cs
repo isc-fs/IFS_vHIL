@@ -16,7 +16,7 @@
 // usart10, spi1, sdmmc1, adc3_h73x, dma1_h7), and it treats the H72x/H73x-only
 // bits (TIM23/24, USART10, UART9, I2C5, DTS, OCTOSPI2, FMAC, CORDIC, OTFDEC,
 // IOMNGR; DFSDM1 at bit 30) as reserved. This owns the nine registers through
-// the RCC's bus hooks (VhilRccHooks.cs): it holds what was written, reads it
+// the RCC's bus hooks (VhilBusHooks.cs): it holds what was written, reads it
 // back, resets the mapped peripheral models on each edge of their bit (so
 // writes made while the bit is held are lost, as on silicon), and passes 0 to
 // the RCC model underneath, so its own resets never fire.
@@ -60,7 +60,7 @@ namespace Antmicro.Renode.Testing
     {
         public VhilRccResets(IMachine machine)
         {
-            hooks = VhilRccHooks.For(machine);
+            hooks = VhilBusHooks.For(machine, "sysbus.rcc");
             foreach(var register in Registers)
             {
                 var offset = register.Key;
@@ -124,7 +124,7 @@ namespace Antmicro.Renode.Testing
             if(unhandled != 0)
             {
                 // The peripheral guard's pattern (vhil/peripheral_guard.py).
-                hooks.Rcc.Log(LogLevel.Warning,
+                hooks.Peripheral.Log(LogLevel.Warning,
                     "Unhandled write to offset 0x{0:X}. Unhandled bits: 0x{1:X8} ({2}) when writing value 0x{3:X8}",
                     offset, unhandled, register.Name, value);
             }
@@ -146,7 +146,7 @@ namespace Antmicro.Renode.Testing
         private void ResetPeripheral(IPeripheral peripheral)
         {
             resets[names[peripheral]]++;
-            hooks.Rcc.Log(LogLevel.Debug, "{0} reset from its RSTR bit", names[peripheral]);
+            hooks.Peripheral.Log(LogLevel.Debug, "{0} reset from its RSTR bit", names[peripheral]);
             if(!(peripheral is STM32_GPIOPort gpio))
             {
                 peripheral.Reset();
@@ -165,7 +165,7 @@ namespace Antmicro.Renode.Testing
             }
         }
 
-        private readonly VhilRccHooks hooks;
+        private readonly VhilBusHooks hooks;
         private readonly Dictionary<long, uint> held = new Dictionary<long, uint>();
         private readonly Dictionary<long, Dictionary<int, IPeripheral[]>> peripherals =
             new Dictionary<long, Dictionary<int, IPeripheral[]>>();
