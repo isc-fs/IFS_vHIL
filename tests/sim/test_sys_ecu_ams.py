@@ -20,23 +20,24 @@ closed, and at 0 V otherwise (an instant precharge and bleed; enough for a
 contract test, not a thermal one). A board losing power is modelled by
 halting its CPU: its controller stops transmitting, as a dead node does.
 
-The AMS image (ams@main) still carries IFS08-CE-AMS#599 (fixed on AMS dev by
-#601): CurrentSensorTask's 1 KB stack leaves 32 B below update_soc()'s
-deepest call, and an interrupt landing there (up to 104 B with FPU state)
-overflows it. vApplicationStackOverflowHook (freertos.c:77-98) names the task
-in g_stack_overflow_task_name, opens the relays, latches Error and spins until
-the IWDG resets the AMS into its bootloader. Whether an interrupt lands in
+IFS08-CE-AMS#599 (AMS main): CurrentSensorTask's 1 KB stack left 32 B below
+update_soc()'s deepest call, and an interrupt landing there (up to 104 B with
+FPU state) overflowed it. vApplicationStackOverflowHook (freertos.c:77-98)
+names the task in g_stack_overflow_task_name, opens the relays, latches Error
+and spins until the IWDG resets the AMS into its bootloader. AMS dev carries
+the fix (#601: a 2 KB stack, main.c:104-110). Whether an interrupt lands in
 that window is a race the interrupt timing decides, and between boards that
-timing varies from run to run. Rig.run watches the hook's global every step
-and decides the run there: #599 -> xfail; any other task -> fail. A test's own
-assertions so never read the stale RAM of an AMS that reset into its
-bootloader (g_state_telemetry still saying Run). One test forces an interrupt
-into that window instead, so #599 fails it every time: a strict xfail until
-the catalogue's AMS carries #601.
+timing varies from run to run, so Rig.run watches the hook's global every
+step and fails the run there for any task: a test's own assertions so never
+read the stale RAM of an AMS that reset into its bootloader
+(g_state_telemetry still saying Run). One test forces an interrupt into
+CurrentSensorTask's deepest frame instead and checks the margin #601 bought;
+it reads the frame off AMS dev's Release image, and on any other build its
+prologue checks fail first.
 """
 import pytest
 
-from vhil import elf
+from vhil import elf, snapshot
 from vhil.sim import Sim
 from vhil.snapshot import parse_bytes
 from vhil.system import REPO
@@ -51,10 +52,26 @@ VCU_STALE, UNDERVOLTAGE = 11, 4
 ECU_AMS_ERROR = 6
 OVERFLOW_TASK = "g_stack_overflow_task_name"   # char[16], freertos.c:64
 AMS_599 = "CurrentSensorTa"                    # the hook copies 15 chars (freertos.c:88)
-# IFS08-CE-AMS#599's deepest frame: ams::soc::r_int_element_ohm, reached from
-# CurrentSensorTask through update_soc -> KalmanSoc::correct.
-R_INT = "_ZN3ams3soc17r_int_element_ohmEds"
-R_INT_PROLOGUE = (0xB480, 0xB099)              # push {r7}; sub sp, #100
+# CurrentSensorTask's deepest frame on AMS dev (1508d13, Release -Os since
+# IFS08-CE-AMS#610), by the prologues on the path: the cycle's restart_into
+# (current_task.cpp:413) -> start_capture, inlined (:241) -> configure_channel
+# (:225-235) -> HAL_ADC_ConfigChannel. From the task's entry: 8 (StartCurrent-
+# SensorTask) + 168 (ams_current_sensor_task_run) + 16 (restart_into) + 48
+# (configure_channel) + 32 (HAL_ADC_ConfigChannel) = 272 B. #599's frame,
+# r_int_element_ohm, is inlined into KalmanSoc::correct now (248 B deep). The
+# FreeRTOS tick path below osDelayUntil goes 8 B deeper, but xTaskResumeAll
+# runs it with BASEPRI raised, where no kernel-aware interrupt lands.
+ADC_CONFIG = "HAL_ADC_ConfigChannel"
+ADC_CONFIG_PROLOGUE = (0x2300, 0xB5F7)          # movs r3, #0; push {r0-r2, r4-r7, lr}
+CONFIGURE = "_ZN12_GLOBAL__N_117configure_channelEm"
+CONFIGURE_PROLOGUE = (0xB510, 0xB08A)           # push {r4, lr}; sub sp, #40
+RESTART = "_ZN12_GLOBAL__N_112restart_intoEh"
+# From HAL_ADC_ConfigChannel's SP past its push to configure_channel's saved
+# LR: its own 32 B, then configure_channel's 40 B and r4.
+CONFIGURE_LR_AT = 32 + 40 + 4
+DEEPEST_B = 272
+EXC_FRAME_B = 32                               # the basic exception frame (ARMv7-M B1.5.7)
+CURRENT_TASK = "CurrentSensorTask_attributes"   # osThreadAttr_t, .stack_size at +20 (cmsis_os2.h)
 ICSR, PENDSTSET = 0xE000ED04, 1 << 26          # SCB->ICSR (core_cm7.h)
 
 
@@ -92,7 +109,7 @@ class Rig:
     def _check_overflow(self):
         """The AMS's stack-overflow hook fired: decide the run (module doc).
         The hook spins ~100 ms before the IWDG resets (reload 100 at LSI/32,
-        AMS main.c:564-566), so a 10 ms step reads its global before the
+        AMS main.c:578-580), so a 10 ms step reads its global before the
         next boot's startup clears it."""
         if not self.sim.read_symbol("ams", OVERFLOW_TASK):
             return
@@ -100,10 +117,8 @@ class Rig:
         raw = self.sim.monitor(f"sysbus ReadBytes {address:#x} 16", board="ams")
         task = parse_bytes(raw).split(b"\0")[0].decode(errors="replace")
         at = f"{self.sim.now_us() / 1e6:.3f} s"
-        if task == AMS_599:
-            pytest.xfail(f"isc-fs/IFS08-CE-AMS#599 at {at}: CurrentSensorTask overflowed its "
-                         "stack; the hook latches Error and the IWDG resets the AMS")
-        pytest.fail(f"the AMS's stack-overflow hook fired at {at} for task {task!r}")
+        hint = " (isc-fs/IFS08-CE-AMS#599, fixed by #601)" if task == AMS_599 else ""
+        pytest.fail(f"the AMS's stack-overflow hook fired at {at} for task {task!r}{hint}")
 
     def ams(self, symbol="g_state_telemetry"):
         return self.sim.read_symbol("ams", symbol)
@@ -156,28 +171,63 @@ def test_the_car_arms_through_the_ecu_heartbeat(rig):
     assert rig.ts_active() == 1, "the ECU does not see the AMS ready"
 
 
-@pytest.mark.xfail(strict=True, reason="isc-fs/IFS08-CE-AMS#599 (fixed on AMS dev by #601, "
-                   "not on main): an interrupt at update_soc's deepest frame overflows "
-                   "CurrentSensorTask's 1 KB stack")
-def test_an_interrupt_at_the_deepest_soc_frame_leaves_the_ams_in_run(rig):
+def test_an_interrupt_at_the_current_tasks_deepest_frame_leaves_the_ams_in_run(rig):
     """The race the arming test can lose, decided: in Run, one interrupt (a
-    pended SysTick) lands as r_int_element_ohm has reserved its frame, the
-    deepest point of CurrentSensorTask. On the car any interrupt can land
-    there (TIM23's 1 kHz HAL tick, SysTick, FDCAN RX), and its exception
-    frame (up to 104 B with FPU state) must fit the task's stack: the AMS
-    stays in Run and the ECU keeps ts_active."""
+    pended SysTick) lands as HAL_ADC_ConfigChannel, called from the cycle's
+    restart_into, has reserved its frame, the deepest point of
+    CurrentSensorTask (DEEPEST_B). On the car any interrupt can land there
+    (TIM23's 1 kHz HAL tick, SysTick, FDCAN RX), and its exception frame (up
+    to 104 B with FPU state, plus PendSV's save if it switches tasks) must fit
+    the task's stack: the AMS stays in Run and the ECU keeps ts_active. On
+    dev's 2 KB stack (#601) that holds by a wide margin; this guards it.
+
+    The hook halts the AMS there first, so the test reads the depth it hit
+    off the stack pointer instead of trusting it."""
     rig.arm()
     assert rig.wait_ams(RUN, 1000) is not None
-    fn = elf.symbol(rig.sim.firmware["ams"], R_INT)[0] & ~1
-    prologue = tuple(int(rig.sim.monitor(f"sysbus ReadWord {fn + 2 * i:#x}", board="ams").strip(), 16)
-                     for i in range(2))
-    assert prologue == R_INT_PROLOGUE, f"{R_INT} changed: {prologue}"
-    at = fn + 4                                         # past push and sub sp
-    rig.sim.monitor(f'cpu AddHook {at:#x} "self.GetMachine().SystemBus.WriteDoubleWord('
-                    f'{ICSR:#x}, {PENDSTSET:#x}); self.RemoveHooksAt({at:#x})"', board="ams")
-    rig.run(300)                                        # correct() runs every 50 ms
-    assert rig.sim.in_app("ams") and rig.ams() == RUN, f"AMS state {rig.ams()}"
+    sim, image = rig.sim, rig.sim.firmware["ams"]
+    mon = lambda cmd: sim.monitor(cmd, board="ams").strip()
+
+    def prologue(name):
+        at = elf.symbol(image, name)[0] & ~1
+        return at, tuple(int(mon(f"sysbus ReadWord {at + 2 * i:#x}"), 16) for i in range(2))
+    fn, words = prologue(ADC_CONFIG)
+    assert words == ADC_CONFIG_PROLOGUE, f"{ADC_CONFIG} changed: {words}"
+    _, words = prologue(CONFIGURE)
+    assert words == CONFIGURE_PROLOGUE, f"{CONFIGURE} changed: {words}"
+    lo, size = elf.symbol(image, RESTART)
+    lo &= ~1
+    at = fn + 4                                         # past movs and push
+    # Only the call under restart_into: the cycle's single-ended read
+    # (read_leg_q4, inlined in the task's loop) calls it 16 B shallower.
+    mon(f'cpu AddHook {at:#x} "lr = self.GetMachine().SystemBus.ReadDoubleWord('
+        f'self.SP.RawValue + {CONFIGURE_LR_AT}) & 0xFFFFFFFE; '
+        f'{lo:#x} <= lr < {lo + size:#x} and (setattr(self, \'IsHalted\', True), '
+        f'self.RemoveHooksAt({at:#x}))"')
+    for _ in range(100):                                # restart_into runs every 50 ms
+        sim.run_for(ms=1)
+        if mon("cpu IsHalted") == "True":
+            break
+    else:
+        pytest.fail("restart_into never called HAL_ADC_ConfigChannel")
+    assert int(mon("cpu PC"), 16) == at
+    tcb = sim.read_symbol("ams", "CurrentSensorTaskHandle", 4)
+    stack = int(mon(f"sysbus ReadDoubleWord {tcb + snapshot.TCB_STACK:#x}"), 16)
+    attrs = elf.symbol(image, CURRENT_TASK)[0]
+    stack_b = int(mon(f"sysbus ReadDoubleWord {attrs + 20:#x}"), 16)
+    depth = stack + stack_b - int(mon('cpu GetRegister "SP"'), 16)
+    # The task starts at the top of its stack, 8-byte aligned (port.c).
+    assert DEEPEST_B <= depth <= DEEPEST_B + 8, f"halted {depth} B deep"
+    mon(f"sysbus WriteDoubleWord {ICSR:#x} {PENDSTSET:#x}")
+    mon("cpu IsHalted false")
+    rig.run(300)
+    assert sim.in_app("ams") and rig.ams() == RUN, f"AMS state {rig.ams()}"
     assert rig.ts_active() == 1
+    snap = snapshot.take(sim, "ams")
+    task = next((t for t in snap.tasks if t.name == "CurrentSensorTask"), None)
+    assert task is not None and task.stack_free is not None, snap.errors
+    used = stack_b - task.stack_free
+    assert depth + EXC_FRAME_B <= used < stack_b, f"CurrentSensorTask used {used} of {stack_b} B"
 
 
 def test_an_ams_fault_puts_the_ecu_in_ams_error(rig):
