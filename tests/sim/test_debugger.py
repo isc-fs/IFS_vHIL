@@ -55,7 +55,10 @@ def test_a_breakpoint_holds_every_board_and_reads_the_firmware(make_sim, tmp_pat
         bp = dbg.break_insert(STEP)
         assert bp["file"].endswith("control.cpp") and bp["line"] > 0, bp
         dbg.resume("continue")
-        sim.run_for(ms=1)
+        # Every RunFor from here on is the runner's: the breakpoint can hit in
+        # any of them (control ticks are 10 ms apart, at a phase each board's
+        # boot sets), and one that holds the test's own thread leaves nothing
+        # to see the stop and resume.
         box = {}
         runner = threading.Thread(target=lambda: box.update(t=sim.run_for(ms=200)))
         runner.start()
@@ -97,10 +100,10 @@ def test_a_breakpoint_holds_every_board_and_reads_the_firmware(make_sim, tmp_pat
     finally:
         dbg.close()
     ecu1, ams1 = ticks(sim)
-    # 211 ms of virtual time ran since the first read (1 + 200 + 10), and in it
+    # 210 ms of virtual time ran since the first read (200 + 10), and in it
     # the two boards' ticks moved together: the AMS did not run on while the
     # ECU was held, for the 3+ s of wall time it was.
-    assert 205 <= ecu1 - ecu0 <= 225, (ecu0, ecu1)
+    assert 200 <= ecu1 - ecu0 <= 220, (ecu0, ecu1)
     assert abs((ams1 - ecu1) - (ams0 - ecu0)) <= 1, (ecu0, ams0, ecu1, ams1)
 
 
