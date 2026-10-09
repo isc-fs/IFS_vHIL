@@ -254,6 +254,12 @@ services:
       <<: [*paths, *proxied]
       VHIL_MAX_TRACE_MB: ${VHIL_MAX_TRACE_MB:-512}
       VHIL_MAX_OUTPUT_MB: ${VHIL_MAX_OUTPUT_MB:-64}
+      # Firmware prune after runs (vhil/fwprune.py, docs/deploy.md "Firmware").
+      VHIL_FW_KEEP: ${VHIL_FW_KEEP:-10}
+      VHIL_FW_KEEP_DAYS: ${VHIL_FW_KEEP_DAYS:-14}
+      VHIL_FW_MAX_GB: ${VHIL_FW_MAX_GB:-0}
+      VHIL_FW_PRUNE_INTERVAL_S: ${VHIL_FW_PRUNE_INTERVAL_S:-3600}
+      VHIL_FIRMWARE_ACTIVE_DAYS: ${VHIL_FIRMWARE_ACTIVE_DAYS:-30}
     # docker stop: SIGTERM ends the current run as error (vhil/worker.py).
     stop_grace_period: 30s
     # No healthcheck: it serves nothing. A crash exits and restarts it.
