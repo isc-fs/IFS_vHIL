@@ -22,7 +22,7 @@ export const SHORTCUTS = [
     ['Ctrl+J', 'Show or hide the dock'],
     ...DOCK_TABS.map((t, i) => [`Ctrl+${i + 1} / Alt+${i + 1}`, `Dock: ${t.label}`]),
     ['?', 'This list'],
-    ['Esc', 'Close a dialog or the ref picker'],
+    ['Esc', 'Close a dialog'],
 ];
 
 const typing = (el) => el && (el.isContentEditable
@@ -60,10 +60,6 @@ export function onKeyDown(ev) {
         ev.preventDefault();
         ws.layout.dockTab = DOCK_TABS[Number(digit[1]) - 1].id;
         ws.layout.dock = true;
-        return;
-    }
-    if (ev.key === 'Escape' && ws.picker) {
-        ws.picker = null;
         return;
     }
     if (ev.key === ' ' && !mod && isLive() && !typing(ev.target) && !ws.dialog

@@ -51,12 +51,40 @@ def test_commit_builds_a_new_branch_on_the_opened_commit():
     assert "ws.base = out.ref;" in workspace
 
 
-def test_shaped_nodes_keep_their_properties_in_the_inspector():
-    """A board's, bus's and device's properties are edited in the
-    inspector, not on the node (step 8: every vHIL kind is a shape)."""
+def test_shaped_nodes_show_no_property_rows():
+    """A shaped node (step 8: every vHIL kind is one) shows none of Pipeline
+    Manager's property rows: a bus's and a device's properties are edited in
+    the inspector, a board's role and refs by its own dropdowns."""
     node = (FRONTEND / "src/custom/CustomNode.vue").read_text()
-    assert "const inInspector = vhilType !== null;" in node
-    assert "if (inInspector) return bigBuses.value;" in node
+    assert "const noPropertyRows = vhilType !== null;" in node
+    assert "if (noPropertyRows) return bigBuses.value;" in node
+
+
+def test_a_board_picks_its_role_firmware_and_bootloader_on_its_node():
+    """Role, firmware branch and bootloader tag are dropdowns on the board's
+    node, the only place they are edited: the inspector shows them
+    read-only, the top bar's chip shows the board, and the ref picker is
+    gone. The dropdowns don't drag the node or reach the canvas's hotkeys,
+    and set no style attribute (CSP style-src 'self')."""
+    node = (FRONTEND / "src/custom/CustomNode.vue").read_text()
+    assert '<VhilBoardControls v-if="vhil?.kind === \'board\'" :node="node" />' in node
+    controls = (VHIL / "VhilBoardControls.vue").read_text()
+    template = controls.split("<script>")[0]
+    assert 'no-drag="true"' in template and "@keydown.stop" in template
+    assert template.count("<select") == 3
+    assert "pickRef(props.node, part.refProp, value)" in controls
+    assert "setProp(props.node, 'role', value)" in controls
+    assert "No {{ app.fwId }} firmware in the catalogue yet" in template
+    assert ":style" not in template and "style=" not in template
+    # The drag handler skips what is marked no-drag.
+    assert "if (ev.target.closest('[no-drag=\"true\"]')) return;" in node
+    inspector = (VHIL / "VhilInspector.vue").read_text()
+    assert "readonly: p.readonly || onNode" in inspector and "pickRef" not in inspector
+    assert not (VHIL / "VhilRefPicker.vue").exists()
+    assert "VhilRefPicker" not in (FRONTEND / "src/components/Home.vue").read_text()
+    assert '@click="showBoard(chip.id)"' in (VHIL / "VhilTopBar.vue").read_text()
+    css = (VHIL / "nodes.css").read_text()
+    assert ".vhil-board-controls {" in css
 
 
 def test_node_shapes():

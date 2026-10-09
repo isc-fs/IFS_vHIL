@@ -2,7 +2,7 @@
 vHIL: the workspace's top bar, 40 px (step 7 of
 docs/architecture/editor-workspace.md; CHANGELOG-VHIL.md), in place of
 Pipeline Manager's NavBar: the mark, what is open, one firmware chip per
-board (opens the ref picker), the scenario Run runs and its duration (step
+board (shows it on the canvas, where its dropdowns pick the refs), the scenario Run runs and its duration (step
 10: a scenario's own), Run and Stop, the mode, Commit… and Open PR
 (dialogs), and the theme. In REPLAY (step 9) the scenario and duration give
 way to the run's clock, a scrubber over its virtual time. In LIVE (step 15)
@@ -41,9 +41,9 @@ scenario" records it.
                 type="button"
                 class="vhil-chip"
                 :class="{ '--picked': chip.picked, '--none': !chip.fw }"
-                :aria-label="`${chip.name} firmware: ${chip.label}. Pick a ref`"
-                :aria-expanded="ws.picker?.nodeId === chip.id"
-                @click="(ev) => openPicker(chip.id, ev)"
+                :aria-label="`${chip.name} firmware: ${chip.label}. Show the board`"
+                :title="`${chip.name}: pick its firmware on the board`"
+                @click="showBoard(chip.id)"
             >
                 <span class="vhil-chip-board">{{ chip.name }}</span>
                 <span class="vhil-chip-ref mono">{{ chip.label }}</span>
@@ -200,7 +200,7 @@ scenario" records it.
 import { computed, defineComponent } from 'vue';
 import {
     ws, boardFirmware, cycleTheme, exitReplay, isLive, keepAlive, pauseLive, pickScenario,
-    runActive, runNow, startLive, stopLive, stopRun,
+    runActive, runNow, showBoard, startLive, stopLive, stopRun,
 } from './workspace.js';
 import { live as session, take } from './session.js';
 import { clockText, idleText } from './live.js';
@@ -240,11 +240,6 @@ export default defineComponent({
             : ''));
         const running = computed(() => Boolean(runActive()));
         const themeGlyph = computed(() => ({ dark: '◐', light: '◑', auto: '◒' })[ws.theme] || '◐');
-        const openPicker = (nodeId, ev) => {
-            const r = ev.currentTarget.getBoundingClientRect();
-            ws.picker = ws.picker?.nodeId === nodeId ? null
-                : { nodeId, x: r.left, y: r.bottom + 4 };
-        };
         // 100 µs a step, coarser over a long run (at most ~20000 steps).
         // The selected scenario's own virtual time, else the run's.
         const duration = computed({
@@ -307,7 +302,7 @@ export default defineComponent({
             crumbTitle,
             running,
             themeGlyph,
-            openPicker,
+            showBoard,
             runNow,
             stopRun,
             cycleTheme,

@@ -7,7 +7,8 @@ inputs (VhilInputs.vue, step 15: pin switches, analog voltages); PAUSED at a
 debugger stop, the held board's stack, locals and registers
 (VhilDebugInspect.vue, step 17), with nothing selected too; with nothing selected,
 the open system and its Check, Commit and PR, which used to be the shell's
-fixed aside. A board's properties live here, not on its node.
+fixed aside. A board's role, firmware and bootloader are edited on its node
+(VhilBoardControls.vue) and only shown here, so one place edits each.
 -->
 
 <template>
@@ -52,18 +53,8 @@ fixed aside. A board's properties live here, not on its node.
                         </label>
                     </dt>
                     <dd>
-                        <!-- a ref: the picker, as the top bar's chip -->
-                        <button
-                            v-if="p.ref"
-                            :id="`vhil-prop-${p.name}`"
-                            type="button"
-                            class="vhil-btn vhil-ref-button mono"
-                            :disabled="!p.fw"
-                            :title="refTitle(p)"
-                            @click="(ev) => openPicker(ev)"
-                        >{{ p.value || (p.fw ? `${p.fw.ref} (catalogue)` : 'none') }}</button>
                         <output
-                            v-else-if="p.type === 'constant' || p.readonly"
+                            v-if="p.type === 'constant' || p.readonly"
                             :id="`vhil-prop-${p.name}`" class="mono"
                         >{{ p.value }}</output>
                         <select
@@ -143,7 +134,7 @@ import { stopOf } from './debugui.js';
 import { live as session } from './session.js';
 import { replay } from './replay.js';
 import {
-    ws, boardFirmware, check, isLive, pickRef, refreshDirty,
+    ws, boardFirmware, check, isLive, refreshDirty,
 } from './workspace.js';
 import {
     nodeById, nodeName, prop, setProp, specNode, vhilKind,
@@ -153,7 +144,9 @@ const LABELS = {
     firmware_ref: 'app ref', bootloader_ref: 'bootloader ref', host_netdev: 'host netdev',
 };
 const NUMERIC = ['integer', 'number', 'slider'];
-const ROLE_NOTE = 'Sets its firmware, node ID, flash bus and pin labels.';
+// A board's: edited by its dropdowns on the node (VhilBoardControls.vue).
+const ON_NODE = ['role', 'firmware', 'firmware_ref', 'bootloader', 'bootloader_ref'];
+const ON_NODE_NOTE = 'Pick the role, firmware and bootloader on the board.';
 
 export default defineComponent({
     components: { VhilStateCard, VhilInputs, VhilDebugInspect },
@@ -184,14 +177,16 @@ export default defineComponent({
                 .filter((p) => !p.hidden && prop(n, p.name))
                 .map((p) => {
                     const f = fw[p.name];
+                    let { value } = prop(n, p.name);
+                    // A ref left empty runs the catalogue's.
+                    if (f && !value) value = f.fw ? `${f.fw.ref} (catalogue)` : 'none';
+                    const onNode = kind.value === 'board' && ON_NODE.includes(p.name);
                     return {
                         ...p,
                         label: LABELS[p.name] ?? p.name.replace(/_/g, ' '),
-                        value: prop(n, p.name).value,
-                        ref: f ? f.what : null,
-                        fw: f?.fw ?? null,
-                        fwId: f?.fwId,
-                        note: p.name === 'role' ? ROLE_NOTE : '',
+                        value,
+                        readonly: p.readonly || onNode,
+                        note: onNode && p.name === 'role' ? ON_NODE_NOTE : '',
                     };
                 });
         });
@@ -201,11 +196,6 @@ export default defineComponent({
             setProp(node.value, name, value);
             refreshDirty();
         };
-        const openPicker = (ev) => {
-            const r = ev.currentTarget.getBoundingClientRect();
-            ws.picker = { nodeId: node.value.id, x: r.left - 40, y: r.bottom + 4 };
-        };
-        const refTitle = (p) => (p.fw ? `Pick a ${p.ref} ref` : `No ${p.fwId} firmware in the catalogue`);
 
         // Width: drag the left edge, or arrow keys on it.
         const clamp = (w) => Math.max(260, Math.min(560, Math.round(w)));
@@ -235,11 +225,8 @@ export default defineComponent({
             nodeProblems,
             nodeName,
             set,
-            openPicker,
-            refTitle,
             NUMERIC,
             check,
-            pickRef,
             resizeBy,
             startResize,
         };

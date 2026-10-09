@@ -51,7 +51,6 @@ in src/vhil/.
             <VhilInspector v-show="ws.layout.inspector" :tick="tick" />
             <VhilDock />
             <VhilStatus :tick="tick" />
-            <VhilRefPicker :tick="tick" />
             <VhilDialogs />
             <VhilInputsMenu />
         </div>
@@ -74,7 +73,6 @@ import VhilRail from '../vhil/VhilRail.vue';
 import VhilInspector from '../vhil/VhilInspector.vue';
 import VhilDock from '../vhil/VhilDock.vue';
 import VhilStatus from '../vhil/VhilStatus.vue';
-import VhilRefPicker from '../vhil/VhilRefPicker.vue';
 import VhilDialogs from '../vhil/VhilDialogs.vue';
 import VhilInputsMenu from '../vhil/VhilInputsMenu.vue';
 import '../vhil/workspace.css';
@@ -95,7 +93,6 @@ export default {
         VhilInspector,
         VhilDock,
         VhilStatus,
-        VhilRefPicker,
         VhilDialogs,
         VhilInputsMenu,
     },
