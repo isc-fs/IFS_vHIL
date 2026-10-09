@@ -15,25 +15,27 @@ from vhil.system import System, REPO
 
 BOARD = "ecu"
 SCK_HIGH = Window("sysbus.gpioPortA", 5, True, instructions=2875, chip_us=None)
+CSN = ("sysbus.gpioPortB", 0)     # the nRF24's chip select, low through a transfer
 
 
 @pytest.fixture(scope="module")
 def run(make_sim):
     sim = make_sim("ecu")
-    pin = sim.io(BOARD).watch(SCK_HIGH.port, SCK_HIGH.pin)
+    io = sim.io(BOARD)
+    pin, csn = io.watch(SCK_HIGH.port, SCK_HIGH.pin), io.watch(*CSN)
     t0 = sim.now_us()
     sim.run_for(ms=500)
-    return sim, sim.io(BOARD).edges(pin, since_us=t0)
+    return sim, io.edges(pin, since_us=t0), io.edges(csn, since_us=t0)
 
 
 def test_the_core_runs_at_the_firmware_rate(run):
-    sim, _ = run
+    sim, _, _ = run
     rate = System(REPO / "systems" / "ecu.yaml").boards[BOARD].firmware["cpu"]["mips"]
     assert mips(sim, BOARD) == rate
 
 
 def test_the_sck_half_period_runs_the_pinned_instructions(run):
-    _, edges = run
+    _, edges, _ = run
     highs = widths(edges, SCK_HIGH.level)
     assert len(highs) > 1000, "the radio sent no snapshot"
     assert min(highs) == pytest.approx(SCK_HIGH.instructions, rel=INSTRUCTION_TOLERANCE), \
@@ -41,10 +43,16 @@ def test_the_sck_half_period_runs_the_pinned_instructions(run):
 
 
 def test_virtual_time_follows_the_rate(run):
-    sim, edges = run
-    # The ECU never sleeps (its idle task spins), so between any two edges
-    # virtual time is the instructions run over the rate, to a quantum.
-    first, last = edges[0], edges[-1]
+    sim, edges, csn = run
+    # Inside a transfer (CSN low) the ECU bit-bangs without yielding, so the
+    # core never sleeps (its idle task WFIs, freertos.c vApplicationIdleHook):
+    # virtual time is the instructions run over the rate, to a quantum. The
+    # longest transfer is a 33-byte payload write, about 2.3 M instructions.
+    lows = [(a.instructions, b.instructions) for a, b in zip(csn, csn[1:])
+            if not a.level and b.level]
+    start, end = max(lows, key=lambda w: w[1] - w[0])
+    inside = [e for e in edges if start <= e.instructions <= end]
+    first, last = inside[0], inside[-1]
     expected = (last.instructions - first.instructions) / mips(sim, BOARD)
     assert abs((last.t_us - first.t_us) - expected) <= sim.system.sync_quantum_us() + 1
 
@@ -52,6 +60,6 @@ def test_virtual_time_follows_the_rate(run):
 def test_the_sck_half_period_is_as_long_as_on_the_chip(run):
     if SCK_HIGH.chip_us is None:
         pytest.skip("no chip measurement of the SCK half-period yet (#246)")
-    sim, _ = run
+    sim, _, _ = run
     assert SCK_HIGH.instructions / mips(sim, BOARD) == pytest.approx(SCK_HIGH.chip_us,
                                                                      rel=CHIP_TOLERANCE)
