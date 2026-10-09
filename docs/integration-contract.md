@@ -63,7 +63,7 @@ sorts by `t_us`.
 | `edge` | `board`, `pin`, `level`, `initial?` (the level as watching starts) | a watched pin's changes | [`scenarios.md`](scenarios.md#rows) |
 | `sample` | `board`, `name`, `value` | a watched symbol, at its period (at sync points) | [`state-view.md`](state-view.md#what-a-run-records) |
 | `radio` | `board`, `device`, `payload` (hex) | every payload a radio device (a model with `interface.radio`, e.g. the ECU's nRF24L01+) sent, at the end of its packet | [`backplanes/ecu.md`](backplanes/ecu.md#in-the-vhil) |
-| `log` | `text` | stimuli, expects' results, worker notes | |
+| `log` | `text`, `source?`, `level?` (`debug`, `info`, `warning`, `error`), `board?`, `wall_s?`, `dropped?` | the worker's notes, the firmware build, Renode's log (filtered), each board's UARTs, stimuli, expects' results, as they happen | [`live-session.md`](live-session.md#logs) |
 | `bus_load` | `bus`, `load` (0..1), `window_us`, `exact` (false on Renode's hub: an estimate) | per bus and slice | [`can-bus.md`](can-bus.md#what-the-bus-does) |
 | `op` | `op_id`, `op`, `status` (`applied`, `refused`), `login`, `detail?` | a live session's op, at the time it took effect | [`live-session.md`](live-session.md#the-channel) |
 | `clock` | `rtf`, `paused`, `wall_s`, `idle_left_s`, `debug?` (where the system is held) | a live session, per slice | [`live-session.md`](live-session.md#the-run) |
@@ -102,4 +102,6 @@ above. It is in each trace's header (`contract`), in `GET /api/health`
 - **1** (first): the surfaces as listed. Stimuli between sync points run at
   the next one, reported (`summary.aligned`, a `log` record, the check's
   warning; [`scenarios.md`](scenarios.md#times)). Added since, an addition
-  that keeps it: the `radio` trace record (#193).
+  that keeps it: the `radio` trace record (#193); the `log` record's
+  `source`, `level`, `board`, `wall_s` and `dropped` (live logs: a record
+  without `source` is the run's, at `info`).

@@ -439,7 +439,8 @@ class Sim:
                  write_protect: dict[str, list[int]] | None = None,
                  trace: Optional[int] = None, coverage_dir: Optional[Path] = None,
                  card_dirs: Iterable[Path | str] = (),
-                 arbitration: Iterable[str] = (), hub: Iterable[str] = ()):
+                 arbitration: Iterable[str] = (), hub: Iterable[str] = (),
+                 uart_log_dir: Path | None = None):
         """params overrides device params for this run, e.g.
         {"sd": {"image": "card.img"}}, checked as the system file's are;
         write_protect a board's write-protected flash sectors at power-on, as
@@ -449,7 +450,11 @@ class Sim:
         Every bus is modelled in virtual time (#174) unless the system file
         says `arbitration: false`; arbitration names buses to model so for
         this run all the same, hub buses to leave to Renode's hub, e.g.
-        ["can_acu"]. trace and coverage_dir default to INSTRUMENT's."""
+        ["can_acu"]. trace and coverage_dir default to INSTRUMENT's.
+        uart_log_dir: every byte each board's firmware sends on a UART of its
+        catalogue's `uart` table goes to <dir>/<board>.<UART>.txt (Renode's
+        UART file backend; `uart_logs`), as the worker streams them
+        (vhil/runlog.py). The firmware is not changed."""
         self.system = System(Path(system), extra_card_dirs=card_dirs)
         for name, sectors in (write_protect or {}).items():
             if name not in self.system.boards:
@@ -474,6 +479,8 @@ class Sim:
             raise ValueError(f"no firmware for boards {sorted(missing)}")
         self.renode, self.advance_immediately, self.seed = renode, advance_immediately, seed
         self.log_path = log_path
+        self.uart_log_dir = Path(uart_log_dir) if uart_log_dir is not None else None
+        self.uart_logs: dict[str, Path] = {}    # "<board>.<UART>" -> its TX file
         self.trace_blocks = INSTRUMENT.trace if trace is None else trace
         self.coverage_dir = INSTRUMENT.coverage_dir if coverage_dir is None else coverage_dir
         self.coverage_logs: dict[str, Path] = {}
@@ -512,6 +519,8 @@ class Sim:
                           f"{rn.quote(board)} {_int(self.trace_blocks)}")
         if self.coverage_dir:
             self._start_coverage(Path(self.coverage_dir))
+        if self.uart_log_dir is not None:
+            self._capture_uarts(self.uart_log_dir)
         _live.append(self)
         return self
 
@@ -530,6 +539,22 @@ class Sim:
             (raw / f"{stem}-{board}.json").write_text(json.dumps(
                 {"system": self.system.id, "board": board, "log": log.name,
                  "images": [str(p) for p in self.images_of(board)]}, indent=1))
+
+    def _capture_uarts(self, root: Path) -> None:
+        """Renode's file backend on every UART a board's catalogue wires:
+        what the firmware transmits, byte for byte, flushed as it goes. A file
+        left from an earlier start goes first (the backend would write
+        `<file>.1` beside it)."""
+        root.mkdir(parents=True, exist_ok=True)
+        for name, board in self.system.boards.items():
+            for conn, target in sorted((board.board.get("uart") or {}).items()):
+                path = (root / f"{name}.{conn}.txt").resolve()
+                path.unlink(missing_ok=True)
+                if not rn.PATH.fullmatch(str(target)):
+                    raise rn.UnsafeText(f"not a Renode peripheral path: {target!r}")
+                self.monitor(f"{target} CreateFileBackend "
+                             f"{rn.file_arg(path)} true", board=name)
+                self.uart_logs[f"{name}.{conn}"] = path
 
     def images_of(self, board: str) -> list[Path]:
         """The ELF images a board's CPU runs: its app, then its bootloader."""

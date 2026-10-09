@@ -109,7 +109,8 @@ All JSON; times in microseconds of virtual time.
   what it returns;
   `WS /api/runs/{id}/live` → the same records as they are written, then
   `{"kind": "end", "state": …}`
-- `GET /api/runs/{id}/artifacts/{name}` → JUnit, snapshots, coverage, logs,
+- `GET /api/runs/{id}/artifacts/{name}` → JUnit, snapshots, coverage, logs
+  (`renode.log`, `build.log`, `uart/<board>.<UART>.txt`, `pytest.txt`),
   never rendered: `text/plain` or an attachment, `CSP: sandbox`
 - `POST /api/runs/{id}/cancel` (owner or admin, else 403)
 - `WS /api/runs/{id}/session` → a live session's ops and acks;
@@ -121,7 +122,10 @@ Trace record kinds: `frame {t_us, bus, id, ext, data, src?}` (`src:
 sent them; counted in the summary's `sent`, not `frames`),
 `edge {t_us, board, pin, level, initial?}` (`initial`: a pin an expect reads,
 its level when the run starts), `sample {t_us, board, name, value}`
-(read_symbol / analog values the scenario asks to watch), `log {t_us, text}`,
+(read_symbol / analog values the scenario asks to watch), `log {t_us, text,
+source, level, board?, wall_s?, dropped?}` (the worker, the firmware build,
+Renode's log filtered, each board's UARTs, stimuli and expects, as they
+happen; [live-session.md](../live-session.md#logs)),
 `radio {t_us, board, device, payload}` (a payload a radio device sent);
 a live session's `op {t_us, op_id, op, status, login, detail?}` and
 `clock {t_us, rtf, paused, wall_s, idle_left_s}`.
