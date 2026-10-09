@@ -534,14 +534,20 @@ class Sim:
     def stop(self) -> None:
         if self in _live:
             _live.remove(self)
+        aborted = False
         if self._monitor is not None:
-            try:
-                self._monitor.execute("quit")
-            except Exception:
-                pass
+            aborted = self._monitor.aborted is not None
+            if not aborted:
+                try:
+                    self._monitor.execute("quit")
+                except Exception:
+                    pass
             self._monitor.close()
             self._monitor = None
         if self._proc is not None:
+            # An aborted machine's RunFor never returns: Renode can't quit.
+            if aborted:
+                self._proc.kill()
             try:
                 self._proc.wait(timeout=15)
             except subprocess.TimeoutExpired:
@@ -571,7 +577,8 @@ class Sim:
         return round((int(h) * 3600 + int(mnt) * 60 + float(s)) * 1_000_000)
 
     def run_for(self, ms: float = 0, us: int = 0) -> int:
-        """Advance virtual time and pause again; returns the new time (us)."""
+        """Advance virtual time and pause again; returns the new time (us).
+        Raises renode.MachineAborted at once if a machine aborts (monitor)."""
         total_us = int(ms * 1000) + us
         if total_us <= 0:
             return self.now_us()
@@ -750,8 +757,13 @@ class Sim:
                 for name, off in SCB_FAULT_REGISTERS.items()}
 
     def monitor(self, command: str, board: Optional[str] = None) -> str:
+        """Run a monitor command. Raises renode.MachineAborted, at once,
+        if a machine aborted while it ran or before (#239): Renode stops an
+        aborted machine for good, so a RunFor would wait for ever."""
         if self._monitor is None:
             raise RuntimeError("Sim not started")
+        if self._monitor.aborted is not None:
+            raise rn.MachineAborted(self._monitor.aborted)
         if board is None and len(self.system.boards) == 1:
             board = next(iter(self.system.boards))
         self.last_activity = next(_activity)

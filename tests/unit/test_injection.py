@@ -450,6 +450,7 @@ def test_a_hostile_scenario_name_is_refused(make, value):
 class _Recorder:
     def __init__(self):
         self.sent = []
+        self.aborted = None
 
     def execute(self, command):
         assert "\n" not in command and "\r" not in command

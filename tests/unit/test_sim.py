@@ -1,9 +1,12 @@
-"""Host-only checks of the Sim helpers: probe output parsing, assertions and
-pin lookup."""
+"""Host-only checks of the Sim helpers: probe output parsing, assertions,
+pin lookup and the monitor's machine-abort report."""
+import socket
+import threading
 from types import SimpleNamespace
 
 import pytest
 
+from vhil.renode import MachineAborted, RenodeError, RenodeMonitor
 from vhil.sim import (BoardIO, Edge, Frame, assert_cadence, assert_period, intervals_us,
                       parse_edges, parse_frames)
 from vhil.system import REPO, System
@@ -79,3 +82,33 @@ def test_gpio_refuses_an_analog_input():
     io = BoardIO(SimpleNamespace(system=System(REPO / "systems" / "ecu.yaml")), "ecu")
     with pytest.raises(ValueError, match="ecu.PF10 is analog, not a GPIO"):
         io.gpio("PF10")
+
+
+def _monitor_on(sock):
+    """A RenodeMonitor on one end of a socket pair (never connected)."""
+    m = object.__new__(RenodeMonitor)
+    m._sock, m._lock, m._buf, m.aborted = sock, threading.Lock(), b"", None
+    return m
+
+
+def test_a_machine_abort_ends_the_command_with_machine_aborted():
+    """#239: Renode never returns from a RunFor whose machine aborted;
+    VhilMonitor.cs sends a VHIL-ABORT line and closes, and the command
+    raises at once instead of waiting for a prompt."""
+    ours, renode = socket.socketpair()
+    m = _monitor_on(ours)
+    renode.sendall(b'emulation RunFor "0.001000"\n'
+                   b"\nVHIL-ABORT machine 'ecu' aborted (PC 0x24050000); see the Renode log\n")
+    renode.shutdown(socket.SHUT_WR)
+    with pytest.raises(MachineAborted, match=r"machine 'ecu' aborted \(PC 0x24050000\)"):
+        m.execute('emulation RunFor "0.001000"')
+    assert m.aborted.startswith("machine 'ecu' aborted")
+
+
+def test_a_closed_monitor_without_an_abort_is_a_plain_error():
+    ours, renode = socket.socketpair()
+    m = _monitor_on(ours)
+    renode.shutdown(socket.SHUT_WR)
+    with pytest.raises(RenodeError) as e:
+        m.execute("version")
+    assert not isinstance(e.value, MachineAborted) and m.aborted is None
