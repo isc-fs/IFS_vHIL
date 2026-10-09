@@ -336,11 +336,14 @@ def test_a_short_logfs_burst_leaves_the_car_in_run(car):
     t0 = -(-car.sim.now_us() // 500) * 500 + 500
     end = flood(car.acu, t0, 30)
     car.rig.run(30)
+    # The flood starts at the sync point t0, 0.5-1 ms after the run began,
+    # so it holds the bus from t0 to here: a little under 30 ms.
+    held_ms = (car.sim.now_us() - t0) / 1000
     stop_flood(car.acu)
     car.rig.run(500)
     hb = sorted(r.start_ns for r in car.acu.timeline(since_us=t0 - 20_000) if r.id == VCU_HEARTBEAT)
     gap = max(b - a for a, b in zip(hb, hb[1:])) / 1e6
-    assert 30 <= gap < 200, f"longest 0x100 gap {gap} ms"
+    assert held_ms <= gap < 200, f"longest 0x100 gap {gap} ms, the flood held {held_ms} ms"
     assert (car.rig.ams(), car.rig.ams("g_fault_reason_telemetry")) == (3, 0)
     assert car.rig.ts_active() == 1
     assert end > t0

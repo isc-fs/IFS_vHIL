@@ -275,7 +275,7 @@ def make_backend(fake_cls, monitor: RenodeMonitor, config: dict, boot_check: boo
         # -- TCA pins wired to GPIO inputs (bench gpio_routes) ---------------
         # A TCA9555 pin drives its line only while its direction bit is 0
         # (output); as an input it floats and the board's pull decides (the
-        # AMS's TSMS and DASH_CHG: GPIO_PULLDOWN, IFS08-CE-AMS main.c:722-725).
+        # AMS's TSMS and DASH_CHG: GPIO_PULLDOWN, IFS08-CE-AMS main.c:739-743).
         # Output and direction registers start as the fake's: 0 and all inputs.
 
         def _tca_regs(self, addr, port):
