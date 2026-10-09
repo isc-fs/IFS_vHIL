@@ -97,7 +97,7 @@ read as its first state.
 
 ## The views
 
-AMS (IFS08-CE-AMS `main`): State (`g_state_telemetry`, `ams::fsm::State`);
+AMS (IFS08-CE-AMS `dev`): State (`g_state_telemetry`, `ams::fsm::State`);
 AIR+, AIR-, PRE, AMS_OK (PB5, PB6, PB7, PB4); Fault
 (`g_fault_reason_telemetry`, `ams::safety::FaultReason` and FsmError);
 Mode (`g_mode_locked_telemetry`, `ams::fsm::Mode`); min and max cell, max
