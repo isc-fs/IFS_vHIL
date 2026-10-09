@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { editorUrl, redirectFor } from "../../vhil/server/static/editor.js";
 import {
-  artifactUrl, firmwareText, junitCounts, parseJunit, scenarioText, snapshotsFor, snapshotsOf, tail, wallText,
+  ageText, artifactUrl, firmwareText, junitCounts, parseJunit, scenarioText, snapshotsFor, snapshotsOf, tail, wallText,
 } from "../../editor/pipeline-manager/pipeline_manager/frontend/src/vhil/artifacts.js";
 
 // As pytest writes it (junit_family xunit2), shortened.
@@ -48,6 +48,21 @@ test("a run's record as text", () => {
   assert.equal(tail("abc", 3), "abc");
   assert.equal(firmwareText({ summary: { firmware: { ams: "/vhil/fw/ams@dev/build/AMS.elf" } } }), "ams: ams@dev");
   assert.equal(firmwareText({ firmware: { ams: null } }), "ams@default");
+  // Builds keyed by commit: the ref and the commit it ran, from the run
+  // (resolved at creation) until the worker's summary says.
+  const sha = "1a2b3c4d5e6f7a8b9c0d1a2b3c4d5e6f7a8b9c0d";
+  assert.equal(firmwareText({ firmware_commits: { ams: { ref: "feat/x", commit: sha },
+                                                  "ams.bootloader": { ref: "v1.7.0", commit: null } } }),
+               "ams: feat/x @ 1a2b3c4d5e6f, ams.bootloader: v1.7.0");
+  assert.equal(firmwareText({ summary: { firmware: { ams: `/vhil/fw/ams+1a2b3c4d5e6f.0123456789/build/AMS.elf` },
+                                         firmware_commits: { ams: { ref: "dev", commit: sha } } } }),
+               "ams: dev @ 1a2b3c4d5e6f");
+  const now = Date.parse("2026-10-09T12:00:00Z");
+  assert.equal(ageText("2026-10-06T12:00:00Z", now), "3 d ago");
+  assert.equal(ageText("2026-10-09T07:00:00Z", now), "5 h ago");
+  assert.equal(ageText("2026-10-09T11:59:00Z", now), "just now");
+  assert.equal(ageText("2026-01-02T00:00:00Z", now), "2026-01-02");
+  assert.equal(ageText(null, now), "");
   assert.equal(wallText({ started: "2026-10-08T10:00:00Z", finished: "2026-10-08T10:03:07Z" }), "3 min 7 s");
   assert.equal(wallText({}), "–");
   assert.equal(scenarioText({ scenario: { kind: "pytest", select: "tests/sim/test_x.py" } }), "pytest tests/sim/test_x.py");

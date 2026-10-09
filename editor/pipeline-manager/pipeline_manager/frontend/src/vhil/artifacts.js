@@ -88,17 +88,33 @@ export function tail(text, max) {
     return `… (${(text.length - max).toLocaleString('en')} characters cut; the file has all of it)\n${text.slice(-max)}`;
 }
 
-/** "ecu: ecu@dev, ecu.bootloader: …": the images a run used (their
- *  directories in the summary), else the refs it asked for. */
+/** "ams: dev @ 1a2b3c4d5e6f, ams.bootloader: v1.7.0 @ …": each image's ref
+ *  and the commit it ran (or will run: resolved when the run was created),
+ *  else the image directory it ran, else the ref it asked for. */
 export function firmwareText(run) {
-    const used = run.summary?.firmware;
-    if (used && Object.keys(used).length) {
-        return Object.entries(used).map(([k, p]) => {
-            const dir = String(p).split('/').find((s) => s.includes('@'));
-            return `${k}: ${dir || p}`;
+    const commits = run.summary?.firmware_commits || run.firmware_commits || {};
+    const used = run.summary?.firmware || {};
+    const keys = [...new Set([...Object.keys(commits), ...Object.keys(used)])];
+    if (keys.length) {
+        return keys.map((k) => {
+            const c = commits[k];
+            if (c?.commit) return `${k}: ${c.ref} @ ${c.commit.slice(0, 12)}`;
+            const dir = used[k] && String(used[k]).split('/').find((s) => /[@+]/.test(s));
+            return `${k}: ${dir || used[k] || c?.ref || 'default'}`;
         }).join(', ');
     }
     return Object.entries(run.firmware || {}).map(([k, v]) => `${k}@${v ?? 'default'}`).join(', ');
+}
+
+/** "3 d ago", "5 h ago", "just now": a branch head's age. */
+export function ageText(iso, now = Date.now()) {
+    const t = Date.parse(iso || '');
+    if (Number.isNaN(t)) return '';
+    const s = Math.max(0, (now - t) / 1000);
+    if (s < 3600) return s < 120 ? 'just now' : `${Math.floor(s / 60)} min ago`;
+    if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
+    if (s < 86400 * 60) return `${Math.floor(s / 86400)} d ago`;
+    return new Date(t).toISOString().slice(0, 10);
 }
 
 /** "4.20 s", "3 min 7 s", "1 h 2 min", or "–". */
