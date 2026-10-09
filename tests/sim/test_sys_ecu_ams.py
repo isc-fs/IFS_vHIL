@@ -337,28 +337,21 @@ def test_a_stranded_link_is_drained_before_the_car_re_arms(stranded):
     spent, state_machine.hpp:267-283); the ECU releases on its own reading
     below DischargeReleaseV = 10 V; then, and only on a new press, the car
     arms and reaches Run again. The plant's RC is uncommissioned (M8, #147):
-    sequencing is asserted, not the bleed's timing. The first arm can lose
-    the race of IFS08-CE-ECU#259 (the ECU securing into the precharge); the
-    test then waits out the ECU's 30 s timeout and goes on."""
+    sequencing is asserted, not the bleed's timing. The arm never secures
+    into the precharge (IFS08-CE-ECU#263, closing #259): the ECU ignores a
+    link that rose from drained until a fresh 0x021 reports the AMS out of
+    Start (discharge.hpp, "the precharge edge", rule 1), so the car runs for
+    a few 0x021 periods before the SDC opens; the plant's precharge is
+    instant, where the car's takes seconds of such frames."""
     rig = stranded
     rig.set_tsms(True)
     rig.run(100)
     rig.press()
     assert rig.wait_ams(RUN, 1000) is not None, f"AMS state {rig.ams()}"
     assert rig.volts == PACK_V
-    if rig.ecu_io.level(rig.secure_pin):
-        # IFS08-CE-ECU#259: the arm's stale 0x021 let the ECU secure into the
-        # precharge (whether it does is a race of the boards' timing; the
-        # deterministic form is a strict xfail in test_ecu_discharge.py). It
-        # holds to DischargeTimeoutMs and gives up with a fault, which the
-        # SDC opening below clears; the stranded-link contract is checked
-        # from there either way.
-        for _ in range(320):
-            rig.run(100)
-            if not rig.ecu_io.level(rig.secure_pin):
-                break
-        assert not rig.ecu_io.level(rig.secure_pin), "secured past DischargeTimeoutMs"
-        assert rig.ams() == RUN
+    rig.run(300)                                         # 0x021 every 100 ms: Run heard
+    assert not rig.ecu_io.level(rig.secure_pin), "the ECU secured into the precharge (ECU#259)"
+    assert rig.ams() == RUN
     t_open = rig.sim.now_us()
     rig.set_tsms(False)                                  # SDC opened ...
     rig.run(100)

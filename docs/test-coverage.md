@@ -177,7 +177,7 @@ heartbeat into VcuStale (`diag_dispatch.hpp:29-43`).
 | E10 | Inverter: ordered fault bursts, Flt_Clear edge, re-drive, silent inverter (strict xfail ECU#246) | 2 | `test_ecu_inverter.py`, `test_cosim.py` | |
 | E11 | **The climb to Ready per inverter state: Ready / Off+Ready / Off only from Shutdown, and the TS-off recovery** (#148/#168) | 2 | *New* `test_ecu_inverter.py::test_the_climb_to_ready_speaks_each_state_s_word`, `::test_a_ts_off_inverter_climbs_back_through_off_to_active` | |
 | E12 | DC-link discharge: three terms, hold through a lost 0x021, release below 10 V | 2 | `test_ecu_discharge.py` | |
-| E13 | **Discharge timeout (30 s) with a fault, cleared by the AMS; sense floor; never into a precharge** | 2 | *New* `test_ecu_discharge.py::test_a_discharge_that_never_completes_gives_up_with_a_fault`, `::test_an_arm_never_secures_the_discharge_into_the_precharge` (strict xfail ECU#259) | |
+| E13 | **Discharge timeout (30 s) with a fault, cleared by the AMS; sense floor; never into a precharge** | 2 | *New* `test_ecu_discharge.py::test_a_discharge_that_never_completes_gives_up_with_a_fault`, `::test_an_arm_never_secures_the_discharge_into_the_precharge` (ECU#259, fixed by ECU#263) | |
 | E14 | **Discharge interlock end to end with the real AMS** (AMS FMEA DISCHARGE-1, ECU#212) | 2 | *New* `test_sys_ecu_ams.py::test_a_stranded_link_is_drained_before_the_car_re_arms` | |
 | E15 | DV seam: 0x504/0x505/0x506/0x511, DV entry and refusal, stale request and command, latch, AmsError pre-emption | 2 | `test_ecu_dv.py` | |
 | E16 | Calibration session, vehicle_safe gate, commit/persist, torn/corrupt record | 2 | `test_ecu_cal.py` | |
@@ -199,7 +199,8 @@ Filled by this work (ranked by safety relevance, as they were found):
    up to ~190 ms with no firmware running.
 3. **Discharge interlock pairing** (E13, E14): FMEA DISCHARGE-1's open
    item, run end to end. It found **IFS08-CE-ECU#259**: a stale 0x021 lets
-   the ECU secure the bleed into a precharge and hold it for 30 s.
+   the ECU secure the bleed into a precharge and hold it for 30 s (fixed by
+   IFS08-CE-ECU#263).
 4. **Forced balancing in Run** (A14): FMEA SEASON-3, pinned as a strict
    xfail until the catalogue's AMS carries #594.
 5. **AmsError status LEDs and the silent-AMS exit** (E6): the exit from
@@ -228,7 +229,7 @@ Some lines are unreachable by design, and are not gaps:
   which never return.
 
 **Firmware issues this work filed:** isc-fs/IFS08-CE-ECU#259 (the discharge
-secured into a precharge). The new tests also pin, as strict xfails, the
+secured into a precharge; fixed by ECU#263). The new tests also pin, as strict xfails, the
 already-filed IFS08-CE-AMS#553 (forced balancing in Run; fixed on AMS dev, not
 on main). The strict xfails the suite already carried are unchanged:
 ECU #245, #246, #247, #248, #249, #251, #252; AMS #599, #604, #616, #619,
