@@ -354,6 +354,32 @@ docker compose -f deploy/compose.prod.yaml run --rm --no-deps worker bash -c \
     'python -m vhil.system build systems/ecu-ams.yaml --workdir /vhil/fw >> /vhil/fw/built.txt'
 ```
 
+### Firmware
+
+A run's firmware refs are resolved to commits when it is created (the API's
+`git ls-remote`), and the worker builds and reuses images by commit:
+`fw/<firmware>+<commit[:12]>.<recipe id>/` (`vhil.system
+commit_source_dir`; the recipe id hashes the catalogue's build recipe and
+toolchain), so a branch that moved builds its new head and the same commit
+picked under two names is built once. A build at a ref name, such as the
+warm-up above, is reused when its checkout is at the run's commit. Each
+commit built takes about as much room as a ref did before (~1 GB); prune
+old `fw/*+*` directories (and their `built.txt` lines) by hand when the
+volume fills.
+
+The editor's firmware picker lists each repo's **active** branches (`GET
+/api/firmware/{id}/refs`): the repo's default branch, `dev` and `main`, the
+catalogue's ref, branches with an open PR, and branches whose head commit is
+within `VHIL_FIRMWARE_ACTIVE_DAYS` [30] days, newest first with each head's
+date, author and PR. Dates and PRs come from the GitHub REST API (the App's
+read-only token for the repo, else `VHIL_GITHUB_TOKEN`, else anonymously:
+the firmware repos are public, and the caches keep an anonymous API well
+within its 60 requests an hour); the default branch and open PRs are cached
+`VHIL_BRANCHES_TTL_S` [120] s and head commits for good. When the API
+can't be asked (no network, rate limit), the picker lists every branch from
+`git ls-remote` and says why. "Show all branches and tags" lists every
+branch and the release tags.
+
 ### The GitHub App (hand-off to an isc-fs org admin)
 
 One App does login (its OAuth client) and pushes (its installation tokens).

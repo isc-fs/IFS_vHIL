@@ -72,17 +72,31 @@ starts. Never set it on a host.
   requests write. Tokens (1 h) are cached and renewed 5 min before they
   expire. `app.state.github_app` is `None` when the App isn't configured.
 - **Firmware refs** (`GET /api/firmware/{id}/refs`, `vhil/server/githost.py`
-  `LsRemote`): the Editor's firmware panel lists each board's app branches
-  and tags and the bootloader's tags from `git ls-remote`, with each ref's
-  commit and whether `$VHIL_FW_DIR/built.txt` has its image (read-only; the
-  API mounts the fw volume `:ro`). The firmware repos are public, so it
-  works with no credentials; with the App it asks with that repo's
-  contents-read token, else with `VHIL_GITHUB_TOKEN`, and falls back to
-  anonymous if the authenticated call fails. 15 s bound, cached
-  `VHIL_REFS_TTL_S` (300 s). Only names a system file's `firmware_ref` /
-  `bootloader_ref` could hold reach the picker; the save validates them
-  again. The role sets which firmware: the panel picks refs only, and
-  writes none when the catalogue's is chosen.
+  `LsRemote`, `GitHubBranches`, `active_branches`): the Editor's firmware
+  panel lists each board's app branches and the bootloader's tags from `git
+  ls-remote`, with each ref's commit and whether `$VHIL_FW_DIR/built.txt`
+  has a build of that commit (read-only; the API mounts the fw volume
+  `:ro`). By default only the active branches: the repo's default branch,
+  `dev`/`main`, the catalogue's ref, branches with an open PR and heads
+  within `VHIL_FIRMWARE_ACTIVE_DAYS` (30) days, newest first with date,
+  author and PR number from the GitHub REST API (`?all=1`, the panel's
+  "Show all branches and tags": every branch, and the tags). The firmware
+  repos are public, so both work with no credentials; with the App they ask
+  with that repo's contents-read token, else with `VHIL_GITHUB_TOKEN`, and
+  ls-remote falls back to anonymous if the authenticated call fails.
+  Without the API (local dev with no token over its anonymous rate limit,
+  no network) the panel lists every branch, undated, and says why. 15 s
+  bound, refs cached `VHIL_REFS_TTL_S` (300 s), the default branch and PRs
+  `VHIL_BRANCHES_TTL_S` (120 s), head commits for good. Only names a system
+  file's `firmware_ref` / `bootloader_ref` could hold reach the picker; the
+  save validates them again. The role sets which firmware, and a role
+  change resets the app's ref to the catalogue's (the bootloader's stays):
+  the panel picks refs only, and writes none when the catalogue's is chosen.
+- **Builds by commit**: a run resolves each image's ref to its commit when
+  it is created (a fresh `git ls-remote`, not the picker's cache) and
+  records them (`firmware_commits`, shown in the Artifacts tab as
+  `ams: feat/x @ 1a2b3c4d5e6f`); the worker builds and reuses images by
+  (firmware, commit, recipe) (`vhil/worker.py` module doc).
 - **Warnings**: Check, Save and Open show what `vhil.system validate` warns
   of (a pin the board's role leaves unconnected on its backplane) next to
   the errors. A warning never blocks a save.
