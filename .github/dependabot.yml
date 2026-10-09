@@ -4,7 +4,11 @@
 # Docker base images: patch updates and digest refreshes only; minor and
 # major bumps (python 3.11 -> 3.12, bookworm -> trixie) move with Renode and
 # the toolchain, deliberately, in their own PR.
-# No pip entry: the repo has no requirements file to update.
+# The vendored Pipeline Manager (editor/pipeline-manager) has its own npm
+# and pip manifests. Its security updates arrive as one grouped PR per
+# ecosystem instead of one per package; version updates stay off
+# (open-pull-requests-limit: 0), since the vendored copy moves with upstream
+# releases, deliberately (CHANGELOG-VHIL.md).
 version: 2
 updates:
   - package-ecosystem: github-actions
@@ -30,3 +34,29 @@ updates:
           - version-update:semver-minor
     commit-message:
       prefix: chore(docker)
+
+  - package-ecosystem: npm
+    directory: /editor/pipeline-manager/pipeline_manager/frontend
+    target-branch: dev
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+    groups:
+      editor-npm-security:
+        applies-to: security-updates
+        patterns: ["*"]
+    commit-message:
+      prefix: chore(deps)
+
+  - package-ecosystem: pip
+    directory: /editor/pipeline-manager
+    target-branch: dev
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+    groups:
+      editor-pip-security:
+        applies-to: security-updates
+        patterns: ["*"]
+    commit-message:
+      prefix: chore(deps)
