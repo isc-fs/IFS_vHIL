@@ -144,6 +144,64 @@ wires march while they carry traffic. Another tab that opens the run
 watches. When the session ends, it stays on the workspace as a REPLAY, and
 "Save as scenario…" puts its recording in the Scenario tab.
 
+## Logs
+
+Every run streams its logs into its trace as `log` records while it runs
+(`vhil/runlog.py`; a live session, a scenario's run and a plain run alike,
+and a finished run's replay reads them back). Each says where it came from
+and how loud it is:
+
+```json
+{"kind": "log", "t_us": 2300000, "source": "renode", "level": "warning", "board": "ams", "text": "watchdog: Watchdog reset triggered!"}
+```
+
+| `source` | What | `t_us` |
+|---|---|---|
+| `worker` | the worker's notes: the system, the firmware it runs, an attempt, an error | virtual time; 0 before power-on, with `wall_s` |
+| `build` | `python -m vhil.system build` line by line (git, cmake, the compiler) while a run waits for a firmware it hasn't built; whole in the `build.log` artifact | 0, with `wall_s` |
+| `pytest` | a `pytest` run's output; whole in `pytest.txt` | 0, with `wall_s` |
+| `renode` | Renode's log, filtered (below); whole in `renode.log`. Also each board's jump from its bootloader to its app, and back to it on a reset (its PC at the slice boundary) | the end of the slice it was read in |
+| `<board>.<UART>` | what the firmware sends on a UART of its board's catalogue (`ecu.USART10`), captured by Renode's UART file backend without changing the firmware; whole in `uart/<board>.<UART>.txt` | the end of the slice it was read in |
+| `scenario` | stimuli, and each expect's result (`error` when it failed) | when it took effect |
+| `session` | a live session's own notes (idle, stopping) | when it happened |
+
+**Time.** Virtual time as every record's, except before power-on: a build or
+a pytest run has no virtual time, so its records are at `t_us` 0 and carry
+`wall_s`, the Unix time the worker wrote them. A line the worker reads from a
+file (Renode's log, a UART) is stamped with the end of the slice it was read
+in, at most one slice (`slice_ms`: 50 ms live, 100 ms otherwise) after the
+firmware wrote it; the trace stays in virtual-time order.
+
+**Renode's filter** (`RenodeFilter`) keeps what a user wants to see live and
+leaves the rest in `renode.log`: errors (with a few lines of a stack after
+them); the watchdog firing, every time; a machine starting and a CPU
+starting (a power-on or a reset; Renode's `Setting initial values`); each
+unmodelled access the peripheral guard's rules (`configs/peripherals.yaml`,
+invariant 7) don't explain, once per register; any other warning the first
+time it is said (numbers aside), its repeats counted in one record at the
+end. Explained accesses, info and the host's own warnings (the translation
+cache) stay out.
+
+**Rate limit.** At most `VHIL_LOG_LINES_PER_S` (20) lines a second per
+source, in virtual seconds (wall seconds for `wall_s` records); the lines
+over it are counted in one `warning` record per second with `dropped: N`,
+so a UART printing every millisecond can't flood the trace or the socket.
+Errors always pass.
+
+**Firmware consoles today.** No board's dev firmware prints a console: the
+AMS initialises USART2 (`IFS08-CE-AMS Core/Src/main.c:663`) and sends
+nothing on it, and its `_write` goes to a weak `__io_putchar` it never
+defines (`Core/Src/syscalls.c:35,80`); the ECU's only transmitter is
+USART10, the PMTK commands it sends its GPS at start
+(`IFS08-CE-ECU Core/Src/app/gps_task.cpp:96`), which show as
+`ecu.USART10`. A UART a firmware starts printing on needs only its entry in
+the board's `uart` table (`catalog/boards/mainlite.yaml`) and its peripheral
+in the platform.
+
+In the editor, the Log tab shows each line's time, source and level
+(warnings and errors coloured), a chip per source to hide or show its lines,
+and a link to download the run's whole `renode.log`.
+
 ## Limits
 
 | Variable | Bounds | |
@@ -153,6 +211,7 @@ watches. When the session ends, it stays on the workspace as a REPLAY, and
 | `VHIL_LIVE_OPS_PER_S` [20] | ops a second per connection (a token bucket) | refused |
 | `VHIL_LIVE_MAX_PERIODIC` [16] | periodic senders running at once | refused by the worker |
 | `VHIL_MAX_STIMULI` [1000] | stimulus ops in one session (its recording's rows) | refused |
+| `VHIL_LOG_LINES_PER_S` [20] | log lines a second per source ([Logs](#logs)) | counted, not shown |
 
 The run's own limits hold too ([deploy.md](deploy.md#limits)): the active
 runs per user and in all, and `VHIL_MAX_TRACE_MB` (a 1 ms periodic for an
