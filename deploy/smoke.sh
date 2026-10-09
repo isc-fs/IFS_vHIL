@@ -155,7 +155,11 @@ echo "$editor_headers" | grep -qiF "unsafe-" && fail "the editor's policy allows
 echo "  headers: nosniff, Referrer-Policy, frame-ancestors (app: none; editor: 'self'), editor CSP"
 
 say "save an edit of systems/ecu.yaml to branch smoke/deploy"
-api "$base/api/systems/ecu" | python3 -c '
+# Edit the file as it is on the branch the save goes to (the editor's flow),
+# not the checked-out tree's: with SMOKE_KEEP=1 the workspace volume keeps an
+# earlier run's smoke/deploy, whose catalogue may predate a model the tree's
+# system now names, and the save is checked against the branch's tip.
+api "$base/api/systems/ecu/dataflow?branch=smoke/deploy" | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
 y = d["yaml"] + "# edited by deploy/smoke.sh\n"
