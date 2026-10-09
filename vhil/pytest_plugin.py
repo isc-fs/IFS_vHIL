@@ -9,6 +9,10 @@ The plugin starts Renode and the virtual broker before IFS_HIL's session
 fixtures look for a bench, and points HIL_BROKER_SOCKET at it. IFS_HIL's
 tests and conftests run unmodified.
 
+Cases IFS_HIL gates on a bench operator's step (an env var plus pulling the
+AMS's card, reading it, or a bus-off adapter) run with the bench doing the
+step itself (vhil/bench_operator.py).
+
 --vhil-system picks the system (default systems/ecu.yaml). --vhil-elf is
 shorthand for a one-board system; --vhil-firmware BOARD=ELF names each board's
 image.
@@ -22,10 +26,13 @@ import pytest
 
 import yaml
 
+from vhil import bench_operator as operator
 from vhil.bench import DEFAULT_RENODE, REPO, VirtualBench
 from vhil.system import System
 
 _bench = None
+_operator = None
+_stepped: dict = {}         # item nodeid -> the step to do after it
 
 
 def pytest_addoption(parser):
@@ -64,10 +71,12 @@ def _firmware(config) -> dict[str, Path]:
 
 
 def pytest_configure(config):
-    global _bench
+    global _bench, _operator
     firmware = _firmware(config)
     if not firmware:
         return
+    # The AMS's card is an image the operator steps can pull and read.
+    params, card_dirs = operator.prepare(Path(config.getoption("--vhil-system")))
     _bench = VirtualBench(
         ifs_hil=Path(config.rootpath), firmware=firmware,
         system=Path(config.getoption("--vhil-system")),
@@ -75,7 +84,10 @@ def pytest_configure(config):
         socketcan=config.getoption("--vhil-socketcan"),
         socket_path=config.getoption("--vhil-socket"),
         log_path=Path(config.getoption("--vhil-log")),
+        params=params, card_dirs=card_dirs,
     ).start()
+    # Before collection: IFS_HIL's gated modules read their env vars on import.
+    _operator = operator.Operator(_bench)
 
 
 @pytest.hookimpl(hookwrapper=True)
@@ -109,18 +121,61 @@ def pytest_collection_modifyitems(config, items):
     # Gap paths are relative to the IFS_HIL checkout pytest runs from. Not the
     # nodeid: that is relative to the rootdir, which a pytest.ini further up
     # (this repo's, when IFS_HIL is checked out inside it) moves.
-    here = config.invocation_params.dir
     for item in items:
-        try:
-            path = item.path.relative_to(here).as_posix()
-        except ValueError:
+        key = _key(config, item)
+        if key is None:
             continue
         for gap in gaps:
             if "systems" in gap and _bench.system.id not in gap["systems"]:
                 continue
-            if (path + "::" + item.name).startswith(gap["path"]):
+            if key.startswith(gap["path"]):
                 item.add_marker(pytest.mark.skip(reason=gap_reason(gap)))
                 break
+        # The adapter IFS_HIL's bus-off stub stands for is the fault hook here.
+        if (_operator is not None and _operator.busoff
+                and key.split("::")[0] in operator.BUSOFF_MODULES
+                and hasattr(item.module, "_inject_busoff")):
+            item.module._inject_busoff = _operator.inject_busoff
+
+
+def _key(config, item) -> str | None:
+    """path::name of a test, the path relative to the IFS_HIL checkout pytest
+    runs from (configs/gaps.yaml, operator.STEPS)."""
+    try:
+        path = item.path.relative_to(config.invocation_params.dir).as_posix()
+    except ValueError:
+        return None
+    return path + "::" + item.name
+
+
+def _skipped(item) -> bool:
+    """Whether a skip or a true skipif marker skips the test before it runs."""
+    if any(True for _ in item.iter_markers("skip")):
+        return True
+    for mark in item.iter_markers("skipif"):
+        conditions = mark.args or (mark.kwargs.get("condition"),)
+        if any(not isinstance(c, str) and c for c in conditions):
+            return True
+    return False
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_setup(item):
+    """The bench operator's step before a gated case, before its fixtures
+    (vhil/bench_operator.py)."""
+    if _operator is None:
+        return
+    steps = operator.STEPS.get(_key(item.config, item) or "")
+    if steps is None or _skipped(item):
+        return
+    before, after = steps
+    _operator.step(before)
+    _stepped[item.nodeid] = after
+
+
+def pytest_runtest_teardown(item, nextitem):
+    if _operator is not None and item.nodeid in _stepped:
+        _operator.step(_stepped.pop(item.nodeid))
 
 
 def gap_reason(gap: dict) -> str:

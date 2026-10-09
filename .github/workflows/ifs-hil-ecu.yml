@@ -225,7 +225,8 @@ jobs:
 
       - name: Create vcan can0 / can1 / can2
         run: |
-          sudo apt-get install -y -qq "linux-modules-extra-$(uname -r)" can-utils >/dev/null
+          # dosfstools, mtools: the AMS's card image (vhil/bench_operator.py)
+          sudo apt-get install -y -qq "linux-modules-extra-$(uname -r)" can-utils dosfstools mtools >/dev/null
           sudo modprobe vcan
           for i in 0 1 2; do
             sudo ip link add "can$i" type vcan
@@ -334,7 +335,8 @@ jobs:
 
       - name: Create vcan can0 / can1 / can2
         run: |
-          sudo apt-get install -y -qq "linux-modules-extra-$(uname -r)" can-utils >/dev/null
+          # dosfstools, mtools: the AMS's card image (vhil/bench_operator.py)
+          sudo apt-get install -y -qq "linux-modules-extra-$(uname -r)" can-utils dosfstools mtools >/dev/null
           sudo modprobe vcan
           for i in 0 1 2; do
             sudo ip link add "can$i" type vcan

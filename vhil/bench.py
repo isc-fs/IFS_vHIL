@@ -10,6 +10,7 @@ import sys
 import tempfile
 import threading
 from pathlib import Path
+from typing import Iterable
 
 from vhil import renode as rn
 from vhil.broker import make_backend, probe_commands, watch_pacing
@@ -44,13 +45,21 @@ class VirtualBench:
                  system: Path = REPO / "systems" / "ecu.yaml",
                  renode: str = DEFAULT_RENODE, socketcan: bool = False,
                  socket_path: str = "/tmp/vhil-broker.sock",
-                 log_path: Path | None = None):
+                 log_path: Path | None = None,
+                 params: dict[str, dict] | None = None,
+                 card_dirs: Iterable[Path | str] = ()):
+        """params overrides device params and card_dirs adds card-image
+        directories, as vhil.sim.Sim's do."""
         self.ifs_hil = Path(ifs_hil).resolve()
-        self.system = System(system)
+        self.system = System(system, extra_card_dirs=card_dirs)
+        for name, values in (params or {}).items():
+            if name not in self.system.devices:
+                raise ValueError(f"params: no device '{name}' in {self.system.id}")
+            self.system.set_params(name, values)
         self.firmware = {b: Path(p).resolve() for b, p in firmware.items()}
         self.renode, self.socketcan = renode, socketcan
         self.socket_path, self.log_path = socket_path, log_path
-        self._proc = self._monitor = None
+        self._proc = self._monitor = self._backend = None
 
     def start(self) -> "VirtualBench":
         for image in self.system.images():
@@ -93,6 +102,7 @@ class VirtualBench:
         from broker.server import serve
 
         backend = make_backend(FakeHardwareManager, m, config, boot_check=True)
+        self._backend = backend
         threading.Thread(target=watch_pacing, args=(m, backend.monitor_lock),
                          daemon=True, name="vhil-pacing").start()
         # A socket left by an earlier run would satisfy _wait_for_socket before
@@ -103,6 +113,12 @@ class VirtualBench:
         os.environ["HIL_BROKER_SOCKET"] = self.socket_path
         self._wait_for_socket()
         return self
+
+    def on(self, machine: str, command: str) -> str:
+        """Run a monitor command on one board, between the broker's own."""
+        with self._backend.monitor_lock:
+            self._monitor.execute(f"mach set {rn.quote(rn.ident(machine))}")
+            return self._monitor.execute(command)
 
     def _wait_for_socket(self, timeout_s: float = 10.0) -> None:
         """Ready means a client can connect: the file exists from bind(),
