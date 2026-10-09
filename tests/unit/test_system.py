@@ -36,6 +36,24 @@ def test_every_system_resolves_and_renders(path):
         assert f'emulation {create} "{bus}"' in script
 
 
+@pytest.mark.parametrize("path", SYSTEMS, ids=lambda p: p.name)
+def test_a_lockstep_run_of_several_boards_gives_each_its_own_time_source(path):
+    """#209: in vhil.sim, several boards each get a time source of their own
+    (models/renode/VhilMachine.cs), compiled before the first is created;
+    one board, and the wall-clock bench, keep `mach create`."""
+    system = System(path)
+    lockstep = system.render_renode({b: Path(f"/fw/{b}.elf") for b in system.boards}, lockstep=True)
+    bench = system.render_renode({b: Path(f"/fw/{b}.elf") for b in system.boards})
+    assert "VhilMachine.cs" not in bench and "CreateVhilMachine" not in bench
+    for name in system.boards:
+        if len(system.boards) > 1:
+            assert f'emulation CreateVhilMachine "{name}"\nmach set "{name}"' in lockstep
+            assert lockstep.index("VhilMachine.cs") < lockstep.index(f'CreateVhilMachine "{name}"')
+            assert "mach create" not in lockstep
+        else:
+            assert f'mach create "{name}"' in lockstep and "VhilMachine" not in lockstep
+
+
 def test_ecu_system_renders_the_bench_setup():
     """systems/ecu.yaml must reproduce what the hand-written ecu.resc did."""
     s = System(REPO / "systems" / "ecu.yaml").render_renode(socketcan=True)

@@ -65,7 +65,10 @@
 // frame that starts and ends inside one quantum on a multi-board bus is
 // therefore seen late; a quantum below the shortest frame (44 bit times, 88 us
 // at 500 kbit/s) makes every effect exact, at a cost in wall time measured in
-// #174. The timeline (Timeline, Load) is exact either way.
+// #174. The timeline (Timeline, Load) is exact either way, and the same on
+// every run of the same inputs: each board runs on a time source of its own
+// (VhilMachine.cs, #209), and the bus reads the master's time only in the
+// sync phase.
 //
 // Test API (monitor): Timeline sinceUs, Load fromUs toUs, Nodes, Stats,
 // SetAck "<node>" true|false, Tec "<node>", DefaultBitRate. Times in the
@@ -290,8 +293,10 @@ namespace Antmicro.Renode.Tools.Network
             lock(sync)
             {
                 return string.Format(CultureInfo.InvariantCulture,
-                    "frames {0} ack_errors {1} lost {2} busy_ns {3} late {4} max_late_ns {5} dropped_records {6} eager {7}\n",
-                    framesOk, ackErrors, lost, busyNs, late, maxLateNs, droppedRecords, eager ? 1 : 0);
+                    "frames {0} ack_errors {1} lost {2} busy_ns {3} late {4} max_late_ns {5} dropped_records {6} eager {7} "
+                    + "wake_retries {8}\n",
+                    framesOk, ackErrors, lost, busyNs, late, maxLateNs, droppedRecords, eager ? 1 : 0,
+                    System.Threading.Interlocked.Read(ref wakeRetries));
             }
         }
 
@@ -640,11 +645,19 @@ namespace Antmicro.Renode.Tools.Network
         // meanwhile; another thread may hold the bus and be waiting for that
         // clock source (Decide scheduling an effect in the board). So the
         // wake never waits for the bus: when it is taken, it tries again a
-        // microsecond later (#193: that wait deadlocked ecu-ams).
+        // microsecond later (#193: that wait deadlocked ecu-ams). That was
+        // when every board shared the master time source, and one board's
+        // clock ran on another board's CPU thread. Each board now has its own
+        // (VhilMachine.cs, #209): a wake runs on its own board's thread, and
+        // the only other holder of a single-board bus is the sync phase, when
+        // the board is stopped. A retry would put host timing into the bus
+        // timeline, so it is counted (Stats wake_retries) and the
+        // determinism test asserts there were none.
         private void Wake(Node node, ulong at)
         {
             if(!System.Threading.Monitor.TryEnter(sync))
             {
+                System.Threading.Interlocked.Increment(ref wakeRetries);
                 node.Machine.ScheduleAction(TimeInterval.FromTicks(RetryNs), _ => Wake(node, at), "vhil-can");
                 return;
             }
@@ -785,5 +798,6 @@ namespace Antmicro.Renode.Tools.Network
         private long late;
         private ulong maxLateNs;
         private long droppedRecords;
+        private long wakeRetries;
     }
 }

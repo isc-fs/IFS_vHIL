@@ -191,6 +191,17 @@ them, e.g. "invariant 8"), so they are not in order.
   macro, which Renode runs on every reset, the CPU's own included; the
   broker's power-on writes it too (`vhil/broker.py`). Don't remove either
   until upstream Renode fixes this.
+- (11) **In a lock-step run, every board of a multi-board system has a
+  time source of its own** (`emulation CreateVhilMachine`,
+  `models/renode/VhilMachine.cs`, rendered by `vhil/system.py` for
+  `vhil.sim`). Renode's `mach create` puts every machine on the master time
+  source, whose time is the slowest CPU's: each board's timers then fire
+  where the host's thread scheduling puts them, and no two runs agree
+  (#209). A board on its own time source runs whole quanta only, so
+  `Sim.run_for` runs a partial one with the quantum set to it. The
+  wall-clock bench keeps `mach create` (its power cycle pauses one machine,
+  which hangs on a time source of its own). A test
+  (`test_two_board_runs_give_the_same_bus_timeline`) holds runs identical.
 
 ## Run things (Linux / WSL2)
 

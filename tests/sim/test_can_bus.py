@@ -194,6 +194,42 @@ def test_every_ams_frame_reaches_the_bus_beside_the_ecu(two_boards):
     assert lost == [], f"{len(lost)} AMS frames lost to arbitration: {sorted({hex(r.id) for r in lost})}"
 
 
+# -- determinism (#209) -------------------------------------------------------
+
+def acu_run(images):
+    """One power-on of ecu-ams with both pit-diag streams armed: the ACU
+    bus's whole timeline and its stats."""
+    with Sim(REPO / "systems" / "ecu-ams.yaml", images("ecu-ams"), arbitration=["can_acu"]) as sim:
+        sim.wait_for_app()
+        sim.run_for(ms=500)
+        can = sim.can("can_acu")
+        can.send(ECU_PIT_ARM, bytes.fromhex("DEADBEEF"))
+        can.send(AMS_PIT_ARM, bytes.fromhex("DEADBEEF"))
+        sim.run_for(ms=1000)
+        return can.timeline(), can.stats()
+
+
+def test_two_board_runs_give_the_same_bus_timeline(images):
+    """The same system and inputs give the same ACU bus, frame for frame:
+    order, offer/start/end times, arbitration outcomes. Each board runs on a
+    time source of its own (models/renode/VhilMachine.cs) and they meet only
+    at sync points, where the bus decides; before #209 both shared Renode's
+    master time source, each board's timers followed whichever CPU thread
+    the host had run furthest, and no two runs agreed past the first 20 ms
+    after boot."""
+    runs = [acu_run(images) for _ in range(3)]
+    tl0, stats0 = runs[0]
+    assert {r.node.split(":")[0] for r in tl0} >= {"ecu", "ams"}
+    for k, (tl, stats) in enumerate(runs[1:], 1):
+        diverged = next((i for i, (a, b) in enumerate(zip(tl0, tl)) if a != b), min(len(tl0), len(tl)))
+        assert tl == tl0, (f"run {k} diverged at frame {diverged} of {len(tl0)}: "
+                           f"{tl0[diverged:diverged + 1]} vs {tl[diverged:diverged + 1]}")
+        assert stats == stats0
+    # A wake that found the bus taken is retried a microsecond later, by
+    # host timing: with a time source per board it never happens.
+    assert stats0["wake_retries"] == 0
+
+
 # -- exit criterion 2: saturation ---------------------------------------------
 
 def test_a_saturating_sender_starves_lower_priority_and_fills_the_tx_fifo(ecu_acu):
