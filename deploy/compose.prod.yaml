@@ -199,6 +199,8 @@ services:
       VHIL_GITHUB_TOKEN_FILE: /run/secrets/github_token
       VHIL_GITHUB_REPO: ${VHIL_GITHUB_REPO:-isc-fs/IFS_vHIL}
       VHIL_BASE_BRANCH: ${VHIL_BASE_BRANCH:-dev}
+      # The firmware picker's active branches (docs/deploy.md, "Firmware").
+      VHIL_FIRMWARE_ACTIVE_DAYS: ${VHIL_FIRMWARE_ACTIVE_DAYS:-30}
       # Limits (vhil/server/runs.py Limits; docs/deploy.md, "Limits").
       VHIL_MAX_VIRTUAL_MS: ${VHIL_MAX_VIRTUAL_MS:-600000}
       VHIL_MAX_QUEUED: ${VHIL_MAX_QUEUED:-50}

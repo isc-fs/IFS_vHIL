@@ -1,9 +1,11 @@
 """Where branches are pushed and PRs opened, and where firmware refs are listed.
 
-Two seams, each with a GitHub implementation and a fake for tests:
+Three seams, each with a GitHub implementation and a fake for tests:
 
-  GitHost     push a workspace branch, open a PR against the base branch
-  RefLister   a firmware repo's branches and tags, with their commits (git ls-remote)
+  GitHost        push a workspace branch, open a PR against the base branch
+  RefLister      a firmware repo's branches and tags, with their commits (git ls-remote)
+  BranchDetails  its default branch, open PRs and each head commit's date and
+                 author (the GitHub REST API), for the picker's active branches
 
 GitHubHost pushes and opens PRs with the GitHub App's installation token for
 this repository when the App is configured (vhil.server.github_app, M5.5),
@@ -276,6 +278,181 @@ class CachedRefs(RefLister):
         hit = self._cache.get(repo)
         if hit and self.clock() - hit[0] < self.ttl_s:
             return hit[1]
+        return self.fresh(repo)
+
+    def fresh(self, repo: str) -> Refs:
+        """Asked now, not from the cache (and cached): what a run resolves
+        its refs with, so a branch pushed a minute ago runs its new head."""
         refs = self.inner.refs(repo)
         self._cache[repo] = (self.clock(), refs)
         return refs
+
+
+def fresh_refs(lister: RefLister, repo: str) -> Refs:
+    return lister.fresh(repo) if isinstance(lister, CachedRefs) else lister.refs(repo)
+
+
+def commit_of(refs: Refs, name: str) -> str | None:
+    """The commit a branch or tag name is at (a branch wins, as for `git
+    clone -b`); a full commit id is its own. None if the repo has no such ref."""
+    if re.fullmatch(r"[0-9a-f]{40}", name):
+        return name
+    for kind in ("branches", "tags"):
+        for r in refs.get(kind, []):
+            if r["name"] == name:
+                return r["sha"]
+    return None
+
+
+# -- branch details (GitHub REST API) ---------------------------------------------
+
+API = "https://api.github.com"
+API_TIMEOUT_S = 10
+MAX_COMMIT_LOOKUPS = 60          # head commits asked per listing; more go undated
+
+
+class BranchDetails(ABC):
+    @abstractmethod
+    def details(self, repo: str, branches: list[dict]) -> dict:
+        """{"default_branch": name, "prs": {branch: [{number, title, url}]},
+        "commits": {sha: {"date": ISO 8601, "author": login or name}}} for
+        the branches given ([{name, sha}], from RefLister). Raises
+        HostUnavailable / HostError when the API can't be asked."""
+
+
+class GitHubBranches(BranchDetails):
+    """The GitHub REST API, with the App's read-only token for the repo when
+    it is configured (`token_for`), else `token` (VHIL_GITHUB_TOKEN), else
+    anonymously: the firmware repos are public, and an anonymous client may
+    ask 60 times an hour, which the caches below keep well within. A head
+    commit's date and author never change, so they are remembered for good
+    (bounded); the default branch and the open PRs, for `ttl_s`."""
+
+    def __init__(self, token: str | None = None, token_for: Callable[[str], str] | None = None,
+                 api: str = API, ttl_s: float = 120.0, clock=time.monotonic,
+                 transport=None):
+        self.token, self.token_for, self.api = token, token_for, api.rstrip("/")
+        self.ttl_s, self.clock, self.transport = ttl_s, clock, transport
+        self._commits: dict[str, dict] = {}
+        self._repo: dict[str, tuple[float, dict]] = {}
+
+    def _token(self, repo: str) -> str | None:
+        if self.token_for is not None:
+            try:
+                return self.token_for(repo)
+            except Exception:  # noqa: BLE001 - not installed there: ask anonymously
+                pass
+        return self.token
+
+    def _client(self, token: str | None):
+        import httpx
+        headers = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        return httpx.Client(base_url=self.api, headers=headers, timeout=API_TIMEOUT_S,
+                            transport=self.transport)
+
+    @staticmethod
+    def _get(http, path: str, token: str | None, **params):
+        import httpx
+        try:
+            r = http.get(path, params=params or None)
+        except httpx.HTTPError as e:
+            raise HostError(f"GitHub API {path}: {type(e).__name__}") from None
+        if r.status_code != 200:
+            limited = r.status_code in (403, 429) and r.headers.get("x-ratelimit-remaining") == "0"
+            raise HostError(_scrub(f"GitHub API {path}: {r.status_code}"
+                                   + (" (rate limit; configure the GitHub App or "
+                                      "VHIL_GITHUB_TOKEN)" if limited else "")
+                                   + f" {r.text[:200]}", token))
+        return r.json()
+
+    def details(self, repo: str, branches: list[dict]) -> dict:
+        if not REPO.fullmatch(repo) or ".." in repo:
+            raise HostError(f"{repo!r} is not an owner/name repository")
+        token = self._token(repo)
+        with self._client(token) as http:
+            hit = self._repo.get(repo)
+            if hit and self.clock() - hit[0] < self.ttl_s:
+                info = hit[1]
+            else:
+                meta = self._get(http, f"/repos/{repo}", token)
+                pulls = self._get(http, f"/repos/{repo}/pulls", token, state="open",
+                                  per_page=100)
+                prs: dict[str, list[dict]] = {}
+                for pr in pulls if isinstance(pulls, list) else []:
+                    head = pr.get("head") or {}
+                    # A fork's branch of the same name is not this repo's.
+                    if ((head.get("repo") or {}).get("full_name") or "").lower() != repo.lower():
+                        continue
+                    prs.setdefault(str(head.get("ref")), []).append(
+                        {"number": int(pr["number"]), "title": str(pr.get("title", ""))[:200],
+                         "url": str(pr.get("html_url", ""))})
+                info = {"default_branch": str(meta.get("default_branch") or ""), "prs": prs}
+                self._repo[repo] = (self.clock(), info)
+            wanted = [b["sha"] for b in branches if b["sha"] not in self._commits]
+            for sha in wanted[:MAX_COMMIT_LOOKUPS]:
+                c = self._get(http, f"/repos/{repo}/commits/{sha}", token)
+                commit = c.get("commit") or {}
+                when = (commit.get("committer") or {}).get("date") or \
+                    (commit.get("author") or {}).get("date")
+                who = (c.get("author") or {}).get("login") or (commit.get("author") or {}).get("name")
+                if len(self._commits) > 5000:
+                    self._commits.clear()
+                self._commits[sha] = {"date": when, "author": who}
+        return {**info, "commits": {b["sha"]: self._commits[b["sha"]] for b in branches
+                                    if b["sha"] in self._commits}}
+
+
+class FakeBranchDetails(BranchDetails):
+    def __init__(self, details: dict[str, dict] | None = None, error: Exception | None = None):
+        self._details, self.error, self.calls = details or {}, error, []
+
+    def details(self, repo: str, branches: list[dict]) -> dict:
+        self.calls.append(repo)
+        if self.error is not None:
+            raise self.error
+        if repo not in self._details:
+            raise HostError(f"GitHub API /repos/{repo}: 404")
+        return self._details[repo]
+
+
+def active_branches(branches: list[dict], details: dict | None, *, catalogue_ref: str,
+                    days: float, now: float | None = None) -> list[dict]:
+    """Every branch with what the picker shows of it, most recent first:
+    `date`, `author`, `prs` and `active` with the reasons (`why`): the repo's
+    default branch, `dev` and `main`, the catalogue's ref, a branch with an
+    open PR, a head commit within the last `days`. Without details (the API
+    could not be asked) a branch has no date and is active only for its
+    name; the caller then shows every branch."""
+    now = time.time() if now is None else now
+    details = details or {}
+    commits, prs = details.get("commits") or {}, details.get("prs") or {}
+    pinned = {"dev", "main", catalogue_ref, details.get("default_branch") or ""}
+    out = []
+    for b in branches:
+        c = commits.get(b["sha"]) or {}
+        when = _epoch(c.get("date"))
+        why = []
+        if b["name"] == details.get("default_branch"):
+            why.append("default")
+        elif b["name"] in pinned:
+            why.append(b["name"] if b["name"] in ("dev", "main") else "catalogue")
+        if prs.get(b["name"]):
+            why.append("pr")
+        if when is not None and now - when <= days * 86400:
+            why.append("recent")
+        out.append({**b, "date": c.get("date"), "author": c.get("author"),
+                    "prs": prs.get(b["name"], []), "active": bool(why), "why": why})
+    out.sort(key=lambda r: (-(_epoch(r["date"]) or 0), r["name"]))
+    return out
+
+
+def _epoch(text) -> float | None:
+    from datetime import datetime
+    if not isinstance(text, str) or not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None

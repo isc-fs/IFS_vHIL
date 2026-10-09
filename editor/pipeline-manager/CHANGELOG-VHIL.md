@@ -541,6 +541,21 @@ from `git archive 04613679` except as listed below.
     the ReDoS alert (descriptions and notes are short). Every other `v-html`
     already went through DOMPurify.
 
+24. **Active firmware branches** (the firmware ref picker,
+    `src/vhil/VhilRefPicker.vue`; `src/vhil/workspace.js` `refsOf`;
+    `src/vhil/artifacts.js` `ageText`, `firmwareText`; `src/vhil/workspace.css`).
+    The app's list is the repo's active branches (`GET
+    /api/firmware/{id}/refs`: default branch, dev/main, open PRs, heads in
+    the server's window), newest first, each option reading `name · 3 d ago ·
+    author · #PR · not built`; under the list, the picked ref's commit, age,
+    author and PR links, and how many inactive branches are hidden. "Show
+    all branches and tags" fetches `?all=1` and lists every branch and the
+    tags; the bootloader lists tags as before. Without the GitHub API the
+    API lists every branch and the picker shows its note. `built` is now
+    the commit's. The Artifacts tab's Firmware reads `ams: feat/x @
+    1a2b3c4d5e6f` from the run's resolved commits. The panel is
+    `min(380px, 100vw - 16px)` wide (was 340px).
+
 ## Left for later
 
 - **Dependabot alerts with no fix.** `showdown` ≤ 2.1.0 (three: ReDoS and

@@ -6,7 +6,8 @@ docs/architecture/editor-workspace.md; docs/debugger.md).
 `path` is what GDB names a stop's file (an absolute path in the image's
 firmware checkout, from its DWARF) or a path relative to that checkout. The
 file is read from the checkout the board's image was built in, in the fw
-volume (`<fw>/<firmware>@<ref>/`, vhil.system source_dir; read-only in the
+volume (`<fw>/<firmware>+<commit>.<recipe>/` or `<fw>/<firmware>@<ref>/`,
+vhil.system commit_source_dir / source_dir; read-only in the
 API): the run's image as decode.board_elfs finds it, never a path the client
 or the trace names.
 

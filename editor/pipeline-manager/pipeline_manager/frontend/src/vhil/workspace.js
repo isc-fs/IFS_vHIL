@@ -352,16 +352,18 @@ export function createScenario(name) {
 
 // -- firmware refs --------------------------------------------------------------
 
-// One refs request per firmware while a picker is open (the API caches
-// ls-remote).
+// One refs request per firmware (and listing) while a picker is open (the
+// API caches ls-remote and the GitHub API). `all`: every branch, not just
+// the active ones.
 const refsCache = new Map();
-export function refsOf(fwId) {
-    if (!refsCache.has(fwId)) {
-        const p = call('GET', `/api/firmware/${encodeURIComponent(fwId)}/refs`);
-        p.catch(() => refsCache.delete(fwId));
-        refsCache.set(fwId, p);
+export function refsOf(fwId, all = false) {
+    const key = `${fwId}${all ? '?all' : ''}`;
+    if (!refsCache.has(key)) {
+        const p = call('GET', `/api/firmware/${encodeURIComponent(fwId)}/refs${all ? '?all=1' : ''}`);
+        p.catch(() => refsCache.delete(key));
+        refsCache.set(key, p);
     }
-    return refsCache.get(fwId);
+    return refsCache.get(key);
 }
 export const clearRefs = () => refsCache.clear();
 

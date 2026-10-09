@@ -3,6 +3,7 @@ scenario executor against a fake Sim. The real Sim end to end is
 tests/sim/test_server_runs.py."""
 import json
 import sqlite3
+import subprocess
 import threading
 import time
 from dataclasses import replace
@@ -18,7 +19,7 @@ from vhil.server import create_app  # noqa: E402
 from vhil.server.config import Settings  # noqa: E402
 from vhil.server.runs import RunStore, read_trace, trace_header  # noqa: E402
 from vhil.sim import Edge, Frame, Payload  # noqa: E402
-from vhil.system import REPO, System  # noqa: E402
+from vhil.system import REPO, System, image_path  # noqa: E402
 from vhil.worker import (Cancelled, FirmwareResolver, TraceWriter, Worker,  # noqa: E402
                          execute_pytest, execute_run, image_env)
 
@@ -840,7 +841,10 @@ class FixedResolver:
     def __init__(self, images=None, error=None):
         self.images, self.error, self.asked = images or {"ecu": Path("/fw/ECU08.elf")}, error, []
 
-    def resolve(self, system, refs):
+    def commits(self, system, refs, known=None, log=None):
+        return {}
+
+    def resolve(self, system, refs, commits=None):
         self.asked.append((system.id, refs))
         if self.error:
             raise self.error
@@ -992,6 +996,106 @@ def test_resolver_reuses_an_image_built_at_the_ref(tmp_path):
     # The catalogue's ref (dev) was never built here.
     with pytest.raises(RuntimeError, match="no built image"):
         resolver.resolve(system, {})
+
+
+class FakeBuild:
+    """`python -m vhil.system build` as the resolver runs it: writes each
+    --only image where a commit build (or a ref build) puts it, prints
+    board=elf, and remembers what it was asked."""
+
+    def __init__(self, system, fw_dir):
+        self.system, self.fw_dir, self.calls = system, fw_dir, []
+
+    def __call__(self, cmd, *a, **k):
+        from vhil.system import commit_image_path
+        from vhil.worker import image_ref
+        only = [cmd[i + 1] for i, c in enumerate(cmd) if c == "--only"]
+        pairs = lambda flag: dict(cmd[i + 1].split("=", 1) for i, c in enumerate(cmd) if c == flag)
+        refs, commits = pairs("--ref"), pairs("--commit")
+        self.calls.append({k: commits.get(k) for k in only})
+        out = []
+        for key in only:
+            fw, ref = image_ref(self.system, key, refs)
+            elf = commit_image_path(self.fw_dir, fw, commits[key]) if key in commits \
+                else image_path(self.fw_dir, fw, ref)
+            elf.parent.mkdir(parents=True, exist_ok=True)
+            elf.write_bytes(b"\x7fELF")
+            out.append(f"{key}={elf}")
+        return subprocess.CompletedProcess(cmd, 0, "\n".join(out) + "\n", "")
+
+
+def test_a_branch_that_moved_rebuilds_and_one_commit_is_built_once(tmp_path, monkeypatch):
+    """Builds are keyed by commit (vhil.worker module doc): feat/x at A
+    builds A; feat/x moved to B builds B, not A's image under the name;
+    v2.0 tagged at A reuses A's build."""
+    import vhil.worker as vw
+    system = System(ECU)
+    build = FakeBuild(system, tmp_path)
+    monkeypatch.setattr(vw.subprocess, "run", build)
+    resolver = FirmwareResolver(tmp_path, log=lambda m: None)
+    a, b, bl = "a" * 40, "b" * 40, "1" * 40
+    first = resolver.resolve(system, {"ecu": "feat/x"}, {"ecu": a, "ecu.bootloader": bl})
+    assert build.calls == [{"ecu": a, "ecu.bootloader": bl}]
+    assert f"ecu+{'a' * 12}." in str(first["ecu"])
+    moved = resolver.resolve(system, {"ecu": "feat/x"}, {"ecu": {"ref": "feat/x", "commit": b},
+                                                         "ecu.bootloader": bl})
+    assert build.calls[1:] == [{"ecu": b}]                       # only what is missing
+    assert moved["ecu"] != first["ecu"] and moved["ecu.bootloader"] == first["ecu.bootloader"]
+    tagged = resolver.resolve(system, {"ecu": "v2.0"}, {"ecu": a, "ecu.bootloader": bl})
+    assert len(build.calls) == 2 and tagged == first
+    # The stamp remembers both names A ran as (the editor's newest build of a ref).
+    from vhil.system import newest_build, read_stamp
+    assert set(read_stamp(first["ecu"].parents[1])["refs"]) == {"feat/x", "v2.0"}
+    assert newest_build(tmp_path, system.boards["ecu"].firmware, "v2.0") == first["ecu"]
+    # --no-build: a commit that isn't built is an error naming it.
+    with pytest.raises(RuntimeError, match=r"ecu at feat/x \(cccccccccccc\)"):
+        FirmwareResolver(tmp_path, build=False).resolve(system, {"ecu": "feat/x"},
+                                                        {"ecu": "c" * 40, "ecu.bootloader": bl})
+
+
+def test_resolve_commits_keeps_the_runs_and_asks_for_the_rest():
+    from vhil.server.githost import FakeRefLister
+    from vhil.worker import resolve_commits
+    system = System(ECU)
+    lister = FakeRefLister({"isc-fs/IFS08-CE-ECU": {"branches": [{"name": "dev", "sha": "d" * 40}],
+                                                     "tags": []}})
+    logs = []
+    got = resolve_commits(system, {}, lister,
+                          known={"ecu.bootloader": {"ref": "v1.7.0", "commit": "1" * 40},
+                                 "ecu": {"ref": "feat/gone", "commit": "2" * 40}},
+                          log=logs.append)
+    # ecu's known commit is for another ref: asked again (the catalogue's dev).
+    assert got == {"ecu": {"ref": "dev", "commit": "d" * 40},
+                   "ecu.bootloader": {"ref": "v1.7.0", "commit": "1" * 40}}
+    got = resolve_commits(system, {"ecu": "feat/nope"}, lister, log=logs.append)
+    assert got["ecu"] == {"ref": "feat/nope", "commit": None}
+    # The bootloader's repo isn't in the fake: unreachable, no commit, said so.
+    assert got["ecu.bootloader"] == {"ref": "v1.7.0", "commit": None}
+    assert any("has no branch or tag feat/nope" in m for m in logs)
+    assert any("can't resolve v1.7.0" in m for m in logs)
+
+
+def test_the_worker_runs_the_commit_the_run_recorded(tmp_path, settings, store, monkeypatch):
+    """A run created with firmware_commits builds and runs those commits;
+    its summary records them, and the trace says which image ran."""
+    import vhil.worker as vw
+    system = System(ECU)
+    build = FakeBuild(system, tmp_path / "fw")
+    monkeypatch.setattr(vw.subprocess, "run", build)
+    commits = {"ecu": {"ref": "dev", "commit": "e" * 40},
+               "ecu.bootloader": {"ref": "v1.7.0", "commit": "1" * 40}}
+    run_id = store.create("ecu", "", {}, {"kind": "run", "virtual_ms": 100, "slice_ms": 100},
+                          firmware_commits=commits)
+    assert store.get(run_id)["firmware_commits"] == commits
+    Worker(settings, sim_factory=lambda *a: FakeSim(),
+           resolver=FirmwareResolver(tmp_path / "fw", log=lambda m: None)).run_once()
+    run = store.get(run_id)
+    assert run["state"] == "passed", run["summary"]
+    assert run["summary"]["firmware_commits"] == commits
+    assert f"ecu+{'e' * 12}." in run["summary"]["firmware"]["ecu"]
+    assert build.calls == [{"ecu": "e" * 40, "ecu.bootloader": "1" * 40}]
+    trace = (settings.results / str(run_id) / "trace.jsonl").read_text()
+    assert f"(dev @ {'e' * 12})" in trace
 
 
 def test_image_env_names_bootloaders_by_firmware_id():
@@ -1256,7 +1360,7 @@ def test_the_heartbeat_thread_keeps_a_run_with_no_slices_claimed(settings, store
     run_id = store.create("ecu", "", {}, RUN)
 
     class SlowBuild(FixedResolver):
-        def resolve(self, system, refs):
+        def resolve(self, system, refs, commits=None):
             time.sleep(2.5)
             return super().resolve(system, refs)
 

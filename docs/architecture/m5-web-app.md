@@ -56,10 +56,14 @@ All JSON; times in microseconds of virtual time.
   (`vhil.system validate`), commits on `branch`, returns `{ref, warnings}`.
   Preview and open return `{errors, warnings}`: a warning (a pin the
   board's role leaves unconnected on its backplane) never stops a save
-- `GET /api/firmware/{id}/refs` → the firmware repo's `branches` and `tags`,
-  each `{name, sha, built}` (`built`: the fw volume's `built.txt` has its
-  image, else the first run at that ref builds it), plus `default` (the
-  catalogue ref). `git ls-remote`, 15 s bound, cached 5 min; anonymous for
+- `GET /api/firmware/{id}/refs[?all=1]` → the firmware repo's active
+  `branches` (every branch with `all`) and its `tags`, each `{name, sha,
+  built}` (`built`: the fw volume has a build of that commit, else the first
+  run at it builds it), a branch also `{date, author, prs, active, why}`,
+  plus `default` (the catalogue ref) and its commit, `default_branch`,
+  `details` (`github`, or `ls-remote` when the GitHub API couldn't be asked,
+  with a `note`), `active_days` and `hidden`. `git ls-remote`, 15 s bound,
+  cached 5 min, and the GitHub REST API for dates and PRs; anonymous for
   the public firmware repos, the GitHub App's read token (or
   `VHIL_GITHUB_TOKEN`) when configured. `id` must be a catalogue id, and a
   remote name or sha a system file couldn't hold is dropped
@@ -73,7 +77,9 @@ All JSON; times in microseconds of virtual time.
   differs from the workspace's HEAD in any of those is refused rather than
   run differently from CI; a saved branch only ever changes a system file.
   A pytest scenario reads the checked-out tests and systems: HEAD only.
-  Board `firmware_ref`s of the system as saved pick the images. A scenario is either
+  Board `firmware_ref`s of the system as saved pick the images; each image's
+  ref is resolved to its commit then (`firmware_commits` in the run), and
+  the worker builds that commit. A scenario is either
   `{"kind": "run", "virtual_ms": N, "stimuli": [...]}` (`virtual_ms`
   defaults to 3000, `DEFAULT_VIRTUAL_MS` in `vhil/server/runs.py`, which
   `GET /api/config` gives the Runs and Editor pages as `run_virtual_ms`;

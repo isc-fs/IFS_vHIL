@@ -18,14 +18,25 @@ default), estimated on a bus with `arbitration: false` from the frames seen at
 bus's mean and peak.
 
 Firmware: each image key of the system ("<board>", "<board>.bootloader")
-needs an ELF at the ref the run asks for (default: the catalogue's). An image
-that `vhil.system build` already produced at that ref, listed in
-`<fw-dir>/built.txt` (what `scripts/vhil-docker.sh fw` writes), is reused;
-otherwise the worker runs `python -m vhil.system build --workdir <fw-dir>`
-for the system, as CI does, and appends to built.txt. Reuse matches the ref
-by name, not commit: a branch that moved since its last build runs the old
-image until someone rebuilds it (`scripts/vhil-docker.sh fw`). --no-build
-makes a missing image an error instead.
+needs an ELF at the ref the run asks for (default: the system's
+firmware_ref / bootloader_ref, else the catalogue's). Builds are keyed by
+commit: the API resolves each image's ref to its commit when the run is
+created (git ls-remote, never the cache: `firmware_commits` in the run,
+resolve_commits), and the worker resolves any it could not. The image of a
+commit is `<fw-dir>/<firmware>+<commit[:12]>.<recipe id>/<elf>`
+(vhil.system commit_source_dir; the recipe id hashes the catalogue's build
+recipe and toolchain, invariant 1), reused when `<fw-dir>/built.txt` lists
+it, so a branch that moved builds its new head and one commit picked as a
+branch and as a tag is built once. A build at a ref name (`vhil.system build`
+without --commit: `scripts/vhil-docker.sh fw`, builds from before commits)
+is reused too when its checkout is at the commit (vhil.system find_build).
+Otherwise the worker runs `python -m vhil.system build --workdir <fw-dir>
+--ref K=<ref> --commit K=<sha> --only K` for the missing images, as CI builds,
+under one lock per fw directory, and appends to built.txt. A ref whose commit
+can't be resolved at all (GitHub unreachable) falls back to the build at the
+ref name, as before, and the trace says so. --no-build makes a missing image
+an error instead. The run's summary records each image's ref and commit
+(`firmware_commits`).
 
 Liveness: while it holds a run the worker beats the run's heartbeat from a
 background thread (every --heartbeat S) and at every slice, and before each
@@ -61,7 +72,7 @@ import traceback
 import uuid
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, NamedTuple, Optional
 
 from vhil import canframe
 from vhil import expect as vexpect
@@ -71,7 +82,8 @@ from vhil.server.runs import (HEARTBEAT_S, MAX_ATTEMPTS, RECLAIM_AFTER_S, TRACE,
                               RunStore, code_changes, materialise_system, trace_header)
 from vhil.server.session import SessionStore
 from vhil.server.workspace import Workspace
-from vhil.system import System, SystemError, built_images, image_path
+from vhil.system import (COMMIT, System, SystemError, built_images, commit_image_path,
+                         commit_source_dir, find_build, image_path, stamp_ref)
 
 DEFAULT_FW_DIR = Path(os.environ.get("VHIL_FW_DIR", "/vhil/fw"))
 
@@ -992,55 +1004,144 @@ def execute_pytest(scenario: dict, run_dir: Path, workspace: Path, env: dict,
 
 # -- firmware --------------------------------------------------------------------
 
+def image_ref(system: System, key: str, refs: dict) -> tuple[dict, str]:
+    """(catalogue firmware, ref) of an image: the run's ref, else the
+    system's (firmware_ref / bootloader_ref), else the catalogue's."""
+    board, _, part = key.partition(".")
+    b = system.boards[board]
+    fw = b.bootloader if part else b.firmware
+    return fw, refs.get(key) or b.ref("bootloader" if part else "firmware")
+
+
+def resolve_commits(system: System, refs: dict, lister, known: Optional[dict] = None,
+                    log: Callable[[str], None] = lambda m: None) -> dict[str, dict]:
+    """image key -> {"ref", "commit"}: each image's ref and the commit it is
+    at now (git ls-remote through `lister`, fresh), or commit None when it
+    can't be told (the remote unreachable, no such ref; `log` says why).
+    `known` (a run's firmware_commits) is kept for an image whose ref it
+    names with a commit."""
+    from vhil.server.githost import HostError, commit_of, fresh_refs
+    known, out, listed = known or {}, {}, {}
+    for key in system.images():
+        fw, ref = image_ref(system, key, refs)
+        k = known.get(key) or {}
+        if k.get("ref") == ref and isinstance(k.get("commit"), str) and COMMIT.fullmatch(k["commit"]):
+            out[key] = {"ref": ref, "commit": k["commit"]}
+            continue
+        commit = ref if COMMIT.fullmatch(ref) else None
+        if commit is None and lister is not None:
+            if fw["repo"] not in listed:
+                try:
+                    listed[fw["repo"]] = fresh_refs(lister, fw["repo"])
+                except HostError as e:
+                    listed[fw["repo"]] = None
+                    log(f"{key}: can't resolve {ref} to a commit ({e})")
+            if listed[fw["repo"]] is not None:
+                commit = commit_of(listed[fw["repo"]], ref)
+                if commit is None:
+                    log(f"{key}: {fw['repo']} has no branch or tag {ref}")
+        out[key] = {"ref": ref, "commit": commit}
+    return out
+
+
+class Image(NamedTuple):
+    ref: str
+    path: Path                     # [1], as callers index it
+    commit: Optional[str] = None
+
+
 class FirmwareResolver:
-    """Image key -> ELF for a system at the requested refs (module doc)."""
+    """Image key -> ELF for a system at the requested refs and their
+    commits (module doc). `lister` resolves a ref the run has no commit for
+    (default: anonymous git ls-remote; the firmware repos are public)."""
 
     def __init__(self, fw_dir: Path = DEFAULT_FW_DIR, build: bool = True,
-                 log: Callable[[str], None] = print):
+                 log: Callable[[str], None] = print, lister=None):
         self.fw_dir, self.build, self.log = Path(fw_dir), build, log
+        self._lister = lister
+
+    @property
+    def lister(self):
+        if self._lister is None:
+            from vhil.server.githost import LsRemote
+            self._lister = LsRemote()
+        return self._lister
 
     def _built(self) -> dict[Path, str]:
         return built_images(self.fw_dir)
 
-    def expected(self, system: System, refs: dict) -> dict[str, tuple[str, Path]]:
-        """key -> (ref, the ELF path vhil.system build gives it)."""
-        out = {}
+    def commits(self, system: System, refs: dict, known: Optional[dict] = None,
+                log: Callable[[str], None] = lambda m: None) -> dict[str, dict]:
+        """resolve_commits with this resolver's lister."""
+        return resolve_commits(system, refs, self.lister, known, log)
+
+    def expected(self, system: System, refs: dict,
+                 commits: Optional[dict] = None) -> dict[str, Image]:
+        """key -> (ref, the ELF a run uses, commit): the build of the image's
+        commit (commits: key -> {"ref", "commit"} or a sha) if one is
+        finished, else where a build of it will be; with no commit, the
+        build at the ref name."""
+        built, out = self._built(), {}
         for key in system.images():
-            board, _, part = key.partition(".")
-            fw = system.boards[board].bootloader if part else system.boards[board].firmware
-            # The run's ref, else the system's (firmware_ref / bootloader_ref),
-            # else the catalogue's.
-            ref = refs.get(key) or system.boards[board].ref("bootloader" if part else "firmware")
-            out[key] = (ref, image_path(self.fw_dir, fw, ref).resolve())
+            fw, ref = image_ref(system, key, refs)
+            c = (commits or {}).get(key)
+            commit = c.get("commit") if isinstance(c, dict) else c
+            if commit:
+                path = find_build(self.fw_dir, fw, commit, built) or \
+                    commit_image_path(self.fw_dir, fw, commit).resolve()
+            else:
+                path = image_path(self.fw_dir, fw, ref).resolve()
+            out[key] = Image(ref, path, commit or None)
         return out
 
-    def resolve(self, system: System, refs: dict) -> dict[str, Path]:
-        want = self.expected(system, refs)
+    def resolve(self, system: System, refs: dict, commits: Optional[dict] = None) -> dict[str, Path]:
+        want = self.expected(system, refs, commits)
         built = self._built()
-        missing = {k: ref for k, (ref, p) in want.items() if p not in built or not p.is_file()}
+        missing = [k for k, im in want.items() if im.path not in built or not im.path.is_file()]
         if missing:
             if not self.build:
-                raise RuntimeError(f"no built image for {missing} in {self.fw_dir}/built.txt")
+                raise RuntimeError("no built image for " + ", ".join(
+                    f"{k} at {want[k].ref}" + (f" ({want[k].commit[:12]})" if want[k].commit else "")
+                    for k in missing) + f" in {self.fw_dir}/built.txt")
             self.fw_dir.mkdir(parents=True, exist_ok=True)
             # One build at a time per firmware directory: a build replaces
             # its source trees.
             with open(self.fw_dir / ".build.lock", "w") as lock:
                 fcntl.flock(lock, fcntl.LOCK_EX)
+                want = self.expected(system, refs, commits)    # another worker may have built it
                 built = self._built()
-                if any(p not in built or not p.is_file() for _, p in want.values()):
+                missing = [k for k, im in want.items()
+                           if im.path not in built or not im.path.is_file()]
+                if missing:
                     cmd = [sys.executable, "-m", "vhil.system", "build", str(system.path),
                            "--workdir", str(self.fw_dir)]
-                    for key, (ref, _) in want.items():
-                        cmd += ["--ref", f"{key}={ref}"]
+                    for key in missing:
+                        cmd += ["--only", key, "--ref", f"{key}={want[key].ref}"]
+                        if want[key].commit:
+                            cmd += ["--commit", f"{key}={want[key].commit}"]
                     self.log("building firmware: " + " ".join(cmd))
                     out = subprocess.run(cmd, check=True, capture_output=True, text=True)
                     with open(self.fw_dir / "built.txt", "a") as f:
                         f.write(out.stdout)
-        out = {k: p for k, (_, p) in want.items()}
+        # A commit build remembers each name it was run as (vhil.system
+        # newest_build: the editor's contract before a run).
+        for key, im in want.items():
+            if im.commit:
+                self._stamp(system, key, refs, im)
+        out = {k: im.path for k, im in want.items()}
         for k, p in out.items():
             if not p.is_file():
                 raise RuntimeError(f"firmware build gave no {k} image at {p}")
         return out
+
+    def _stamp(self, system: System, key: str, refs: dict, im: Image) -> None:
+        fw, _ = image_ref(system, key, refs)
+        if not self.build or im.path != commit_image_path(self.fw_dir, fw, im.commit).resolve():
+            return               # read-only, or a build at a ref name: no stamp
+        try:
+            stamp_ref(commit_source_dir(self.fw_dir, fw, im.commit), fw, im.commit, im.ref)
+        except OSError as e:
+            self.log(f"{key}: can't stamp its build: {e}")
 
 
 # -- the worker --------------------------------------------------------------------
@@ -1121,9 +1222,18 @@ class Worker:
                              f"{prev}, whose heartbeat stopped")
             system_path = self._system_file(run, run_dir, trace)
             system = System(system_path)
-            firmware = self.resolver.resolve(system, run["firmware"])
-            trace.log(0, f"worker {self.id}; firmware " +
-                      ", ".join(f"{k}={p}" for k, p in firmware.items()))
+            commits = self.resolver.commits(system, run["firmware"],
+                                            run.get("firmware_commits") or {},
+                                            log=lambda m: trace.log(0, m))
+            unresolved = [k for k, c in commits.items() if not c["commit"]]
+            if unresolved:
+                trace.log(0, f"no commit for {', '.join(unresolved)}: using the build at the "
+                             f"ref name")
+            firmware = self.resolver.resolve(system, run["firmware"], commits)
+            trace.log(0, f"worker {self.id}; firmware " + ", ".join(
+                f"{k}={p}" + (f" ({commits[k]['ref']} @ {commits[k]['commit'][:12]})"
+                              if commits.get(k, {}).get("commit") else "")
+                for k, p in firmware.items()))
             scenario = run["scenario"]
             if scenario["kind"] == "run":
                 if scenario.get("live"):
@@ -1146,6 +1256,7 @@ class Worker:
             else:
                 raise ValueError(f"unknown scenario kind '{scenario['kind']}'")
             summary["firmware"] = {k: str(p) for k, p in firmware.items()}
+            summary["firmware_commits"] = commits
             if run.get("ref"):
                 summary["system_ref"] = run["ref"]
         except Lost:

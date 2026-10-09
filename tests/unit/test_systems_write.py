@@ -8,6 +8,8 @@ import re
 import shutil
 import subprocess
 import sys
+import time
+from datetime import datetime, timezone
 
 import pytest
 import yaml
@@ -18,8 +20,8 @@ from fastapi.testclient import TestClient  # noqa: E402
 from vhil import editor  # noqa: E402
 from vhil.server import create_app  # noqa: E402
 from vhil.server.config import Settings  # noqa: E402
-from vhil.server.githost import (CachedRefs, FakeGitHost, FakeRefLister,  # noqa: E402
-                                 GitHubHost)
+from vhil.server.githost import (CachedRefs, FakeBranchDetails, FakeGitHost,  # noqa: E402
+                                 FakeRefLister, GitHubHost, HostError)
 from vhil.system import REPO  # noqa: E402
 
 
@@ -45,9 +47,34 @@ def remote(tmp_path):
     return ws, bare
 
 
-REFS = {"branches": [{"name": n, "sha": c * 40} for n, c in (("dev", "a"), ("feat/x", "b"),
+REFS = {"branches": [{"name": n, "sha": c * 40} for n, c in (("dev", "a"), ("feat/old", "1"),
+                                                              ("feat/pr", "2"), ("feat/x", "b"),
                                                               ("main", "c"))],
         "tags": [{"name": "v1.0.0", "sha": "d" * 40}]}
+NOW = time.time()
+
+
+def _iso(days_ago: float) -> str:
+    return datetime.fromtimestamp(NOW - days_ago * 86400, timezone.utc).isoformat()
+
+
+# The GitHub API's view of the ECU repo: dev is old but pinned, feat/x
+# recent, feat/pr old with an open PR, feat/old old and nothing else.
+DETAILS = {"default_branch": "dev",
+           "prs": {"feat/pr": [{"number": 7, "title": "pr", "url": "https://github.com/x/pull/7"}]},
+           "commits": {"a" * 40: {"date": _iso(90), "author": "ana"},
+                       "1" * 40: {"date": _iso(45), "author": "old"},
+                       "2" * 40: {"date": _iso(60), "author": "pat"},
+                       "b" * 40: {"date": _iso(2), "author": "raul"},
+                       "c" * 40: {"date": _iso(200), "author": "rel"}}}
+
+
+# What the AMS and its bootloader resolve to in a run's tests.
+FW_REFS = {"isc-fs/IFS08-CE-AMS": {"branches": [{"name": "dev", "sha": "f" * 40},
+                                                {"name": "feat/x", "sha": "e" * 40}],
+                                   "tags": []},
+           "isc-fs/stm32-can-bootloader": {"branches": [], "tags": [{"name": "v1.7.0",
+                                                                      "sha": "9" * 40}]}}
 
 
 class Clock:
@@ -66,9 +93,11 @@ def env(remote, tmp_path):
     clock = Clock()
     lister = FakeRefLister({"isc-fs/IFS08-CE-ECU": REFS})
     app.state.ref_lister = CachedRefs(lister, ttl_s=60, clock=clock)
+    details = FakeBranchDetails({"isc-fs/IFS08-CE-ECU": DETAILS})
+    app.state.branch_details = details
     app.state.fw_dir = tmp_path / "fw"          # no builds, whatever the host has
     return type("Env", (), dict(client=TestClient(app), app=app, ws=ws, bare=bare,
-                                lister=lister, clock=clock))
+                                lister=lister, clock=clock, details=details))
 
 
 def snapshot(ws):
@@ -343,12 +372,38 @@ def test_firmware_lists_the_catalogue_sources(env):
     assert fw["ecu"]["build"]["elf"] == "build/ECU08.elf"
 
 
-def test_firmware_refs_come_from_ls_remote_cached(env):
+def test_firmware_refs_list_the_active_branches_newest_first(env, monkeypatch):
+    """Active: the default branch and dev/main, a branch with an open PR, a
+    head within the window (30 days by default); newest first, each with
+    its date, author and PRs. Tags always; nothing built here."""
     r = env.client.get("/api/firmware/ecu/refs").json()
-    assert r == {"id": "ecu", "repo": "isc-fs/IFS08-CE-ECU", "default": "dev",
-                 "default_built": False,
-                 "branches": [{**b, "built": False} for b in REFS["branches"]],
-                 "tags": [{**t, "built": False} for t in REFS["tags"]]}
+    assert [b["name"] for b in r["branches"]] == ["feat/x", "feat/pr", "dev", "main"]
+    by = {b["name"]: b for b in r["branches"]}
+    assert by["feat/x"] == {"name": "feat/x", "sha": "b" * 40, "date": DETAILS["commits"]["b" * 40]["date"],
+                            "author": "raul", "prs": [], "active": True, "why": ["recent"],
+                            "built": False}
+    assert by["feat/pr"]["why"] == ["pr"] and by["feat/pr"]["prs"][0]["number"] == 7
+    assert by["dev"]["why"] == ["default"] and by["main"]["why"] == ["main"]
+    assert {k: r[k] for k in ("id", "repo", "default", "default_commit", "default_built",
+                              "default_branch", "details", "note", "active_days", "all",
+                              "hidden")} == {
+        "id": "ecu", "repo": "isc-fs/IFS08-CE-ECU", "default": "dev",
+        "default_commit": "a" * 40, "default_built": False, "default_branch": "dev",
+        "details": "github", "note": None, "active_days": 30.0, "all": False, "hidden": 1}
+    assert r["tags"] == [{"name": "v1.0.0", "sha": "d" * 40, "built": False}]
+    # ?all=1: every branch, still newest first; a wider window makes feat/old active.
+    every = env.client.get("/api/firmware/ecu/refs?all=1").json()
+    assert [b["name"] for b in every["branches"]] == ["feat/x", "feat/old", "feat/pr", "dev", "main"]
+    assert every["all"] is True and every["hidden"] == 0
+    assert not {b["name"]: b for b in every["branches"]}["feat/old"]["active"]
+    env.clock.t = 1000                        # past the refs cache
+    monkeypatch.setenv("VHIL_FIRMWARE_ACTIVE_DAYS", "50")
+    r = env.client.get("/api/firmware/ecu/refs").json()
+    assert "feat/old" in [b["name"] for b in r["branches"]] and r["active_days"] == 50.0
+
+
+def test_firmware_refs_come_from_ls_remote_cached(env):
+    env.client.get("/api/firmware/ecu/refs")
     env.client.get("/api/firmware/ecu/refs")
     assert env.lister.calls == ["isc-fs/IFS08-CE-ECU"]
     env.clock.t = 61
@@ -356,18 +411,39 @@ def test_firmware_refs_come_from_ls_remote_cached(env):
     assert len(env.lister.calls) == 2
 
 
-def test_firmware_refs_say_which_are_built(env, tmp_path):
-    """A ref is built when the firmware volume's built.txt lists its image
-    and the file is there: the worker reuses it (else the first run builds)."""
+def test_firmware_refs_without_the_api_list_every_branch(env):
+    """No GitHub API (rate limit, no network): the ls-remote list, every
+    branch by name, undated, and a note saying why."""
+    env.app.state.branch_details = FakeBranchDetails(error=HostError("GitHub API: 403 rate limit"))
+    r = env.client.get("/api/firmware/ecu/refs").json()
+    assert r["details"] == "ls-remote" and "rate limit" in r["note"] and r["all"] is True
+    assert [b["name"] for b in r["branches"]] == ["dev", "feat/old", "feat/pr", "feat/x", "main"]
+    assert all(b["date"] is None and b["prs"] == [] for b in r["branches"])
+    assert r["default_branch"] is None
+
+
+def test_firmware_refs_say_which_commits_are_built(env, tmp_path):
+    """`built` is the commit's: a build of feat/x's commit with today's
+    recipe (the worker's commit builds), or a build at a ref name whose
+    checkout is at that commit (builds from before). A built.txt line with no
+    file counts for nothing."""
+    from vhil.system import commit_image_path
     fw = tmp_path / "fw"
-    elf = fw / "ecu@feat_x" / "build" / "ECU08.elf"
+    doc = yaml.safe_load((REPO / "catalog" / "firmware" / "ecu.yaml").read_text())
+    elf = commit_image_path(fw, doc, "b" * 40)
     elf.parent.mkdir(parents=True)
     elf.write_bytes(b"\x7fELF")
-    (fw / "built.txt").write_text(f"ecu={elf}\necu={fw}/ecu@dev/build/ECU08.elf\n")
+    # An older build at the name "main", whose checkout is at main's commit.
+    legacy = fw / "ecu@main" / "build" / "ECU08.elf"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_bytes(b"\x7fELF")
+    (fw / "ecu@main" / ".git").mkdir()
+    (fw / "ecu@main" / ".git" / "HEAD").write_text("c" * 40 + "\n")
+    (fw / "built.txt").write_text(f"ecu={elf}\necu={legacy}\necu={fw}/ecu@dev/build/ECU08.elf\n")
     env.app.state.fw_dir = fw
-    r = env.client.get("/api/firmware/ecu/refs").json()
+    r = env.client.get("/api/firmware/ecu/refs?all=1").json()
     assert {b["name"]: b["built"] for b in r["branches"]} == {
-        "dev": False, "feat/x": True, "main": False}   # dev: listed, but no file
+        "dev": False, "feat/old": False, "feat/pr": False, "feat/x": True, "main": True}
     assert r["default_built"] is False
 
 
@@ -419,6 +495,7 @@ def test_a_run_at_a_saved_branch_runs_that_file_and_leaves_the_checkout_alone(en
     from .test_runs import FakeSim
 
     before = snapshot(env.ws)
+    env.lister._refs.update(FW_REFS)
     sha = saved_ams(env)
     r = env.client.post("/api/runs", json={"system": "ams", "ref": "feat/ams-run",
                                            "scenario": run_scenario()})
@@ -426,12 +503,15 @@ def test_a_run_at_a_saved_branch_runs_that_file_and_leaves_the_checkout_alone(en
     run_id = r.json()["run_id"]
     run = env.client.get(f"/api/runs/{run_id}").json()
     assert run["ref"] == sha and run["ref_name"] == "feat/ams-run"
+    # Each image's ref, resolved to its commit when the run was created.
+    assert run["firmware_commits"] == {"ams": {"ref": "feat/x", "commit": "e" * 40},
+                                       "ams.bootloader": {"ref": "v1.7.0", "commit": "9" * 40}}
 
     seen = {}
 
     class Resolver(FirmwareResolver):
-        def resolve(self, system, refs):
-            seen["expected"] = self.expected(system, refs)
+        def resolve(self, system, refs, commits=None):
+            seen["expected"] = self.expected(system, refs, commits)
             return {k: tmp_path / f"{k}.elf" for k in system.images()}
 
     def factory(path, firmware, log_path):
@@ -449,9 +529,12 @@ def test_a_run_at_a_saved_branch_runs_that_file_and_leaves_the_checkout_alone(en
     assert "saved from the editor" in seen["text"]
     assert seen["path"] == settings.results / str(run_id) / "system" / "ams.yaml"
     assert "saved from the editor" not in (env.ws / "systems" / "ams.yaml").read_text()
-    # The saved board firmware_ref decides which image the worker resolves.
-    assert seen["expected"]["ams"][0] == "feat/x"
-    assert "ams@feat_x" in str(seen["expected"]["ams"][1])
+    # The saved board firmware_ref decides which image the worker resolves:
+    # the build of the commit it was at.
+    assert seen["expected"]["ams"].ref == "feat/x"
+    assert seen["expected"]["ams"].commit == "e" * 40
+    assert f"ams+{'e' * 12}." in str(seen["expected"]["ams"].path)
+    assert run["summary"]["firmware_commits"]["ams"] == {"ref": "feat/x", "commit": "e" * 40}
     trace = (settings.results / str(run_id) / "trace.jsonl").read_text()
     assert f"at feat/ams-run ({sha[:12]})" in trace
     assert snapshot(env.ws) == before

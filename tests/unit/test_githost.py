@@ -218,3 +218,130 @@ def test_the_push_token_is_read_from_its_file(tmp_path, monkeypatch):
     state = SimpleNamespace(settings=SimpleNamespace(workspace=tmp_path), github_app=None)
     host = systems_write._host(SimpleNamespace(app=SimpleNamespace(state=state)))
     assert host.token == TOKEN
+
+
+# -- active branches, commits of refs ------------------------------------------------
+
+def _branches(*names_shas):
+    return [{"name": n, "sha": s * 40} for n, s in names_shas]
+
+
+def _day(n, now=1_800_000_000.0):
+    from datetime import datetime, timezone
+    return datetime.fromtimestamp(now - n * 86400, timezone.utc).isoformat()
+
+
+def test_active_branches_are_pinned_pr_or_recent_and_newest_first():
+    from vhil.server.githost import active_branches
+    now = 1_800_000_000.0
+    branches = _branches(("dev", "a"), ("main", "b"), ("trunk", "c"), ("feat/new", "d"),
+                         ("feat/stale", "e"), ("feat/pr", "f"), ("release", "1"))
+    details = {"default_branch": "trunk",
+               "prs": {"feat/pr": [{"number": 3, "title": "t", "url": "u"}]},
+               "commits": {"a" * 40: {"date": _day(100), "author": "x"},
+                           "b" * 40: {"date": _day(400), "author": "x"},
+                           "c" * 40: {"date": _day(31), "author": "x"},
+                           "d" * 40: {"date": _day(29.9), "author": "y"},
+                           "e" * 40: {"date": _day(30.1), "author": "z"},
+                           "f" * 40: {"date": _day(99), "author": "w"},
+                           "1" * 40: {"date": _day(5), "author": "v"}}}
+    out = active_branches(branches, details, catalogue_ref="release", days=30, now=now)
+    assert [b["name"] for b in out] == ["release", "feat/new", "feat/stale", "trunk",
+                                        "feat/pr", "dev", "main"]
+    why = {b["name"]: b["why"] for b in out}
+    assert why == {"release": ["catalogue", "recent"], "feat/new": ["recent"], "feat/stale": [],
+                   "trunk": ["default"], "feat/pr": ["pr"], "dev": ["dev"], "main": ["main"]}
+    assert [b["name"] for b in out if b["active"]] == ["release", "feat/new", "trunk", "feat/pr",
+                                                       "dev", "main"]
+    # No details (the API couldn't be asked): undated, active by name only.
+    bare = active_branches(branches, None, catalogue_ref="dev", days=30, now=now)
+    assert {b["name"] for b in bare if b["active"]} == {"dev", "main"}
+    assert all(b["date"] is None for b in bare)
+
+
+def test_commit_of_prefers_a_branch_and_takes_a_full_sha():
+    from vhil.server.githost import commit_of
+    refs = {"branches": _branches(("v1", "a"), ("dev", "b")), "tags": _branches(("v1", "c"))}
+    assert commit_of(refs, "v1") == "a" * 40
+    assert commit_of(refs, "dev") == "b" * 40
+    assert commit_of(refs, "0123456789" * 4) == "0123456789" * 4
+    assert commit_of(refs, "nope") is None
+
+
+def test_a_run_resolves_with_fresh_refs_not_the_cache():
+    from vhil.server.githost import CachedRefs, FakeRefLister, fresh_refs
+    inner = FakeRefLister({"o/r": {"branches": _branches(("dev", "a")), "tags": []}})
+    cached = CachedRefs(inner, ttl_s=300, clock=lambda: 0.0)
+    cached.refs("o/r")
+    cached.refs("o/r")
+    assert inner.calls == ["o/r"]
+    inner._refs["o/r"] = {"branches": _branches(("dev", "b")), "tags": []}
+    assert fresh_refs(cached, "o/r")["branches"][0]["sha"] == "b" * 40
+    assert cached.refs("o/r")["branches"][0]["sha"] == "b" * 40   # and cached
+    assert len(inner.calls) == 2
+
+
+def _api(routes, seen):
+    import httpx
+
+    def handler(request):
+        seen.append((request.url.path, request.headers.get("authorization")))
+        body = routes.get(request.url.path)
+        if body is None:
+            return httpx.Response(404, json={"message": "Not Found"})
+        if isinstance(body, httpx.Response):
+            return body
+        return httpx.Response(200, json=body)
+    return httpx.MockTransport(handler)
+
+
+def test_github_branches_reads_prs_and_dates_and_caches_commits():
+    pytest.importorskip("httpx")
+    from vhil.server.githost import GitHubBranches
+    routes = {
+        "/repos/o/r": {"default_branch": "dev"},
+        "/repos/o/r/pulls": [
+            {"number": 4, "title": "Mine", "html_url": "https://github.com/o/r/pull/4",
+             "head": {"ref": "feat/x", "repo": {"full_name": "o/r"}}},
+            # A fork's branch of the same name is not this repo's.
+            {"number": 5, "title": "Fork", "html_url": "u",
+             "head": {"ref": "dev", "repo": {"full_name": "someone/r"}}}],
+        f"/repos/o/r/commits/{'a' * 40}": {"author": {"login": "raul"},
+                                            "commit": {"committer": {"date": "2026-10-01T00:00:00Z"},
+                                                       "author": {"name": "Raul"}}},
+        f"/repos/o/r/commits/{'b' * 40}": {"author": None,
+                                            "commit": {"committer": {"date": "2026-09-01T00:00:00Z"},
+                                                       "author": {"name": "Ana"}}},
+    }
+    seen, t = [], [0.0]
+    gh = GitHubBranches(token=TOKEN, transport=_api(routes, seen), ttl_s=60, clock=lambda: t[0])
+    branches = _branches(("dev", "a"), ("feat/x", "b"))
+    d = gh.details("o/r", branches)
+    assert d["default_branch"] == "dev"
+    assert d["prs"] == {"feat/x": [{"number": 4, "title": "Mine",
+                                    "url": "https://github.com/o/r/pull/4"}]}
+    assert d["commits"] == {"a" * 40: {"date": "2026-10-01T00:00:00Z", "author": "raul"},
+                            "b" * 40: {"date": "2026-09-01T00:00:00Z", "author": "Ana"}}
+    assert all(auth == f"Bearer {TOKEN}" for _, auth in seen) and len(seen) == 4
+    # Within the TTL nothing is asked again; past it only the repo and its
+    # PRs, never a commit already known.
+    gh.details("o/r", branches)
+    assert len(seen) == 4
+    t[0] = 61
+    gh.details("o/r", branches)
+    assert [p for p, _ in seen[4:]] == ["/repos/o/r", "/repos/o/r/pulls"]
+
+
+def test_github_branches_without_a_token_asks_anonymously_and_says_rate_limit():
+    pytest.importorskip("httpx")
+    import httpx
+    from vhil.server.githost import GitHubBranches, HostError
+    seen = []
+    limited = httpx.Response(403, headers={"x-ratelimit-remaining": "0"},
+                             json={"message": "API rate limit exceeded"})
+    gh = GitHubBranches(transport=_api({"/repos/o/r": limited}, seen))
+    with pytest.raises(HostError, match="rate limit"):
+        gh.details("o/r", [])
+    assert seen == [("/repos/o/r", None)]
+    with pytest.raises(HostError, match="not an owner/name"):
+        gh.details("../x", [])
