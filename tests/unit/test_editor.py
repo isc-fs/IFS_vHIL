@@ -309,6 +309,21 @@ def test_a_role_change_keeps_unrouted_wires_and_drops_rekinded_ones(spec):
     assert doc["devices"]["isospi"] == {"model": "ltc6820", "spi": "ams.SPI1", "cs": "ams.PB9"}
 
 
+def test_a_role_change_resets_the_firmware_ref_but_keeps_the_bootloaders(spec):
+    """A branch of the AMS repo means nothing to the ECU's: the new role's
+    firmware starts at the catalogue's ref. The bootloader is every role's."""
+    graph = to_dataflow(yaml.safe_load((REPO / "systems" / "ams.yaml").read_text()), spec)
+    node = _set_role(_node(graph, "ams"), "ecu")
+    for p in node["properties"]:
+        if p["name"] in ("firmware_ref", "bootloader_ref"):
+            p["value"] = "feat/x" if p["name"] == "firmware_ref" else "v1.6.0"
+    new, _, _ = switch_role(node, graph["graphs"][0]["connections"], _types(spec)["mainlite"],
+                            BOARD, FIRMWARE)
+    values = {p["name"]: p["value"] for p in new["properties"]}
+    assert values["firmware"] == "ecu" and values["firmware_ref"] == ""
+    assert values["bootloader_ref"] == "v1.6.0"
+
+
 def test_a_node_already_in_its_role_is_left_alone(spec):
     graph = to_dataflow(yaml.safe_load((REPO / "systems" / "ams.yaml").read_text()), spec)
     assert switch_role(_node(graph, "ams"), graph["graphs"][0]["connections"],

@@ -753,7 +753,9 @@ def switch_role(node: dict, connections: list[dict], spec_type: dict, board: dic
     Each pin keeps its interface ID, so its wires stay. A wire on a pin the
     new role leaves unconnected stays, and the pin shows as "n.c." (validate
     warns of it, as of any such wire); a wire on a pin whose kind changes
-    (AMS PF9 is a GPIO, ECU PF9 an analog input) can't, and is dropped."""
+    (AMS PF9 is a GPIO, ECU PF9 an analog input) can't, and is dropped. The
+    node's firmware becomes the role's, and its firmware_ref the catalogue's
+    (none) when that changes the firmware."""
     props = {p["name"]: p for p in node.get("properties", [])}
     choice = props["role"]["value"]
     role = spec_type["additionalData"]["vhil"]["roles"].get(choice) or role_of(choice)
@@ -778,8 +780,13 @@ def switch_role(node: dict, connections: list[dict], spec_type: dict, board: dic
         return None, [], []
     new = {k: v for k, v in node.items()
            if k not in ("interfaces", "enabledInterfaceGroups", "properties")}
-    new["properties"] = [{**p, "value": fw} if p["name"] == "firmware" else p
-                         for p in node["properties"]]
+    # A new firmware starts at the catalogue's ref: a branch of the old
+    # role's repo means nothing in the new one. The bootloader is every
+    # role's, so its ref stays.
+    changed = props.get("firmware", {}).get("value") != fw
+    new["properties"] = [{**p, "value": fw} if p["name"] == "firmware"
+                         else {**p, "value": ""} if p["name"] == "firmware_ref" and changed
+                         else p for p in node["properties"]]
     new["interfaces"], new["enabledInterfaceGroups"] = ifaces, groups
     # Two columns, wide enough for them (a node keeps a width it was given).
     new["width"] = max(node.get("width") or 0, spec_type.get("width", 0))
