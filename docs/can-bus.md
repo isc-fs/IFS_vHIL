@@ -89,19 +89,34 @@ same arbitration outcomes, the same late effects
 (`test_two_board_runs_give_the_same_bus_timeline`).
 
 That needs each board on a time source of its own
-([`VhilMachine.cs`](../models/renode/VhilMachine.cs), #209). Renode's `mach
-create` puts every machine on the emulation's master time source, whose
-virtual time is the minimum of what all CPUs have executed. A board's clock
-(its timers, interrupts and scheduled actions) then advanced only as far as
-the slowest CPU, on whichever CPU thread moved that minimum, so where a timer
-interrupt landed in a firmware's instruction stream depended on how far the
-host had run the other board. Twenty runs of `ecu-ams` gave twenty different
-ACU timelines, diverging about 20 ms after the apps started (the ECU's
+([`VhilMachine.cs`](../models/renode/VhilMachine.cs), #209), which `vhil.sim`
+renders for every system of more than one board. Renode's `mach create` puts
+every machine on the emulation's master time source, whose virtual time is
+the minimum of what all CPUs have executed. A board's clock (its timers,
+interrupts and scheduled actions) then advanced only as far as the slowest
+CPU, on whichever CPU thread moved that minimum: a board's timer interrupts
+came late in its own instruction stream, by however far the host had run
+the other board. Twenty runs of `ecu-ams` gave twenty different ACU
+timelines, diverging about 20 ms after the apps started (the ECU's
 `HAL_Delay` loop left at a different instruction), on the hub as on the bus
 model, and even with the two boards on separate buses. A board on its own
 time source runs alone between sync points, as in a single-board system,
 which was already deterministic; the boards meet only at sync points, where
 the bus decides.
+
+Two Renode 1.17 limits come with it. A machine on its own time source runs
+only whole quanta: a shorter grant (the last part of a `RunFor` that is not a
+whole number of quanta) is kept for later and the board falls behind, so
+`Sim.run_for` runs such a remainder with the quantum set to it. And the
+wall-clock bench (`vhil.bench`, the broker) pauses one board's machine to
+power-cycle it, which hung on a machine with its own time source; the bench
+keeps `mach create`, so a multi-board bench run is not deterministic (it is
+paced to wall time anyway). `emulation SetGlobalSerialExecution true` is
+deterministic on the shared time source too, but about 3.5x slower, and its
+timers are later still: each board ran its whole quantum before the other
+ran, so the shared time (and every timer) moved only when the second had,
+and the timeline changed character (30 arbitration contests in 3 s, where
+each board on its own time source gives 168).
 
 What is not deterministic is wall time, and anything read from Renode's
 master time source in the middle of a quantum (it is the slowest board's

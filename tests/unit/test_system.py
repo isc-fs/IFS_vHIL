@@ -29,14 +29,29 @@ def test_every_system_resolves_and_renders(path):
     script = system.render_renode({b: Path(f"/fw/{b}.elf") for b in system.boards},
                                   socketcan=True)
     for name in system.boards:
-        # Each board on a time source of its own (models/renode/VhilMachine.cs, #209).
-        assert f'emulation CreateVhilMachine "{name}"\nmach set "{name}"' in script
-        assert script.index("VhilMachine.cs") < script.index(f'CreateVhilMachine "{name}"')
-        assert "mach create" not in script
+        assert f'mach create "{name}"' in script
         assert f"$elf_{name}=@/fw/{name}.elf" in script
     for bus in system.buses:
         create = "CreateVhilCanBus" if system.arbitrated(bus) else "CreateCANHub"
         assert f'emulation {create} "{bus}"' in script
+
+
+@pytest.mark.parametrize("path", SYSTEMS, ids=lambda p: p.name)
+def test_a_lockstep_run_of_several_boards_gives_each_its_own_time_source(path):
+    """#209: in vhil.sim, several boards each get a time source of their own
+    (models/renode/VhilMachine.cs), compiled before the first is created;
+    one board, and the wall-clock bench, keep `mach create`."""
+    system = System(path)
+    lockstep = system.render_renode({b: Path(f"/fw/{b}.elf") for b in system.boards}, lockstep=True)
+    bench = system.render_renode({b: Path(f"/fw/{b}.elf") for b in system.boards})
+    assert "VhilMachine.cs" not in bench and "CreateVhilMachine" not in bench
+    for name in system.boards:
+        if len(system.boards) > 1:
+            assert f'emulation CreateVhilMachine "{name}"\nmach set "{name}"' in lockstep
+            assert lockstep.index("VhilMachine.cs") < lockstep.index(f'CreateVhilMachine "{name}"')
+            assert "mach create" not in lockstep
+        else:
+            assert f'mach create "{name}"' in lockstep and "VhilMachine" not in lockstep
 
 
 def test_ecu_system_renders_the_bench_setup():
@@ -45,7 +60,7 @@ def test_ecu_system_renders_the_bench_setup():
     assert 'emulation SetGlobalQuantum "0.0005"' in s
     assert "stm32h733.repl" in s
     # The H73x ADC3 model is compiled once, before any machine loads its repl.
-    assert s.index("include @") < s.index('mach set "ecu"')
+    assert s.index("include @") < s.index('mach create "ecu"')
     assert s.count("models/renode/Stm32H7Adc3.cs") == 1
     for controller, bus in (("fdcan1_h7", "can_inv"), ("fdcan2_h7", "can_acu"), ("fdcan3_h7", "can_dash")):
         assert f"connector Connect sysbus.{controller} {bus}" in s
@@ -399,7 +414,7 @@ def test_bad_devices_are_rejected_with_a_reason(tmp_path, devices, message):
 
 def test_each_board_sets_its_image_inside_its_own_machine(tmp_path):
     """A Renode variable set while a machine is selected is local to it, so
-    each $elf_<board> must follow its own machine's creation."""
+    each $elf_<board> must follow its own `mach create`."""
     p = tmp_path / "s.yaml"
     p.write_text("kind: system\nid: t\nboards:\n"
                  "  ecu: {board: mainlite, role: ecu}\n"
@@ -407,7 +422,7 @@ def test_each_board_sets_its_image_inside_its_own_machine(tmp_path):
                  "buses:\n  can_acu: {kind: can, nodes: [ecu.FDCAN2, ams.FDCAN1]}\n")
     lines = System(p).render_renode({"ecu": Path("/fw/ecu.elf"), "ams": Path("/fw/ams.elf")}).splitlines()
     for board in ("ecu", "ams"):
-        assert lines.index(f"$elf_{board}=@/fw/{board}.elf") == lines.index(f'mach set "{board}"') + 1
+        assert lines.index(f"$elf_{board}=@/fw/{board}.elf") == lines.index(f'mach create "{board}"') + 1
 
 
 def test_an_i2c_model_must_place_its_targets(tmp_path):

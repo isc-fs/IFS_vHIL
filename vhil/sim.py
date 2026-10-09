@@ -474,7 +474,7 @@ class Sim:
 
     def start(self) -> "Sim":
         script = Path(tempfile.mkdtemp(prefix="vhil-sim-")) / f"{self.system.id}.resc"
-        script.write_text(self.system.render_renode(self.firmware))
+        script.write_text(self.system.render_renode(self.firmware, lockstep=True))
         port = _free_port()
         log = open(self.log_path, "w") if self.log_path else subprocess.DEVNULL
         # The monitor listens on 127.0.0.1 only (vhil/renode.py, launch).
@@ -565,8 +565,27 @@ class Sim:
     def run_for(self, ms: float = 0, us: int = 0) -> int:
         """Advance virtual time and pause again; returns the new time (us)."""
         total_us = int(ms * 1000) + us
-        if total_us > 0:
+        if total_us <= 0:
+            return self.now_us()
+        if not self.system.own_time_sources(lockstep=True):
             self.monitor(f'emulation RunFor "{total_us / 1e6:.6f}"')
+            return self.now_us()
+        # Each board on its own time source (models/renode/VhilMachine.cs):
+        # a board only runs whole quanta of its own, and a shorter grant (a
+        # RunFor's last, partial quantum) is kept for later, the board left
+        # behind the emulation's time. So the remainder runs with the quantum
+        # set to it, then the quantum goes back; the sync points are where
+        # they were, a RunFor's end being one either way.
+        q = self.system.sync_quantum_us()
+        whole, rest = total_us - total_us % q, total_us % q
+        if whole:
+            self.monitor(f'emulation RunFor "{whole / 1e6:.6f}"')
+        if rest:
+            self.monitor(f'emulation SetGlobalQuantum "{rest / 1e6:.6f}"')
+            try:
+                self.monitor(f'emulation RunFor "{rest / 1e6:.6f}"')
+            finally:
+                self.monitor(f'emulation SetGlobalQuantum "{q / 1e6:.6f}"')
         return self.now_us()
 
     def run_until(self, condition: Callable[[], bool], timeout_ms: float,
