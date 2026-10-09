@@ -1036,6 +1036,11 @@ class System:
                 out.append(f"${var}={rn.file_arg(firmware[b.name])}")
             out.append(f"machine LoadPlatformDescription {rn.file_arg(REPO / platform['repl'])}")
             out += [line.format(board=b.name) for line in platform.get("setup", [])]
+            if "cpu" in b.firmware:
+                # The rate the chip runs this firmware's code at, which its
+                # caches and memory placement set (docs/cpu-timing.md); the
+                # platform's otherwise.
+                out.append(f"{cpu} PerformanceInMips {int(b.firmware['cpu']['mips'])}")
             if b.write_protect:
                 # Option bytes are flash: burned once, before the first boot,
                 # they survive every reset and power cycle (not in the macro).

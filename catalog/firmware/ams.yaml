@@ -14,6 +14,19 @@ load:
   # Linked at 0x08020000 behind the bootloader. The AMS sets VTOR itself
   # (main.c), so this only mirrors what the bootloader leaves.
   vector_table: 0x08020000
+cpu:
+  # docs/cpu-timing.md, #246. The AMS runs from flash with the I- and D-caches
+  # off (no SCB_EnableICache/DCache, none in AMS.ioc), SYSCLK 528 MHz, AXI
+  # 264 MHz, FLASH_LATENCY_3 (main.c SystemClock_Config); data and stack in
+  # DTCM (STM32H733XG_FLASH.ld). With no I-cache every fetch goes to the
+  # flash's single 256-bit read buffer, which reads a new flash word in
+  # 4 AXI clocks = 8 CPU cycles (RM0468 Rev 3 4.3.8 and Table 16). Its
+  # busy-wait (ltc6820.cpp delay_us, the LTC6811 wake pulse) runs 8
+  # instructions an iteration over two flash words, at least 16 cycles:
+  # at most 528 * 8 / 16 = 264 MIPS. That bound, until the chip's own
+  # number is measured (#246); 528, one instruction a cycle, made the
+  # firmware's CPU-bound code at least twice as fast as the chip's.
+  mips: 264
 can:
   # The application is FDCAN1-only, the accumulator/vehicle bus
   # (can_isr.cpp:6-11, app_init_task.cpp:103-114): the whole .def contract
