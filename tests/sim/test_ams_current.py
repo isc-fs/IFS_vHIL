@@ -4,12 +4,13 @@ Firmware facts (IFS08-CE-AMS):
   pack current: differential ADC3 INP3/INN3 = PF7/PF8, Bourns SSA-2;
     mA = (raw - CurrentZeroCount) * 2 * Vref / 4095 * 10 / CurrentMvPerAmpe1
                                                    current_service.cpp:34-40
-  DCDC current: single-ended ADC3 INP11 = PC1, ACS758;
+  DCDC current (main only): single-ended ADC3 INP11 = PC1, ACS758;
     mA = (raw * Vref / 4095 - DcdcCurrentZeroMv) * 10 / DcdcCurrentMvPerAmpe1
-                                                   current_service.cpp:55-62
+    (main current_service.cpp:55-62). dev fits no DC-DC: PC1 is not sampled
+    and 0x135's dcdc slot is always 0         acu_tx_encoders.hpp:165-171
   constants                                         ams_config.hpp:733-740
-  both sampled every 50 ms, IIR-filtered (shift 4), sent as BE i16
-  deciamps [pack | dcdc] on 0x135                   acu_tx_encoders.hpp:165-170
+  sampled every 50 ms, IIR-filtered (shift 4), sent as BE i16
+  deciamps [pack | dcdc] on 0x135                   acu_tx_encoders.hpp:165-174
   CurrentStale = fault reason 9, once the last sample is older than
     IStaleMs = 200 (safety_predicates.hpp:241, ams_config.hpp:149)
   CurrentOverLimit (10): |filtered| > CurrentMaxMa = 185 A, no debounce
@@ -23,6 +24,7 @@ Firmware facts (IFS08-CE-AMS):
 """
 import pytest
 
+from vhil import elf
 from vhil.sim import Sim
 from vhil.system import REPO
 
@@ -131,12 +133,19 @@ def test_pack_current_reaches_0x135(ams, amps):
     assert ams.can("can_acu").count(CURRENTS, since_us=since - 1_000_000) >= 15, "0x135 not at 20 Hz"
 
 
-def test_dcdc_current_reaches_0x135(ams):
+def test_dcdc_slot_of_0x135(ams):
+    """AMS dev fits no DC-DC: PC1 is not sampled and 0x135's dcdc slot is
+    always 0, whatever the pin carries (acu_tx_encoders.hpp:165-171,
+    acu_currents.def:5-6; af07ec8). A build without the DMA capture (main)
+    still samples PC1 and must report it."""
     io = ams.io("ams")
     volts = DCDC_ZERO_MV / 1000 + 10 * DCDC_MV_PER_A_E1 / 10 / 1000   # +10 A
     io.set_voltage("PC1", volts)
     ams.run_for(ms=SETTLE_MS)
     _, dcdc = _currents(ams.can("can_acu").last(CURRENTS))
+    if "hdma_adc3" in elf.symbols(ams.firmware["ams"]):
+        assert dcdc == 0, f"0x135 dcdc {dcdc} dA with no DC-DC fitted"
+        return
     expected = _dcdc_dA(volts)
     assert abs(dcdc - expected) <= 5, f"0x135 dcdc {dcdc} dA, expected {expected:.0f}"
 

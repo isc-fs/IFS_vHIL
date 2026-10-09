@@ -393,7 +393,7 @@ def test_a_firmwares_enums(env):
     fw = env.app.state.fw_dir
     system = System(REPO / "systems" / "ams.yaml")
     out = env.client.get("/api/firmware/ams/enums").json()
-    assert out == {"id": "ams", "ref": "main", "built": False, "source": "none",
+    assert out == {"id": "ams", "ref": "dev", "built": False, "source": "none",
                    "note": "firmware not built here", "enums": {}, "variables": {}}
     elf = FirmwareResolver(fw, build=False).expected(system, {"ams": "feat/x"})["ams"][1]
     elf.parent.mkdir(parents=True)

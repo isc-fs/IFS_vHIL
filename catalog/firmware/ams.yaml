@@ -2,7 +2,7 @@ kind: firmware
 id: ams
 description: Accumulator management system application, run behind the CAN bootloader.
 repo: isc-fs/IFS08-CE-AMS
-ref: main
+ref: dev
 submodules: false
 build:
   toolchain: Arm GNU 14.2.Rel1
@@ -21,36 +21,37 @@ can:
   contract: [FDCAN1]
 state_view:
   # What the state panel shows of an AMS (docs/state-view.md). Citations are
-  # IFS08-CE-AMS at the catalogue ref (main).
+  # IFS08-CE-AMS at the catalogue ref (dev).
   #
-  # The FSM state, mirrored on every transition (safety_task.cpp:51, written
-  # :139, :253, :332); its values are ams::fsm::State (state_machine.hpp:21-28).
+  # The FSM state, mirrored on every transition (safety_task.cpp:65, written
+  # :153, :267, :346); its values are ams::fsm::State (state_machine.hpp:21-28).
   - {label: State, kind: state, source: "symbol:g_state_telemetry", enum: "ams::fsm::State"}
-  # The relay drivers (main.h:76-83): a coil is closed when its pin is set
+  # The relay drivers (main.h:74-81): a coil is closed when its pin is set
   # (relay_driver.cpp:12-13); AMS_OK is the active-high SDC enable
   # (relay_driver.cpp:68-72).
   - {label: AIR+, kind: relay, source: "pin:PB5"}
   - {label: AIR-, kind: relay, source: "pin:PB6"}
   - {label: PRE, kind: relay, source: "pin:PB7"}
   - {label: AMS_OK, kind: relay, source: "pin:PB4"}
-  # Which branch latched Error, written once on the way in (safety_task.cpp:73,
-  # :246-248 for a predicate, :346-349 for the FSM): ams::safety::FaultReason
-  # (safety_predicates.hpp:43-75). 12, the FSM-driven Error, is a bare
-  # constant with no enumerator (safety_predicates.hpp:76-83).
+  # Which branch latched Error, written once on the way in (safety_task.cpp:87,
+  # :258-262 for a predicate, :360-363 for the FSM): ams::safety::FaultReason
+  # (safety_predicates.hpp:43-76). 12, the FSM-driven Error, is a bare
+  # constant with no enumerator (safety_predicates.hpp:78-89).
   - {label: Fault, kind: fault, source: "symbol:g_fault_reason_telemetry", enum: "ams::safety::FaultReason", values: {"12": FsmError}}
-  # The mode locked at Start -> Precharge (safety_task.cpp:53-57):
+  # The mode locked at Start -> Precharge (safety_task.cpp:71, written :319-320):
   # ams::fsm::Mode (state_machine.hpp:34-38).
   - {label: Mode, source: "symbol:g_mode_locked_telemetry", enum: "ams::fsm::Mode"}
-  # 0x4A0 AMS_status every 500 ms (safety_task.cpp:397-402, ams_status.def:11-18).
+  # 0x4A0 AMS_status every 500 ms (safety_task.cpp:388, :417; ams_status.def:11-18).
   - {label: Min cell, source: "frame:FDCAN1.AMS_status.min_cell_mV", unit: mV}
   - {label: Max cell, source: "frame:FDCAN1.AMS_status.max_cell_mV", unit: mV}
-  # 0x4A2 AMS_temps (safety_task.cpp:400-404, ams_temps.def:20-28).
+  # 0x4A2 AMS_temps (safety_task.cpp:414-419, ams_temps.def:20-28).
   - {label: Max temp, source: "frame:FDCAN1.AMS_temps.max_tempC", unit: degC}
-  # 0x135 ACU_currents every 50 ms, + = discharge (acu_can_task.cpp:263-265,
-  # :611; acu_currents.def:12-15).
+  # 0x135 ACU_currents every 50 ms, + = discharge (acu_can_task.cpp:293-295,
+  # :649-650; acu_currents.def:14-17). The dcdc slot is always 0 on dev: no
+  # DC-DC is fitted (acu_tx_encoders.hpp:165-171).
   - {label: Pack current, source: "frame:FDCAN1.ACU_currents.current_accu_dA", unit: A}
-  # 0x4A1 AMS_pack (safety_task.cpp:399-403, ams_pack.def:13-16).
+  # 0x4A1 AMS_pack (safety_task.cpp:413, :418; ams_pack.def:13-16).
   - {label: Pack voltage, source: "frame:FDCAN1.AMS_pack.pack_voltage_mV", unit: mV}
   # 0x130 ACU_soc; 0xFF while there is no trustworthy estimate
-  # (acu_can_task.cpp:272-277, soc_estimator.hpp:43, acu_soc.def:24-26).
+  # (acu_can_task.cpp:302-307, :667; soc_estimator.hpp:43; acu_soc.def:24-26).
   - {label: SoC, source: "frame:FDCAN1.ACU_soc.soc_percent", unit: "%", values: {"255": Unknown}}
