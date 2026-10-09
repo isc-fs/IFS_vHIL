@@ -6,9 +6,10 @@
 The contract is the firmware's own: the .def files of the source each board's
 image was built from (vhil/candef.py), found next to the ELF the worker ran
 (the run summary's `firmware`, or, before the run has finished, the path the
-worker's FirmwareResolver gives the run's refs and the commits they resolved to). A .def does not say which
-bus a frame rides; the catalogue firmware does (`can.contract`: the board
-connectors the contract rides, System.contract_buses), so a board's
+worker's FirmwareResolver gives the run's refs and the commits they resolved
+to). A .def does not say which bus a frame rides; the catalogue firmware
+does (`can.contract`: the board connectors the contract rides,
+System.contract_buses), so a board's
 messages apply on those buses only: the ECU's on its ACU bus, not on the
 dash bus, whose own 0x510/0x511 would otherwise decode as the uDV's. A
 firmware that names none applies on every bus the board sits on. Where two

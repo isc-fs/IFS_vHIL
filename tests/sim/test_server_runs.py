@@ -32,7 +32,10 @@ class Pinned:
     def __init__(self, images):
         self.images = images
 
-    def resolve(self, system, refs):
+    def commits(self, system, refs, known=None, log=None):
+        return {}
+
+    def resolve(self, system, refs, commits=None):
         return self.images
 
 
