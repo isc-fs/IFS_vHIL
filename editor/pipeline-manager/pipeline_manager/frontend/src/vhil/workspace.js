@@ -336,6 +336,18 @@ export async function pickScenario(name) {
     remember();
 }
 
+/** The top bar's "New scenario…": the Scenario tab open, its name field
+ *  focused (VhilScenario.vue watches scen.askName). */
+export function askNewScenario() {
+    if (!ws.id) {
+        say('Open a system first', 'warning');
+        return;
+    }
+    ws.layout.dock = true;
+    ws.layout.dockTab = 'scenario';
+    scen.askName += 1;
+}
+
 /** A new scenario of the open system, selected (committed by Commit…). */
 export function createScenario(name) {
     if (!ws.id) {

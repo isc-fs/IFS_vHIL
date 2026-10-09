@@ -34,6 +34,7 @@ export const scen = reactive({
     selected: '', // the row being edited ("stimuli[2]")
     results: null, // {runId, state, summary} of the last run of it seen here
     version: 0, // bumped on every edit (the timeline redraws)
+    askName: 0, // bumped to focus the Scenario tab's new-name field
 });
 
 let context = () => ({ id: null, branch: '', fw: {} });
