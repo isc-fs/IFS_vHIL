@@ -25,7 +25,7 @@
         "cytoscape-cola": "^2.5.1",
         "cytoscape-dagre": "^2.5.0",
         "d3": "^7.9.0",
-        "dompurify": "^3.1.6",
+        "dompurify": "^3.4.16",
         "epic-spinners": "^2.0.0",
         "fuzzysort": "^2.0.4",
         "html-to-image": "^1.11.11",
@@ -72,7 +72,7 @@
         "pyodide": "^0.23.4",
         "typescript": "^5.8.3",
         "url": "^0.11.4",
-        "vue": "^3.5.17",
+        "vue": "^3.5.43",
         "vue-template-compiler": "^2.7.16",
         "webpack": "^5.100.0",
         "webpack-cli": "^6.0.1"
