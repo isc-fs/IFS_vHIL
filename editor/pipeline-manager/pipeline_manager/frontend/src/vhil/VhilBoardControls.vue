@@ -27,6 +27,7 @@ canvas's hotkeys. No style attribute (the editor's CSP is style-src 'self').
             <span class="vhil-board-key">Role</span>
             <select
                 class="vhil-board-select"
+                :aria-label="`${name} role`"
                 :value="role"
                 :disabled="locked || !roles.length"
                 :title="ROLE_NOTE"
@@ -39,6 +40,7 @@ canvas's hotkeys. No style attribute (the editor's CSP is style-src 'self').
             <span class="vhil-board-key">Bootloader</span>
             <select
                 class="vhil-board-select mono"
+                :aria-label="`${name} bootloader tag`"
                 :value="boot.ref"
                 :disabled="locked || !boot.fw"
                 :title="boot.fw ? `${boot.fwId} tag (${boot.fw.repo})` : ''"
@@ -79,6 +81,7 @@ canvas's hotkeys. No style attribute (the editor's CSP is style-src 'self').
                 <select
                     :id="appId"
                     class="vhil-board-select --wide mono"
+                    :aria-label="`${name} firmware branch or tag (${app.fwId})`"
                     :value="app.ref"
                     :disabled="locked"
                     :aria-describedby="`${appId}-info`"
