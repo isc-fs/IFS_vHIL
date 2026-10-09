@@ -9,7 +9,10 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def _no_github(monkeypatch):
-    from vhil.server import githost
+    try:
+        from vhil.server import githost
+    except ImportError:          # no server dependencies (the editor's CI image)
+        return
 
     real = subprocess.run
 
