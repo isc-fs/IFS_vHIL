@@ -21,6 +21,15 @@ sram1:
 sram2:
     size: 0x4000
 
+// The reserved range between the AXI SRAM's end and D2's AHB SRAM: past
+// D1_AXISRAM2_BASE 0x24020000 + 192 KB (the AXI SRAM's last 64 KB block,
+// stm32h733xx.h:2166) = 0x24050000, up to D2_AHBSRAM1_BASE 0x30000000
+// (stm32h733xx.h:2169). On the chip an access to it is a bus error; Renode
+// returned 0 and dropped writes. Every access is now a precise BusFault
+// (models/renode/VhilBusError.cs), the target of the tests' bus-fault hook.
+reservedAxi: Miscellaneous.VhilBusError @ sysbus 0x24050000
+    size: 0x0BFB0000
+
 // --- Clock tree: the MainLite has a 24 MHz HSE (Renode defaults to the
 // Nucleo's 8 MHz). The firmwares run HSE/2*44 = 528 MHz SYSCLK; with the wrong
 // HSE the RCC model derives 176 MHz and every FreeRTOS period runs 3x slow.

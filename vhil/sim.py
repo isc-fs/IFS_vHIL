@@ -41,6 +41,14 @@ from vhil.system import System
 PROBE_SOURCE = REPO / "models" / "renode" / "VhilProbe.cs"
 TRACE_SOURCE = REPO / "models" / "renode" / "VhilTrace.cs"
 
+# The first address of the stm32h733 platform's reserved range, where every
+# access is a bus error (platforms/cpus/stm32h733.repl, reservedAxi).
+BUS_ERROR_ADDRESS = 0x24050000
+# A pvPortMalloc request no FreeRTOS heap on the MainLite can satisfy (Sim.fail_malloc).
+HEAP_NEVER_FITS = 0x00100000
+# SCB fault registers, offsets from SCB_BASE (CMSIS core_cm7.h SCB_Type).
+SCB_FAULT_REGISTERS = {"SHCSR": 0x24, "CFSR": 0x28, "HFSR": 0x2C, "MMFAR": 0x34, "BFAR": 0x38}
+
 
 @dataclass
 class Instrumentation:
@@ -670,6 +678,76 @@ class Sim:
         address, _ = elf.symbol(self.firmware[board], symbol)
         op = {1: "ReadByte", 2: "ReadWord", 4: "ReadDoubleWord"}[size]
         return int(self.monitor(f"sysbus {op} {_int(address):#x}", board=board).strip(), 16)
+
+    # -- CPU fault injection (#196) -----------------------------------------
+    #
+    # Each arms a one-shot Renode execution hook on the board's CPU: Python
+    # run when the CPU reaches an address, with the CPU as `self`. It changes
+    # a register, never the image, and acts once: a counter kept in the
+    # hook's own scope, which outlives resets, so the next boot runs clean.
+    # The hook stays set (harmless once spent) until remove_hooks().
+
+    def _hook_once(self, board: str, at: int, action: str, call: int) -> int:
+        if call < 1:
+            raise ValueError("call counts from 1")
+        key = f"vhil_n_{at:x}"
+        self.monitor(f'cpu AddHook {_int(at):#x} "from Antmicro.Renode.Peripherals.CPU import '
+                     f"RegisterValue; {key} = globals().get('{key}', 0) + 1; "
+                     f"globals()['{key}'] = {key}; {key} == {_int(call)} and {action}\"",
+                     board=board)
+        return at
+
+    def _function(self, board: str, function: str) -> int:
+        return elf.symbol(self.firmware[board], function)[0] & ~1
+
+    def fail_malloc(self, board: str, call: int = 1) -> int:
+        """Make the board's `call`-th pvPortMalloc from now on fail, as a heap
+        with no block big enough does: at the function's entry its request
+        (r0, xWantedSize) becomes HEAP_NEVER_FITS bytes, more than any
+        FreeRTOS heap the MainLite firmwares configure (configTOTAL_HEAP_SIZE
+        64 KB, AMS and ECU FreeRTOSConfig.h:72), so heap_4 takes its own
+        failure path: it returns NULL and calls vApplicationMallocFailedHook
+        (heap_4.c, configUSE_MALLOC_FAILED_HOOK). Returns the hook's
+        address."""
+        return self._hook_once(board, self._function(board, "pvPortMalloc"),
+                               f"self.SetRegister(0, RegisterValue.Create({HEAP_NEVER_FITS:#x}, 32))",
+                               call)
+
+    def bus_fault_at(self, board: str, function: str, register: int = 0, call: int = 1) -> int:
+        """On the `call`-th entry to `function` from now on, point the pointer
+        it was passed in r<register> at a reserved address (BUS_ERROR_ADDRESS):
+        its first load or store through it is a bus error, a precise BusFault
+        for a load (models/renode/VhilBusError.cs), as a corrupted pointer
+        gives on the chip. E.g. HAL_IWDG_Refresh's `ldr r3, [r0]` (the
+        handle's Instance). Returns the hook's address."""
+        if not 0 <= register <= 12:
+            raise ValueError("r0..r12")
+        return self._hook_once(board, self._function(board, function),
+                               f"self.SetRegister({_int(register)}, RegisterValue.Create("
+                               f"{BUS_ERROR_ADDRESS:#x}, 32))", call)
+
+    def remove_hooks(self, board: str, at: int) -> None:
+        self.monitor(f"cpu RemoveHooksAt {_int(at):#x}", board=board)
+
+    def function_at(self, board: str, address: Optional[int] = None) -> Optional[str]:
+        """The function of the board's images whose extent holds `address`
+        (default: the PC), e.g. "BusFault_Handler"; None outside them."""
+        if address is None:
+            address = int(self.monitor("cpu PC", board=board).strip(), 16)
+        for image in self.images_of(board):
+            found = elf.symbol_at(image, address)
+            if found is not None:
+                return found[0]
+        return None
+
+    def fault_status(self, board: str) -> dict[str, int]:
+        """The SCB's fault registers (CMSIS core_cm7.h SCB_Type, SCB_BASE
+        0xE000ED00): SHCSR (+0x24, the MEMFAULTENA/BUSFAULTENA/USGFAULTENA
+        enables at bits 16-18), CFSR (+0x28), HFSR (+0x2C, FORCED bit 30),
+        MMFAR (+0x34), BFAR (+0x38)."""
+        return {name: int(self.monitor(f"sysbus ReadDoubleWord {0xE000ED00 + off:#x}",
+                                       board=board).strip(), 16)
+                for name, off in SCB_FAULT_REGISTERS.items()}
 
     def monitor(self, command: str, board: Optional[str] = None) -> str:
         if self._monitor is None:

@@ -31,6 +31,9 @@ renode:
     # I2C master that NACKs an unanswered address (Renode's never does).
     # Device models for I2C targets build on it, so it loads before them.
     - models/renode/Stm32H7I2c.cs
+    # A reserved range of the memory map that bus-faults every access
+    # (Renode returns 0 for unmapped reads), for the tests' bus-fault hook.
+    - models/renode/VhilBusError.cs
     # One owner for the RCC's bus hooks, shared by the two models below.
     - models/renode/VhilRccHooks.cs
     # RCC_RSR reset-source flags across resets (Renode's RCC resets them).
