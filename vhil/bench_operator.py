@@ -19,9 +19,15 @@ tests run unmodified:
              stub that raises) forces the AMS's FDCAN1 bus-off through the
              FDCAN fault hook (models/renode/Stm32H7Fdcan.cs, ForceBusOff).
 
-A card the virtual bench can pull is backed by an image file: a system whose
-card has none gets a freshly formatted FAT32 one, as a new SDHC card comes
-(the firmware does not format cards).
+A card the virtual bench can pull is backed by an image file. A system whose
+card has none gets a blank one, which the firmware can't mount (it does not
+format cards): its logger stays idle, as with the in-memory card the system
+had before, until U-160's wipe gives it a FAT32. A card that logs from the
+first test would be the car's, but each boot's index scan and orphan sealing
+grow with the files the suite's ~100 boots leave on it, and that host time
+puts the wall-clock suite behind real time (#154): with 800 files a boot
+costs ~1.5 s of extra host time on a fast machine. The logger's own
+behaviour is covered natively (tests/sim/test_ams_sd.py).
 """
 from __future__ import annotations
 
@@ -84,8 +90,8 @@ def _cards(system: System) -> list[str]:
 
 
 def prepare(system_path: Path) -> tuple[dict[str, dict], list[Path]]:
-    """Before the bench starts: an image for each AMS card that has none.
-    Returns the bench's params and card directories."""
+    """Before the bench starts: a blank image for each AMS card that has
+    none. Returns the bench's params and card directories."""
     system = System(system_path)
     params: dict[str, dict] = {}
     dirs: list[Path] = []
@@ -98,7 +104,6 @@ def prepare(system_path: Path) -> tuple[dict[str, dict], list[Path]]:
         image = directory / "card.img"
         with open(image, "wb") as f:
             f.truncate(int(values["capacity"]))
-        format_card(image)
         params[name] = {"image": str(image)}
         dirs.append(directory)
     return params, dirs

@@ -76,6 +76,7 @@ def test_the_ams_card_is_pulled_read_and_put_back(env):
     assert bench.commands == [("ams", f"{card} Flush"), ("ams", f"{card} Respond true"),
                               ("ams", f"{drive} false")]
 
+    o.step("wipe_card")                        # the blank card gets its FAT32
     (o.mount.parent / "LOG0000.CSV").write_text("tick_ms\n1\n")
     subprocess.run(["mcopy", "-i", str(o.card.image), str(o.mount.parent / "LOG0000.CSV"),
                     "::/LOG0000.CSV"], check=True, env=dict(os.environ, MTOOLS_SKIP_CHECK="1"))
