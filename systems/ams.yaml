@@ -34,8 +34,8 @@ port:
   # The co-simulation port (vhil/cosim.py): the cockpit and the contactors
   # around the AMS. TSMS and DASH_CHG are inputs the driver works; AIR-,
   # AIR+, precharge and AMS_OK are the relay drivers the AMS commands
-  # (IFS08-CE-AMS main.h:70-83, relay_driver.cpp). SafetyTask samples and
-  # drives them every 10 ms (ams_config.hpp:193 SafetyPeriodMs).
+  # (IFS08-CE-AMS main.h:70-81, relay_driver.cpp). SafetyTask samples and
+  # drives them every 10 ms (ams_config.hpp:198 SafetyPeriodMs).
   step_ms: 10
   signals:
     tsms:      {gpio_in: ams.PF9}    # TSMS_FIL, a digital input (docs/backplanes/ams.md)
