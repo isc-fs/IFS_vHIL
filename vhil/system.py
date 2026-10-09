@@ -40,6 +40,8 @@ CATALOG = REPO / "catalog"
 # Renode's global quantum when a system sets no `time.quantum_s` (100 us).
 RENODE_DEFAULT_QUANTUM_S = 0.0001
 CAN_BUS_SOURCE = REPO / "models" / "renode" / "VhilCanBus.cs"
+# Each board's machine, with a time source of its own (#209).
+MACHINE_SOURCE = REPO / "models" / "renode" / "VhilMachine.cs"
 
 # What a system file may name, as the schema says (schemas/vhil.schema.json):
 # checked again here so that a schema that loosens can't let a value reach a
@@ -873,6 +875,9 @@ class System:
         sources += sorted({(REPO / d["model_doc"]["renode"]["source"]).as_posix()
                            for d in self.devices.values()
                            if "source" in d["model_doc"].get("renode", {})} - set(sources))
+        # A board's machine gets a time source of its own, so its clock
+        # follows its own CPU and not the slowest board's (VhilMachine.cs).
+        out += [f"include {rn.file_arg(MACHINE_SOURCE)}"]
         if sources:
             out += [f"include {rn.file_arg(src)}" for src in sources] + [""]
         arbitrated = [bus for bus in self.buses if self.arbitrated(bus)]
@@ -890,9 +895,9 @@ class System:
             var = f"elf_{rn.ident(b.name)}"
             out.append(rn.comment(f"# --- {b.name}: {b.board['id']} running {b.firmware['id']} "
                                   f"({b.firmware['repo']})"))
-            out.append(f"mach create {rn.quote(b.name)}")
+            out += [f"emulation CreateVhilMachine {rn.quote(b.name)}", f"mach set {rn.quote(b.name)}"]
             if b.name in firmware:
-                # After `mach create`: a variable set while a machine is
+                # After `mach set`: a variable set while a machine is
                 # selected is local to it, so the next board would not see it.
                 out.append(f"${var}={rn.file_arg(firmware[b.name])}")
             out.append(f"machine LoadPlatformDescription {rn.file_arg(REPO / platform['repl'])}")

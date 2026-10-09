@@ -81,6 +81,37 @@ make them all exact. With two boards it costs 3x to 5x in wall time, and it
 slows the ECU's control loop, so the model doesn't do it. The spike numbers
 are on [#174](https://github.com/isc-fs/IFS_vHIL/issues/174).
 
+### Determinism
+
+The same system, images and inputs give the same bus timeline on every run:
+the same frames in the same order, the same offer, start and end times, the
+same arbitration outcomes, the same late effects
+(`test_two_board_runs_give_the_same_bus_timeline`).
+
+That needs each board on a time source of its own
+([`VhilMachine.cs`](../models/renode/VhilMachine.cs), #209). Renode's `mach
+create` puts every machine on the emulation's master time source, whose
+virtual time is the minimum of what all CPUs have executed. A board's clock
+(its timers, interrupts and scheduled actions) then advanced only as far as
+the slowest CPU, on whichever CPU thread moved that minimum, so where a timer
+interrupt landed in a firmware's instruction stream depended on how far the
+host had run the other board. Twenty runs of `ecu-ams` gave twenty different
+ACU timelines, diverging about 20 ms after the apps started (the ECU's
+`HAL_Delay` loop left at a different instruction), on the hub as on the bus
+model, and even with the two boards on separate buses. A board on its own
+time source runs alone between sync points, as in a single-board system,
+which was already deterministic; the boards meet only at sync points, where
+the bus decides.
+
+What is not deterministic is wall time, and anything read from Renode's
+master time source in the middle of a quantum (it is the slowest board's
+progress); the bus reads it only in the sync phase. A single-board bus wakes
+in its board's own thread; a wake that found the bus taken would be retried
+1 µs later (#207, the old lock-order deadlock), which would be host timing,
+so `CanBus.stats()["wake_retries"]` counts them and the test asserts none.
+`emulation SetGlobalSerialExecution true` also made `ecu-ams` deterministic,
+but ran it about 4.5x slower.
+
 ## Using it from a test
 
 ```python
