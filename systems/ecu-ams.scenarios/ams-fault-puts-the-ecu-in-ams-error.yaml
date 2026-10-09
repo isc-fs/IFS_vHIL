@@ -1,6 +1,6 @@
 kind: scenario
 system: ecu-ams
-description: "An AMS fault puts the ECU in AmsError: the car armed to Run as in car-arms-through-the-ecu, then 300 A on the pack-current sensor (PF7/PF8 legs, 5 mV/A about a 1.44 V common mode) trips CurrentOverLimit (10) when the AMS's IIR crosses CurrentMaxMa = 185 A; the AMS latches Error and opens the AIRs, its next 0x4A0 says Error, and the ECU enters AmsError within a tick and stays there (every AMS frame keeps it fresh); 0x504 ts_active drops. The native test faults a cell (SetCell), which a scenario cannot drive; over-current is the AMS fault a scenario can. IFS08-CE-AMS safety_predicates.hpp:244, ams_config.hpp:153, current_service.cpp; IFS08-CE-ECU control.cpp:150, 235-236, control_task.cpp:117-120; tests/sim/test_sys_ecu_ams.py test_an_ams_fault_puts_the_ecu_in_ams_error, test_ams_current.py."
+description: "An AMS fault puts the ECU in AmsError: the car armed to Run as in car-arms-through-the-ecu, then 300 A on the pack-current sensor (PF7/PF8 legs, 5 mV/A about a 1.44 V common mode) trips CurrentOverLimit (10) when the AMS's IIR crosses CurrentMaxMa = 185 A; the AMS latches Error and opens the AIRs, its next 0x4A0 (every 500 ms) says Error, and the ECU enters AmsError then and not before and stays there (every AMS frame keeps it fresh); 0x504 ts_active drops. The native test faults a cell (SetCell), which a scenario cannot drive; over-current is the AMS fault a scenario can. IFS08-CE-AMS safety_predicates.hpp:244, ams_config.hpp:153, current_service.cpp; IFS08-CE-ECU control.cpp:150, 235-236, control_task.cpp:117-120; tests/sim/test_sys_ecu_ams.py test_an_ams_fault_puts_the_ecu_in_ams_error, test_ams_current.py."
 virtual_ms: 10000
 stimuli:
   - {kind: can_periodic, name: inv-drained, at_ms: 2500, bus: can_inv, id: 0x466, data: "000000000000", period_ms: 10}
@@ -22,12 +22,12 @@ expect:
   - {check: eventually, name: ams-run, at_ms: 6500, until_ms: 6800, signal: "symbol:ams.g_state_telemetry", value: 3}
   - {check: eventually, name: ts-active, at_ms: 6500, until_ms: 7000, signal: "frame:can_acu.VCU_ts_active.ts_active", value: 1}
   - {check: never, name: no-ams-error-before, at_ms: 0, until_ms: 7500, signal: "symbol:ams.g_state_telemetry", value: 5}
-  - {check: never, name: no-ecu-ams-error-before, at_ms: 0, until_ms: 7500, signal: "symbol:ecu.g_last_ctrl_state", value: 6}
-  - {check: eventually, name: ams-over-current-error, at_ms: 7500, until_ms: 8500, signal: "symbol:ams.g_state_telemetry", value: 5}
-  - {check: always, name: reason-over-limit, at_ms: 8600, signal: "symbol:ams.g_fault_reason_telemetry", value: 10}
-  - {check: always, name: air-plus-open, at_ms: 8600, signal: "pin:ams.PB5", value: low}
-  - {check: always, name: air-minus-open, at_ms: 8600, signal: "pin:ams.PB6", value: low}
-  - {check: eventually, name: error-on-can, at_ms: 7500, until_ms: 9100, signal: "frame:can_acu.AMS_status.fsm_state", value: 5}
-  - {check: eventually, name: ecu-ams-error, at_ms: 7500, until_ms: 9200, signal: "symbol:ecu.g_last_ctrl_state", value: 6}
-  - {check: always, name: ecu-held-in-ams-error, at_ms: 9300, signal: "symbol:ecu.g_last_ctrl_state", value: 6}
-  - {check: always, name: ts-inactive, at_ms: 9400, signal: "frame:can_acu.VCU_ts_active.ts_active", value: 0}
+  - {check: never, name: no-ecu-ams-error-before-the-report, at_ms: 0, until_ms: 8500, signal: "symbol:ecu.g_last_ctrl_state", value: 6}
+  - {check: eventually, name: ams-over-current-error, at_ms: 8100, until_ms: 8450, signal: "symbol:ams.g_state_telemetry", value: 5}
+  - {check: always, name: reason-over-limit, at_ms: 8450, signal: "symbol:ams.g_fault_reason_telemetry", value: 10}
+  - {check: always, name: air-plus-open, at_ms: 8450, signal: "pin:ams.PB5", value: low}
+  - {check: always, name: air-minus-open, at_ms: 8450, signal: "pin:ams.PB6", value: low}
+  - {check: eventually, name: error-on-can, at_ms: 8100, until_ms: 8950, signal: "frame:can_acu.AMS_status.fsm_state", value: 5}
+  - {check: eventually, name: ecu-ams-error, at_ms: 8500, until_ms: 9000, signal: "symbol:ecu.g_last_ctrl_state", value: 6}
+  - {check: always, name: ecu-held-in-ams-error, at_ms: 9000, signal: "symbol:ecu.g_last_ctrl_state", value: 6}
+  - {check: always, name: ts-inactive, at_ms: 9200, signal: "frame:can_acu.VCU_ts_active.ts_active", value: 0}

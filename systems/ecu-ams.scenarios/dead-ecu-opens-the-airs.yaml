@@ -20,14 +20,14 @@ expect:
   - {check: eventually, name: ams-precharge, at_ms: 5600, until_ms: 5700, signal: "symbol:ams.g_state_telemetry", value: 1}
   - {check: eventually, name: ams-run, at_ms: 6500, until_ms: 6800, signal: "symbol:ams.g_state_telemetry", value: 3}
   - {check: eventually, name: ts-active, at_ms: 6500, until_ms: 7000, signal: "frame:can_acu.VCU_ts_active.ts_active", value: 1}
-  - {check: never, name: no-ams-error-while-fed, at_ms: 0, until_ms: 7600, signal: "symbol:ams.g_state_telemetry", value: 5}
-  - {check: eventually, name: ecu-silent, at_ms: 7500, until_ms: 7600, signal: "frame:can_acu.VCU_heartbeat.dc_bus_valid", value: 1}
+  - {check: never, name: no-ams-error-while-fed, at_ms: 0, until_ms: 7690, signal: "symbol:ams.g_state_telemetry", value: 5}
+  - {check: eventually, name: relayed-until-the-trigger, at_ms: 7400, until_ms: 7500, signal: "frame:can_acu.VCU_heartbeat.dc_bus_valid", value: 1}
   - {check: count, name: no-heartbeat-after-reboot, at_ms: 7600, signal: "frame:can_acu.VCU_heartbeat", max: 0}
-  - {check: eventually, name: vcu-stale-error, at_ms: 7600, until_ms: 7900, signal: "symbol:ams.g_state_telemetry", value: 5}
-  - {check: always, name: latched, at_ms: 8000, signal: "symbol:ams.g_state_telemetry", value: 5}
-  - {check: always, name: reason-vcu-stale, at_ms: 8000, signal: "symbol:ams.g_fault_reason_telemetry", value: 11}
-  - {check: always, name: air-plus-open, at_ms: 8000, signal: "pin:ams.PB5", value: low}
-  - {check: always, name: air-minus-open, at_ms: 8000, signal: "pin:ams.PB6", value: low}
-  - {check: always, name: precharge-open, at_ms: 8000, signal: "pin:ams.PB7", value: low}
-  - {check: always, name: ams-ok-dropped, at_ms: 8000, signal: "pin:ams.PB4", value: low}
-  - {check: eventually, name: error-on-can, at_ms: 7600, until_ms: 8500, signal: "frame:can_acu.AMS_status.fsm_state", value: 5}
+  - {check: eventually, name: vcu-stale-error, at_ms: 7690, until_ms: 7760, signal: "symbol:ams.g_state_telemetry", value: 5}
+  - {check: always, name: latched, at_ms: 7800, signal: "symbol:ams.g_state_telemetry", value: 5}
+  - {check: always, name: reason-vcu-stale, at_ms: 7800, signal: "symbol:ams.g_fault_reason_telemetry", value: 11}
+  - {check: always, name: air-plus-open, at_ms: 7800, signal: "pin:ams.PB5", value: low}
+  - {check: always, name: air-minus-open, at_ms: 7800, signal: "pin:ams.PB6", value: low}
+  - {check: always, name: precharge-open, at_ms: 7800, signal: "pin:ams.PB7", value: low}
+  - {check: always, name: ams-ok-dropped, at_ms: 7800, signal: "pin:ams.PB4", value: low}
+  - {check: eventually, name: error-on-can, at_ms: 7700, until_ms: 8300, signal: "frame:can_acu.AMS_status.fsm_state", value: 5}
