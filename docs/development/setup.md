@@ -75,6 +75,28 @@ to 89 s); it is opt-in for that reason.
 scripts/vhil-docker.sh sim -k heartbeat_only --vhil-trace     # results/sim-logs/failures/
 ```
 
+### CPU fault injection
+
+A native test can make the CPU fail where the firmware's own fault paths
+start, without patching the image (#196, `vhil/sim.py`). Each call arms a
+one-shot execution hook that changes a register when the CPU reaches a
+function; its counter outlives resets, so the next boot runs clean.
+
+| Call | What the firmware sees |
+|---|---|
+| `sim.fail_malloc(board, call=1)` | its `call`-th `pvPortMalloc` from now asks for more than the heap holds: heap_4 returns NULL and calls `vApplicationMallocFailedHook` |
+| `sim.bus_fault_at(board, function, register=0, call=1)` | the pointer in `r<register>` at `function`'s entry points at the platform's reserved range (`BUS_ERROR_ADDRESS`): its first load is a precise BusFault (`models/renode/VhilBusError.cs`) |
+| `sim.fault_status(board)` | SHCSR, CFSR, HFSR, MMFAR and BFAR |
+| `sim.function_at(board)` | the function the PC is in, e.g. `HardFault_Handler` |
+
+The CPU model routes a fault as ARMv7-M does: with SHCSR's
+MEMFAULTENA/BUSFAULTENA/USGFAULTENA clear (as the AMS and ECU leave them) a
+MemManage, BusFault or UsageFault escalates to HardFault with HFSR.FORCED;
+set, each takes its own handler. Renode models the PMSAv7 MPU, so a test can
+program a region to get a MemManage. Not modelled: an instruction fetch from
+an XN region of the default memory map (a jump into peripheral space) aborts
+the Renode machine instead of raising MemManage (#239).
+
 ### Firmware coverage
 
 `--vhil-coverage DIR` records which code of each image ran

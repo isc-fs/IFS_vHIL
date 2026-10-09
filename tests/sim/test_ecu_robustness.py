@@ -53,11 +53,25 @@ to survive:
     address, the commonest way firmware ends up in its fault handler.
 A stack overflow is modelled by its first physical effect: the canary words at
 the bottom of DiagTask's stack overwritten, nothing above them.
+
+#196 adds the two the corrupted return address can't reach (vhil/sim.py):
+  - allocation failure (Sim.fail_malloc): pvPortMalloc is asked for more than
+    the 64 KB heap (FreeRTOSConfig.h:72), so heap_4 fails and calls
+    vApplicationMallocFailedHook (freertos.c:175-188), which stamps 0xF6 and
+    returns (#252). The ECU allocates only while it boots (MX_FREERTOS_Init's
+    queues and tasks, freertos.c:215-249), so the test fails the first of
+    those: can_rx_queue (freertos.c:215).
+  - a bus error (Sim.bus_fault_at): HAL_IWDG_Refresh's handle, which
+    Watchdog::refresh passes it, points at the platform's reserved range, so
+    its first load bus-faults. Nothing in the ECU (nor the CAN bootloader)
+    sets SHCSR's MEMFAULTENA/BUSFAULTENA/USGFAULTENA, so on the chip the
+    BusFault escalates to HardFault (ARMv7-M ARM B1.5.8) and the MemManage/
+    BusFault/UsageFault handlers (stm32h7xx_it.c:105-145) never run.
 """
 import pytest
 
 from vhil import canframe, elf
-from vhil.sim import Frame, Sim, assert_cadence
+from vhil.sim import BUS_ERROR_ADDRESS, Frame, Sim, assert_cadence
 from vhil.system import REPO
 
 HEARTBEAT, HEALTH, PIT_STATUS = 0x100, 0x704, 0x700
@@ -70,6 +84,15 @@ TICK_MS, IWDG_MS, PIT_MS = 10, 500, 100
 KERNEL_TICK_US = 1000      # configTICK_RATE_HZ 1000 (FreeRTOSConfig.h:67)
 POWER_ON, PIN, SOFTWARE, IWDG = 1, 2, 3, 4
 NO_FAULT, HARD_FAULT, STACK_OVERFLOW = 0x00, 0xF1, 0xF5
+MEM_MANAGE, BUS_FAULT, MALLOC_FAILED = 0xF2, 0xF3, 0xF6
+LATCH_TAG = 0xFA170000                 # error_latch.hpp:32, FaultLatch::encode
+RTC_BKP1R = 0x58004000 + 0x50 + 4      # RTC_BASE + BKP0R (stm32h733xx.h), BKP1R
+FAULT_ENABLES = 0x7 << 16              # SHCSR MEM/BUS/USGFAULTENA (core_cm7.h)
+FORCED, PRECISERR, BFARVALID = 1 << 30, 1 << 9, 1 << 15   # HFSR, CFSR (core_cm7.h)
+NO_FAULT_ENABLES = pytest.mark.xfail(strict=True, reason=(
+    "isc-fs/IFS08-CE-ECU#264: nothing sets SHCSR MEMFAULTENA/BUSFAULTENA/USGFAULTENA, "
+    "so a BusFault escalates to HardFault (ARMv7-M B1.5.8): BusFault_Handler "
+    "(stm32h7xx_it.c:120-131) never runs and 0x704 reports 0xF1, never 0xF3"))
 WAIT_VDC, PRECHARGE, AMS_ERROR = 0, 1, 6
 # The car's bootloader clears the reset flags before the app can read them:
 # stm32-can-bootloader v1.7.0 bl_health.c:59-63 latches RCC_RSR for itself and
@@ -264,6 +287,94 @@ def test_a_stack_overflow_resets_and_names_itself(ecu):
     _overflow_diag_task_stack(ecu)
     ecu.run_for(ms=3000)                       # next DiagTask switch-out <= 1 s, + the dog
     assert [h[1:3] for h in _health(ecu, since_us=t)][-1] == (IWDG, STACK_OVERFLOW)
+
+
+# -- #196: allocation failure, bus faults ------------------------------------------
+
+@pytest.fixture
+def ecu_failed_alloc(images):
+    """An ECU whose first allocation of the boot (can_rx_queue,
+    freertos.c:215) the heap refuses."""
+    with Sim(REPO / "systems" / "ecu.yaml", images("ecu")) as sim:
+        sim.fail_malloc("ecu")
+        sim.wait_for_app()
+        sim.run_for(ms=100)
+        yield sim
+
+
+def test_a_failed_allocation_stamps_the_latch(ecu_failed_alloc):
+    """freertos.c:175-188: the hook stamps MallocFailed (0xF6) into BKP1R."""
+    sim = ecu_failed_alloc
+    assert int(sim.monitor(f"sysbus ReadDoubleWord {RTC_BKP1R:#x}").strip(), 16) == LATCH_TAG | MALLOC_FAILED
+
+
+@pytest.mark.xfail(strict=True, reason=(
+    "isc-fs/IFS08-CE-ECU#252: vApplicationMallocFailedHook (freertos.c:175-188) "
+    "latches 0xF6 and returns: no reset, and the ECU runs on without the primitive "
+    "it couldn't create (with can_rx_queue missing it keeps sending 0x100 but never "
+    "a 0x704), so the failure is never reported. error_latch.hpp:4-5 says the hooks "
+    "spin into the watchdog reset"))
+def test_a_failed_allocation_resets_and_names_itself(ecu_failed_alloc):
+    sim = ecu_failed_alloc
+    sim.run_for(ms=3000)                       # the dog's 500 ms, a boot, a 0x704
+    health = _health(sim)
+    assert health and health[-1][2] == MALLOC_FAILED, f"0x704 last_fault: {[h[2] for h in health]}"
+
+
+def _land(sim, timeout_ms=50):
+    names = {"HardFault_Handler", "MemManage_Handler", "BusFault_Handler", "UsageFault_Handler"}
+    found = []
+    sim.run_until(lambda: found.append(sim.function_at("ecu")) or found[-1] in names,
+                  timeout_ms=timeout_ms, step_ms=0.1)
+    return found[-1]
+
+
+def _fault_report_after_reset(sim):
+    reset = sim.run_until(lambda: _reset_seen(sim), timeout_ms=IWDG_MS + 50, step_ms=5)
+    sim.wait_for_app()
+    sim.run_for(ms=1500)
+    return _health(sim, since_us=reset)[0][2]
+
+
+def test_a_bus_error_escalates_to_hardfault(ecu):
+    """What the car does: a precise BusFault (CFSR.PRECISERR, BFAR) with
+    BUSFAULTENA clear escalates to HardFault (HFSR.FORCED); 0xF1 after the
+    watchdog reset."""
+    assert ecu.fault_status("ecu")["SHCSR"] & FAULT_ENABLES == 0
+    ecu.bus_fault_at("ecu", "HAL_IWDG_Refresh")
+    assert _land(ecu) == "HardFault_Handler"
+    regs = ecu.fault_status("ecu")
+    assert regs["HFSR"] & FORCED
+    assert regs["CFSR"] & (PRECISERR | BFARVALID) == PRECISERR | BFARVALID, f"CFSR {regs['CFSR']:#x}"
+    assert regs["BFAR"] == BUS_ERROR_ADDRESS
+    assert _fault_report_after_reset(ecu) == HARD_FAULT
+
+
+@NO_FAULT_ENABLES
+def test_a_bus_error_reports_busfault(ecu):
+    ecu.bus_fault_at("ecu", "HAL_IWDG_Refresh")
+    handler = _land(ecu)
+    assert (handler, _fault_report_after_reset(ecu)) == ("BusFault_Handler", BUS_FAULT)
+
+
+@pytest.mark.parametrize("fault, code", [("BusFault", BUS_FAULT), ("MemManage", MEM_MANAGE)])
+def test_with_the_fault_enables_each_class_lands_in_its_own_handler(ecu, fault, code):
+    """The vHIL side of #196: SHCSR's enables written here, as a firmware
+    that set them would (the ECU doesn't). A precise BusFault lands in
+    BusFault_Handler; for MemManage an MPU no-access region over the
+    reserved range (the ECU programs none: region 0, 64 KB, XN, AP 0;
+    PRIVDEFENA keeps the default map for the rest, ARMv7-M ARM B3.5) makes
+    the same load an MPU fault first. Neither escalates, and each reason
+    reaches 0x704 after the watchdog reset."""
+    ecu.monitor(f"sysbus WriteDoubleWord 0xE000ED24 {FAULT_ENABLES:#x}")
+    if fault == "MemManage":
+        for reg, value in ((0xE000ED98, 0), (0xE000ED9C, BUS_ERROR_ADDRESS),
+                           (0xE000EDA0, 1 << 28 | 15 << 1 | 1), (0xE000ED94, 1 << 2 | 1)):
+            ecu.monitor(f"sysbus WriteDoubleWord {reg:#x} {value:#x}")
+    ecu.bus_fault_at("ecu", "HAL_IWDG_Refresh")
+    assert _land(ecu) == f"{fault}_Handler"
+    assert not ecu.fault_status("ecu")["HFSR"] & FORCED
+    assert _fault_report_after_reset(ecu) == code
 
 
 # -- TX overload -------------------------------------------------------------------
