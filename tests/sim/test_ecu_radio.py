@@ -101,11 +101,14 @@ def test_every_send_ends_on_tx_ds_not_the_timeout(run):
     for p in payloads[:-1]:
         assert p.t_us in cleared, f"TX_DS at {p.t_us} us never cleared"
         assert cleared[p.t_us] - p.t_us < 3 * poll_us, (p.t_us, cleared[p.t_us], poll_us)
-    # Back to back in a cycle: the bit-banged transfers and the 5 ms pace.
-    # The timeout path took 10 ms more per fragment.
+    # Back to back in a cycle: the 5 ms pace, then a send's bit-banged bytes
+    # (nrf24.c:576-642: STATUS clear 2, FLUSH_TX 1, W_TX_PAYLOAD 33, a STATUS
+    # poll or two of 2, STATUS clear 2, CONFIG 2), at most 50 at the core's
+    # speed. The timeout path took 10 ms more per fragment.
+    send_us = 50 * 8 * BIT_INSTRUCTIONS / mips(sim, "ecu")
     for frags in _cycles(payloads).values():
         gaps = [b.t_us - a.t_us for a, b in zip(frags, frags[1:])]
-        assert all(PACE_US <= g < PACE_US + SEND_TIMEOUT_US for g in gaps), gaps
+        assert all(PACE_US <= g < PACE_US + send_us for g in gaps), (gaps, send_us)
 
 
 def test_a_snapshot_every_200_ms_in_five_fragments(run):
