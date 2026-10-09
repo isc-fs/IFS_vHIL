@@ -228,24 +228,24 @@
     - tests/sim/test_ams_contactors.py::test_error_opens_everything_and_drops_ams_ok_in_one_tick[undervoltage]
   why: "pico_emu: the bench's Pico LTC emulator injects it; the vHIL covers the behaviour natively on the LTC6811 chain model (#150, not planned)"
 
-# Skipped on bench-01 too unless an operator does a step by hand; the virtual
-# bench could do the step itself (#152).
-- path: tests/hil/ams/test_block_s_sdcard.py::test_s142_bl_recovery_no_card
-  why: "operator-gated (AMS_SD_NOCARD=1, card out); vHIL could run it without the card (#152)"
-- path: tests/hil/ams/test_block_s_sdcard.py::test_s143_no_card_boots
-  why: "operator-gated (AMS_SD_NOCARD=1, card out); vHIL could run it without the card (#152)"
+# Skipped on bench-01 too unless an operator does a step by hand. The virtual
+# bench does the step itself (vhil/bench_operator.py, #152), except where the
+# test has none to do.
 - path: tests/hil/ams/test_block_t_sdlogger.py::test_t151_log_content_manual
-  why: "operator-gated (AMS_SD_CARD_PULL=1, read the card); vHIL could read a card image (#152)"
+  why: "IFS_HIL: the body is a bare pytest.skip even with AMS_SD_CARD_PULL=1, so there is no card read for the bench to feed (#152)"
+  replaced_by:
+    - tests/sim/test_ams_sd.py::test_the_columns_carry_the_seeded_cell_and_temperature
+    - tests/sim/test_ams_sd.py::test_the_log_has_a_header_and_rows_at_4_hz
+    - tests/sim/test_ams_sd.py::test_the_sidecar_crc_matches_the_log
 - path: tests/hil/ams/test_block_t_sdlogger.py::test_t152_power_loss_durability_manual
-  why: "operator-gated (AMS_SD_CARD_PULL=1, read the card); vHIL could read a card image (#152)"
+  why: "IFS_HIL: the body is a bare pytest.skip even with AMS_SD_CARD_PULL=1, so there is no power cut and card read for the bench to do (#152)"
+  replaced_by:
+    - tests/sim/test_ams_sd.py::test_a_power_cut_loses_at_most_a_second
+    - tests/sim/test_ams_sd.py::test_the_card_holds_a_sealed_log
 - path: tests/hil/ams/test_block_u_microsd_multirun.py::test_u161_file_per_run_no_fragmentation
-  why: "operator-gated (card pull, AMS_SD_MOUNT); vHIL could mount a card image (#152)"
-- path: tests/hil/ams/test_block_u_microsd_multirun.py::test_u162_no_truncation_and_sealed
-  why: "operator-gated (card pull, AMS_SD_MOUNT); vHIL could mount a card image (#152)"
-- path: tests/hil/ams/test_block_j_busoff.py::test_j130_busoff_is_recovered
-  why: "operator-gated (AMS_BUSOFF_IFACE, a USB-CAN adapter); vHIL could use its FDCAN fault hooks (#152)"
-- path: tests/hil/ams/test_block_j_busoff.py::test_j131_recovery_count_increments
-  why: "operator-gated (AMS_BUSOFF_IFACE, a USB-CAN adapter); vHIL could use its FDCAN fault hooks (#152)"
+  why: "IFS_HIL: wants AMS_SD_MULTIRUN_BOOTS sealed run-sized LOG*.CSV, but the last boot's log is still LOGnnnn.TMP when the card is pulled: AMS seals it at the next boot (sd_logger_task.cpp orphan seal), so N boots give N-1 (vHIL card: a short pre-run LOG0000, 240/244-row LOG0001/0002, LOG0003.TMP); bench-01 passed on a 616-row pre-run (#152)"
+  replaced_by:
+    - tests/sim/test_ams_sd.py::test_one_sealed_log_per_run
 
 # Physical-only. IFS_HIL deselects all of these by default (`soak`, its
 # pyproject.toml addopts); they are listed so a `-m soak` run skips them here.

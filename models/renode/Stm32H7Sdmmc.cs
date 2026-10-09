@@ -39,7 +39,7 @@
 // no virtual time, like the transfers: the response timeout is 64 SDMMC_CK,
 // and DTIMEOUT would come DATATIME SDMMC_CK periods later (the HAL programs
 // 0xFFFFFFFF; it clears the flag on the command's CTIMEOUT without waiting).
-// Test API (monitor): UnansweredCommands here; Respond on the card.
+// Test API (monitor): UnansweredCommands here; Respond and Flush on the card.
 //
 // Register offsets from ST's stm32h733xx.h (SDMMC_TypeDef: IDMACTRL 0x50,
 // IDMABSIZE 0x54, IDMABASE0 0x58, IDMABASE1 0x5C); SDMMC1_BASE =
@@ -329,5 +329,27 @@ namespace Antmicro.Renode.Peripherals.SD
         }
 
         public bool Respond { get; set; }
+
+        // Bring the image file and the card in step, for the host to read or
+        // rewrite the image while the emulation runs (a card pulled from the
+        // slot, read on a PC and put back). Renode's SDCard reaches its image
+        // through a buffered FileStream, which keeps its last write until the
+        // next seek and may serve reads from a buffer the host has since
+        // rewritten; Flush writes the one out and drops the other. Returns how
+        // many streams it flushed: 0 for an in-memory card.
+        public int Flush()
+        {
+            var flushed = 0;
+            foreach(var field in typeof(SDCard).GetFields(BindingFlags.Instance | BindingFlags.NonPublic))
+            {
+                if(typeof(System.IO.Stream).IsAssignableFrom(field.FieldType)
+                   && field.GetValue(this) is System.IO.Stream stream)
+                {
+                    stream.Flush();
+                    flushed++;
+                }
+            }
+            return flushed;
+        }
     }
 }

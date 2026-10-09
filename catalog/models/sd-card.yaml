@@ -7,7 +7,9 @@ description: >-
   to see it log. Param dead: the card sits in the slot (card detect low)
   but never answers, so the controller times its commands out (CMDSENT /
   CTIMEOUT / DTIMEOUT, as with no card attached). Test API (monitor, on
-  the device): Respond (false: dead from now on, true: answers again).
+  the device): Respond (false: dead from now on, true: answers again),
+  Flush (the image file and the card in step, to read or rewrite the image
+  mid-run).
 interface: {sdmmc: true}
 params:
   capacity: 0x8000000      # 128 MiB

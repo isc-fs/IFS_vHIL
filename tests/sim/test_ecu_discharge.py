@@ -135,10 +135,6 @@ def test_a_discharge_that_never_completes_gives_up_with_a_fault(ecu, link):
     assert io.level(pin), "a new stranding did not secure after the fault cleared"
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "isc-fs/IFS08-CE-ECU#259: 0x021 is 100 ms cyclic and trusted for 500 ms, so "
-    "after the press the ECU still holds 'fsm_in_start' while the link rises "
-    "through PRE; it secures within a tick and holds to the 30 s timeout"))
 def test_an_arm_never_secures_the_discharge_into_the_precharge(ecu):
     """The AMS arms from Start: AIR- and PRE close and the link rises through
     the precharge resistor at once, but 0x021 is 100 ms cyclic
@@ -151,7 +147,10 @@ def test_an_arm_never_secures_the_discharge_into_the_precharge(ecu):
     (discharge.cpp:42-60), so a spurious secure puts the transient-duty
     bleed across a precharging, then live, link. Here the press lands 5 ms
     after a 0x021 and the link reads 352 V on the next 0x466; the AMS's next
-    0x021 (95 ms later) says not-in-Start. The ECU must not secure."""
+    0x021 (95 ms later) says not-in-Start. The ECU must not secure: since
+    IFS08-CE-ECU#263 (closing #259) it never latches on a link that rose
+    from a drained reading while it still believes Start (discharge.hpp,
+    "the precharge edge", rule 1)."""
     sim, io, pin = ecu
     inv, acu = sim.can("can_inv"), sim.can("can_acu")
     inv.send_periodic("vdc", VDC, _vdc(0), 10)               # drained link, AMS in Start

@@ -37,9 +37,9 @@ SPDX-License-Identifier: Apache-2.0
 import {
     computed, defineComponent, ref, reactive, nextTick,
 } from 'vue';
-import showdown from 'showdown';
 import { useResizeObserver } from '@vueuse/core';
 import { useViewModel } from '@baklavajs/renderer-vue';
+import { renderMarkdown } from '../vhil/markdown';
 
 export default defineComponent({
     props: {
@@ -66,23 +66,8 @@ export default defineComponent({
             },
         });
 
-        const converter = new showdown.Converter({
-            smartIndentationFix: true,
-            simpleLineBreaks: true,
-        });
-
-        const renderedMarkdown = computed(() => {
-            let html = converter.makeHtml(props.modelValue);
-            const aTagRe = /<a href="[a-zA-Z0-9-$_.+!*'()/&?=:%]+">/gm;
-            html.match(aTagRe)?.forEach((match) => {
-                const hrefParts = match.split('"');
-                // Forces the link to open in a new tab instead of closing the pipeline manager
-                const newEnd = ` tabindex="-1" target="_blank"${hrefParts[2]}`;
-                const newHref = [hrefParts[0], hrefParts[1], newEnd].join('"');
-                html = html.replace(match, newHref);
-            });
-            return html;
-        });
+        // vHIL: sanitized, and the input capped (src/vhil/markdown.js).
+        const renderedMarkdown = computed(() => renderMarkdown(props.modelValue));
 
         const styles = reactive({
             resize: 'none',
