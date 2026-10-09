@@ -223,7 +223,7 @@ Left, ranked (each needs a model or hook the vHIL doesn't have; issues filed in 
 
 | Rank | Gap | Why it matters | What it needs |
 |---|---|---|---|
-| 1 | ~~AMS SPI/isoSPI transfer failures~~ **Filled** (A20, #196 section 1): an SPI1 transfer that never runs (`Stm32H7Spi.cs`) and an LTC6811 WRCFGA that does not take (`IsoSpi.cs`). It found AMS#631 and #632, below | | |
+| 1 | ~~AMS SPI/isoSPI transfer failures: `bms_poll_task.cpp` error returns, a failed balance quiesce (FMEA BALANCE-1), a failed chain recovery~~ | The paths the AMS takes when the isoSPI link itself errors, rather than goes silent or returns a bad PEC | **Done (#196):** an SPI1 transfer that never runs (`Stm32H7Spi.cs`) and an LTC6811 WRCFGA that does not take (`IsoSpi.cs`); A20, which found AMS#631 and #632 (below) |
 | 2 | Contactor and DC-link physics: welded AIR or PRE (FMEA RELAY-2), precharge against a real R·C, BusCollapse with real AIRs, `DischargeReleaseV` against the inverter's sense floor | Timing assertions need commissioned parameters | M8 TS-1 plant, #147 (parked) |
 | 3 | ~~Malloc-failed hooks (AMS and ECU)~~ | Same landing as the overflow hook | **Done (#196):** `Sim.fail_malloc`; both hooks now run (below) |
 | 4 | ~~MemManage/BusFault (ECU and AMS)~~ | Same landing as HardFault; their own reason codes | **Done (#196):** a bus-error range in the platform and `Sim.bus_fault_at`, an MPU region for MemManage; both handlers now run (below) |
