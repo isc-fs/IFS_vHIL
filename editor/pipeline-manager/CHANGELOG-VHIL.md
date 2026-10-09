@@ -511,7 +511,34 @@ from `git archive 04613679` except as listed below.
       attribute (a `color="white"` prop) is `src/vhil/theme.css`'s, as
       before.
 
+22. **Dependency security fixes** (the frontend's Dependabot alerts).
+    `pipeline_manager/frontend/package-lock.json` is `npm audit fix` (no
+    `--force`, so within each range: e.g. sass 1.69 → 1.105, socket.io-client
+    4.7 → 4.8, webpack 5.100 → 5.111, caniuse-lite, which drops the
+    `-webkit-backdrop-filter` prefix), and `package.json`:
+    - `patch-package` ^7 → ^8.0.1 (tmp ^0.2; `patches/` applies unchanged);
+    - `js-loader` gone from `devDependencies`: nothing loads it, and it
+      pulled uglify-js 0.0.4 and connect 0.5.8;
+    - `overrides` for transitive dependencies whose fix is outside their
+      parent's range: `webpack-dev-server` ^5.2.6 (`vue-cli-service serve`
+      only, whose options are already v5's; selfsigned 5, no node-forge),
+      `postcss-selector-parser` ^7.1.6 (cssnano 5, eslint-plugin-vue),
+      `serialize-javascript` ^7.0.5 (copy- and css-minimizer-webpack-plugin),
+      postcss ^8.5.29 under `@vue/component-compiler-utils` (Vue 2 only,
+      never loaded here), picomatch 2 at ^2.3.2, uuid ^11.1.1 under sockjs,
+      underscore ^1.13.8 (under nomnom, jsonlint's CLI). The built CSS
+      differs from before only in that prefix and in where Sass 1.105 puts
+      declarations that follow a nested rule (same computed styles).
+
 ## Left for later
+
+- **Dependabot alerts with no fix.** `showdown` ≤ 2.1.0 (three: ReDoS and
+  two XSS; its HTML is not sanitized in `custom/CustomSidebar.vue` and
+  `interfaces/TextAreaInterface.vue`, though the CSP blocks inline script),
+  `braces` ≤ 3.0.3 (build tooling: chokidar, micromatch) and
+  `vue-template-compiler` 2.x (a required peer of
+  `@vue/cli-plugin-typescript` 5; the Vue 3 build never loads it) have no
+  patched release.
 
 - **Light theme contrast on coloured pills.** `custom/Editor.js`
   `getTextColor` picks white or black text from a pill's hex colour; a
