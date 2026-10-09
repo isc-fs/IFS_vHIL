@@ -397,7 +397,7 @@ before commit keys) are never pruned: the worker falls back to them when a
 ref can't be resolved to a commit. Remove one by hand (its directory and its
 `built.txt` lines) once nothing names that ref.
 
-The editor's firmware picker lists each repo's **active** branches (`GET
+A board's Firmware dropdown in the editor lists its repo's **active** branches (`GET
 /api/firmware/{id}/refs`): the repo's default branch, `dev` and `main`, the
 catalogue's ref, branches with an open PR, and branches whose head commit is
 within `VHIL_FIRMWARE_ACTIVE_DAYS` [30] days, newest first with each head's
@@ -406,7 +406,7 @@ read-only token for the repo, else `VHIL_GITHUB_TOKEN`, else anonymously:
 the firmware repos are public, and the caches keep an anonymous API well
 within its 60 requests an hour); the default branch and open PRs are cached
 `VHIL_BRANCHES_TTL_S` [120] s and head commits for good. When the API
-can't be asked (no network, rate limit), the picker lists every branch from
+can't be asked (no network, rate limit), the dropdown lists every branch from
 `git ls-remote` and says why. "Show all branches and tags" lists every
 branch and the release tags.
 

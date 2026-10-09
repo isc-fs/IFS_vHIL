@@ -179,8 +179,8 @@ Minimum target 1366×768 at 125 % zoom with no horizontal page scroll; dock and
 sidebar sizes are kept per viewer in `localStorage` (wrapped in try/catch).
 
 1. **Top run bar, 40 px:** IFS mark; "system @ branch" with a dirty dot; one
-   firmware chip per board (opens the ref picker that replaces the firmware
-   aside); scenario dropdown; duration; Run (F5), Pause (Space), Stop
+   firmware chip per board (shows the board, whose own dropdowns pick its
+   role, firmware and bootloader refs: they replace the firmware aside); scenario dropdown; duration; Run (F5), Pause (Space), Stop
    (Shift+F5), Restart; mode pill; virtual clock "t=1.234 s · RTF 0.8x";
    Commit… and Open PR as dialogs; theme toggle; avatar.
 2. **Activity rail, 44 px, and a 260 px sidebar (Ctrl+B):** Palette (PM's
