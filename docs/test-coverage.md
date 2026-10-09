@@ -216,9 +216,37 @@ Left, ranked (each needs a model or hook the vHIL doesn't have; issues filed in 
 |---|---|---|---|
 | 1 | AMS SPI/isoSPI transfer failures: `bms_poll_task.cpp` error returns, a failed balance quiesce (FMEA BALANCE-1: bled voltages reach the predicates), a failed chain recovery | The paths the AMS takes when the isoSPI link itself errors, rather than goes silent or returns a bad PEC | A fault hook on SPI1 / the LTC6820 model (HAL error, stuck DCC): #196 |
 | 2 | Contactor and DC-link physics: welded AIR or PRE (FMEA RELAY-2), precharge against a real R·C, BusCollapse with real AIRs, `DischargeReleaseV` against the inverter's sense floor | Timing assertions need commissioned parameters | M8 TS-1 plant, #147 (parked) |
-| 3 | Malloc-failed hooks (AMS and ECU) | Same landing as the overflow hook | Heap-exhaustion injection; #196 covers it |
-| 4 | MemManage/BusFault (ECU and AMS) | Same landing as HardFault; their own reason codes | An MPU or bus-error injection hook (the INVSTATE fault the tests inject escalates to HardFault: UsageFault is not enabled); #196 |
+| 3 | ~~Malloc-failed hooks (AMS and ECU)~~ | Same landing as the overflow hook | **Done (#196):** `Sim.fail_malloc`; both hooks now run (below) |
+| 4 | ~~MemManage/BusFault (ECU and AMS)~~ | Same landing as HardFault; their own reason codes | **Done (#196):** a bus-error range in the platform and `Sim.bus_fault_at`, an MPU region for MemManage; both handlers now run (below) |
 | 5 | AMS SD rotation at 5 min / 4 MiB, LOGFS LIST paging past 46 entries | Diagnostics only | A long run, or a pre-filled card image; not safety |
+
+Ranks 3 and 4, closed by #196 (`test_ams_faults.py`, `test_ecu_robustness.py`;
+[setup.md](development/setup.md#cpu-fault-injection)):
+
+- **Allocation failure.** The AMS allocates in Run (FatFs' sync object at every
+  mount attempt): the hook opens the contactors within 0.2 ms and sets the
+  ErrorLatch, but it spins in SdLoggerTask with interrupts on, so SafetyTask
+  keeps feeding the IWDG: no reset, Run reported until BmsStale, no
+  `MallocFail` on 0x6CA (**IFS08-CE-AMS#634**, two strict xfails). The ECU
+  allocates only at boot: a failed allocation latches 0xF6 and returns, and
+  with `can_rx_queue` missing the ECU never sends a 0x704 (ECU#252, strict
+  xfail).
+- **MemManage / BusFault.** Neither firmware sets SHCSR's fault enables, so on
+  the car a BusFault or MemManage escalates to HardFault (HFSR.FORCED): their
+  handlers and reason codes are unreachable (**IFS08-CE-AMS#633**,
+  **IFS08-CE-ECU#264**, strict xfails). The vHIL routes them as the
+  ARMv7-M ARM says: tests that write the enables, as the fix would, land in
+  `BusFault_Handler` (precise, BFAR) and, through an MPU no-access region,
+  `MemManage_Handler` (DACCVIOL, MMFAR), and the next boot reports 6/5 (AMS)
+  and 0xF3/0xF2 (ECU). An instruction fetch from an XN region aborts the
+  Renode machine instead (#239). UsageFault stays uncovered: its trigger is
+  the same escalation, and no test enables it.
+
+`--vhil-coverage` over the new tests alone (AMS dev `ec8ab44`, ECU dev
+`44610a5`) hits `vApplicationMallocFailedHook`, `MemManage_Handler` and
+`BusFault_Handler` in both images (`freertos.c:122-134` / `:175-188`,
+`stm32h7xx_it.c:132-154` / `:105-130`); the suite-wide figures above are
+not re-run.
 
 Some lines are unreachable by design, and are not gaps:
 
