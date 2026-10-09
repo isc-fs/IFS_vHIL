@@ -9,11 +9,13 @@ Renode-specific, and nothing here knows about any particular MCU.
     python -m vhil.system validate systems/ecu.yaml
     python -m vhil.system render   systems/ecu.yaml [--firmware ecu=ECU08.elf] [--socketcan] [-o out.resc]
     python -m vhil.system bench    systems/ecu.yaml          # virtual broker wiring, as JSON
-    python -m vhil.system build    systems/ecu.yaml [--workdir build/fw] [--ref ecu=<ref>]
+    python -m vhil.system build    systems/ecu.yaml [--workdir build/fw] [--ref ecu=<ref>] [--commit ecu=<sha>]
 """
 from __future__ import annotations
 
 import argparse
+import datetime
+import hashlib
 import json
 import math
 import os
@@ -93,9 +95,16 @@ def board_pin_model(board: dict, catalog: Path = CATALOG) -> pm.PinModel | None:
         raise SystemError(f"board {board['id']}: pin model {name}: {e}") from None
 
 
-# Where `vhil.system build --workdir <dir>` puts a firmware source at a ref,
-# and the list of what it built (scripts/vhil-docker.sh fw and the worker
-# append its board=elf lines to <dir>/built.txt).
+# Where `vhil.system build --workdir <dir>` puts a firmware source, and the
+# list of what it built (scripts/vhil-docker.sh fw and the worker append its
+# board=elf lines to <dir>/built.txt). A build at a ref name goes to
+# <id>@<ref>; a build at a commit (--commit, what the web app's worker asks
+# for) to <id>+<commit[:12]>.<recipe id>, so a branch that moved builds anew
+# and one commit under two names is one build. The two never collide: a ref
+# has no "+" before its "@", an id has neither.
+COMMIT = re.compile(r"[0-9a-f]{40}")
+BUILD_STAMP = ".vhil-build.json"
+
 
 def source_dir(workdir: Path, fw: dict, ref: str) -> Path:
     return Path(workdir) / f"{fw['id']}@{ref.replace('/', '_')}"
@@ -104,6 +113,26 @@ def source_dir(workdir: Path, fw: dict, ref: str) -> Path:
 def image_path(workdir: Path, fw: dict, ref: str) -> Path:
     """The ELF a build of catalogue firmware `fw` at `ref` gives."""
     return source_dir(workdir, fw, ref) / fw["build"]["elf"]
+
+
+def recipe_id(fw: dict) -> str:
+    """What a build's output depends on besides the commit: the recipe
+    (IFS_HIL's, invariant 1) and its declared toolchain, the source repo and
+    whether submodules are fetched. Ten hex digits of their hash."""
+    ident = {"repo": fw.get("repo"), "submodules": bool(fw.get("submodules")),
+             "build": {k: fw["build"].get(k) for k in ("toolchain", "configure", "build", "elf")}}
+    return hashlib.sha256(json.dumps(ident, sort_keys=True).encode()).hexdigest()[:10]
+
+
+def commit_source_dir(workdir: Path, fw: dict, commit: str) -> Path:
+    if not COMMIT.fullmatch(commit):
+        raise SystemError(f"{commit!r} is not a full commit id")
+    return Path(workdir) / f"{fw['id']}+{commit[:12]}.{recipe_id(fw)}"
+
+
+def commit_image_path(workdir: Path, fw: dict, commit: str) -> Path:
+    """The ELF a build of `fw` at `commit` with today's recipe gives."""
+    return commit_source_dir(workdir, fw, commit) / fw["build"]["elf"]
 
 
 def built_images(workdir: Path) -> dict[Path, str]:
@@ -116,6 +145,95 @@ def built_images(workdir: Path) -> dict[Path, str]:
             if sep:
                 out[Path(path.strip()).resolve()] = key
     return out
+
+
+def checkout_commit(src: Path) -> str | None:
+    """The commit a firmware checkout is at, read from its .git without
+    running git (the API reads the fw volume as another user, which git
+    would refuse as dubious ownership). None if it can't be told."""
+    git = Path(src) / ".git"
+    try:
+        head = (git / "HEAD").read_text().strip()
+        if COMMIT.fullmatch(head):
+            return head
+        ref = head.removeprefix("ref: ").strip()
+        if not ref.startswith("refs/") or ".." in ref:
+            return None
+        loose = git / ref
+        if loose.is_file():
+            sha = loose.read_text().strip()
+            return sha if COMMIT.fullmatch(sha) else None
+        packed = git / "packed-refs"
+        if packed.is_file():
+            for line in packed.read_text().splitlines():
+                sha, _, name = line.partition(" ")
+                if name == ref and COMMIT.fullmatch(sha):
+                    return sha
+    except (OSError, UnicodeDecodeError):
+        pass
+    return None
+
+
+def read_stamp(src: Path) -> dict:
+    """A commit build's stamp ({firmware, commit, recipe, refs: {name: time}}), or {}."""
+    try:
+        data = json.loads((Path(src) / BUILD_STAMP).read_text())
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def stamp_ref(src: Path, fw: dict, commit: str, ref: str | None) -> None:
+    """Record in a commit build's stamp that `ref` named it, now: the newest
+    build a ref name had is what the editor decodes with before a run
+    (newest_build)."""
+    data = read_stamp(src) or {"firmware": fw["id"], "commit": commit, "recipe": recipe_id(fw),
+                               "refs": {}}
+    if ref and ref != commit:
+        data.setdefault("refs", {})[ref] = datetime.datetime.now(datetime.timezone.utc).isoformat(
+            timespec="seconds")
+    tmp = Path(src) / f"{BUILD_STAMP}.{os.getpid()}.tmp"
+    tmp.write_text(json.dumps(data, indent=1, sort_keys=True) + "\n")
+    tmp.replace(Path(src) / BUILD_STAMP)
+
+
+def find_build(workdir: Path, fw: dict, commit: str,
+               built: dict[Path, str] | None = None) -> Path | None:
+    """The ELF of a finished build of `fw` at `commit`: the commit build with
+    today's recipe, else a build at a ref name (from before builds were
+    keyed by commit) whose checkout is at that commit. Finished means listed
+    in built.txt, with its file there. None if there is none."""
+    workdir = Path(workdir)
+    built = built_images(workdir) if built is None else built
+    elf = commit_image_path(workdir, fw, commit).resolve()
+    if elf in built and elf.is_file():
+        return elf
+    rel = PurePosixPath(fw["build"]["elf"])
+    for path in built:
+        try:
+            parts = path.relative_to(workdir.resolve()).parts
+        except ValueError:
+            continue
+        if (len(parts) > 1 and parts[0].startswith(f"{fw['id']}@")
+                and PurePosixPath(*parts[1:]) == rel and path.is_file()
+                and checkout_commit(workdir / parts[0]) == commit):
+            return path
+    return None
+
+
+def newest_build(workdir: Path, fw: dict, ref: str) -> Path | None:
+    """The ELF of the newest finished commit build a run asked for as `ref`
+    (its stamp), with today's recipe: what the editor reads a ref's contract
+    and enums from before a run resolves its commit. None if there is none."""
+    workdir = Path(workdir)
+    built = built_images(workdir)
+    best: tuple[str, Path] | None = None
+    for src in workdir.glob(f"{fw['id']}+*.{recipe_id(fw)}"):
+        when = (read_stamp(src).get("refs") or {}).get(ref)
+        elf = (src / fw["build"]["elf"]).resolve()
+        if isinstance(when, str) and elf in built and elf.is_file() and (best is None or when > best[0]):
+            best = (when, elf)
+    return best[1] if best else None
 
 
 def _validator():
@@ -1045,30 +1163,54 @@ class System:
         return config
 
     def build_firmware(self, workdir: Path, refs: dict[str, str] | None = None,
-                       log=print) -> dict[str, Path]:
+                       log=print, commits: dict[str, str] | None = None,
+                       only: Iterable[str] | None = None) -> dict[str, Path]:
         """Clone each firmware source at its ref and build it with its recipe.
         The ref is `refs[image]` if given, else the board's firmware_ref /
-        bootloader_ref in the system file, else the catalogue entry's.
-        Returns image key (System.images: "<board>", "<board>.bootloader")
-        -> ELF; a flat .bin is written next to it."""
-        refs, built, workdir = refs or {}, {}, Path(workdir)
+        bootloader_ref in the system file, else the catalogue entry's. An
+        image with a commit in `commits` (a full commit id: what that ref
+        was resolved to) is fetched at that commit instead and built in its
+        commit directory (commit_source_dir), which then gets a stamp naming
+        the ref. With `only`, just those images are built (the others a
+        caller already has). Returns image key (System.images: "<board>",
+        "<board>.bootloader") -> ELF; a flat .bin is written next to it."""
+        refs, commits, built, workdir = refs or {}, commits or {}, {}, Path(workdir)
+        only = None if only is None else set(only)
         by_source: dict[tuple, Path] = {}
         sources = [(b.name, b.firmware, b.ref("firmware")) for b in self.boards.values()]
         sources += [(f"{b.name}.bootloader", b.bootloader, b.ref("bootloader"))
                     for b in self.boards.values() if b.bootloader is not None]
         for name, fw, default_ref in sources:
-            ref = refs.get(name, default_ref)
-            key = (fw["id"], fw["repo"], ref)
+            if only is not None and name not in only:
+                continue
+            ref, commit = refs.get(name, default_ref), commits.get(name)
+            if commit is not None and not COMMIT.fullmatch(commit):
+                raise SystemError(f"{name}: {commit!r} is not a full commit id")
+            key = (fw["id"], fw["repo"], commit or ref)
             if key not in by_source:
-                src = source_dir(workdir, fw, ref)
-                if src.exists():
-                    shutil.rmtree(src)
-                log(f"[{name}] cloning {fw['repo']}@{ref}")
-                cmd = ["git", "clone", "-q", "--depth", "1", "-b", ref,
-                       f"https://github.com/{fw['repo']}", str(src)]
-                if fw.get("submodules"):
-                    cmd[2:2] = ["--recurse-submodules"]
-                subprocess.run(cmd, check=True)
+                url = f"https://github.com/{fw['repo']}"
+                if commit:
+                    src = commit_source_dir(workdir, fw, commit)
+                    if src.exists():
+                        shutil.rmtree(src)
+                    log(f"[{name}] fetching {fw['repo']}@{commit} ({ref})")
+                    subprocess.run(["git", "init", "-q", str(src)], check=True)
+                    subprocess.run(["git", "-C", str(src), "fetch", "-q", "--depth", "1", url,
+                                    commit], check=True)
+                    subprocess.run(["git", "-C", str(src), "checkout", "-q", "FETCH_HEAD"],
+                                   check=True)
+                    if fw.get("submodules"):
+                        subprocess.run(["git", "-C", str(src), "submodule", "update", "-q",
+                                        "--init", "--recursive", "--depth", "1"], check=True)
+                else:
+                    src = source_dir(workdir, fw, ref)
+                    if src.exists():
+                        shutil.rmtree(src)
+                    log(f"[{name}] cloning {fw['repo']}@{ref}")
+                    cmd = ["git", "clone", "-q", "--depth", "1", "-b", ref, url, str(src)]
+                    if fw.get("submodules"):
+                        cmd[2:2] = ["--recurse-submodules"]
+                    subprocess.run(cmd, check=True)
                 # Build output goes to stderr: stdout carries only the
                 # board=elf results, so callers can parse it.
                 for step in ("configure", "build"):
@@ -1078,6 +1220,8 @@ class System:
                 elf = src / fw["build"]["elf"]
                 subprocess.run(["arm-none-eabi-objcopy", "-O", "binary", str(elf),
                                 str(elf.with_suffix(".bin"))], check=True)
+                if commit:
+                    stamp_ref(src, fw, commit, ref)
                 by_source[key] = elf
             built[name] = by_source[key]
         return built
@@ -1111,6 +1255,11 @@ def main(argv=None) -> int:
         if name == "build":
             s.add_argument("--workdir", type=Path, default=REPO / "build" / "fw")
             s.add_argument("--ref", action="append", metavar="BOARD=REF")
+            s.add_argument("--commit", action="append", metavar="BOARD=SHA",
+                           help="build that image at this full commit id (what its ref "
+                                "resolved to), in a directory keyed by commit and recipe")
+            s.add_argument("--only", action="append", metavar="IMAGE",
+                           help="build just this image (repeatable; default: every image)")
     args = p.parse_args(argv)
     try:
         system = System(args.system)
@@ -1134,7 +1283,9 @@ def main(argv=None) -> int:
             print(json.dumps(system.bench_config(), indent=2))
         elif args.cmd == "build":
             for board, elf in system.build_firmware(args.workdir, _pairs(args.ref),
-                                                    log=lambda m: print(m, file=sys.stderr)).items():
+                                                    log=lambda m: print(m, file=sys.stderr),
+                                                    commits=_pairs(args.commit),
+                                                    only=args.only).items():
                 print(f"{board}={elf}")
     except SystemError as e:
         print(f"error: {e}", file=sys.stderr)

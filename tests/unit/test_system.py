@@ -1,6 +1,7 @@
 """Host-only checks of the catalogue, the systems and the generator."""
 import json
 import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -681,6 +682,95 @@ def test_built_images_name_the_source_dir_by_ref(tmp_path):
     assert built_images(tmp_path) == {}
     (tmp_path / "built.txt").write_text(f"ecu={elf}\nnot a line\n")
     assert built_images(tmp_path) == {elf.resolve(): "ecu"}
+
+
+def test_commit_builds_are_keyed_by_commit_and_recipe(tmp_path):
+    from vhil.system import commit_image_path, recipe_id, source_dir
+    fw = yaml.safe_load((REPO / "catalog" / "firmware" / "ecu.yaml").read_text())
+    sha = "0123456789abcdef" * 2 + "01234567"
+    elf = commit_image_path(tmp_path, fw, sha)
+    assert elf == tmp_path / f"ecu+0123456789ab.{recipe_id(fw)}" / "build" / "ECU08.elf"
+    # Another recipe or toolchain is another build of the same commit.
+    other = {**fw, "build": {**fw["build"], "toolchain": "Arm GNU 15.1.Rel1"}}
+    assert recipe_id(other) != recipe_id(fw)
+    assert recipe_id({**fw, "description": "words"}) == recipe_id(fw)
+    # A ref name never lands there: "<id>@<ref>", and a ref has no "+" before it.
+    assert source_dir(tmp_path, fw, "+x").name == "ecu@+x"
+    with pytest.raises(SystemError, match="not a full commit id"):
+        commit_image_path(tmp_path, fw, "dev")
+
+
+@pytest.mark.parametrize("layout", ["detached", "loose", "packed"])
+def test_checkout_commit_reads_git_without_running_it(tmp_path, layout):
+    from vhil.system import checkout_commit
+    sha = "ab" * 20
+    git = tmp_path / ".git"
+    (git / "refs" / "heads" / "feat").mkdir(parents=True)
+    if layout == "detached":
+        (git / "HEAD").write_text(sha + "\n")
+    else:
+        (git / "HEAD").write_text("ref: refs/heads/feat/x\n")
+        if layout == "loose":
+            (git / "refs" / "heads" / "feat" / "x").write_text(sha + "\n")
+        else:
+            (git / "packed-refs").write_text(f"# pack-refs\n{sha} refs/heads/feat/x\n")
+    assert checkout_commit(tmp_path) == sha
+    assert checkout_commit(tmp_path / "nope") is None
+
+
+def test_find_build_reuses_a_commit_build_or_an_old_ref_build_at_that_commit(tmp_path):
+    from vhil.system import commit_image_path, find_build, newest_build, stamp_ref
+    fw = yaml.safe_load((REPO / "catalog" / "firmware" / "ams.yaml").read_text())
+    a, b = "a" * 40, "b" * 40
+    new = commit_image_path(tmp_path, fw, a)
+    new.parent.mkdir(parents=True)
+    new.write_bytes(b"\x7fELF")
+    old = tmp_path / "ams@dev" / "build" / "AMS.elf"
+    old.parent.mkdir(parents=True)
+    old.write_bytes(b"\x7fELF")
+    (tmp_path / "ams@dev" / ".git").mkdir()
+    (tmp_path / "ams@dev" / ".git" / "HEAD").write_text(b + "\n")
+    assert find_build(tmp_path, fw, a) is None                    # not in built.txt yet
+    (tmp_path / "built.txt").write_text(f"ams={new}\nams={old}\n")
+    assert find_build(tmp_path, fw, a) == new.resolve()
+    assert find_build(tmp_path, fw, b) == old.resolve()           # built before, by name
+    assert find_build(tmp_path, fw, "c" * 40) is None
+    # The editor's "newest build of a ref name": the stamps the worker writes.
+    assert newest_build(tmp_path, fw, "feat/x") is None
+    stamp_ref(new.parents[1], fw, a, "feat/x")
+    assert newest_build(tmp_path, fw, "feat/x") == new.resolve()
+
+
+def test_build_at_a_commit_fetches_it_into_its_commit_dir(tmp_path, monkeypatch):
+    """--commit: git init + fetch of that commit (GitHub serves a reachable
+    commit by id) + checkout, the recipe's steps, and a stamp naming the
+    ref; --only builds just that image."""
+    from vhil import system as vs
+    calls = []
+
+    def run(cmd, *a, **k):
+        calls.append(cmd)
+        if isinstance(cmd, list) and cmd[:2] == ["git", "init"]:
+            Path(cmd[-1]).mkdir(parents=True)
+        if isinstance(cmd, list) and cmd[0] == "arm-none-eabi-objcopy":
+            Path(cmd[-2]).parent.mkdir(parents=True, exist_ok=True)
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+    monkeypatch.setattr(vs.subprocess, "run", run)
+    sha = "c" * 40
+    out = System(REPO / "systems" / "ams.yaml").build_firmware(
+        tmp_path, {"ams": "feat/x"}, log=lambda m: None, commits={"ams": sha}, only=["ams"])
+    fw = yaml.safe_load((REPO / "catalog" / "firmware" / "ams.yaml").read_text())
+    src = vs.commit_source_dir(tmp_path, fw, sha)
+    assert out == {"ams": src / "build" / "AMS.elf"}
+    git = [c for c in calls if isinstance(c, list) and c[0] == "git"]
+    assert git == [["git", "init", "-q", str(src)],
+                   ["git", "-C", str(src), "fetch", "-q", "--depth", "1",
+                    "https://github.com/isc-fs/IFS08-CE-AMS", sha],
+                   ["git", "-C", str(src), "checkout", "-q", "FETCH_HEAD"]]
+    assert vs.read_stamp(src)["commit"] == sha and "feat/x" in vs.read_stamp(src)["refs"]
+    with pytest.raises(SystemError, match="not a full commit id"):
+        System(REPO / "systems" / "ams.yaml").build_firmware(tmp_path, commits={"ams": "dev"},
+                                                             log=lambda m: None)
 
 
 @pytest.mark.parametrize("entry, message", [
