@@ -35,7 +35,7 @@ class Pinned:
     def commits(self, system, refs, known=None, log=None):
         return {}
 
-    def resolve(self, system, refs, commits=None):
+    def resolve(self, system, refs, commits=None, on_line=None):
         return self.images
 
 
@@ -101,3 +101,17 @@ def test_a_queued_run_streams_its_trace_and_passes(tmp_path, images):
     assert rec == {"kind": "end", "state": "passed"}
     assert len(got) == len(frames) + len(samples)
     assert client.get(f"/api/runs/{run_id}/artifacts/renode.log").status_code == 200
+
+    # Its live logs (vhil/runlog.py, docs/live-session.md#logs): Renode's
+    # log filtered (the machine starting), the bootloader's jump to the app
+    # after its 2 s window (invariant 5), and what the ECU sent its GPS on
+    # USART10 (the PMTK commands, IFS08-CE-ECU gps_task.cpp:96).
+    logs = client.get(f"/api/runs/{run_id}/trace?kinds=log").json()
+    assert all(r.get("source") and r.get("level") for r in logs)
+    renode = [r for r in logs if r["source"] == "renode"]
+    assert any("Machine started" in r["text"] for r in renode)
+    jump = [r["t_us"] for r in renode if r["text"] == "ecu: the bootloader jumped to the app"]
+    assert len(jump) == 1 and 2_000_000 <= jump[0] <= BOOT_MS * 1000, jump
+    gps = [r for r in logs if r["source"] == "ecu.USART10"]
+    assert gps and all(r["text"].startswith("$PMTK") for r in gps), gps
+    assert client.get(f"/api/runs/{run_id}/artifacts/uart/ecu.USART10.txt").status_code == 200

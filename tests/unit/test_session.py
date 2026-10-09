@@ -279,7 +279,7 @@ class FixedResolver:
     def commits(self, system, refs, known=None, log=None):
         return {}
 
-    def resolve(self, system, refs, commits=None):
+    def resolve(self, system, refs, commits=None, on_line=None):
         return {}
 
 
