@@ -1,22 +1,32 @@
 """AMS SD logging through the SDMMC1 IDMA model (#21), read back from the card.
 
-Firmware facts (IFS08-CE-AMS):
+Firmware facts (IFS08-CE-AMS dev, 1508d13):
   FatFs on SDMMC1 by IDMA, single buffer: HAL_SD_ReadBlocks_DMA /
     HAL_SD_WriteBlocks_DMA via sd_diskio.c, bounce buffer in .sd_dma (RAM_D1)
   LOGnnnn.TMP is open while logging; it becomes LOGnnnn.CSV with a LOGnnnn.CRC
-    sidecar at rotation (5 min / 4 MiB, ams_config.hpp:295-304) or, after a
-    power cut, as an orphan sealed at the next boot (sd_logger_task.cpp:212-250)
-  .CRC: 8 ASCII hex digits + newline, CRC-32 ISO-HDLC = zlib.crc32 (crc32.hpp)
-  rows at 4 Hz (SafetyTask capture period 250 ms, ams_config.hpp:273); 314
-    columns: tick_ms, FSM / pack fields, then c<m>_<cell> (5 x 19) and
-    t<m>_<slot> (5 x 40)
+    sidecar at rotation (5 min / 4 MiB, ams_config.hpp:300, :313) or, after a
+    power cut, as an orphan sealed at the next boot (sd_logger_task.cpp:248-290)
+  .CRC: 8 ASCII hex digits + newline, CRC-32 ISO-HDLC = zlib.crc32 (crc32.hpp,
+    sd_logger_task.cpp:227-246)
+  rows at 4 Hz (SafetyTask capture period 250 ms, ams_config.hpp:282); 331
+    columns: 18 head scalars, c<m>_<cell> (5 x 19), t<m>_<slot> (5 x 40), 18
+    tail scalars (log_record.hpp:15-21, :116-164); cell, temperature and BMS
+    summary fields are empty until every module has reported (bms_valid,
+    log_record.hpp:71-75)
+  split-rate logging (IFS08-CE-AMS #596/#598/#601/#603): each rotation index
+    also owns IMUnnnn, CELnnnn and ELEnnnn .TMP -> .BIN + .CRC, sealed with
+    the LOG (binary first, LOG last) (log_names.hpp:5-10,
+    sd_logger_task.cpp:283-290, :389-399); format in ams_binlog.py
+  CEL: one 5 x 19 cell frame per cell-voltage read (bin_log.hpp:119-146);
+    ELE: one record per 10 ms window of the oversampled pack current, its
+    mean / min / max (bin_log.hpp:178-202)
   card detect PE3: LOW = card in; with the slot empty the MainLite's pull-up
     holds it HIGH and BSP_SD_Init returns before touching SDMMC
     (fatfs_platform.c BSP_PlatformIsDetected); the logger retries the mount
     every tick and never blocks (sd_logger_task.cpp:1-20)
-  g_log_state 0=boot 1=no_card 2=logging 3=io_error (sd_logger_task.cpp:117):
-    1 when f_mount fails (:662-674), 3 on teardown after an I/O error
-    (:356-365, :678/:687/:750)
+  g_log_state 0=boot 1=no_card 2=logging 3=io_error (sd_logger_task.cpp:140):
+    1 when f_mount fails (:759-764), 3 on teardown after an I/O error
+    (:405-415)
   a dead card (detect LOW, no answer): BSP_SD_Init -> HAL_SD_Init
     (bsp_driver_sd.c:42-62) runs the card identification, whose commands
     time out on the controller (Stm32H7Sdmmc.cs header, RM0468 60.5.4); the
@@ -30,13 +40,24 @@ from types import SimpleNamespace
 
 import pytest
 
+import ams_binlog as binlog
 from vhil.sim import Sim
 from vhil.system import REPO
 
 CARD_BYTES = 0x8000000          # catalog/models/sd-card.yaml capacity: 128 MiB
 LOG_S, AFTER_CUT_S = 8, 6
 RUNS, RUN_S = 3, 5
-COLUMNS = 314
+COLUMNS_MAIN = 314                                  # a pre split-rate build's LOG.CSV
+# LOG.CSV's columns (log_record.hpp:116-154): head, cells, temperatures, tail.
+HEAD = ["tick_ms", "fsm", "mode", "ams_ok", "fault", "detail", "tsms", "dash_chg", "mod_mask",
+        "pack_mV", "I_raw_mA", "I_filt_mA", "dcbus_V", "vmin_mV", "vmax_mV", "tmin_C", "tmax_C",
+        "tavg_C"]
+TAIL = ["bal_state", "bal_inhibit", "bal_active", "bms_valid", "bms_age_ms", "soc_ppm",
+        "soc_sig_ppm", "soc_flags", "soc_seeds", "q_dis_mAs", "q_chg_mAs", "q_gaps",
+        "dcbus_age_ms", "veh_flags", "chg_age_ms", "pec_err", "spi_err", "chain_rec"]
+LOG_COLUMNS = (HEAD + [f"c{m}_{n}" for m in range(5) for n in range(19)]
+               + [f"t{m}_{n}" for m in range(5) for n in range(40)] + TAIL)
+BIN_KINDS = {"IMU": binlog.IMU_SCHEMA, "CEL": binlog.CEL_SCHEMA, "ELE": binlog.ELE_SCHEMA}
 STATUS, TIMING = 0x4A0, 0x6C1
 SDMMC, CARD = "sysbus.sdmmc1", "sysbus.sdmmc1.sd"   # catalog/boards/mainlite.yaml
 LOG_STATE = "_ZN12_GLOBAL__N_111g_log_stateE"      # sd_logger_task.cpp:117
@@ -103,9 +124,10 @@ def logged(tmp_path_factory, images, request):
         status = [f.t_us for f in sim.can("can_acu").frames(STATUS)]
         timing = sim.can("can_acu").last(TIMING).data
         cut_ms = sim.read_symbol("ams", "uwTick", 4)   # the app's clock, as tick_ms
+        split = binlog.split_rate(sim)
         _cut(sim)
         sim.run_for(ms=AFTER_CUT_S * 1000)
-    return SimpleNamespace(img=img, status=status, cut_ms=cut_ms,
+    return SimpleNamespace(img=img, status=status, cut_ms=cut_ms, split=split,
                            poll_max_ms=int.from_bytes(timing[2:4], "big"))
 
 
@@ -140,15 +162,82 @@ def test_the_log_has_a_header_and_rows_at_4_hz(card):
     assert 2 * LOG_S <= len(rows) <= 4 * LOG_S + 2, f"{len(rows)} rows in {LOG_S} s"
 
 
-def test_the_columns_carry_the_seeded_cell_and_temperature(card):
-    """T-151: 314 columns; the seeded cell and NTC in their own columns,
-    every other cell at the model default."""
-    header, rows = _rows(card, "LOG0000.CSV")
-    assert len(header) == COLUMNS, f"{len(header)} columns"
-    assert all(r["c1_11"] == "3650" and r["c1_10"] == "3700" for r in rows)
-    settled = rows[4:]                       # past the first temperature sweep
+def test_the_columns_carry_the_seeded_cell_and_temperature(logged):
+    """T-151: the firmware's columns, in its order; the seeded cell and NTC
+    in their own columns, every other cell at the model default, once every
+    module has reported (bms_valid)."""
+    header, rows = _rows(logged.img, "LOG0000.CSV")
+    if not logged.split:
+        assert len(header) == COLUMNS_MAIN, f"{len(header)} columns"
+        valid = rows
+    else:
+        assert header == LOG_COLUMNS, f"{len(header)} columns: {header[:18]} ... {header[-18:]}"
+        valid = [r for r in rows if r["bms_valid"] == "1"]
+        assert len(valid) >= len(rows) - 2, f"{len(rows) - len(valid)} rows before the first full poll"
+        assert all(r["c1_11"] == "" for r in rows if r["bms_valid"] != "1"), "seed values logged"
+    assert all(r["c1_11"] == "3650" and r["c1_10"] == "3700" for r in valid)
+    settled = valid[4:]                      # past the first temperature sweep
     assert all(r["t3_10"] == "40" and r["t3_11"] == "25" for r in settled)
-    assert all(r["mod_mask"] == "31" for r in rows)
+    assert all(r["mod_mask"] == "31" for r in valid)
+
+
+def _bin(img, name):
+    data = _read(img, name)
+    log = binlog.decode(data)
+    assert log.tail == 0, f"{name}: {log.tail} bytes of a partial record"
+    return log
+
+
+@pytest.fixture(scope="module")
+def split(logged):
+    if not logged.split:
+        pytest.skip("this AMS build has no split-rate .BIN logs (main)")
+    return logged
+
+
+def test_the_cell_frames_carry_every_read_of_the_seeded_cell(split):
+    """CEL0000.BIN: one frame per cell-voltage read, numbered without a gap,
+    each with the 5 x 19 matrix as the chain converted it; the seeded cell
+    and its neighbour in their slots (bin_log.hpp:119-176)."""
+    log = _bin(split.img, "CEL0000.BIN")
+    assert (log.stream, log.index, log.schema) == ("CEL", 0, binlog.CEL_SCHEMA)
+    frames = log.records
+    assert frames, "no cell frames"
+    seq = [f["seq"] for f in frames]
+    assert all((b - a) % 0x10000 == 1 for a, b in zip(seq, seq[1:])), f"dropped frames: {seq}"
+    t = [f["t_adcv_ms"] for f in frames]
+    assert t == sorted(t) and t[0] >= log.open_tick_ms
+    clean = [f for f in frames if f["ltc_ok"] == 0x3FF]      # all 10 ICs PEC-clean
+    assert len(clean) >= len(frames) - 2, f"{len(frames) - len(clean)} frames with a PEC miss"
+    assert all(f["c"][1][11] == 3650 and f["c"][1][10] == 3700 for f in clean)
+    assert all(v == 3700 for f in clean for m, row in enumerate(f["c"]) for n, v in enumerate(row)
+               if (m, n) != (1, 11))
+    # The logged window: from boot to within ~1 s of the cut.
+    assert split.cut_ms - t[-1] <= 1250, f"last frame at {t[-1]} ms, cut at {split.cut_ms} ms"
+
+
+def test_the_current_windows_run_at_100_hz_and_agree_with_the_log(split):
+    """ELE0000.BIN: a record per 10 ms window of the 12.5 kHz oversampled
+    capture, numbered without a gap, mean within [min, max]; at a constant
+    input every window's mean is the current LOG.CSV reports
+    (bin_log.hpp:178-230, ams_config.hpp:408)."""
+    log = _bin(split.img, "ELE0000.BIN")
+    assert (log.stream, log.index, log.schema) == ("ELE", 0, binlog.ELE_SCHEMA)
+    recs = log.records
+    assert len(recs) >= 100 * (LOG_S - 2), f"{len(recs)} windows in {LOG_S} s"
+    seq = [r["seq"] for r in recs]
+    assert all((b - a) % 0x10000 == 1 for a, b in zip(seq, seq[1:])), "dropped windows"
+    ticks = [r["tick_ms"] for r in recs]
+    gaps = [b - a for a, b in zip(ticks, ticks[1:])]
+    assert all(9 <= g <= 11 for g in gaps), f"window ends {sorted(set(gaps))} ms apart"
+    assert all(100 <= r["n"] <= 126 for r in recs), sorted({r["n"] for r in recs})
+    assert all(r["flags"] == 0 for r in recs), sorted({r["flags"] for r in recs})
+    assert all(r["i_min"] <= r["i_mean"] <= r["i_max"] for r in recs)
+    _, rows = _rows(split.img, "LOG0000.CSV")
+    raw = {int(r["I_raw_mA"]) for r in rows}
+    means = {r["i_mean"] for r in recs}
+    assert max(raw) - min(raw) <= 50 and max(means) - min(means) <= 50, (raw, means)
+    assert abs(sum(means) / len(means) - sum(raw) / len(raw)) <= 50, (raw, means)
 
 
 def test_a_power_cut_loses_at_most_a_second(logged):
@@ -173,33 +262,45 @@ def runs(tmp_path_factory, images):
     img = _card(tmp_path_factory.mktemp("sd-runs"))
     with Sim(REPO / "systems" / "ams.yaml", images("ams"),
              params={"sd": {"image": str(img)}}, card_dirs=[img.parent]) as sim:
+        split = binlog.split_rate(sim)
         for _ in range(RUNS):
             sim.wait_for_app()
             sim.run_for(ms=RUN_S * 1000)
             _cut(sim)
         sim.run_for(ms=3000)
-    return img
+    return img, split
 
 
 def test_one_sealed_log_per_run(runs):
-    """U-161, U-162: per run, the 4 Hz LOG and the 100 Hz IMU log (the
-    MainLite's BMI088, imu_task.cpp -> sd_logger_task.cpp) sealed with a
-    matching .CRC each, the next ones open, no stray files (AMS#495
-    fragmentation)."""
-    files = _ls(runs)
-    sealed = [f"{kind}{i:04d}" for kind in ("LOG", "IMU") for i in range(RUNS)]
-    expected = sorted([f"{n}.CSV" for n in sealed] + [f"{n}.CRC" for n in sealed]
-                      + [f"LOG{RUNS:04d}.TMP", f"IMU{RUNS:04d}.TMP"])
+    """U-161, U-162: per run, the 4 Hz LOG and the IMU, CEL and ELE binary
+    logs of the same rotation index (log_names.hpp:5-10), each sealed with a
+    matching .CRC, the next set open, no stray files (AMS#495
+    fragmentation). Every .BIN decodes: its header names its stream and run,
+    carries the firmware's schema and whole records."""
+    img, split = runs
+    if not split:
+        pytest.skip("this AMS build has no split-rate .BIN logs (main)")
+    files = _ls(img)
+    sealed = [f"LOG{i:04d}.CSV" for i in range(RUNS)]
+    sealed += [f"{kind}{i:04d}.BIN" for kind in BIN_KINDS for i in range(RUNS)]
+    expected = sorted(sealed + [f[:-4] + ".CRC" for f in sealed]
+                      + [f"{kind}{RUNS:04d}.TMP" for kind in ("LOG", *BIN_KINDS)])
     assert files == expected, f"card holds {files}"
-    for n in sealed:
-        crc = int(_read(runs, f"{n}.CRC").decode().strip(), 16)
-        assert crc == zlib.crc32(_read(runs, f"{n}.CSV")), f"{n}.CRC does not match"
+    for f in sealed:
+        data = _read(img, f)
+        crc = int(_read(img, f[:-4] + ".CRC").decode().strip(), 16)
+        assert crc == zlib.crc32(data), f"{f[:-4]}.CRC does not match"
+        if f.endswith(".BIN"):
+            log = _bin(img, f)
+            assert (log.stream, log.index, log.schema) == (f[:3], int(f[3:7]), BIN_KINDS[f[:3]]), f
+            assert log.record_size == binlog.RECORD_BYTES[f[:3]] and log.records, f
 
 
 def test_every_run_starts_fresh_and_keeps_the_mask(runs):
     """U-160: each log starts at its own boot and the module mask holds."""
+    img, _ = runs
     for i in range(RUNS):
-        _, rows = _rows(runs, f"LOG{i:04d}.CSV")
+        _, rows = _rows(img, f"LOG{i:04d}.CSV")
         assert int(rows[0]["tick_ms"]) <= 1000, f"LOG{i:04d} starts at {rows[0]['tick_ms']} ms"
         assert len(rows) >= 2 * (RUN_S - 1)
         assert {r["mod_mask"] for r in rows} == {"31"}
