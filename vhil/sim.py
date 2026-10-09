@@ -240,7 +240,9 @@ class CanBus:
     def stats(self) -> dict:
         """frames, ack_errors, lost, busy_ns, late (effects a machine saw after
         their bus time: a frame that started and ended between two sync points
-        of a multi-board bus), max_late_ns, dropped_records, eager."""
+        of a multi-board bus), max_late_ns, dropped_records, eager,
+        wake_retries (single-board wakes that found the bus taken and were
+        retried 1 us later: host timing in the timeline; 0 since #209)."""
         parts = self._bus("Stats").split()
         return {k: int(v) for k, v in zip(parts[::2], parts[1::2])}
 
