@@ -363,9 +363,39 @@ commit_source_dir`; the recipe id hashes the catalogue's build recipe and
 toolchain), so a branch that moved builds its new head and the same commit
 picked under two names is built once. A build at a ref name, such as the
 warm-up above, is reused when its checkout is at the run's commit. Each
-commit built takes about as much room as a ref did before (~1 GB); prune
-old `fw/*+*` directories (and their `built.txt` lines) by hand when the
-volume fills.
+commit built takes about as much room as a ref did before (~150 MB to ~1 GB).
+
+After a run, at most once every `VHIL_FW_PRUNE_INTERVAL_S` [3600] s across
+the workers (`fw/.last-prune`), a worker prunes the commit builds
+(`vhil/fwprune.py`). Per firmware it keeps the `VHIL_FW_KEEP` [10] used most
+recently and every one used within `VHIL_FW_KEEP_DAYS` [14] days (last use:
+`.vhil-last-used` in the build, touched whenever a run reuses or builds it),
+and never removes:
+
+- the head of an active branch of the firmware's repo (as the picker counts
+  them, `VHIL_FIRMWARE_ACTIVE_DAYS`) or the catalogue ref's commit. The
+  workers' egress reaches github.com only, not its API, so in this
+  deployment every branch head counts as active; a repo whose refs can't be
+  listed keeps all its builds;
+- the commit of a queued or running run;
+- anything while a build holds `fw/.build.lock` (the pass is skipped).
+
+`VHIL_FW_MAX_GB` [0, no cap] > 0 also caps the commit builds' total: beyond
+it, the builds the first two rules kept go oldest first (the three above
+still stay). `built.txt` is rewritten atomically without a build's lines
+before its directory is deleted. Each pass logs what it removed and the bytes
+freed (`docker compose logs worker | grep prune`). To see what a pass would
+do, or make one now:
+
+```sh
+docker compose -f deploy/compose.prod.yaml run --rm --no-deps worker \
+    python -m vhil.worker prune --dry-run      # drop --dry-run to prune
+```
+
+Builds at a ref name (`fw/<firmware>@<ref>/`: the warm-up above, builds from
+before commit keys) are never pruned: the worker falls back to them when a
+ref can't be resolved to a commit. Remove one by hand (its directory and its
+`built.txt` lines) once nothing names that ref.
 
 The editor's firmware picker lists each repo's **active** branches (`GET
 /api/firmware/{id}/refs`): the repo's default branch, `dev` and `main`, the

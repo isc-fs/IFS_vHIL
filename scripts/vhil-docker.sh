@@ -25,6 +25,7 @@
 #   scripts/vhil-docker.sh server                web app API + shell on http://localhost:8080
 #                                                (M5; full stack: docker/compose.yaml)
 #   scripts/vhil-docker.sh worker [--once ...]   run worker for the server's queue (vhil.worker)
+#   scripts/vhil-docker.sh prune [--dry-run]     prune old commit builds in /vhil/fw (vhil/fwprune.py)
 #   scripts/vhil-docker.sh editor-check [systems...]
 #                                                Pipeline Manager loads every system's graph
 #   scripts/vhil-docker.sh shell                 a shell in the container
@@ -215,7 +216,9 @@ server)
     VHIL_IMAGE=$base_image exec "${compose[@]}" up api proxy ;;
 worker)
     in_container 'export VHIL_DATA=/vhil/server VHIL_FW_DIR=/vhil/fw; exec python -m vhil.worker "$@"' "$@" ;;
+prune)
+    in_container 'export VHIL_DATA=/vhil/server VHIL_FW_DIR=/vhil/fw; exec python -m vhil.worker prune "$@"' "$@" ;;
 shell) in_container 'exec bash' ;;
 run) in_container 'exec "$@"' "$@" ;;
-*) sed -n '2,35p' "$0" | sed 's/^# \{0,1\}//'; [ "$cmd" = help ] ;;
+*) sed -n '2,36p' "$0" | sed 's/^# \{0,1\}//'; [ "$cmd" = help ] ;;
 esac

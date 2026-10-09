@@ -96,7 +96,9 @@ starts. Never set it on a host.
   it is created (a fresh `git ls-remote`, not the picker's cache) and
   records them (`firmware_commits`, shown in the Artifacts tab as
   `ams: feat/x @ 1a2b3c4d5e6f`); the worker builds and reuses images by
-  (firmware, commit, recipe) (`vhil/worker.py` module doc).
+  (firmware, commit, recipe) (`vhil/worker.py` module doc), and prunes
+  old ones after runs (`vhil/fwprune.py`; `scripts/vhil-docker.sh prune
+  [--dry-run]` locally, [docs/deploy.md, "Firmware"](../deploy.md#firmware)).
 - **Warnings**: Check, Save and Open show what `vhil.system validate` warns
   of (a pin the board's role leaves unconnected on its backplane) next to
   the errors. A warning never blocks a save.

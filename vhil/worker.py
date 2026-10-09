@@ -1,6 +1,7 @@
 """The web app's run worker (M5.2, #114; docs/architecture/m5-web-app.md).
 
-    python -m vhil.worker [--once] [--poll S] [--fw-dir DIR] [--no-build]
+    python -m vhil.worker [--once] [--poll S] [--fw-dir DIR] [--no-build] [--no-prune]
+    python -m vhil.worker prune [--dry-run] [--fw-dir DIR]
 
 Claims queued runs from the server's SQLite table (vhil/server/runs.py) and
 executes their scenario with the same code CI runs: a `run` scenario drives
@@ -36,7 +37,12 @@ under one lock per fw directory, and appends to built.txt. A ref whose commit
 can't be resolved at all (GitHub unreachable) falls back to the build at the
 ref name, as before, and the trace says so. --no-build makes a missing image
 an error instead. The run's summary records each image's ref and commit
-(`firmware_commits`).
+(`firmware_commits`). After a run, at most once an hour across the workers
+(VHIL_FW_PRUNE_INTERVAL_S), the worker prunes the commit builds no one is
+likely to run again (vhil/fwprune.py: the last VHIL_FW_KEEP used and those
+used within VHIL_FW_KEEP_DAYS stay, and active branch heads, queued and
+running runs' commits and a build in progress always); `prune [--dry-run]`
+makes a pass now.
 
 Liveness: while it holds a run the worker beats the run's heartbeat from a
 background thread (every --heartbeat S) and at every slice, and before each
@@ -75,6 +81,7 @@ from pathlib import Path
 from typing import Callable, NamedTuple, Optional
 
 from vhil import canframe
+from vhil import fwprune
 from vhil import expect as vexpect
 from vhil import stateview
 from vhil.server.config import Settings
@@ -1095,9 +1102,13 @@ class FirmwareResolver:
         return out
 
     def resolve(self, system: System, refs: dict, commits: Optional[dict] = None) -> dict[str, Path]:
-        want = self.expected(system, refs, commits)
-        built = self._built()
-        missing = [k for k, im in want.items() if im.path not in built or not im.path.is_file()]
+        # Under the reuse lock, a prune can't remove a build between its
+        # lookup here and its last-use mark (vhil.fwprune).
+        with fwprune.reuse_lock(self.fw_dir):
+            want = self.expected(system, refs, commits)
+            built = self._built()
+            missing = [k for k, im in want.items() if im.path not in built or not im.path.is_file()]
+            self._used(system, refs, {k: im for k, im in want.items() if k not in missing})
         if missing:
             if not self.build:
                 raise RuntimeError("no built image for " + ", ".join(
@@ -1128,11 +1139,19 @@ class FirmwareResolver:
         for key, im in want.items():
             if im.commit:
                 self._stamp(system, key, refs, im)
+        self._used(system, refs, want)
         out = {k: im.path for k, im in want.items()}
         for k, p in out.items():
             if not p.is_file():
                 raise RuntimeError(f"firmware build gave no {k} image at {p}")
         return out
+
+    def _used(self, system: System, refs: dict, images: dict[str, Image]) -> None:
+        """Mark each commit build in `images` used now (what a prune keeps by)."""
+        for key, im in images.items():
+            fw, _ = image_ref(system, key, refs)
+            if im.commit and im.path == commit_image_path(self.fw_dir, fw, im.commit).resolve():
+                fwprune.touch_used(commit_source_dir(self.fw_dir, fw, im.commit))
 
     def _stamp(self, system: System, key: str, refs: dict, im: Image) -> None:
         fw, _ = image_ref(system, key, refs)
@@ -1156,7 +1175,8 @@ class Worker:
                  sim_factory: Callable = _default_sim,
                  resolver: Optional[FirmwareResolver] = None,
                  heartbeat_s: float = HEARTBEAT_S, reclaim_after_s: float = RECLAIM_AFTER_S,
-                 max_attempts: int = MAX_ATTEMPTS, limits: Optional[Limits] = None):
+                 max_attempts: int = MAX_ATTEMPTS, limits: Optional[Limits] = None,
+                 prune: Optional[fwprune.PrunePolicy] = None):
         if reclaim_after_s <= 2 * heartbeat_s:
             raise ValueError("reclaim_after_s must be more than two heartbeats")
         self.settings = settings
@@ -1168,6 +1188,8 @@ class Worker:
         self.heartbeat_s, self.reclaim_after_s = heartbeat_s, reclaim_after_s
         self.max_attempts = max_attempts
         self.limits = limits or Limits.from_env()
+        self.prune = prune              # None: never prune the firmware volume
+        self._details = None
 
     def reclaim(self) -> list[dict]:
         moved = self.store.reclaim(self.reclaim_after_s, self.max_attempts)
@@ -1192,7 +1214,35 @@ class Worker:
         trace = TraceWriter(run_dir / TRACE, max_bytes=self.limits.max_trace_bytes,
                             header=trace_header(run))
         with Heartbeat(self.store, run["id"], self.id, self.heartbeat_s):
-            return self._execute(run, run_dir, trace)
+            run_id = self._execute(run, run_dir, trace)
+        self.prune_firmware()
+        return run_id
+
+    def prune_firmware(self, force: bool = False, dry_run: bool = False) -> Optional[fwprune.PruneResult]:
+        """A firmware prune pass (vhil.fwprune) when one is due: at most once
+        per policy interval across every worker sharing the volume. Never
+        fails the caller; a worker that can't build doesn't prune."""
+        policy = self.prune
+        if policy is None or not self.resolver.build:
+            return None
+        fw_dir = self.resolver.fw_dir
+        if not force and not fwprune.due(fw_dir, policy.interval_s):
+            return None
+        log = lambda m: print(m, flush=True)
+        try:
+            if self._details is None:
+                self._details = fwprune.branch_details()
+            result = fwprune.prune(fw_dir, policy, catalog=Path(self.settings.workspace) / "catalog",
+                                   lister=self.resolver.lister, details=self._details,
+                                   db=self.settings.db, active_days=fwprune.active_days(),
+                                   dry_run=dry_run, log=log)
+        except Exception as e:  # noqa: BLE001 - a failed prune never fails a run
+            print(f"firmware prune failed: {type(e).__name__}: {e}", flush=True)
+            return None
+        if result.removed or result.skipped or dry_run:
+            for line in result.report():
+                print(line, flush=True)
+        return result
 
     def _execute(self, run: dict, run_dir: Path, trace: TraceWriter) -> int:
         run_id = run["id"]
@@ -1317,13 +1367,36 @@ class Worker:
                 time.sleep(poll_s)
 
 
+def prune_main(argv) -> int:
+    p = argparse.ArgumentParser(prog="python -m vhil.worker prune",
+                                description="Prune the firmware volume's commit builds "
+                                            "(vhil/fwprune.py; VHIL_FW_KEEP, VHIL_FW_KEEP_DAYS, "
+                                            "VHIL_FW_MAX_GB)")
+    p.add_argument("--dry-run", action="store_true", help="say what would go; remove nothing")
+    p.add_argument("--fw-dir", type=Path, default=DEFAULT_FW_DIR,
+                   help="firmware build directory with built.txt (default $VHIL_FW_DIR or /vhil/fw)")
+    a = p.parse_args(argv)
+    worker = Worker(Settings.from_env(), resolver=FirmwareResolver(a.fw_dir),
+                    prune=fwprune.PrunePolicy.from_env())
+    result = worker.prune_firmware(force=True, dry_run=a.dry_run)
+    if result is not None and not (result.removed or result.skipped or a.dry_run):
+        for line in result.report():
+            print(line)
+    return 0 if result is not None and not result.skipped else 1
+
+
 def main(argv=None) -> int:
+    argv = sys.argv[1:] if argv is None else list(argv)
+    if argv[:1] == ["prune"]:
+        return prune_main(argv[1:])
     p = argparse.ArgumentParser(prog="python -m vhil.worker", description=__doc__.splitlines()[0])
     p.add_argument("--once", action="store_true", help="run at most one queued run, then exit")
     p.add_argument("--poll", type=float, default=1.0, help="seconds between queue polls")
     p.add_argument("--fw-dir", type=Path, default=DEFAULT_FW_DIR,
                    help="firmware build directory with built.txt (default $VHIL_FW_DIR or /vhil/fw)")
     p.add_argument("--no-build", action="store_true", help="never build firmware; reuse only")
+    p.add_argument("--no-prune", action="store_true",
+                   help="never prune old commit builds after a run (vhil/fwprune.py)")
     p.add_argument("--heartbeat", type=float, default=HEARTBEAT_S,
                    help=f"seconds between a held run's heartbeats (default {HEARTBEAT_S:g})")
     p.add_argument("--reclaim-after", type=float, default=RECLAIM_AFTER_S,
@@ -1334,7 +1407,8 @@ def main(argv=None) -> int:
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
     worker = Worker(Settings.from_env(), resolver=FirmwareResolver(
         a.fw_dir, build=not a.no_build, log=lambda m: print(m, file=sys.stderr, flush=True)),
-        heartbeat_s=a.heartbeat, reclaim_after_s=a.reclaim_after)
+        heartbeat_s=a.heartbeat, reclaim_after_s=a.reclaim_after,
+        prune=None if a.no_prune else fwprune.PrunePolicy.from_env())
     if a.once:
         worker.run_once()
     else:
