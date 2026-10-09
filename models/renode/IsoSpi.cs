@@ -242,8 +242,10 @@ namespace Antmicro.Renode.Peripherals.SPI
             CorruptPec = false;
             corruptNext = 0;
             corrupting = false;
+            CorruptConfigWrites = false;
+            corruptConfigNext = 0;
             commandCounts.Clear();
-            badCommandPec = badWritePec = wakes = adcvWhileDischarging = 0;
+            badCommandPec = badWritePec = wakes = adcvWhileDischarging = adowWhileDischarging = 0;
             rx.Clear();
             relayed.Clear();
             reply = null;
@@ -337,6 +339,14 @@ namespace Antmicro.Renode.Peripherals.SPI
             switch(command.Value)
             {
                 case WRCFGA:
+                    if(CorruptConfigWrites || corruptConfigNext > 0)
+                    {
+                        // The write's data PEC arrives wrong: the chip
+                        // discards the data, CFGR (DCC included) unchanged.
+                        corruptConfigNext = Math.Max(0, corruptConfigNext - 1);
+                        badWritePec++;
+                        break;
+                    }
                     TakeSegment(config);
                     break;
                 case WRCOMM:
@@ -365,6 +375,23 @@ namespace Antmicro.Renode.Peripherals.SPI
         {
             corruptNext = Math.Max(0, n);
         }
+
+        // A WRCFGA that does not take on this chip: its write data arrives
+        // with a bad PEC (noise on this chip's isoSPI port A), so the chip
+        // discards it and keeps its configuration, DCC bits included, as the
+        // LTC6811 does with any write whose data PEC does not match (its
+        // datasheet's PEC rule for write commands; TakeSegment below). The
+        // host sees nothing: a write has no reply. Every WRCFGA while set,
+        // or just the next n.
+        public bool CorruptConfigWrites { get; set; }
+
+        public void CorruptNextConfigWrites(int n)
+        {
+            corruptConfigNext = Math.Max(0, n);
+        }
+
+        // Writes this chip discarded for a bad data PEC, injected or not.
+        public int RejectedWrites => badWritePec;
 
         public void SetCell(int cell, int millivolts)
         {
@@ -421,6 +448,11 @@ namespace Antmicro.Renode.Peripherals.SPI
 
         public int MuxChannel => muxChannel;
 
+        // The ADG731 address in COMM, what the next STCOMM latches (-1: no
+        // START in COMM, so STCOMM leaves the mux alone).
+        public int CommMuxAddress =>
+            (comm[0] >> 4) == 0x8 ? (((comm[0] & 0x0F) << 4) | (comm[1] >> 4)) & 0x1F : -1;
+
         // DCC (discharge) bits last written, cells 1..12.
         public int DischargeBits => config[4] | ((config[5] & 0x0F) << 8);
 
@@ -428,6 +460,10 @@ namespace Antmicro.Renode.Peripherals.SPI
         // meant to quiesce balancing first, or the reading includes the
         // balance current's IR drop.
         public int AdcvWhileDischarging => adcvWhileDischarging;
+
+        // Open-wire conversions (ADOW) started with a discharge switch on:
+        // the balance current shifts the pull-up/down delta the same way.
+        public int AdowWhileDischarging => adowWhileDischarging;
 
         public int CommandCount(int opcode)
         {
@@ -490,6 +526,10 @@ namespace Antmicro.Renode.Peripherals.SPI
             }
             if(IsAdow(opcode))
             {
+                if(DischargeBits != 0)
+                {
+                    adowWhileDischarging++;
+                }
                 ConvertOpenWire(pullUp: (opcode & AdowPup) != 0);
                 return;
             }
@@ -547,11 +587,11 @@ namespace Antmicro.Renode.Peripherals.SPI
         // low 5 bits (EN = CS = 0). A no-op COMM (ICOM 0xF) leaves it alone.
         private void LatchMuxFromComm()
         {
-            if((comm[0] >> 4) != 0x8)
+            var address = CommMuxAddress;
+            if(address >= 0)
             {
-                return;
+                muxChannel = address;
             }
-            muxChannel = (((comm[0] & 0x0F) << 4) | (comm[1] >> 4)) & 0x1F;
         }
 
         private static byte[] Segment(byte[] data6)
@@ -736,6 +776,8 @@ namespace Antmicro.Renode.Peripherals.SPI
         private ushort? command;
         private int badCommandPec;
         private int adcvWhileDischarging;
+        private int adowWhileDischarging;
+        private int corruptConfigNext;
         private int badWritePec;
         private int wakes;
     }
