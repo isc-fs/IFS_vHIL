@@ -31,6 +31,7 @@ MONITOR_SOURCE = REPO / "models" / "renode" / "VhilMonitor.cs"
 
 _PROMPT = re.compile(rb"\((?:monitor|[\w.-]+)\) $")
 _ANSI = re.compile(rb"\x1b\[[0-9;?]*[A-Za-z]")
+_ABORT = re.compile(rb"VHIL-ABORT (.*)\n")
 
 IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 PATH = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*")
@@ -43,6 +44,12 @@ _FILE = re.compile(r"/?[A-Za-z0-9_.+@-]+(?:/[A-Za-z0-9_.+@-]+)*")
 
 class RenodeError(RuntimeError):
     pass
+
+
+class MachineAborted(RenodeError):
+    """Renode aborted a machine (a CPU abort: models/renode/VhilMonitor.cs
+    ends the connection with a VHIL-ABORT line). The emulation can't go on;
+    what tlib refused to do is in the Renode log."""
 
 
 class UnsafeText(ValueError):
@@ -124,11 +131,17 @@ class RenodeMonitor:
                 time.sleep(0.5)
         self._lock = threading.Lock()
         self._buf = b""
+        self.aborted: str | None = None   # the VHIL-ABORT line, once a machine aborted
         self._read_prompt()
 
     def _read_prompt(self) -> bytes:
         while True:
             clean = _ANSI.sub(b"", self._buf).replace(b"\r", b"")
+            abort = _ABORT.search(clean)
+            if abort:
+                # The line may come before or after the command's own prompt.
+                self.aborted = abort.group(1).decode(errors="replace")
+                raise MachineAborted(self.aborted)
             m = _PROMPT.search(clean)
             if m:
                 self._buf = b""

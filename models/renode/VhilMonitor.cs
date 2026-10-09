@@ -13,8 +13,19 @@
 // PrepareShell), on 127.0.0.1 only. One client at a time: a second connects
 // once the first closes.
 //
+// A machine abort ends the client's connection, after one line naming it:
+//
+//     VHIL-ABORT machine 'ams' aborted (PC 0x40000000); see the Renode log
+//
+// Renode 1.17 pauses an aborted machine for good ("Emulation cannot continue
+// until this machine is removed", Machine.Abort), and a `RunFor` waiting on
+// its CPU never returns (#239): the client (vhil/renode.py) gets the line
+// instead of a prompt that never comes.
+//
 using System;
 using System.Collections.Concurrent;
+using System.Linq;
+using System.Text;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading;
@@ -34,7 +45,29 @@ namespace Antmicro.Renode.Testing
             var monitor = ObjectCreator.Instance.GetSurrogate<RenodeMonitor>();
             var listener = new TcpListener(IPAddress.Loopback, port);
             listener.Start(1);
+            emulation.MachineStateChanged += OnMachineStateChanged;
+            EmulationManager.Instance.EmulationChanged += () =>
+                EmulationManager.Instance.CurrentEmulation.MachineStateChanged += OnMachineStateChanged;
             new Thread(() => Serve(listener, monitor)) { IsBackground = true, Name = "vhil-monitor" }.Start();
+        }
+
+        private static void OnMachineStateChanged(IMachine machine, MachineStateChangedEventArgs args)
+        {
+            var io = client;
+            if(args.CurrentState != MachineStateChangedEventArgs.State.Aborted || io == null)
+            {
+                return;
+            }
+            var emulation = EmulationManager.Instance.CurrentEmulation;
+            var name = emulation.TryGetMachineName(machine, out var n) ? n : "?";
+            var cpu = machine.SystemBus.GetCPUs().FirstOrDefault();
+            var pc = cpu != null ? string.Format(" (PC 0x{0:X8})", cpu.PC.RawValue) : "";
+            foreach(var b in Encoding.ASCII.GetBytes($"\nVHIL-ABORT machine '{name}' aborted{pc}; see the Renode log\n"))
+            {
+                io.Write(b);
+            }
+            // Not on the aborting CPU's thread: closing waits for the line to go out.
+            new Thread(io.Dispose) { IsBackground = true, Name = "vhil-monitor-abort" }.Start();
         }
 
         private static void Serve(TcpListener listener, RenodeMonitor monitor)
@@ -45,27 +78,31 @@ namespace Antmicro.Renode.Testing
             monitor.Quitted += () => current?.Stop();
             while(true)
             {
-                Socket client;
+                Socket socket;
                 try
                 {
-                    client = listener.AcceptSocket();
+                    socket = listener.AcceptSocket();
                 }
                 catch(SocketException)
                 {
                     return;
                 }
-                using(var io = new LoopbackIO(client))
+                using(var io = new LoopbackIO(socket))
                 {
                     var shell = ShellProvider.GenerateShell(monitor);
                     shell.Terminal = new NavigableTerminalEmulator(new IOProvider { Backend = io }, null);
                     shell.Terminal.PlainMode = true;
                     monitor.Interaction = shell.Writer;
                     current = shell;
+                    client = io;
                     shell.Start(true);   // returns when the client closes
+                    client = null;
                     current = null;
                 }
             }
         }
+
+        private static volatile LoopbackIO client;
     }
 
     // A client socket as AntShell's passive I/O source: blocking reads, and

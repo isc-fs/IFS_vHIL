@@ -247,9 +247,13 @@ Ranks 3 and 4, closed by #196 (`test_ams_faults.py`, `test_ecu_robustness.py`;
   ARMv7-M ARM says: tests that write the enables, as the fix would, land in
   `BusFault_Handler` (precise, BFAR) and, through an MPU no-access region,
   `MemManage_Handler` (DACCVIOL, MMFAR), and the next boot reports 6/5 (AMS)
-  and 0xF3/0xF2 (ECU). An instruction fetch from an XN region aborts the
-  Renode machine instead (#239). UsageFault stays uncovered: its trigger is
-  the same escalation, and no test enables it.
+  and 0xF3/0xF2 (ECU). A jump into peripheral space (an instruction fetch
+  from an XN region of the default memory map) is a MemManage with IACCVIOL
+  (#239, `models/renode/VhilExecuteNever.cs`): HardFault/FORCED as the
+  firmware stands, `MemManage_Handler` with MEMFAULTENA set. A fetch from a
+  reserved range (IBUSERR on the chip) still aborts the Renode machine; the
+  run fails at once. UsageFault stays uncovered: its trigger is the same
+  escalation, and no test enables it.
 
 `--vhil-coverage` over the new tests alone (AMS dev `ec8ab44`, ECU dev
 `44610a5`) hits `vApplicationMallocFailedHook`, `MemManage_Handler` and

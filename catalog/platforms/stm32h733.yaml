@@ -34,8 +34,12 @@ renode:
     # A reserved range of the memory map that bus-faults every access
     # (Renode returns 0 for unmapped reads), for the tests' bus-fault hook.
     - models/renode/VhilBusError.cs
-    # One owner for the RCC's bus hooks, shared by the two models below.
-    - models/renode/VhilRccHooks.cs
+    # One owner for the RCC's and the NVIC's bus hooks, shared by the
+    # models below.
+    - models/renode/VhilBusHooks.cs
+    # The default memory map's Execute Never while the MPU is off: a fetch
+    # from peripheral space is a MemManage (Renode aborts the machine).
+    - models/renode/VhilExecuteNever.cs
     # RCC_RSR reset-source flags across resets (Renode's RCC resets them).
     - models/renode/VhilResetFlags.cs
     # RCC xxxRSTR peripheral resets with the H733's bits (Renode's has the
@@ -45,6 +49,7 @@ renode:
   setup:
     - emulation CreateVhilResetFlags "vhil_reset_{board}" "{board}"
     - emulation CreateVhilRccResets "vhil_rcc_{board}" "{board}"
+    - emulation CreateVhilExecuteNever "vhil_xn_{board}" "{board}"
   # In the reset macro, after every reset: power-on, software and watchdog.
   # Renode 1.17's CPU reset zeroes BASEPRI as read but not the masking it
   # applies (renode/renode#1021). An IWDG reset taken while the firmware

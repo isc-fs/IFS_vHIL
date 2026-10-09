@@ -47,13 +47,8 @@ namespace Antmicro.Renode.Testing
         public VhilResetFlags(IMachine machine)
         {
             this.machine = machine;
-            var sysbus = machine.SystemBus;
-            if(!machine.TryGetByName<IBusPeripheral>("sysbus.nvic", out var nvic))
-            {
-                throw new ArgumentException("needs sysbus.nvic");
-            }
-            // The RCC's hooks are shared with VhilRccResets.cs (VhilRccHooks.cs).
-            var rcc = VhilRccHooks.For(machine);
+            // The RCC's and the NVIC's hooks are shared (VhilBusHooks.cs).
+            var rcc = VhilBusHooks.For(machine, "sysbus.rcc");
             foreach(var offset in new[] { RsrOffset, C1RsrOffset })
             {
                 rcc.OnRead(offset, _ => rsr);
@@ -66,9 +61,9 @@ namespace Antmicro.Renode.Testing
                     return value;
                 });
             }
-            sysbus.SetHookBeforePeripheralWrite<uint>(nvic, (value, offset) =>
+            VhilBusHooks.For(machine, "sysbus.nvic").OnWrite(Aircr, value =>
             {
-                if(offset == Aircr && (value >> 16) == AircrKey && (value & SysResetReq) != 0)
+                if((value >> 16) == AircrKey && (value & SysResetReq) != 0)
                 {
                     pending = Software;
                 }
