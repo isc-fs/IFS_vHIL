@@ -116,9 +116,12 @@ scenario" records it.
             title="The scenario Run runs: its stimuli, watches and expects (the Scenario tab)"
         >
             <span class="vhil-visually-hidden">Scenario</span>
+            <!-- v-memo: re-rendered only when what it shows changes, so an open
+                 popup's options are never re-patched (src/vhil/stable.js) -->
             <select
+                v-memo="[scen.name, ws.id, scenarioKey]"
                 :value="scen.name" :disabled="!ws.id" aria-label="Scenario for Run"
-                @change="(ev) => pickScenario(ev.target.value)"
+                @change="(ev) => pickFromSelect(ev.target)"
             >
                 <option value="">no scenario</option>
                 <option v-for="s in scen.list" :key="s.name" :value="s.name">
@@ -197,7 +200,9 @@ scenario" records it.
 </template>
 
 <script>
-import { computed, defineComponent } from 'vue';
+import {
+    computed, defineComponent, inject, ref,
+} from 'vue';
 import {
     ws, boardFirmware, cycleTheme, exitReplay, isLive, keepAlive, pauseLive, pickScenario,
     runActive, runNow, showBoard, startLive, stopLive, stopRun,
@@ -211,17 +216,17 @@ import { edited, scen } from './scenarios.js';
 import { boards, nodeName } from './graph.js';
 import { replay, seconds } from './replay.js';
 import { runPage } from './api.js';
+import { keep } from './stable.js';
 
 export default defineComponent({
-    props: {
-        // Bumped when the graph changes, so the chips follow it.
-        tick: { type: Number, default: 0 },
-    },
-    setup(props) {
-        const chips = computed(() => {
-            props.tick; // eslint-disable-line no-unused-expressions
-            if (!ws.id) return [];
-            return boards().map((node) => {
+    setup() {
+        // Bumped when the graph changes, so the chips follow it (Home.vue).
+        const tick = inject('vhilTick', ref(0));
+        // The same chips as before keep the top bar from re-rendering.
+        const chips = computed((old) => {
+            tick.value; // eslint-disable-line no-unused-expressions
+            if (!ws.id) return keep(old, []);
+            return keep(old, boards().map((node) => {
                 const app = boardFirmware(node).find((f) => f.what === 'app');
                 let label = 'no firmware';
                 if (app?.fw) label = app.ref || app.fw.ref;
@@ -233,8 +238,20 @@ export default defineComponent({
                     label,
                     picked: Boolean(app?.ref),
                 };
-            });
+            }));
         });
+        // What the scenario dropdown lists, for its v-memo.
+        const scenarioKey = computed(() => scen.list
+            .map((s) => `${s.name}${s.unsaved ? ' (new)' : ''}`).join('\n'));
+        // A pick the workspace refused (its scenario didn't load) shows
+        // what is selected: v-memo keeps the select from re-syncing itself.
+        const pickFromSelect = async (el) => {
+            try {
+                await pickScenario(el.value);
+            } finally {
+                el.value = scen.name; // eslint-disable-line no-param-reassign
+            }
+        };
         const crumbTitle = computed(() => (ws.id
             ? `${ws.id} @ ${ws.branch || 'the checked-out tree'}${ws.ref ? ` (${ws.ref.slice(0, 8)})` : ''}${ws.dirty ? ': unsaved edits' : ''}`
             : ''));
@@ -312,7 +329,8 @@ export default defineComponent({
             exitReplay,
             runPage,
             scen,
-            pickScenario,
+            scenarioKey,
+            pickFromSelect,
             duration,
         };
     },

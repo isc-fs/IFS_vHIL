@@ -57,12 +57,17 @@ fixed aside. A board's role, firmware and bootloader are edited on its node
                             v-if="p.type === 'constant' || p.readonly"
                             :id="`vhil-prop-${p.name}`" class="mono"
                         >{{ p.value }}</output>
+                        <!-- v-pick and v-memo: a re-render leaves an open popup's
+                             options alone (src/vhil/stable.js) -->
                         <select
                             v-else-if="p.type === 'select'"
+                            v-pick="p.value"
                             :id="`vhil-prop-${p.name}`" class="vhil-input"
-                            :value="p.value" @change="(ev) => set(p.name, ev.target.value)"
+                            @change="(ev) => set(p.name, ev.target.value)"
                         >
-                            <option v-for="v in p.values" :key="v" :value="v">{{ v }}</option>
+                            <option v-for="v in p.values" :key="v" v-memo="[v]" :value="v">
+                                {{ v }}
+                            </option>
                         </select>
                         <input
                             v-else-if="p.type === 'bool'"
@@ -126,7 +131,9 @@ fixed aside. A board's role, firmware and bootloader are edited on its node
 </template>
 
 <script>
-import { computed, defineComponent } from 'vue';
+import {
+    computed, defineComponent, inject, ref,
+} from 'vue';
 import VhilStateCard from './VhilStateCard.vue';
 import VhilInputs from './VhilInputs.vue';
 import VhilDebugInspect from './VhilDebugInspect.vue';
@@ -139,6 +146,7 @@ import {
 import {
     nodeById, nodeName, prop, setProp, specNode, vhilKind,
 } from './graph.js';
+import { keep, vPick } from './stable.js';
 
 const LABELS = {
     firmware_ref: 'app ref', bootloader_ref: 'bootloader ref', host_netdev: 'host netdev',
@@ -150,17 +158,17 @@ const ON_NODE_NOTE = 'Pick the role, firmware and bootloader on the board.';
 
 export default defineComponent({
     components: { VhilStateCard, VhilInputs, VhilDebugInspect },
-    props: {
-        tick: { type: Number, default: 0 },
-    },
-    setup(props) {
+    directives: { pick: vPick },
+    setup() {
+        // Bumped when the graph changes (Home.vue).
+        const tick = inject('vhilTick', ref(0));
         const stateTrace = computed(() => {
             replay.version; // eslint-disable-line no-unused-expressions
             return ws.mode === 'REPLAY' || isLive() ? replay.stateTrace : null;
         });
         const live = computed(() => isLive());
         const node = computed(() => {
-            props.tick; // eslint-disable-line no-unused-expressions
+            tick.value; // eslint-disable-line no-unused-expressions
             return ws.selectedId ? nodeById(ws.selectedId) ?? null : null;
         });
         const kind = computed(() => (node.value ? vhilKind(node.value.type) : null));
@@ -168,12 +176,13 @@ export default defineComponent({
         // The node's properties as its type declares them (vhil/editor.py
         // specification()), with the values on the canvas; hidden ones (a
         // system's write_protect) stay hidden.
-        const properties = computed(() => {
-            props.tick; // eslint-disable-line no-unused-expressions
+        // The same rows as before keep the inspector from re-rendering.
+        const properties = computed((old) => {
+            tick.value; // eslint-disable-line no-unused-expressions
             const n = node.value;
-            if (!n) return [];
+            if (!n) return keep(old, []);
             const fw = Object.fromEntries(boardFirmware(n).map((f) => [f.refProp, f]));
-            return (specNode(n.type)?.properties ?? [])
+            return keep(old, (specNode(n.type)?.properties ?? [])
                 .filter((p) => !p.hidden && prop(n, p.name))
                 .map((p) => {
                     const f = fw[p.name];
@@ -188,7 +197,7 @@ export default defineComponent({
                         readonly: p.readonly || onNode,
                         note: onNode && p.name === 'role' ? ON_NODE_NOTE : '',
                     };
-                });
+                }));
         });
         const nodeProblems = computed(() => ws.problems.filter((p) => p.nodeId === ws.selectedId));
 

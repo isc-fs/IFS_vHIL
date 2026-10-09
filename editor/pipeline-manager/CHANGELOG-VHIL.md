@@ -595,6 +595,29 @@ from `git archive 04613679` except as listed below.
       (`workspace.js` `showBoard`: selected, centred, its firmware dropdown
       focused).
 
+26. **Native selects keep a pick** (Chrome and Safari on macOS: the top
+    bar's scenario dropdown opened, but clicking an option did nothing).
+    `components/Home.vue` bumps `tick` on every pointerup, keyup and change
+    (and 800 ms later), and passed it to the top bar and the inspector as a
+    prop: a prop change re-renders a component whole, and Vue re-patches
+    every `:value` on each render (it always patches `value`, and since 3.5
+    also sets the attribute), so an open select's options were re-written
+    under its popup, which drops the pick. Now:
+    - `Home.vue` provides `tick` (`inject('vhilTick')`) instead of passing
+      it to `VhilTopBar.vue` and `VhilInspector.vue`; they read it in the
+      computeds that follow the graph (the chips, the node's properties),
+      which keep their old value when they recompute to the same data
+      (`src/vhil/stable.js` `keep`, new, pure; `tests/js/stable.test.mjs`).
+      A pointer event no longer re-renders the top bar.
+    - The top bar's scenario select has `v-memo` (re-rendered only when the
+      scenario, the system or the list changes) and, after a pick, shows
+      what is selected (a refused pick goes back). The inspector's select
+      (inside a `v-for`, where `v-memo` can't go) takes its value through
+      `v-pick` (`stable.js`), which writes the DOM only when it differs, and
+      its options have `v-memo`.
+    - The board's own dropdowns (`VhilBoardControls.vue`) and the dock's
+      selects don't re-render on pointer events, and stay as they were.
+
 ## Left for later
 
 - **Dependabot alerts with no fix.** `showdown` ≤ 2.1.0 (three: ReDoS and
