@@ -9,8 +9,10 @@ description: >-
   downstream. Defaults: 3700 mV cells, 25 C on every mux channel, every
   wire connected. Test API per chip (monitor): SetCell, SetAllCells,
   SetTemperature, SetAllTemperatures, SetAuxRaw, OpenWire, Respond,
-  BreakDownstream, CorruptPec, CorruptNextReplies, CommandCount,
-  DischargeBits, AdcvWhileDischarging.
+  BreakDownstream, CorruptPec, CorruptNextReplies, CorruptConfigWrites,
+  CorruptNextConfigWrites (a WRCFGA that does not take: DCC stays as it
+  was), RejectedWrites, CommMuxAddress, CommandCount, DischargeBits, AdcvWhileDischarging,
+  AdowWhileDischarging.
 interface: {attach: isospi}
 params:
   # false: write segment i goes to the chip i hops from the bridge, as the
