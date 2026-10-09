@@ -196,7 +196,6 @@ SPDX-License-Identifier: Apache-2.0
 <script>
 import { computed, defineComponent, watch, ref, nextTick } from 'vue'; // eslint-disable-line object-curly-newline
 import { CheckboxInterface, ButtonInterface } from '@baklavajs/renderer-vue'; // eslint-disable-line object-curly-newline
-import showdown from 'showdown';
 import CustomInterface from './CustomInterface.vue';
 import Cross from '../icons/Cross.vue';
 import Visible from '../icons/Visible.vue';
@@ -206,6 +205,7 @@ import EditorManager from '../core/EditorManager';
 import { validateInterfaceGroupsNames } from '../core/interfaceParser';
 import NodeSpecificationEditor from '../components/NodeSpecificationEditor.vue';
 import { checkForUnsavedEditorChangesWithToast } from './node_editor/NodeSpecEditorUtils.js';
+import { renderMarkdown } from '../vhil/markdown';
 
 export default defineComponent({
     components: {
@@ -221,11 +221,6 @@ export default defineComponent({
         const editorManager = EditorManager.getEditorManagerInstance();
         const viewModel = computed(() => editorManager.baklavaView);
         const graph = computed(() => viewModel.value.displayedGraph);
-
-        const converter = new showdown.Converter({
-            smartIndentationFix: true,
-            simpleLineBreaks: true,
-        });
 
         const width = ref(300);
 
@@ -246,18 +241,8 @@ export default defineComponent({
             node.value.type,
         ).subgraphId);
 
-        const desc = computed(() => {
-            let html = converter.makeHtml(node.value?.description ?? '');
-            const aTagRe = /<a href="[a-zA-Z0-9-$_.+!*'()/&?=:%]+">/gm;
-            html.match(aTagRe)?.forEach((match) => {
-                const hrefParts = match.split('"');
-                // Forces the link to open in a new tab instead of closing the pipeline manager
-                const newEnd = ` tabindex="-1" target="_blank"${hrefParts[2]}`;
-                const newHref = [hrefParts[0], hrefParts[1], newEnd].join('"');
-                html = html.replace(match, newHref);
-            });
-            return html;
-        });
+        // vHIL: sanitized, and the input capped (src/vhil/markdown.js).
+        const desc = computed(() => renderMarkdown(node.value?.description ?? ''));
 
         const nodeIcon = computed(() => viewModel.value.editor.getNodeIconPath(node.value?.type));
         const nodeURLs = computed(() => viewModel.value.editor.getNodeURLs(node.value?.type));

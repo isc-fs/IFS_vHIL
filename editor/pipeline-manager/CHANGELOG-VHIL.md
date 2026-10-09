@@ -530,11 +530,22 @@ from `git archive 04613679` except as listed below.
       differs from before only in that prefix and in where Sass 1.105 puts
       declarations that follow a nested rule (same computed styles).
 
+23. **Markdown sanitized** (showdown's open advisories). `src/vhil/markdown.js`
+    (new) renders markdown for `custom/CustomSidebar.vue` (a node's
+    description) and `interfaces/TextAreaInterface.vue` (a text area's
+    preview), which each built their own showdown converter and put its
+    output in `v-html` unsanitized: showdown 2.1.0, the last release, has two
+    XSS alerts and passes raw HTML through. The output now goes through
+    DOMPurify (`target` kept for upstream's new-tab link rewrite, which runs
+    before it), and the input is cut at 20 000 characters, a guard against
+    the ReDoS alert (descriptions and notes are short). Every other `v-html`
+    already went through DOMPurify.
+
 ## Left for later
 
 - **Dependabot alerts with no fix.** `showdown` ≤ 2.1.0 (three: ReDoS and
-  two XSS; its HTML is not sanitized in `custom/CustomSidebar.vue` and
-  `interfaces/TextAreaInterface.vue`, though the CSP blocks inline script),
+  two XSS; its output is sanitized and its input capped, change 23, and the
+  CSP blocks inline script),
   `braces` ≤ 3.0.3 (build tooling: chokidar, micromatch) and
   `vue-template-compiler` 2.x (a required peer of
   `@vue/cli-plugin-typescript` 5; the Vue 3 build never loads it) have no

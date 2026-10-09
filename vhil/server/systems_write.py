@@ -263,6 +263,19 @@ def check_with_warnings(store: GitStore, commit: str, system_id: str,
     return [], list(system.warnings)
 
 
+def _behind(store: GitStore, branch: str, tip: str, newer: str, system_id: str,
+            text: str) -> str | None:
+    """Why a save onto an existing branch failed when the text is valid at
+    `newer` (the commit it was opened at, else the base branch): the branch
+    is older than the tree the edit was made on, so its catalogue lacks what
+    the system now names (a model added since, say). None otherwise."""
+    if store.branch_tip(branch) is None or tip == newer or check(store, newer, system_id, text):
+        return None
+    return (f"branch '{branch}' is at {tip[:12]}, whose catalogue predates this system "
+            f"(it is valid at {newer[:12]}): save to a new branch, or bring '{branch}' up "
+            f"to date with {store.base} first")
+
+
 def _save(request: Request, system_id: str, body: Save, create: bool) -> dict:
     store = _store(request)
     try:
@@ -283,7 +296,8 @@ def _save(request: Request, system_id: str, body: Save, create: bool) -> dict:
     text = _text(body, system_id, store.read(parent, _path(system_id)))
     errors, warnings = check_with_warnings(store, parent, system_id, text)
     if errors:
-        raise HTTPException(422, {"errors": errors, "yaml": text})
+        hint = _behind(store, body.branch, parent, base or store.base_commit(), system_id, text)
+        raise HTTPException(422, {"errors": errors + ([hint] if hint else []), "yaml": text})
     try:
         out = store.commit_file(body.branch, _path(system_id), text, body.message, author,
                                 must_not_exist=create, trailers=trailers, expect_parent=parent,

@@ -4,6 +4,7 @@ Every test works on a throwaway clone of a throwaway bare remote seeded with
 this repo's catalogue and systems; nothing here touches this checkout's
 branches or any real remote, and PRs go to a fake host.
 """
+import re
 import shutil
 import subprocess
 import sys
@@ -725,3 +726,66 @@ def test_firmware_refs_in_a_system_file_are_plain_git_refs(env, ref):
 @pytest.mark.parametrize("ref", ["dev", "feat/x", "v1.6.2", "release/1.0+fs", "0a1b2c3"])
 def test_ordinary_firmware_refs_still_validate(env, ref):
     assert put(env, "ams", yaml=edited_ams(env.ws, ref), branch="feat/goodref").status_code == 200
+
+
+# -- a branch older than the tree the edit was made on ----------------------------
+
+def stale_branch(env, tmp_path, branch="smoke/deploy"):
+    """A local `branch` left from before dev gained catalog/models/nrf24l01p
+    (the ECU's radio): what a kept deploy/smoke.sh stack's workspace volume
+    holds once dev moves on. The checked-out tree has the model."""
+    other = tmp_path / "older"
+    subprocess.run(["git", "clone", "-q", str(env.bare), str(other)], check=True)
+    git(other, "checkout", "-q", "-b", branch)
+    git(other, "rm", "-q", "catalog/models/nrf24l01p.yaml")
+    ecu = other / "systems" / "ecu.yaml"
+    text = ecu.read_text()
+    doc = yaml.safe_load(text)
+    doc["devices"] = {k: v for k, v in doc["devices"].items() if v["model"] != "nrf24l01p"}
+    if not doc["devices"]:
+        del doc["devices"]
+    ecu.write_text(editor.write_system(doc, text))
+    git(other, "commit", "-qam", "before the radio")
+    git(other, "push", "-q", "origin", branch)
+    git(env.ws, "fetch", "-q")
+    git(env.ws, "branch", "-q", branch, f"origin/{branch}")
+    assert "model: nrf24l01p" in (env.ws / "systems" / "ecu.yaml").read_text()
+
+
+def test_an_edit_of_a_newer_tree_on_an_older_branch_says_the_branch_is_behind(env, tmp_path):
+    """deploy/smoke.sh read systems/ecu.yaml from the checked-out tree and
+    saved it onto a kept smoke/deploy older than the radio model: a bare
+    "no model 'nrf24l01p' in the catalogue". The 422 now says why."""
+    stale_branch(env, tmp_path)
+    text = env.client.get("/api/systems/ecu").json()["yaml"] + "# edited\n"
+    r = put(env, "ecu", yaml=text, branch="smoke/deploy")
+    assert r.status_code == 422, r.text
+    errors = r.json()["detail"]["errors"]
+    assert any("no model 'nrf24l01p' in the catalogue" in e for e in errors), errors
+    tip = git(env.ws, "rev-parse", "smoke/deploy")
+    assert any(f"branch 'smoke/deploy' is at {tip[:12]}" in e and "save to a new branch" in e
+               for e in errors), errors
+    # A new branch from the same tree takes it.
+    assert put(env, "ecu", yaml=text, branch="smoke/fresh").status_code == 200
+
+
+def test_an_edit_of_the_branch_saved_to_saves_however_old_it_is(env, tmp_path):
+    """deploy/smoke.sh's save, as it now does it: read the system on the
+    branch it saves to, edit, save. Passes on a kept stack whose branch is
+    older than the tree."""
+    stale_branch(env, tmp_path)
+    got = env.client.get("/api/systems/ecu/dataflow", params={"branch": "smoke/deploy"}).json()
+    assert "nrf24l01p" not in got["yaml"] and got["errors"] == []
+    r = put(env, "ecu", yaml=got["yaml"] + "# edited\n", branch="smoke/deploy")
+    assert r.status_code == 200, r.text
+
+
+def test_the_deploy_smoke_edits_the_branch_it_saves_to():
+    """deploy/smoke.sh's save step reads the system from the branch its PUT
+    names, never the checked-out tree (GET /api/systems/ecu), so a kept
+    stack's older branch can't fail it (see the two tests above)."""
+    script = (REPO / "deploy" / "smoke.sh").read_text()
+    step = script[script.index('say "save an edit'):script.index("saved=$(")]
+    saved_to = re.search(r'"branch": "([^"]+)"', step).group(1)
+    assert f"/api/systems/ecu/dataflow?branch={saved_to}\"" in step, step
+    assert '"$base/api/systems/ecu" |' not in step
