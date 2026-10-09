@@ -91,8 +91,15 @@
 - path: tests/hil/ams/test_block_a_boot.py::test_a008_cadence_60s
   why: "counts frames in a 60 s wall-clock window; the emulation runs below real time on slow runners (117 of ~120) (#154; WFI: isc-fs/IFS08-CE-AMS#624, isc-fs/IFS08-CE-ECU#258)"
 
+# K-103 watches 1000 0x4A2 heartbeats (500 s) beside IFS_HIL's 20 Hz 0x100.
+# The IWDG reset ~100 s into it (#151) was IFS08-CE-AMS#599 on AMS main:
+# CurrentSensorTask overflowed its 1 KB stack, the hook latched Error and spun
+# until the IWDG fired; AMS dev's 2 KB stack (#601) ended it. What is left is
+# the car's: FDCAN1 runs with DAR, so a 0x4A2 that meets a 0x100 at the same
+# bus-idle instant loses arbitration and is cancelled, never retried
+# (tests/sim/test_can_bus.py test_every_ams_frame_reaches_the_bus_beside_the_ecu).
 - path: tests/hil/ams/test_block_k_encoders.py::test_k103
-  why: "the AMS takes an IWDG reset ~98 s after boot on the virtual bench (#151)"
+  why: "0x4A2 lost to arbitration against the bench's 0x100: FDCAN1 cancels it under DAR, a heartbeat skip (4 in 1000 on AMS dev) (isc-fs/IFS08-CE-AMS#623)"
 
 # The Pico LTC emulator's injections (pico_emu). The virtual bench has no Pico
 # and won't get one (#150, closed as not planned): the LTC6811 chain model is
