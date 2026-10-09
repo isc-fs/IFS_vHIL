@@ -26,6 +26,12 @@ are planned; today there is one of each:
 Where this file names Renode, the STM32H733 or the MainLite, the rule is
 specific to that backend, platform or board.
 
+How fast the emulated core runs firmware code (virtual-time fidelity of
+busy-waits, ISR and task CPU time; not #154's wall-clock speed) is each
+firmware's `cpu.mips` in the catalogue, not the platform's: the H733 runs
+these firmwares with the caches off, from flash
+([`docs/cpu-timing.md`](docs/cpu-timing.md), #246).
+
 ---
 
 ## Branch policy (READ THIS BEFORE ANY GIT OPERATION)
