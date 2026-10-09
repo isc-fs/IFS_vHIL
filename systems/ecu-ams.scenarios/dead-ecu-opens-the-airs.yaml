@@ -1,0 +1,33 @@
+kind: scenario
+system: ecu-ams
+description: "A dead ECU faults the armed AMS VcuStale: the car armed to Run as in car-arms-through-the-ecu, then the ECU leaves the bus, rebooted into its CAN bootloader by the pit tool's 0x002 B007AD12 (allowed in WaitStartBrake; the AMS's own trigger is B007AD11) where it stays, sending no 0x100. 200 ms after the last heartbeat the AMS latches Error, reason VcuStale (11), opens AIR+, AIR- and PRE and drops AMS_OK, and reports Error on 0x4A0. A scenario cannot cut a board's power as the native test does (CPU halted); the reboot silences the ECU's app the same way. IFS08-CE-ECU can_rx_task.cpp:64-69, bootloader.hpp, ecu_config.hpp:656-658; IFS08-CE-AMS safety_predicates.hpp:253-254, ams_config.hpp:168; tests/sim/test_sys_ecu_ams.py test_a_dead_ecu_faults_the_armed_ams_vcu_stale."
+virtual_ms: 10000
+stimuli:
+  - {kind: can_periodic, name: inv-drained, at_ms: 2500, bus: can_inv, id: 0x466, data: "000000000000", period_ms: 10}
+  - {kind: gpio, name: tsms-on, at_ms: 5500, board: ams, pin: PF9, level: true}
+  - {kind: gpio, name: dash-press, at_ms: 5600, board: ams, pin: PF10, level: true}
+  - {kind: gpio, name: dash-release, at_ms: 5650, board: ams, pin: PF10, level: false}
+  - {kind: stop_periodic, at_ms: 6500, periodic: inv-drained}
+  - {kind: can_periodic, name: inv-charged, at_ms: 6500, bus: can_inv, id: 0x466, data: "000060010000", period_ms: 10}
+  - {kind: can_send, name: ecu-to-bootloader, at_ms: 7500, bus: can_acu, id: 0x002, data: "b007ad12"}
+watch:
+  - {kind: symbol, board: ams, name: g_state_telemetry, size: 1, period_ms: 10}
+  - {kind: symbol, board: ams, name: g_mode_locked_telemetry, size: 1, period_ms: 10}
+  - {kind: symbol, board: ams, name: g_fault_reason_telemetry, size: 1, period_ms: 10}
+  - {kind: symbol, board: ecu, name: g_last_ctrl_state, size: 1, period_ms: 10}
+expect:
+  - {check: always, name: ams-start-before-tsms, at_ms: 4500, until_ms: 5500, signal: "symbol:ams.g_state_telemetry", value: 0}
+  - {check: eventually, name: ams-precharge, at_ms: 5600, until_ms: 5700, signal: "symbol:ams.g_state_telemetry", value: 1}
+  - {check: eventually, name: ams-run, at_ms: 6500, until_ms: 6800, signal: "symbol:ams.g_state_telemetry", value: 3}
+  - {check: eventually, name: ts-active, at_ms: 6500, until_ms: 7000, signal: "frame:can_acu.VCU_ts_active.ts_active", value: 1}
+  - {check: never, name: no-ams-error-while-fed, at_ms: 0, until_ms: 7600, signal: "symbol:ams.g_state_telemetry", value: 5}
+  - {check: eventually, name: ecu-silent, at_ms: 7500, until_ms: 7600, signal: "frame:can_acu.VCU_heartbeat.dc_bus_valid", value: 1}
+  - {check: count, name: no-heartbeat-after-reboot, at_ms: 7600, signal: "frame:can_acu.VCU_heartbeat", max: 0}
+  - {check: eventually, name: vcu-stale-error, at_ms: 7600, until_ms: 7900, signal: "symbol:ams.g_state_telemetry", value: 5}
+  - {check: always, name: latched, at_ms: 8000, signal: "symbol:ams.g_state_telemetry", value: 5}
+  - {check: always, name: reason-vcu-stale, at_ms: 8000, signal: "symbol:ams.g_fault_reason_telemetry", value: 11}
+  - {check: always, name: air-plus-open, at_ms: 8000, signal: "pin:ams.PB5", value: low}
+  - {check: always, name: air-minus-open, at_ms: 8000, signal: "pin:ams.PB6", value: low}
+  - {check: always, name: precharge-open, at_ms: 8000, signal: "pin:ams.PB7", value: low}
+  - {check: always, name: ams-ok-dropped, at_ms: 8000, signal: "pin:ams.PB4", value: low}
+  - {check: eventually, name: error-on-can, at_ms: 7600, until_ms: 8500, signal: "frame:can_acu.AMS_status.fsm_state", value: 5}
