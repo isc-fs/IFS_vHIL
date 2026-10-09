@@ -2,7 +2,7 @@ kind: platform
 id: stm32h733
 description: >-
   STM32H733ZG (Cortex-M7, 1 MB flash). Renode ships only H743/H753/H747, so
-  this reuses its stm32h7.repl and adds FDCAN3, TIM23, USART10, SPI1, the H73x
+  this reuses its stm32h7.repl and adds FDCAN3, TIM23, USART10, SPI1 (with a fault hook), the H73x
   ADC3 with timed conversions and DMA, a DMA1 with half-transfer and error
   flags, a DBGMCU, SDMMC1 with IDMA and an I2C2 that NACKs, plus the 24 MHz
   HSE of the MainLite, and a flash controller with non-volatile option bytes and
@@ -25,6 +25,9 @@ renode:
     - models/renode/Stm32H7Flash.cs
     # FDCAN with fault hooks for tests (Renode's MCAN has no error states).
     - models/renode/Stm32H7Fdcan.cs
+    # SPI with a fault hook for tests: a transfer that never runs (Renode's
+    # never fails one).
+    - models/renode/Stm32H7Spi.cs
     # I2C master that NACKs an unanswered address (Renode's never does).
     # Device models for I2C targets build on it, so it loads before them.
     - models/renode/Stm32H7I2c.cs

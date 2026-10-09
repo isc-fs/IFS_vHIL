@@ -135,7 +135,11 @@ sdmmc1: SD.STM32H7_SDMMC @ sysbus 0x52007000
     IRQ -> nvic@49
 
 // SPI1 — the AMS's LTC6820 isoSPI master. The base platform only tags it.
-spi1: SPI.STM32H7_SPI @ sysbus 0x40013000
+// Renode's STM32H7_SPI with a fault hook (a transfer that never runs) for
+// tests: models/renode/Stm32H7Spi.cs, unchanged until the hook is set.
+// SPI1_BASE = D2_APB2PERIPH_BASE + 0x3000 (stm32h733xx.h:2354, 2194). The
+// AMS polls it, so SPI1_IRQn (35) is not wired.
+spi1: SPI.STM32H7_SPIWithFaults @ sysbus 0x40013000
 
 // I2C2 — the MainLite's BMI088 IMU (PF0 SDA / PF1 SCL), read by the AMS's ImuTask
 // with RX on DMA1 Stream 0 through DMAMUX1. Our model,
