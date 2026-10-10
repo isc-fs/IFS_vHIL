@@ -15,18 +15,17 @@ load:
   # (main.c), so this only mirrors what the bootloader leaves.
   vector_table: 0x08020000
 cpu:
-  # docs/cpu-timing.md, #246. The AMS runs from flash with the I- and D-caches
-  # off (no SCB_EnableICache/DCache, none in AMS.ioc), SYSCLK 528 MHz, AXI
-  # 264 MHz, FLASH_LATENCY_3 (main.c SystemClock_Config); data and stack in
-  # DTCM (STM32H733XG_FLASH.ld). With no I-cache every fetch goes to the
-  # flash's single 256-bit read buffer, which reads a new flash word in
-  # 4 AXI clocks = 8 CPU cycles (RM0468 Rev 3 4.3.8 and Table 16). Its
-  # busy-wait (ltc6820.cpp delay_us, the LTC6811 wake pulse) runs 8
-  # instructions an iteration over two flash words, at least 16 cycles:
-  # at most 528 * 8 / 16 = 264 MIPS. That bound, until the chip's own
-  # number is measured (#246); 528, one instruction a cycle, made the
-  # firmware's CPU-bound code at least twice as fast as the chip's.
-  mips: 264
+  # docs/cpu-timing.md, #246. Since IFS08-CE-AMS#637 the AMS runs with the
+  # I-cache on (SCB_EnableICache in main(), AMS.ioc CPU_ICache) and the
+  # D-cache off; SYSCLK 528 MHz, code in flash, data and stack in DTCM
+  # (main.c SystemClock_Config, STM32H733XG_FLASH.ld). The I-cache lifts the
+  # flash read buffer's bound (264 MIPS for the old NOP loop). On cache hits
+  # the Cortex-M7 fetches 64 bits a cycle and issues up to two instructions a
+  # cycle, so the bound is 1056; 528, one instruction a cycle, is the rate
+  # used: half that peak, for branchy control code that stalls on device
+  # loads. No pin window measures it any more (delay_us is CYCCNT-timed):
+  # an SWD CYCCNT measurement of a CPU-bound function replaces it (#246).
+  mips: 528
 can:
   # The application is FDCAN1-only, the accumulator/vehicle bus
   # (can_isr.cpp:6-11, app_init_task.cpp:103-114): the whole .def contract
