@@ -48,7 +48,7 @@ import LogView from './LogView.vue';
 import { terminalStore, MAIN_TERMINAL } from '../core/stores.js';
 import { artifactUrl } from './artifacts.js';
 import { replay } from './replay.js';
-import { sourceOf, sourcesOf, toggled } from './runlog.js';
+import { orderSources, sourceOf, toggled } from './runlog.js';
 import { keep } from './stable.js';
 import { ws } from './workspace.js';
 
@@ -66,12 +66,12 @@ export default defineComponent({
             const add = new Set();
             for (; scanned < list.length; scanned += 1) add.add(sourceOf(list[scanned]));
             const known = new Set(seen.value);
-            if ([...add].some((s) => !known.has(s))) seen.value = sourcesOf([...known, ...add]);
+            if ([...add].some((s) => !known.has(s))) seen.value = orderSources([...known, ...add]);
         };
         watch(() => entries.value.length, scan, { immediate: true });
         watch(entries, () => { seen.value = []; scanned = 0; scan(); });
         // A hidden source stays a chip after a clear, so it can be shown again.
-        const sources = computed((old) => keep(old, sourcesOf([...seen.value,
+        const sources = computed((old) => keep(old, orderSources([...seen.value,
             ...(ws.layout.logHidden || [])])));
         const hiddenSet = computed(() => new Set(ws.layout.logHidden || []));
         const toggle = (s) => { ws.layout.logHidden = toggled(ws.layout.logHidden, s); };
