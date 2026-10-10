@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
-  EDITOR, RUN, levelOf, logEntry, shownEntries, sourceOf, sourcesOf, textOf, toggled, when,
+  EDITOR, RUN, levelOf, orderSources, logEntry, shownEntries, sourceOf, sourcesOf, textOf, toggled, when,
 } from "../../editor/pipeline-manager/pipeline_manager/frontend/src/vhil/runlog.js";
 
 test("a record becomes a line with its time, source and level", () => {
@@ -69,4 +69,11 @@ test("a chip toggles its source in a new, sorted list", () => {
   assert.deepEqual(toggled(["build", "renode"], "renode"), ["build"]);
   assert.deepEqual(h, ["renode"]); // not changed in place
   assert.deepEqual(toggled(undefined, "x"), ["x"]);
+});
+
+test("source names order as their entries do (the chips' list)", () => {
+  // The chips are built from names, not entries: a name is not the editor's message.
+  assert.deepEqual(orderSources(["ecu.USART10", "renode", "editor", "build", "renode"]),
+    ["editor", "build", "renode", "ecu.USART10"]);
+  assert.deepEqual(orderSources(sourcesOf(ENTRIES)), sourcesOf(ENTRIES));
 });
