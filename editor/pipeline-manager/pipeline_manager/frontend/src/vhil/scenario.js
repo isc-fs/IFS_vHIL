@@ -50,6 +50,36 @@ export const emptyScenario = (virtualMs = 3000) => ({
     description: '', virtual_ms: virtualMs, slice_ms: 100, stimuli: [], watch: [], expect: [],
 });
 
+/** The top bar's "New scenario…" entry: not a scenario name (NAME refuses
+ *  '+'), so it can't collide with one. */
+export const NEW_SCENARIO = '+new';
+
+/** The top bar's scenario choices for system `id` with scenarios `list`:
+ *  none, each scenario, then "New scenario…". A system with none says so in
+ *  a disabled entry, so an empty list reads as "none yet", not as broken. */
+export function scenarioChoices(list, id) {
+    const out = [{ value: '', label: 'no scenario' }];
+    if (!list.length) {
+        out.push({ value: '-none', label: `no scenarios for ${id || 'this system'} yet`, disabled: true });
+    }
+    list.forEach((s) => out.push({ value: s.name, label: `▸ ${s.name}${s.unsaved ? ' (new)' : ''}` }));
+    out.push({ value: NEW_SCENARIO, label: 'New scenario…' });
+    return out;
+}
+
+/** The Scenario tab's text with no scenario open: how to pick one, or, for
+ *  a system with none, how to make one (here, or from a live session). */
+export function emptyScenarioText(id, count) {
+    if (count) {
+        return 'Pick a scenario, or make a new one: its stimuli, watches and expects run '
+            + 'with Run (F5), and its expects make it a test.';
+    }
+    return `${id} has no scenarios yet. Name one above and + New makes it: add stimuli, `
+        + 'watches and expects, then Commit… saves it as '
+        + `systems/${id}.scenarios/<name>.yaml. Or start a session with ● Live, drive its `
+        + 'buses and pins, and "Save as scenario…" in the top bar turns what you did into one.';
+}
+
 /** The action of a list item. */
 export function actionOf(list, item) {
     if (list === 'stimuli') return BY_KIND[item.kind]?.action ?? item.kind;

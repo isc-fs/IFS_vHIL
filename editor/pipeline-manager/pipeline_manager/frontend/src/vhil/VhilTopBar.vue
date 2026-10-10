@@ -123,10 +123,9 @@ scenario" records it.
                 :value="scen.name" :disabled="!ws.id" aria-label="Scenario for Run"
                 @change="(ev) => pickFromSelect(ev.target)"
             >
-                <option value="">no scenario</option>
-                <option v-for="s in scen.list" :key="s.name" :value="s.name">
-                    ▸ {{ s.name }}{{ s.unsaved ? ' (new)' : '' }}
-                </option>
+                <option
+                    v-for="c in choices" :key="c.value" :value="c.value" :disabled="c.disabled"
+                >{{ c.label }}</option>
             </select>
         </label>
         <label
@@ -204,7 +203,8 @@ import {
     computed, defineComponent, inject, ref,
 } from 'vue';
 import {
-    ws, boardFirmware, cycleTheme, exitReplay, isLive, keepAlive, pauseLive, pickScenario,
+    ws, askNewScenario, boardFirmware, cycleTheme, exitReplay, isLive, keepAlive, pauseLive,
+    pickScenario,
     runActive, runNow, showBoard, startLive, stopLive, stopRun,
 } from './workspace.js';
 import { live as session, take } from './session.js';
@@ -213,6 +213,7 @@ import { heldText } from './debug.js';
 import './debug.css';
 import './live.css';
 import { edited, scen } from './scenarios.js';
+import { NEW_SCENARIO, scenarioChoices } from './scenario.js';
 import { boards, nodeName } from './graph.js';
 import { replay, seconds } from './replay.js';
 import { runPage } from './api.js';
@@ -245,9 +246,12 @@ export default defineComponent({
             .map((s) => `${s.name}${s.unsaved ? ' (new)' : ''}`).join('\n'));
         // A pick the workspace refused (its scenario didn't load) shows
         // what is selected: v-memo keeps the select from re-syncing itself.
+        // "New scenario…" keeps the pick and opens the Scenario tab to name
+        // one (scenario.js NEW_SCENARIO).
         const pickFromSelect = async (el) => {
             try {
-                await pickScenario(el.value);
+                if (el.value === NEW_SCENARIO) askNewScenario();
+                else await pickScenario(el.value);
             } finally {
                 el.value = scen.name; // eslint-disable-line no-param-reassign
             }
@@ -290,6 +294,9 @@ export default defineComponent({
         // A live run, now or replayed: its ops can become a scenario.
         const recorded = computed(() => Boolean(replay.run?.scenario?.live)
             && (live.value || ws.mode === 'REPLAY'));
+        // The scenarios, or a disabled "none yet" for a system without any,
+        // and "New scenario…" (v-memo above: they follow scen.list and ws.id).
+        const choices = computed(() => scenarioChoices(scen.list, ws.id));
         const showArtifacts = () => {
             ws.layout.dock = true;
             ws.layout.dockTab = 'artifacts';
@@ -331,6 +338,7 @@ export default defineComponent({
             scen,
             scenarioKey,
             pickFromSelect,
+            choices,
             duration,
         };
     },

@@ -1,0 +1,33 @@
+kind: scenario
+system: ecu-ams
+description: "The car arms through the ECU's heartbeat, both boards real: the inverter's DC link (0x466 on can_inv, drained, then at the pack's 352 V once the AMS has closed AIR- and PRE: a scripted, instant precharge) reaches the AMS only as the ECU relays it on 0x100 (dc_bus_voltage, dc_bus_valid). TSMS and a DASH_CHG press lock Car mode and arm Precharge; the relayed link gives Run (AIR+ closes, PRE opens); the AMS's 0x020 ok_precharge takes the ECU from Precharge to WaitStartBrake and 0x504 ts_active to 1, held. Neither board errors. IFS08-CE-ECU control_task.cpp:117-120, 306-334, control.cpp:155-160; IFS08-CE-AMS state_machine.hpp:128, 288; tests/sim/test_sys_ecu_ams.py test_the_car_arms_through_the_ecu_heartbeat."
+virtual_ms: 8500
+stimuli:
+  - {kind: can_periodic, name: inv-drained, at_ms: 2500, bus: can_inv, id: 0x466, data: "000000000000", period_ms: 10}
+  - {kind: gpio, name: tsms-on, at_ms: 5500, board: ams, pin: PF9, level: true}
+  - {kind: gpio, name: dash-press, at_ms: 5600, board: ams, pin: PF10, level: true}
+  - {kind: gpio, name: dash-release, at_ms: 5650, board: ams, pin: PF10, level: false}
+  - {kind: stop_periodic, at_ms: 6500, periodic: inv-drained}
+  - {kind: can_periodic, name: inv-charged, at_ms: 6500, bus: can_inv, id: 0x466, data: "000060010000", period_ms: 10}
+watch:
+  - {kind: symbol, board: ams, name: g_state_telemetry, size: 1, period_ms: 10}
+  - {kind: symbol, board: ams, name: g_mode_locked_telemetry, size: 1, period_ms: 10}
+  - {kind: symbol, board: ecu, name: g_last_ctrl_state, size: 1, period_ms: 10}
+expect:
+  - {check: never, name: no-ams-error, at_ms: 0, signal: "symbol:ams.g_state_telemetry", value: 5}
+  - {check: never, name: no-ecu-ams-error, at_ms: 0, signal: "symbol:ecu.g_last_ctrl_state", value: 6}
+  - {check: eventually, name: link-relayed-drained, at_ms: 2500, until_ms: 3000, signal: "frame:can_acu.VCU_heartbeat.dc_bus_valid", value: 1}
+  - {check: always, name: ts-inactive-before-arm, at_ms: 3000, until_ms: 5600, signal: "frame:can_acu.VCU_ts_active.ts_active", value: 0}
+  - {check: never, name: ecu-waits-for-the-ams, at_ms: 3000, until_ms: 6500, signal: "symbol:ecu.g_last_ctrl_state", value: 2}
+  - {check: always, name: ams-start-before-tsms, at_ms: 4500, until_ms: 5500, signal: "symbol:ams.g_state_telemetry", value: 0}
+  - {check: eventually, name: ams-precharge, at_ms: 5600, until_ms: 5700, signal: "symbol:ams.g_state_telemetry", value: 1}
+  - {check: eventually, name: ams-run, at_ms: 6500, until_ms: 6800, signal: "symbol:ams.g_state_telemetry", value: 3}
+  - {check: always, name: car-mode, at_ms: 5700, signal: "symbol:ams.g_mode_locked_telemetry", value: 1}
+  - {check: eventually, name: link-relayed-charged, at_ms: 6500, until_ms: 6600, signal: "frame:can_acu.VCU_heartbeat.dc_bus_voltage", value: 352}
+  - {check: eventually, name: ecu-wait-start-brake, at_ms: 6500, until_ms: 7000, signal: "symbol:ecu.g_last_ctrl_state", value: 2}
+  - {check: eventually, name: ts-active, at_ms: 6500, until_ms: 7000, signal: "frame:can_acu.VCU_ts_active.ts_active", value: 1}
+  - {check: always, name: ts-active-held, at_ms: 7000, signal: "frame:can_acu.VCU_ts_active.ts_active", value: 1}
+  - {check: always, name: air-plus-closed, at_ms: 6800, signal: "pin:ams.PB5", value: high}
+  - {check: always, name: air-minus-closed, at_ms: 6800, signal: "pin:ams.PB6", value: high}
+  - {check: always, name: precharge-open-in-run, at_ms: 6800, signal: "pin:ams.PB7", value: low}
+  - {check: always, name: ams-ok, at_ms: 4500, signal: "pin:ams.PB4", value: high}
