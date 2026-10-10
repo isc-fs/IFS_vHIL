@@ -42,6 +42,8 @@ ECR, PSR, TXFQS = 0x040, 0x044, 0x0C4
 TFQF, EP, EW, BO = 1 << 21, 1 << 5, 1 << 6, 1 << 7
 VCU_HEARTBEAT, ECU_PIT_ARM, AMS_PIT_ARM = 0x100, 0x7E0, 0x7F0
 LOGFS = 0x012
+# acu_can_task.cpp (IFS08-CE-AMS#628): TX FIFO flushes of a node nobody ACKs.
+FLUSH_COUNT = "_ZN12_GLOBAL__N_123g_fdcan1_tx_flush_countE"
 INV_SETPOINTS = (0x360, 0x362)
 
 
@@ -180,15 +182,13 @@ def test_two_boards_arbitrate_on_the_acu_bus(two_boards):
           f"arbitration ({sorted({hex(r.id) for r in lost})}), stats {stats}")
 
 
-@pytest.mark.xfail(strict=True, reason="IFS08-CE-AMS#623: with AutoRetransmission DISABLE "
-                   "(DAR) a frame that loses arbitration is cancelled, not retried")
 def test_every_ams_frame_reaches_the_bus_beside_the_ecu(two_boards):
-    """The AMS's docs/CAN_MAP.md says a frame is dropped only if it 'loses
-    arbitration and then errors'. RM0468 (FDCAN, disabled automatic
-    retransmission) cancels it on lost arbitration alone: beside the ECU's
-    10 ms traffic the AMS's pit-diag scan loses the same frames every
-    second (0x685-0x689 here; on the car, whichever its burst lines up
-    with)."""
+    """With AutoRetransmission DISABLE (DAR), RM0468's FDCAN cancels a frame
+    on lost arbitration alone, so beside the ECU's 10 ms traffic the AMS's
+    pit-diag scan lost the same frames every second (IFS08-CE-AMS#623).
+    IFS08-CE-AMS#628 turned retransmission back on (AMS.ioc, and a boot guard
+    that clears CCCR.DAR, app_init_task.cpp): a frame that loses arbitration
+    is retried, and none is lost."""
     tl, _ = two_boards
     lost = [r for r in tl if r.outcome == "lost"]
     assert lost == [], f"{len(lost)} AMS frames lost to arbitration: {sorted({hex(r.id) for r in lost})}"
@@ -312,25 +312,34 @@ def test_a_lone_ecu_goes_error_passive_and_recovers_when_acked(images):
         assert reg(sim, "ecu", FDCAN1, TXFQS) & TFQF == 0
 
 
-def test_a_lone_ams_gives_up_each_frame_and_stays_error_passive(images):
-    """The AMS (AutoRetransmission DISABLE) alone on its bus: one attempt per
-    frame, each an ACK error and cancelled, TEC to 128 and no further, no
-    bus-off, so no Stop/Start recovery (it reacts to PSR.BO only:
-    acu_can_task.cpp:140-175) and it stays in Start."""
+def test_a_lone_ams_retries_flushes_and_stays_error_passive(images):
+    """The AMS alone on its bus, retransmission on (IFS08-CE-AMS#628): the
+    head frame is retried back to back, each attempt an ACK error, TEC to
+    128 and no further (an ACK error in error-passive doesn't count, ISO
+    11898-1), so no bus-off and no Stop/Start recovery (it reacts to PSR.BO
+    only: acu_can_task.cpp). With the TX FIFO full for FdcanTxStallFlushMs
+    (100 ms, ams_config.hpp) AcuCanTask cancels every pending frame
+    (poll_fdcan1_tx_stall), again each window while nobody ACKs; it stays in
+    Start."""
     with Sim(REPO / "systems" / "ams.yaml", images("ams"), arbitration=["can_acu"]) as sim:
         sim.wait_for_app()
         acu = sim.can("can_acu")
         acu.set_ack(False)
+        sim.run_for(ms=500)
+        flushes0 = sim.read_symbol("ams", FLUSH_COUNT, 4)
         t0 = sim.run_for(ms=2000)
         tl = acu.timeline(since_us=t0 - 2_000_000)
         assert len(tl) >= 20 and {r.outcome for r in tl} == {"ack"}
-        # Each frame tried once: no two attempts of one frame back to back.
-        assert all(a.offer_ns != b.offer_ns or a.id != b.id for a, b in zip(tl, tl[1:]))
+        # Retried: one frame's attempts follow each other.
+        assert any(a.offer_ns == b.offer_ns and a.id == b.id for a, b in zip(tl, tl[1:]))
         ams = next(n for n, v in acu.nodes().items() if v["kind"] == "controller")
         assert acu.nodes()[ams]["tec"] == 128
         psr = reg(sim, "ams", FDCAN1, PSR)
         assert psr & EP and not psr & BO
-        assert reg(sim, "ams", FDCAN1, TXFQS) & TFQF == 0, "cancelled frames stayed queued"
+        flushes = sim.read_symbol("ams", FLUSH_COUNT, 4) - flushes0
+        # At most one a 100 ms window, and they keep coming: the FIFO refills
+        # at the cyclic frames' pace between them (8 in 2 s on AMS dev).
+        assert 4 <= flushes <= 20, f"{flushes} TX flushes in 2 s"
         assert int(sim.monitor("sysbus.fdcan1_h7 BusOffRecoveries", board="ams").strip(), 16) == 0
         assert sim.read_symbol("ams", "g_state_telemetry") == 0
 
