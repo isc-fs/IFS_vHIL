@@ -594,7 +594,6 @@ from `git archive 04613679` except as listed below.
       `ws.picker` with them. The top bar's firmware chip shows the board
       (`workspace.js` `showBoard`: selected, centred, its firmware dropdown
       focused).
-
 26. **Native selects keep a pick** (Chrome and Safari on macOS: the top
     bar's scenario dropdown opened, but clicking an option did nothing).
     `components/Home.vue` bumps `tick` on every pointerup, keyup and change
@@ -638,6 +637,18 @@ from `git archive 04613679` except as listed below.
       most 40 000 entries in memory and saves its last 2 000 to
       localStorage at most twice a second (upstream re-serialised the whole
       log on every line, which a streaming run makes quadratic).
+28. **A system with no scenarios says so.** The top bar's scenario select
+    offered only "no scenario" for a system without any (`ecu-ams` before
+    its first), which read as a select that doesn't work. Its entries are
+    `src/vhil/scenario.js` `scenarioChoices` (pure; `tests/js/scenario.test.mjs`):
+    "no scenario", a disabled "no scenarios for <system> yet" when there
+    are none, the scenarios, then "New scenario…" (`NEW_SCENARIO`, not a
+    valid name), which keeps the pick (change 26), opens the Scenario tab
+    and focuses its name field (`workspace.js` `askNewScenario` bumps `scen.askName`,
+    which `VhilScenario.vue` watches). The Scenario tab's empty state
+    (`emptyScenarioText`) says how to make one: name it and + New, add
+    rows, Commit… to `systems/<system>.scenarios/<name>.yaml`, or record a
+    ● Live session and "Save as scenario…".
 
 ## Left for later
 

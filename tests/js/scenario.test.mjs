@@ -3,8 +3,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
-  addRow, appliedAt, emptyScenario, expectText, findMessage, looseSignal, messagesByRow, moveItem, parseSignal,
-  periodicNames, removeRow, resultsByRow, rowsOf, signalText, snap, targetOf, valueOf,
+  NEW_SCENARIO, addRow, appliedAt, emptyScenario, emptyScenarioText, expectText, findMessage, looseSignal, messagesByRow, moveItem, parseSignal,
+  periodicNames, removeRow, resultsByRow, rowsOf, scenarioChoices, signalText, snap, targetOf, valueOf,
 } from "../../editor/pipeline-manager/pipeline_manager/frontend/src/vhil/scenario.js";
 
 const CONTRACT = { buses: { can_acu: { 256: { name: "VCU_heartbeat", id: 256, ext: false, dlc: 3, fields: [] },
@@ -109,4 +109,27 @@ test("a stimulus between sync points runs at the next one", () => {
   assert.equal(appliedAt(0.05, 100), 0.1);
   assert.equal(appliedAt(0.0001, 100), 0);          // whole us, as the worker rounds
   assert.equal(appliedAt(12.3, undefined), 12.3);   // no contract yet: as written
+});
+
+test("a system with no scenarios says so in the top bar, and offers a new one", () => {
+  const none = scenarioChoices([], "ecu-ams");
+  assert.deepEqual(none.map((c) => [c.value, c.label, Boolean(c.disabled)]), [
+    ["", "no scenario", false],
+    ["-none", "no scenarios for ecu-ams yet", true],
+    [NEW_SCENARIO, "New scenario…", false]]);
+  const some = scenarioChoices([{ name: "a" }, { name: "b", unsaved: true }], "ams");
+  assert.deepEqual(some.map((c) => c.label), ["no scenario", "▸ a", "▸ b (new)", "New scenario…"]);
+  assert.ok(some.every((c) => !c.disabled));
+  // Not a scenario name, so it can't be one (scenarios.js NAME).
+  assert.ok(!/^[a-z0-9][a-z0-9-]{0,63}$/.test(NEW_SCENARIO));
+  assert.equal(new Set(none.map((c) => c.value)).size, none.length);
+});
+
+test("the Scenario tab's empty state says how to make one", () => {
+  const text = emptyScenarioText("ecu-ams", 0);
+  assert.match(text, /ecu-ams has no scenarios yet/);
+  assert.match(text, /\+ New/);
+  assert.match(text, /systems\/ecu-ams\.scenarios\/<name>\.yaml/);
+  assert.match(text, /Save as scenario/);
+  assert.match(emptyScenarioText("ams", 2), /^Pick a scenario/);
 });

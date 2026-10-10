@@ -337,8 +337,8 @@ def test_listing_and_reading_on_a_branch_with_the_last_run(env):
 
 
 def test_every_systems_scenarios_as_checked_out(env):
-    folder = env.ws / "systems" / "ecu-ams.scenarios"
-    folder.mkdir()
+    folder = env.ws / "systems" / "ecu-ams.scenarios"     # a seed's, or a new one
+    folder.mkdir(exist_ok=True)
     (folder / "hb.yaml").write_text("kind: scenario\nsystem: ecu-ams\nvirtual_ms: 100\n")
     listed = [(s["system"], s["name"]) for s in env.client.get("/api/scenarios").json()]
     assert ("ecu-ams", "hb") in listed

@@ -24,6 +24,7 @@ evidence, and the timeline lays them over what the run did.
             </label>
             <form class="vhil-scen-new" @submit.prevent="create">
                 <input
+                    ref="nameInput"
                     v-model="newName" class="vhil-input mono" placeholder="new-scenario"
                     aria-label="New scenario name" pattern="[a-z0-9][a-z0-9\-]*"
                     title="lowercase letters, digits and '-'" :disabled="!ws.id"
@@ -152,10 +153,12 @@ evidence, and the timeline lays them over what the run did.
 </template>
 
 <script>
-import { computed, defineComponent, ref } from 'vue';
 import {
-    ACTIONS, addRow, appliedAt, messagesByRow, periodicNames, removeRow, resultsByRow, rowsOf,
-    targetOf, valueOf,
+    computed, defineComponent, nextTick, onMounted, ref, watch,
+} from 'vue';
+import {
+    ACTIONS, addRow, appliedAt, emptyScenarioText, messagesByRow, periodicNames, removeRow,
+    resultsByRow, rowsOf, targetOf, valueOf,
 } from './scenario.js';
 import { edited, scen } from './scenarios.js';
 import { ws, createScenario, pickScenario } from './workspace.js';
@@ -174,10 +177,15 @@ export default defineComponent({
             createScenario(newName.value.trim());
             newName.value = '';
         };
-        const emptyText = computed(() => (scen.list.length
-            ? 'Pick a scenario, or make a new one: its stimuli, watches and expects run '
-                + 'with Run (F5), and its expects make it a test.'
-            : `${ws.id} has no scenarios yet: + New makes one.`));
+        const emptyText = computed(() => emptyScenarioText(ws.id, scen.list.length));
+        // The top bar's "New scenario…" (scenarios.js askNewScenario): the
+        // name field, focused.
+        const nameInput = ref(null);
+        const focusName = () => nextTick(() => nameInput.value?.focus());
+        watch(() => scen.askName, focusName);
+        onMounted(() => {
+            if (scen.askName) focusName();
+        });
         const rows = computed(() => {
             scen.version; // eslint-disable-line no-unused-expressions
             return scen.doc ? rowsOf(scen.doc) : [];
@@ -272,6 +280,7 @@ export default defineComponent({
             ws,
             scen,
             newName,
+            nameInput,
             create,
             emptyText,
             pickScenario,
