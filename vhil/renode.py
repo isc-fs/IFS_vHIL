@@ -23,8 +23,9 @@ import re
 import socket
 import subprocess
 import threading
-import time
 from pathlib import Path
+
+from vhil.benchclock import host as hostclock
 
 REPO = Path(__file__).resolve().parent.parent
 MONITOR_SOURCE = REPO / "models" / "renode" / "VhilMonitor.cs"
@@ -120,15 +121,15 @@ def launch(renode: str, port: int, stdout=subprocess.DEVNULL) -> subprocess.Pope
 class RenodeMonitor:
     def __init__(self, port: int, host: str = "127.0.0.1",
                  connect_timeout_s: float = 60.0, timeout_s: float = 30.0):
-        deadline = time.monotonic() + connect_timeout_s
+        deadline = hostclock.monotonic() + connect_timeout_s
         while True:
             try:
                 self._sock = socket.create_connection((host, port), timeout=timeout_s)
                 break
             except OSError:
-                if time.monotonic() > deadline:
+                if hostclock.monotonic() > deadline:
                     raise
-                time.sleep(0.5)
+                hostclock.sleep(0.5)
         self._lock = threading.Lock()
         self._buf = b""
         self.aborted: str | None = None   # the VHIL-ABORT line, once a machine aborted

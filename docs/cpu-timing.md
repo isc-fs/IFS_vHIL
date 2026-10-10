@@ -22,13 +22,25 @@ There are two different speeds, and they are easy to mix up:
   firmware code takes. It is set by the rate above and affects native tests
   (`vhil.sim`), which run entirely in virtual time.
 - **#154 and `scripts/speed.py`: wall-clock speed.** How many virtual seconds
-  the host emulates per wall second. It matters only to IFS_HIL's wall-clock
-  suites on the virtual bench.
+  the host emulates per wall second. It matters only to IFS_HIL's suites on
+  the virtual bench, and there only to how long they take: they run on the
+  bench's time (below).
 
 The two interact in one way only: a lower rate means fewer instructions per
 virtual second, so the host emulates faster. The wall-clock bench sets every
-core to `WALL_CLOCK_MIPS` (100, `vhil/bench.py`) so that it can keep real
+core to `WALL_CLOCK_MIPS` (100, `vhil/bench.py`) to keep close to real
 time. That gives up fidelity to the rates below on purpose.
+
+The host does not keep real time anyway. On a 4-vCPU CI runner the two-board
+`ecu-ams` bench runs at 0.1-0.4x while both bootloaders poll and at 0.4-0.9x
+after, and an 8-core M-series host at 0.4-0.9x (#243). IFS_HIL's tests time
+the bench with `time.sleep`, `time.monotonic` and CAN frame timestamps, so the
+vHIL's pytest plugin puts them on the emulation's virtual time
+(`vhil/benchclock.py`, published by `models/renode/VhilClock.cs`): a slow host
+makes a suite take longer, not miss a 6 s deadline that covered 0.6 s of the
+firmware's boot. Each test's report gives the bench's speed during it, and a
+stopped emulation fails the test that waits on it (`BenchStalled`) instead of
+timing it out. `--vhil-host-clock` restores the host's clock.
 
 ## Where the rate is set
 
