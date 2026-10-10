@@ -621,7 +621,8 @@ from `git archive 04613679` except as listed below.
     `vhil/runlog.py`, [`docs/live-session.md`](../../docs/live-session.md#logs)).
     - `src/vhil/runlog.js` (new): a run's `log` record as a Log entry
       (`{ text, source, level }`: virtual time, or the wall time before
-      power-on; source; level; text) and the source filter.
+      power-on; source; level; text) and the source filter (`orderSources`
+      orders the chips' names).
       `workspace.js` (a followed run, a replay) and `session.js` (a live
       session) log those entries instead of a formatted string.
     - `src/vhil/LogView.vue`: an entry may be such an object (its text

@@ -44,15 +44,18 @@ export const textOf = (entry) => (typeof entry === 'string' ? entry : String(ent
 /** The sources present, in a stable order: the editor first, then the
  *  run's (worker, build, renode, scenario, …), then each board's UARTs. */
 const ORDER = [EDITOR, RUN, 'worker', 'build', 'pytest', 'renode', 'scenario', 'session'];
-export function sourcesOf(entries) {
-    const seen = new Set();
-    entries.forEach((e) => seen.add(sourceOf(e)));
+
+/** Source names, each once, in that order. */
+export function orderSources(names) {
     const rank = (s) => {
         const i = ORDER.indexOf(s);
         return i < 0 ? ORDER.length : i;
     };
-    return [...seen].sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
+    return [...new Set(names)].sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
 }
+
+/** The sources of these entries, in that order. */
+export const sourcesOf = (entries) => orderSources(entries.map(sourceOf));
 
 /** The entries whose source isn't hidden. */
 export function shownEntries(entries, hidden) {
