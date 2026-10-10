@@ -44,6 +44,14 @@ used within VHIL_FW_KEEP_DAYS stay, and active branch heads, queued and
 running runs' commits and a build in progress always); `prune [--dry-run]`
 makes a pass now.
 
+Live logs (vhil/runlog.py, docs/live-session.md#logs): every `log` record
+has a `source` and a `level`. A firmware build streams its output line by
+line (`build`, run_build; whole in build.log), a pytest run its output
+(`pytest`); at each slice boundary the worker reads what Renode logged
+(`renode`, filtered; whole in renode.log), what each board sent on its UARTs
+(`<board>.<UART>`; whole in uart/) and whether each board jumped from its
+bootloader to its app, all rate-limited per source.
+
 Liveness: while it holds a run the worker beats the run's heartbeat from a
 background thread (every --heartbeat S) and at every slice, and before each
 claim it reclaims runs whose heartbeat went stale (--reclaim-after S): a
@@ -82,6 +90,7 @@ from typing import Callable, NamedTuple, Optional
 
 from vhil import canframe
 from vhil import fwprune
+from vhil import runlog
 from vhil import expect as vexpect
 from vhil import stateview
 from vhil.server.config import Settings
@@ -163,7 +172,12 @@ class TraceWriter:
     run). After that only log records (the run's own end) are written.
 
     With `header`, a new file starts with it as its first line (the run's
-    token, vhil/server/runs.py trace_header)."""
+    token, vhil/server/runs.py trace_header).
+
+    Every `log` record has a `source` and a `level` (vhil/runlog.py): one
+    written without is the worker's (`worker`, `info`). While `pre` (before
+    the system is powered on: firmware, a build, a pytest run), a log record
+    carries `wall_s` too, the wall time it was written."""
 
     def __init__(self, path: Path, max_bytes: Optional[int] = None,
                  header: Optional[dict] = None):
@@ -173,6 +187,7 @@ class TraceWriter:
         self._f = open(path, "a")
         self._size = self._f.tell()
         self.full = False
+        self.pre = True
         if header is not None and self._size == 0:
             line = json.dumps(header, separators=(",", ":")) + "\n"
             self._f.write(line)
@@ -181,6 +196,12 @@ class TraceWriter:
 
     def write(self, records: list[dict]) -> None:
         records.sort(key=lambda r: r["t_us"])   # stable: same-time order kept
+        for r in records:
+            if r.get("kind") == "log":
+                r.setdefault("source", "worker")
+                r.setdefault("level", "info")
+                if self.pre:
+                    r.setdefault("wall_s", runlog.wall())
         if self.full:
             records = [r for r in records if r.get("kind") == "log"]
         text = "".join(json.dumps(rec, separators=(",", ":")) + "\n" for rec in records)
@@ -189,7 +210,8 @@ class TraceWriter:
             t_us = records[0]["t_us"] if records else 0
             note = json.dumps({"kind": "log", "t_us": t_us,
                                "text": f"trace limit reached ({self.max_bytes >> 20} MiB): "
-                                       "stopping the run"}, separators=(",", ":")) + "\n"
+                                       "stopping the run", "source": "worker", "level": "error"},
+                              separators=(",", ":")) + "\n"
             self._f.write(note)
             self._f.flush()
             self._size += len(note)
@@ -199,8 +221,9 @@ class TraceWriter:
         self._f.flush()
         self._size += len(text)
 
-    def log(self, t_us: int, text: str) -> None:
-        self.write([{"kind": "log", "t_us": t_us, "text": text}])
+    def log(self, t_us: int, text: str, source: str = "worker", level: str = "info") -> None:
+        self.write([{"kind": "log", "t_us": t_us, "text": text, "source": source,
+                     "level": level}])
 
     def close(self) -> None:
         self._f.close()
@@ -303,7 +326,7 @@ def _us(ms) -> int:
 def execute_run(sim, scenario: dict, trace: TraceWriter, *,
                 cancelled: Callable[[], bool] = lambda: False,
                 progress: Callable[[int], None] = lambda us: None,
-                state_view: bool = False, session=None, debug_hub=None) -> dict:
+                state_view: bool = False, session=None, debug_hub=None, logs=None) -> dict:
     """execute_scenario, and every board a live session debugged let go
     before the Sim stops (docs/debugger.md). debug_hub: makes the session's
     DebugHub from the Sim (a test's fake; default vhil.gdb.DebugHub)."""
@@ -311,7 +334,7 @@ def execute_run(sim, scenario: dict, trace: TraceWriter, *,
     try:
         return execute_scenario(sim, scenario, trace, cancelled=cancelled, progress=progress,
                                 state_view=state_view, session=session, debug_hub=debug_hub,
-                                hub=hub)
+                                hub=hub, logs=logs)
     finally:
         if hub["dbg"] is not None:
             hub["dbg"].close_all()
@@ -321,7 +344,7 @@ def execute_scenario(sim, scenario: dict, trace: TraceWriter, *,
                      cancelled: Callable[[], bool] = lambda: False,
                      progress: Callable[[int], None] = lambda us: None,
                      state_view: bool = False, session=None, debug_hub=None,
-                     hub: Optional[dict] = None) -> dict:
+                     hub: Optional[dict] = None, logs=None) -> dict:
     """Drive a started Sim through a `run` scenario (runs.RunScenario as a
     dict); returns the summary. Times in the scenario are virtual time from
     the system's power-on. Raises Cancelled when `cancelled()` turns true at
@@ -343,7 +366,12 @@ def execute_scenario(sim, scenario: dict, trace: TraceWriter, *,
     thread, and when a board stops (a breakpoint, a step) the whole system
     is held where it is, the stop is written into the trace with a paused
     `clock` record, and debug ops and controls are taken until every board
-    runs again; stimuli wait for the next slice boundary."""
+    runs again; stimuli wait for the next slice boundary.
+
+    With `logs` (vhil/runlog.py RunLogs), what Renode and the boards' UARTs
+    said is read at every slice boundary and written in that slice, stamped
+    with its end; the caller drains the rest (RunLogs.finish) when the Sim
+    stops."""
     end_us = int(scenario["virtual_ms"]) * 1000
     slice_us = int(scenario.get("slice_ms", 100)) * 1000
     system = sim.system
@@ -371,7 +399,8 @@ def execute_scenario(sim, scenario: dict, trace: TraceWriter, *,
 
     def note(t_us: int, text) -> None:
         nonlocal seq
-        rec = text if isinstance(text, dict) else {"kind": "log", "t_us": t_us, "text": text}
+        rec = text if isinstance(text, dict) else {"kind": "log", "t_us": t_us, "text": text,
+                                                   "source": "scenario"}
         heapq.heappush(notes, (t_us, seq, rec))
         seq += 1
 
@@ -665,7 +694,7 @@ def execute_scenario(sim, scenario: dict, trace: TraceWriter, *,
                 trace.write([session.clock(now, paused=live["paused"])])
             if not live["stop"] and session.idle():
                 live["stop"] = "idle"
-                trace.write([{"kind": "log", "t_us": now,
+                trace.write([{"kind": "log", "t_us": now, "source": "session",
                               "text": f"live session idle for {session.idle_s:g} s: stopping"}])
             if live["stop"] or not live["paused"]:
                 break
@@ -729,7 +758,7 @@ def execute_scenario(sim, scenario: dict, trace: TraceWriter, *,
             if not live["stop"] and session.idle():
                 live["stop"] = "idle"
                 dbg.close_all()
-                recs.append({"kind": "log", "t_us": now,
+                recs.append({"kind": "log", "t_us": now, "source": "session",
                              "text": f"live session idle for {session.idle_s:g} s: stopping"})
             if dbg.stopped():
                 session.wait()
@@ -784,6 +813,8 @@ def execute_scenario(sim, scenario: dict, trace: TraceWriter, *,
     since = now          # frames/edges from here on belong to the next slice
     slice_end = now + slice_us
     batch: list[dict] = []        # this slice's records, written when it ends
+    if logs is not None:
+        trace.write(logs.poll(now, sim))     # what the system said as it started
     if session is not None:
         session.rebase(now)
         live_boundary(now, slice_end)
@@ -831,6 +862,8 @@ def execute_scenario(sim, scenario: dict, trace: TraceWriter, *,
                                   "device": device, "payload": p.data.hex()})
             while notes and notes[0][0] <= now:
                 batch.append(heapq.heappop(notes)[2])
+            if logs is not None:
+                batch += logs.poll(now, sim)
             if session is not None:
                 batch.append(session.clock(now))
             since = now + 1
@@ -923,7 +956,8 @@ def evaluate_expects(run_dir: Path, scenario: dict, system: System, firmware: di
     elfs = {b: Path(p) for b, p in firmware.items() if "." not in b and b in system.boards}
     contract = system_contract(system, elfs)
     results = vexpect.evaluate_trace(run_dir / TRACE, scenario["expect"], contract, end_us)
-    trace.write([{"kind": "log", "t_us": end_us,
+    trace.write([{"kind": "log", "t_us": end_us, "source": "scenario",
+                  "level": "info" if r["passed"] else "error",
                   "text": f"expect {'passed' if r['passed'] else 'FAILED'} "
                           f"{r['name'] or r['check']} {r['signal']}: {r['detail']}"}
                  for r in results])
@@ -957,12 +991,24 @@ def image_env(system: System, firmware: dict[str, Path]) -> dict[str, str]:
 
 def execute_pytest(scenario: dict, run_dir: Path, workspace: Path, env: dict,
                    trace: TraceWriter, cancelled: Callable[[], bool],
-                   max_output_bytes: Optional[int] = None) -> tuple[str, dict]:
+                   max_output_bytes: Optional[int] = None,
+                   limit: Optional[runlog.RateLimit] = None) -> tuple[str, dict]:
+    """Run the scenario's pytest selection; its output goes to pytest.txt
+    and, rate-limited, into the trace as it comes (`pytest`, vhil/runlog.py)."""
     junit = run_dir / "junit.xml"
     cmd = [sys.executable, "-m", "pytest", scenario["select"], "-v", "-p", "no:cacheprovider",
            "--sim-log-dir", str(run_dir / "sim-logs"), f"--junitxml={junit}"]
     trace.log(0, "$ " + " ".join(cmd))
     deadline = time.monotonic() + scenario.get("timeout_s", 3600)
+    limit = limit or runlog.RateLimit()
+    tail = runlog.FileTail(run_dir / "pytest.txt")
+
+    def stream(lines: list[str]) -> None:
+        recs = limit([runlog.record(0, line, "pytest", runlog.level_of(line),
+                                    wall_s=runlog.wall()) for line in lines if line.strip()])
+        if recs:
+            trace.write(recs)
+
     with open(run_dir / "pytest.txt", "w") as out:
         proc = subprocess.Popen(cmd, cwd=workspace, env={**os.environ, **env},
                                 stdout=out, stderr=subprocess.STDOUT, start_new_session=True)
@@ -986,7 +1032,10 @@ def execute_pytest(scenario: dict, run_dir: Path, workspace: Path, env: dict,
                     os.killpg(proc.pid, signal.SIGKILL)
                     proc.wait()
                 break
+            stream(tail.lines())
             time.sleep(1)
+    stream(tail.rest())
+    trace.write(limit.flush(sources=["pytest"]))
     rc = proc.returncode
     summary = {"returncode": rc, **junit_summary(junit)}
     trace.log(0, f"pytest exited {rc}" + (f" ({reason})" if reason else ""))
@@ -1051,6 +1100,30 @@ def resolve_commits(system: System, refs: dict, lister, known: Optional[dict] = 
     return out
 
 
+def run_build(cmd: list[str], on_line: Callable[[str], None] = lambda line: None) -> str:
+    """Run `python -m vhil.system build`: its stdout (the board=elf lines
+    built.txt keeps) returned, its stderr (git, cmake, the compiler: the
+    build's output) handed to `on_line` a line at a time as it comes, so a
+    run's trace shows a build that takes minutes as it goes. A failed build
+    raises CalledProcessError with the output's last lines as its stderr."""
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                            errors="replace", bufsize=1,
+                            env={**os.environ, "PYTHONUNBUFFERED": "1"})
+    out: list[str] = []
+    reader = threading.Thread(target=lambda: out.append(proc.stdout.read()), daemon=True)
+    reader.start()
+    tail: list[str] = []
+    for line in proc.stderr:
+        line = line.rstrip("\r\n")
+        tail = (tail + [line])[-40:]
+        on_line(line)
+    rc = proc.wait()
+    reader.join()
+    if rc:
+        raise subprocess.CalledProcessError(rc, cmd, "".join(out), "\n".join(tail))
+    return "".join(out)
+
+
 class Image(NamedTuple):
     ref: str
     path: Path                     # [1], as callers index it
@@ -1101,7 +1174,12 @@ class FirmwareResolver:
             out[key] = Image(ref, path, commit or None)
         return out
 
-    def resolve(self, system: System, refs: dict, commits: Optional[dict] = None) -> dict[str, Path]:
+    def resolve(self, system: System, refs: dict, commits: Optional[dict] = None,
+                on_line: Optional[Callable[[str], None]] = None) -> dict[str, Path]:
+        """`on_line` gets the build's output a line at a time, and a note while
+        another worker's build holds the lock (the worker streams them into
+        the run's trace, `build`)."""
+        say = on_line or (lambda line: None)
         # Under the reuse lock, a prune can't remove a build between its
         # lookup here and its last-use mark (vhil.fwprune).
         with fwprune.reuse_lock(self.fw_dir):
@@ -1118,7 +1196,11 @@ class FirmwareResolver:
             # One build at a time per firmware directory: a build replaces
             # its source trees.
             with open(self.fw_dir / ".build.lock", "w") as lock:
-                fcntl.flock(lock, fcntl.LOCK_EX)
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    say("waiting for another firmware build on this server to finish")
+                    fcntl.flock(lock, fcntl.LOCK_EX)
                 want = self.expected(system, refs, commits)    # another worker may have built it
                 built = self._built()
                 missing = [k for k, im in want.items()
@@ -1131,9 +1213,12 @@ class FirmwareResolver:
                         if want[key].commit:
                             cmd += ["--commit", f"{key}={want[key].commit}"]
                     self.log("building firmware: " + " ".join(cmd))
-                    out = subprocess.run(cmd, check=True, capture_output=True, text=True)
+                    say("building " + ", ".join(
+                        f"{k} at {want[k].ref}" + (f" ({want[k].commit[:12]})" if want[k].commit else "")
+                        for k in missing))
+                    built_out = run_build(cmd, say)
                     with open(self.fw_dir / "built.txt", "a") as f:
-                        f.write(out.stdout)
+                        f.write(built_out)
         # A commit build remembers each name it was run as (vhil.system
         # newest_build: the editor's contract before a run).
         for key, im in want.items():
@@ -1166,8 +1251,10 @@ class FirmwareResolver:
 # -- the worker --------------------------------------------------------------------
 
 def _default_sim(system_path: Path, firmware: dict, log_path: Path):
+    """The run's Sim: Renode's log at `log_path`, and what each board sends
+    on its UARTs in uart/ beside it (vhil/runlog.py streams both)."""
     from vhil.sim import Sim
-    return Sim(system_path, firmware, log_path=log_path)
+    return Sim(system_path, firmware, log_path=log_path, uart_log_dir=log_path.parent / "uart")
 
 
 class Worker:
@@ -1265,6 +1352,20 @@ class Worker:
             progress["us"] = us
             self.store.progress(run_id, us, worker=self.id)
 
+        # The run's live logs (vhil/runlog.py): one rate limit for them all.
+        limit = runlog.RateLimit()
+        build_log: dict = {"f": None}
+
+        def build_line(line: str) -> None:
+            """A firmware build's line: into build.log (an artifact) and,
+            rate-limited, into the trace as it comes."""
+            if build_log["f"] is None:
+                build_log["f"] = open(run_dir / "build.log", "a")
+            build_log["f"].write(line + "\n")
+            build_log["f"].flush()
+            trace.write(limit([runlog.record(0, line, "build", runlog.level_of(line),
+                                             wall_s=runlog.wall())]))
+
         try:
             if run["attempts"] > 1:
                 prev = (run.get("summary") or {}).get("reclaimed_from") or "a worker"
@@ -1279,7 +1380,13 @@ class Worker:
             if unresolved:
                 trace.log(0, f"no commit for {', '.join(unresolved)}: using the build at the "
                              f"ref name")
-            firmware = self.resolver.resolve(system, run["firmware"], commits)
+            try:
+                firmware = self.resolver.resolve(system, run["firmware"], commits,
+                                                 on_line=build_line)
+            finally:
+                if build_log["f"] is not None:
+                    build_log["f"].close()
+                    trace.write(limit.flush(sources=["build"]))
             trace.log(0, f"worker {self.id}; firmware " + ", ".join(
                 f"{k}={p}" + (f" ({commits[k]['ref']} @ {commits[k]['commit'][:12]})"
                               if commits.get(k, {}).get("commit") else "")
@@ -1289,10 +1396,20 @@ class Worker:
                 if scenario.get("live"):
                     session = LiveSession(SessionStore(self.settings.db), run_id, self.limits)
                 sim = self.sim_factory(system_path, firmware, run_dir / "renode.log")
-                with sim:
-                    summary = execute_run(sim, scenario, trace, cancelled=cancelled,
-                                          progress=on_progress, state_view=True,
-                                          session=session)
+                logs = runlog.RunLogs(run_dir / "renode.log", limit=limit)
+                try:
+                    with sim:
+                        trace.pre = False          # virtual time from here on
+                        logs.add_uarts(getattr(sim, "uart_logs", None) or {})
+                        summary = execute_run(sim, scenario, trace, cancelled=cancelled,
+                                              progress=on_progress, state_view=True,
+                                              session=session, logs=logs)
+                finally:
+                    # What Renode and the UARTs said last (an abort, a quit).
+                    try:
+                        trace.write(logs.finish(progress["us"]))
+                    except TraceLimit:
+                        pass
                 state, virtual_us = "passed", progress["us"]
                 if scenario.get("expect"):
                     summary.update(evaluate_expects(run_dir, scenario, system, firmware,
@@ -1302,7 +1419,8 @@ class Worker:
             elif scenario["kind"] == "pytest":
                 state, summary = execute_pytest(scenario, run_dir, Path(self.settings.workspace),
                                                 image_env(system, firmware), trace, cancelled,
-                                                max_output_bytes=self.limits.max_output_bytes)
+                                                max_output_bytes=self.limits.max_output_bytes,
+                                                limit=limit)
             else:
                 raise ValueError(f"unknown scenario kind '{scenario['kind']}'")
             summary["firmware"] = {k: str(p) for k, p in firmware.items()}

@@ -1,9 +1,10 @@
 <!--
 vHIL: the bottom dock (Ctrl+J; Ctrl+1..8 or Alt+1..8 picks a tab;
 CHANGELOG-VHIL.md). Log is Pipeline Manager's terminal (the plain log view,
-src/vhil/LogView.vue), moved here from its own panel; Problems lists Check's
-errors and warnings, and a click selects the node one is about (or the
-scenario row: its check's messages and its run's failed expects, step 10);
+src/vhil/LogView.vue, with a chip per source: VhilLog.vue), moved here from
+its own panel; Problems lists Check's errors and warnings, and a click
+selects the node one is about (or the scenario row: its check's messages
+and its run's failed expects, step 10);
 Bus shows a replayed run's frames (VhilBus.vue, step 9); Scenario the
 selected scenario's rows (VhilScenario.vue, step 10); State each board's
 state card (VhilState.vue, step 13); Debug a board's debugger in a live
@@ -75,7 +76,7 @@ Collapsed, it is its tab strip, which still shows the problem count.
             class="vhil-tabpanel"
             :aria-labelledby="`vhil-tab-${tab.id}`"
         >
-            <Terminal v-if="tab.id === 'log'" :terminalInstance="logName" />
+            <VhilLog v-if="tab.id === 'log'" />
             <VhilBus v-else-if="tab.id === 'bus'" />
             <VhilState v-else-if="tab.id === 'state'" />
             <VhilScenario v-else-if="tab.id === 'scenario'" />
@@ -115,10 +116,10 @@ Collapsed, it is its tab strip, which still shows the problem count.
 
 <script>
 import { computed, defineComponent, onMounted } from 'vue';
-import Terminal from '../components/Terminal.vue';
 import VhilArtifacts from './VhilArtifacts.vue';
 import VhilBus from './VhilBus.vue';
 import VhilDebug from './VhilDebug.vue';
+import VhilLog from './VhilLog.vue';
 import VhilScenario from './VhilScenario.vue';
 import VhilSignals from './VhilSignals.vue';
 import VhilState from './VhilState.vue';
@@ -130,7 +131,7 @@ import {
 
 export default defineComponent({
     components: {
-        Terminal, VhilArtifacts, VhilBus, VhilDebug, VhilScenario, VhilSignals, VhilState,
+        VhilArtifacts, VhilBus, VhilDebug, VhilLog, VhilScenario, VhilSignals, VhilState,
     },
     setup() {
         const errors = computed(() => problemCount('error'));

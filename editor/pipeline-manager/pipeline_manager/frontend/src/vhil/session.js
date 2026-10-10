@@ -27,6 +27,7 @@ import {
     BusRates, SessionState, opText,
 } from './live.js';
 import { feedLive, replay } from './replay.js';
+import { logEntry } from './runlog.js';
 
 const KINDS = 'frame,log,edge,sample,bus_load,op,clock,debug';
 const FLUSH_MS = 50;
@@ -88,7 +89,7 @@ function flush() {
             hooks.log(`  ${(r.t_us / 1e6).toFixed(3)} s  op ${r.op_id} ${r.status}: ${opText(r.op)}`
                 + `${r.detail ? ` (${r.detail})` : ''}${r.login ? ` · ${r.login}` : ''}`);
         } else if (r.kind === 'clock') clock = r;
-        else if (r.kind === 'log') hooks.log(`  ${(r.t_us / 1e6).toFixed(3)} s  ${r.text}`);
+        else if (r.kind === 'log') hooks.log(logEntry(r));
     });
     feedLive(batch);
     if (ops) publish();

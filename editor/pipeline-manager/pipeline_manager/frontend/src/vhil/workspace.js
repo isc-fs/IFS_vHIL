@@ -33,6 +33,7 @@ import {
 } from './shell/editor-run.js';
 /* eslint-enable import/no-unresolved, import/extensions */
 import { terminalStore } from '../core/stores.js';
+import { logEntry } from './runlog.js';
 import NotificationHandler from '../core/notifications.js';
 import {
     bindWorkspace, clearScenario, commitScenario, edited, loadContract, loadScenarios, newScenario,
@@ -72,6 +73,7 @@ const LAYOUT = {
     dock: true,
     dockTab: 'log',
     dockH: 240,
+    logHidden: [], // the Log's hidden sources (VhilLog.vue)
 };
 
 export const ws = reactive({
@@ -538,7 +540,7 @@ export function openRun(id, { tab = 'bus' } = {}) {
             buses[b] = (buses[b] || 0) + 1;
         }
         log(`run ${id} replayed (${run.state}): ${frameCounts(buses) || 'no frames'}`);
-        replay.logs.forEach((r) => log(`  ${(r.t_us / 1e6).toFixed(3)} s  ${r.text}`));
+        replay.logs.forEach((r) => log(logEntry(r)));
         const over = (replay.end / 1e6).toFixed(3);
         say(`Replaying run ${id} (${run.state}): ${frames.length} frames over ${over} s`);
     });
@@ -692,7 +694,7 @@ function follow(id, body) {
             log(`run ${id} running`);
             ws.status = `Run ${id} running`;
         }
-        if (rec.kind === 'log') log(`  ${(rec.t_us / 1e6).toFixed(3)} s  ${rec.text}`);
+        if (rec.kind === 'log') log(logEntry(rec));
         else if (!rec.src) counts[rec.bus] = (counts[rec.bus] || 0) + 1;
         paint();
     };

@@ -58,6 +58,10 @@ export const notificationStore = reactive({
 
 export const MAIN_TERMINAL = 'Terminal';
 
+const TERMINAL_KEEP = 40000;
+const TERMINAL_SAVED = 2000;
+let saveTimer = 0;
+
 export const terminalStore = reactive({
     // Object
     logs: {
@@ -69,9 +73,21 @@ export const terminalStore = reactive({
     add(log, instance = MAIN_TERMINAL) {
         this.logs[instance].push(log);
 
-        // Update localStorage only for the main terminal
+        // Update localStorage only for the main terminal. vHIL
+        // (CHANGELOG-VHIL.md, live logs): a run streams many lines, so the
+        // log is kept in memory up to TERMINAL_KEEP entries and saved at most
+        // twice a second, its last TERMINAL_SAVED entries, not re-serialised
+        // whole on every line.
         if (instance === MAIN_TERMINAL) {
-            set(`logs`, JSON.stringify(this.logs[instance]));
+            const logs = this.logs[instance];
+            if (logs.length > TERMINAL_KEEP) logs.splice(0, logs.length - TERMINAL_KEEP / 2);
+            if (!saveTimer) {
+                saveTimer = setTimeout(() => {
+                    saveTimer = 0;
+                    const kept = this.logs[MAIN_TERMINAL];
+                    if (kept) set(`logs`, JSON.stringify(kept.slice(-TERMINAL_SAVED)));
+                }, 500);
+            }
         }
     },
     isReadOnly(instance = MAIN_TERMINAL) {
@@ -115,6 +131,8 @@ export const terminalStore = reactive({
 
     clear(instance = MAIN_TERMINAL) {
         if (instance === MAIN_TERMINAL) {
+            clearTimeout(saveTimer);
+            saveTimer = 0;
             remove(`logs`);
         }
         this.logs[instance] = [];

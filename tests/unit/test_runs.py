@@ -844,7 +844,7 @@ class FixedResolver:
     def commits(self, system, refs, known=None, log=None):
         return {}
 
-    def resolve(self, system, refs, commits=None):
+    def resolve(self, system, refs, commits=None, on_line=None):
         self.asked.append((system.id, refs))
         if self.error:
             raise self.error
@@ -999,14 +999,14 @@ def test_resolver_reuses_an_image_built_at_the_ref(tmp_path):
 
 
 class FakeBuild:
-    """`python -m vhil.system build` as the resolver runs it: writes each
+    """`python -m vhil.system build` as the resolver runs it (run_build): writes each
     --only image where a commit build (or a ref build) puts it, prints
     board=elf, and remembers what it was asked."""
 
     def __init__(self, system, fw_dir):
         self.system, self.fw_dir, self.calls = system, fw_dir, []
 
-    def __call__(self, cmd, *a, **k):
+    def __call__(self, cmd, on_line=None):
         from vhil.system import commit_image_path
         from vhil.worker import image_ref
         only = [cmd[i + 1] for i, c in enumerate(cmd) if c == "--only"]
@@ -1021,7 +1021,9 @@ class FakeBuild:
             elf.parent.mkdir(parents=True, exist_ok=True)
             elf.write_bytes(b"\x7fELF")
             out.append(f"{key}={elf}")
-        return subprocess.CompletedProcess(cmd, 0, "\n".join(out) + "\n", "")
+        if on_line is not None:
+            on_line(f"[{', '.join(only)}] compiling")
+        return "\n".join(out) + "\n"
 
 
 def test_a_branch_that_moved_rebuilds_and_one_commit_is_built_once(tmp_path, monkeypatch):
@@ -1031,7 +1033,7 @@ def test_a_branch_that_moved_rebuilds_and_one_commit_is_built_once(tmp_path, mon
     import vhil.worker as vw
     system = System(ECU)
     build = FakeBuild(system, tmp_path)
-    monkeypatch.setattr(vw.subprocess, "run", build)
+    monkeypatch.setattr(vw, "run_build", build)
     resolver = FirmwareResolver(tmp_path, log=lambda m: None)
     a, b, bl = "a" * 40, "b" * 40, "1" * 40
     first = resolver.resolve(system, {"ecu": "feat/x"}, {"ecu": a, "ecu.bootloader": bl})
@@ -1081,7 +1083,7 @@ def test_the_worker_runs_the_commit_the_run_recorded(tmp_path, settings, store, 
     import vhil.worker as vw
     system = System(ECU)
     build = FakeBuild(system, tmp_path / "fw")
-    monkeypatch.setattr(vw.subprocess, "run", build)
+    monkeypatch.setattr(vw, "run_build", build)
     commits = {"ecu": {"ref": "dev", "commit": "e" * 40},
                "ecu.bootloader": {"ref": "v1.7.0", "commit": "1" * 40}}
     run_id = store.create("ecu", "", {}, {"kind": "run", "virtual_ms": 100, "slice_ms": 100},
@@ -1360,7 +1362,7 @@ def test_the_heartbeat_thread_keeps_a_run_with_no_slices_claimed(settings, store
     run_id = store.create("ecu", "", {}, RUN)
 
     class SlowBuild(FixedResolver):
-        def resolve(self, system, refs, commits=None):
+        def resolve(self, system, refs, commits=None, on_line=None):
             time.sleep(2.5)
             return super().resolve(system, refs)
 
