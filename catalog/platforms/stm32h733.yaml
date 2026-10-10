@@ -45,11 +45,15 @@ renode:
     # RCC xxxRSTR peripheral resets with the H733's bits (Renode's has the
     # H743's, and doesn't know the models this platform adds).
     - models/renode/VhilRccResets.cs
+    # The Cortex-M7 cache controls as architected no-ops: CCR.IC/DC read back,
+    # ICIALLU accepted (Renode has no cache to enable or invalidate).
+    - models/renode/VhilCaches.cs
   # After each board's platform loads; {board} is its machine name.
   setup:
     - emulation CreateVhilResetFlags "vhil_reset_{board}" "{board}"
     - emulation CreateVhilRccResets "vhil_rcc_{board}" "{board}"
     - emulation CreateVhilExecuteNever "vhil_xn_{board}" "{board}"
+    - emulation CreateVhilCaches "vhil_caches_{board}" "{board}"
   # In the reset macro, after every reset: power-on, software and watchdog.
   # Renode 1.17's CPU reset zeroes BASEPRI as read but not the masking it
   # applies (renode/renode#1021). An IWDG reset taken while the firmware

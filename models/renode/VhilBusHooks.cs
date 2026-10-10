@@ -7,7 +7,8 @@
 // by offset; offsets nobody registered go to the peripheral unchanged.
 //
 //   sysbus.rcc   VhilResetFlags.cs (RCC_RSR), VhilRccResets.cs (xxxRSTR)
-//   sysbus.nvic  VhilResetFlags.cs (AIRCR), VhilExecuteNever.cs (MPU_CTRL)
+//   sysbus.nvic  VhilResetFlags.cs (AIRCR), VhilExecuteNever.cs (MPU_CTRL),
+//                VhilCaches.cs (CCR, ICIALLU)
 //
 using System;
 using System.Collections.Generic;

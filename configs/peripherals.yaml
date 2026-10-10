@@ -58,3 +58,13 @@
 - peripheral: flashController_h7
   offsets: [0xC]
   why: "CR1.PSIZE1, the programming parallelism (x8..x64). It sets how fast a flash word programs, not what is written, and the model programs instantly"
+
+# The Cortex-M7 core's system registers (every board).
+
+- peripheral: nvic
+  offsets: [0xF50]
+  why: "ICIALLU, invalidate the whole I-cache (SCB_EnableICache, CMSIS cachel1_armv7.h). models/renode/VhilCaches.cs counts it through a bus hook; the NVIC model underneath defines no register there, hence its warning. Renode has no cache, so every fetch already sees memory: the invalidation's effect on what runs is the architected one"
+
+- peripheral: dwt
+  offsets: [0xFB0]
+  why: "DWT_LAR, the CoreSight software lock (0xC5ACCE55 unlocks). The car's H733 counts CYCCNT without it: the CAN bootloader enables CYCCNT with no LAR write (main.c:489-491) and measured 1822 ms sector erases with it on bench-01 (stm32-can-bootloader#138). Renode's DWT has no lock, so dropping the unlock is what the silicon does with it"

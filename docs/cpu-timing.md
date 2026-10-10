@@ -54,6 +54,54 @@ timing it out. `--vhil-host-clock` restores the host's clock.
 The rate belongs to the firmware, not the platform. It is decided by what the
 firmware sets up: the clock tree, the caches, and where code and data live.
 
+## The cycle counter
+
+The DWT cycle counter, CYCCNT (0xE0001004), counts core clock cycles (ARMv7-M
+ARM DDI0403E C1.8). In the emulator it counts **SYSCLK cycles of virtual
+time**: 528 per virtual us (`dwt` in `platforms/cpus/stm32h733.repl`). Renode's
+DWT syncs the CPU's time on every CYCCNT read, so a read is exact to the
+instruction. Since each instruction costs 1 / `cpu.mips` us, it adds
+528 / `cpu.mips` cycles: 2 at 264 MIPS, 1 at 528.
+
+So a wait timed on CYCCNT lasts what the firmware asks in virtual time,
+whatever the rate, as it does on the chip whatever the caches and wait states
+do. Only the code around the wait follows the rate. The rate still decides
+how many polls the wait takes, but no pin shows that.
+
+- Every MainLite image has CYCCNT running: the CAN bootloader enables it
+  (DEMCR.TRCENA, DWT_CTRL.CYCCNTENA; `stm32-can-bootloader` `main.c:489-491`)
+  to time its sector erases, and the app inherits it.
+- The bootloader writes no DWT_LAR unlock, and on the car's H733 the counter
+  runs anyway: bench-01 measured 1822 ms erases with it
+  (stm32-can-bootloader#138). So the emulator has no lock. A firmware's
+  unlock write is dropped and explained in `configs/peripherals.yaml`.
+- Renode's DWT counts while CYCCNTENA is set, regardless of DEMCR.TRCENA.
+  Every image sets both.
+- 528 MHz is fixed, not derived from the RCC: every image runs SYSCLK at
+  528 MHz from the bootloader on. Code that reads CYCCNT before
+  `SystemClock_Config` (HSI 64 MHz on the chip) would see it count 8x fast.
+- `stm32h7.repl` clocked it at 250 MHz, so CYCCNT-timed waits ran 2.1x long
+  (the AMS's isoSPI wake after IFS08-CE-AMS#637: 42.7 us / 1056 us for a
+  20 us / 500 us request). `tests/sim/test_cortex_m7_core.py` pins the rate.
+
+## The caches
+
+Renode has no cache. Every fetch and load sees memory, and every instruction
+costs the same. Enabling a cache or invalidating it is therefore modelled as
+the architected no-op for what code observes
+(`models/renode/VhilCaches.cs`):
+
+- CCR.IC and CCR.DC read back as written and clear on every reset (ARMv7-M
+  ARM B3.2.8; ST PM0253 4.3.7). tlib dropped them, so CMSIS
+  `SCB_EnableICache` (`cachel1_armv7.h:57-70`) saw the cache still off.
+- ICIALLU (0xE000EF50) is accepted and counted (ARMv7-M ARM B2.2.7).
+
+What a cache does to speed has to be the firmware's `cpu.mips`, which is why
+a firmware that turns its caches on needs its rate redone.
+`SCB_EnableDCache` would also read CSSELR and CCSIDR, which Renode leaves
+tagged. The guard would fail that run until they are modelled, and no
+MainLite firmware enables the D-cache.
+
 ## What the chip runs (firmware dev, 2026-10-09)
 
 - **Clocks.** SYSCLK is 528 MHz: HSE 24 MHz / PLLM 2 * PLLN 44 / PLLP 1. AXI
