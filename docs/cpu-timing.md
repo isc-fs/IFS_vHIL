@@ -46,7 +46,7 @@ timing it out. `--vhil-host-clock` restores the host's clock.
 
 | Where | Value | Used by |
 |---|---|---|
-| `catalog/firmware/<fw>.yaml` `cpu.mips` | AMS 264, ECU 231 | Native tests and generated scripts (`vhil/system.py` renders `cpu PerformanceInMips` per board) |
+| `catalog/firmware/<fw>.yaml` `cpu.mips` | AMS 528, ECU 231 | Native tests and generated scripts (`vhil/system.py` renders `cpu PerformanceInMips` per board) |
 | `platforms/cpus/stm32h733.repl` `PerformanceInMips` | 528 | Any image the catalogue gives no rate (one instruction per cycle at SYSCLK) |
 | `vhil/bench.py` `WALL_CLOCK_MIPS` | 100 | The wall-clock bench only, to keep real time |
 | `scripts/speed.py --mips` | any | Host speed measurement only |
@@ -102,15 +102,20 @@ a firmware that turns its caches on needs its rate redone.
 tagged. The guard would fail that run until they are modelled, and no
 MainLite firmware enables the D-cache.
 
-## What the chip runs (firmware dev, 2026-10-09)
+## What the chip runs (firmware dev, 2026-10-10)
 
 - **Clocks.** SYSCLK is 528 MHz: HSE 24 MHz / PLLM 2 * PLLN 44 / PLLP 1. AXI
   (HCLK) is 264 MHz, and the flash runs `FLASH_LATENCY_3` at VOS0 (AMS and ECU
   `Core/Src/main.c` `SystemClock_Config`). 550 MHz is the part's maximum; these
   firmwares don't use it.
-- **Caches.** The I-cache and D-cache are **off** in the AMS, the ECU and the
-  CAN bootloader. None of them calls `SCB_EnableICache` or `SCB_EnableDCache`,
-  and `AMS.ioc` and `ECU.ioc` have no `CORTEX_M7` cache keys.
+- **Caches.**
+  - AMS: the I-cache is **on** since IFS08-CE-AMS#637 (`SCB_EnableICache` in
+    `main()` before `HAL_Init`, `AMS.ioc` `CORTEX_M7.CPU_ICache=Enabled`). The
+    D-cache stays off: the AMS's DMA buffers are in AXI SRAM and it has no
+    non-cacheable MPU region (its `docs/ARCHITECTURE.md`, "Caches").
+  - ECU and CAN bootloader: both caches **off**. Neither calls
+    `SCB_EnableICache` or `SCB_EnableDCache`, and `ECU.ioc` has no
+    `CORTEX_M7` cache keys.
 - **Code** runs from embedded flash (`0x08020000`) over the 64-bit AXI bus.
   ITCM is unused.
 - **Data.**
@@ -125,12 +130,13 @@ MainLite firmware enables the D-cache.
   buffer; any other word needs a new read. At 3 WS a read takes 4 flash clocks
   at the AXI's 264 MHz, which is 8 CPU cycles.
 
-With no I-cache, every instruction fetch goes to that buffer. A loop whose
+With no I-cache (the ECU, the bootloader), every instruction fetch goes to
+that buffer. A loop whose
 body spans two flash words reads both words on every iteration, which costs at
 least 16 CPU cycles per iteration, however short the body is. ST's headline
 figures (2778 CoreMark at 550 MHz, about 1 instruction per cycle or better)
-are measured with the L1 cache on, so they don't apply to these firmwares. I
-found no published cache-off figure for the H72x/H73x.
+are measured with the L1 cache on, so they don't apply to the cache-off
+firmwares. I found no published cache-off figure for the H72x/H73x.
 
 ## The rate: a datasheet bound until the chip is measured
 
@@ -139,7 +145,6 @@ a pin, so a logic analyzer can time it on the chip too.
 
 | Firmware | Window | Loop | Instructions in the window (emulator) | Bound |
 |---|---|---|---|---|
-| AMS | LTC6820 CS (PB9) low for the wake pulse, `delay_us(20)` (`ltc6820.cpp` `Bus::wakeup`), 10 pulses at boot | 8 instructions over 2 flash words, 3000 iterations | 24130 | 528 * 8/16 = **264 MIPS** |
 | ECU | nRF24 SCK (PA5) high half-period, `NRF24_BitBangDelay` (`nrf24.c:359-365`) | 7 instructions over 2 flash words, 400 iterations | 2875 | 528 * 7/16 = **231 MIPS** |
 
 How the bound is worked out:
@@ -158,6 +163,42 @@ instruction per cycle) made them at least twice as fast as on the chip.
 The catalogue uses the bound until the chip's own number replaces it:
 **rate = instructions in the window / the window measured on the chip (us)**.
 
+Up to AMS dev 2026-10-09 the AMS had such a window too: PB9 low for the wake
+pulse, a `delay_us(20)` NOP loop of 8 instructions over 2 flash words, 24130
+instructions, bound 528 * 8/16 = 264 MIPS.
+
+### The AMS: I-cache on, no window left
+
+IFS08-CE-AMS#637 changed two things:
+
+- `delay_us` is timed on CYCCNT, so the wake pulse lasts 20 us whatever the
+  rate ("The cycle counter" above). It was the AMS's only pass-counting delay
+  (the PR's own audit). Every other pin edge brackets peripheral-timed work,
+  which Renode doesn't time the way the chip does: SPI transfers to the
+  LTC6820, relay and SDC writes.
+- With the I-cache on, a loop that fits in the 32 KB cache no longer pays the
+  flash read buffer. The 264 bound is gone.
+
+So no pin times the AMS's CPU rate any more, and the rate is pinned on the
+pipeline instead:
+
+- **Upper bound, 1056 MIPS.** On I-cache hits the Cortex-M7 fetches 64 bits a
+  cycle and its in-order superscalar pipeline issues up to two instructions a
+  cycle (Arm Cortex-M7 Processor Technical Reference Manual, DDI 0489,
+  "About the processor" and "Prefetch Unit"): 2 * 528.
+- **Rate used, 528 MIPS: one instruction a cycle.** Dual issue is limited to
+  certain pairs, a mispredicted branch costs the pipeline's refill, and the
+  AMS's code is branchy control code with loads from peripherals over AXI and
+  AHB, which stall for many cycles. Its data and stack are in DTCM, so its
+  own loads and stores don't stall. Half the dual-issue peak is the
+  documented middle until the chip is measured. Expect the chip within a
+  factor of 2 either way, closer to 528 for most code.
+
+The AMS's PB9 wake train is still worth timing on the chip: 20 us low and
+500 us high per IC is the firmware's intent (LTC6811 "Waking a Daisy Chain,
+Method 2"), and it checks the cycle-counter model against the silicon. It
+doesn't measure the rate.
+
 ### Measuring the chip (no firmware change, invariant 1)
 
 Any MainLite running the same image will do: on the car, or bench-01's. CPU
@@ -167,8 +208,10 @@ which these windows don't touch).
 
 **Logic analyzer, at 10 MS/s or more.**
 
-- AMS: probe PB9 from power-on. Record the ten CS-low pulses of the boot wake
-  train, which are about 50 us apart.
+- AMS (since IFS08-CE-AMS#637): probe PB9 from power-on. Record the ten
+  CS-low pulses of the boot wake train and the nine CS-high gaps between them.
+  Expect 20 us low and 500 us high. That checks the cycle counter, not the
+  rate.
 - ECU: probe PA5 while TelemetryTask sends, every 200 ms. Record the SCK high
   half-periods.
 - Report the minimum and the median over the run, and the firmware commit. The
@@ -181,6 +224,12 @@ which these windows don't touch).
 3. Read DWT_CYCCNT at each break, about 20 times, and take the minimum.
 4. The rate is 528 times the window's instructions over the cycles.
 
+For the AMS, which has no pin window, SWD is the way to measure its rate. Use
+a CPU-bound function such as `ams::crc::update`, the SD log's nibble-table
+CRC over a block. Count its instructions for the same call in the emulator,
+from the CPU's executed-instruction count at its entry and at its return, then
+apply step 4.
+
 To record a measurement:
 
 1. Put it in the test as the window's `chip_us`.
@@ -188,12 +237,13 @@ To record a measurement:
 3. Note the firmware commit and the instrument in the firmware entry.
 
 The skipped `..._is_as_long_as_on_the_chip` test then holds the rate to the
-measurement.
+measurement. For the AMS's wake train, put the chip's widths in
+`CHIP_WAKE_US` instead: the test then holds the cycle counter to them.
 
 ## What pins it
 
-`tests/sim/test_ams_cpu_timing.py` and `tests/sim/test_ecu_cpu_timing.py`
-(shared helpers in `tests/sim/cpu_timing.py`) check four things:
+`tests/sim/test_ecu_cpu_timing.py` (shared helpers in
+`tests/sim/cpu_timing.py`) checks four things:
 
 - **The board's core runs at its firmware's catalogue rate.**
 - **The window still costs the pinned instructions, within 3 %.** If the
@@ -210,6 +260,12 @@ GPIO edges carry the CPU's executed-instruction count at the write
 edge's time is only as fine as the sync quantum (500 us in these systems).
 That is what makes a 20 us window measurable in the emulator.
 
+`tests/sim/test_ams_cpu_timing.py` checks that the AMS's core runs at its
+catalogue rate, and that its wake train is 20 us low and 500 us high per IC
+in virtual time, to the instruction. Once isc-fs/IFS_HIL#154 reports the
+chip's widths, it also holds the train to them.
+`tests/sim/test_cortex_m7_core.py` holds CYCCNT at 528 cycles per virtual us.
+
 ## Limitations
 
 - **One rate per core.** Renode 1.17 charges every instruction the same. It
@@ -220,7 +276,11 @@ That is what makes a 20 us window measurable in the emulator.
   step) can run faster on the chip than the loop rate implies, because
   sequential fetches are served from the read buffer. Expect a 10 % tolerance
   on the windows and less fidelity elsewhere.
-- **The bootloader** runs on the same core at its application's rate.
+- **The bootloader** runs on the same core at its application's rate. The
+  bootloader keeps its caches off, so behind the AMS it runs about twice as
+  fast as on the chip. It times nothing by running code: its waits use the
+  HAL tick and CYCCNT.
 - **A firmware that turns the caches on**, or moves code to ITCM, changes its
-  rate a lot. Its catalogue entry must then be measured again.
+  rate a lot. Its catalogue entry must then be redone, as the AMS's was for
+  IFS08-CE-AMS#637.
 - **The uDV** has no catalogue firmware yet, so it gets the platform's 528.
