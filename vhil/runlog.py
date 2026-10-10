@@ -302,6 +302,9 @@ class RunLogs:
         self.limit = limit or RateLimit()
         self._in_app: dict[str, bool] = {}
         self._boot_ok = True
+        # A one-board system's Renode log names no machine ("cpu:", not
+        # "ams/cpu:"): its lines are that board's.
+        self._sole: Optional[str] = None
 
     def add_uarts(self, uarts: dict) -> None:
         for src, p in uarts.items():
@@ -313,7 +316,7 @@ class RunLogs:
             shown = self.filter.feed(line)
             if shown is not None:
                 level, text, board = shown
-                out.append(record(t_us, text, "renode", level, board=board))
+                out.append(record(t_us, text, "renode", level, board=board or self._sole))
         return out
 
     def _boot(self, t_us: int, sim) -> list[dict]:
@@ -343,6 +346,9 @@ class RunLogs:
         return out
 
     def poll(self, t_us: int, sim=None) -> list[dict]:
+        boards = getattr(getattr(sim, "system", None), "boards", None) or {}
+        if len(boards) == 1:
+            self._sole = next(iter(boards))
         recs = self._renode(t_us, self.renode.lines()) if self.renode else []
         for src, tail in self.uarts.items():
             board = src.split(".", 1)[0]

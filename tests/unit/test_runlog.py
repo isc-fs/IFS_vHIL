@@ -193,6 +193,8 @@ def test_a_run_trace_has_build_renode_and_uart_logs_as_they_happen(tmp_path, set
     # Renode's lines and the UART's at the end of the slice they were read in.
     renode = [(r["t_us"], r["text"]) for r in logs if r["source"] == "renode"]
     assert renode[0] == (0, "ecu: Machine started.")
+    # One board: Renode names no machine, and its lines are the board's.
+    assert {r.get("board") for r in logs if r["source"] == "renode"} == {"ecu"}
     assert (300_000, "iwdg: Watchdog reset triggered!") in renode
     uart = [(r["t_us"], r["text"], r["board"]) for r in logs if r["source"] == "ecu.USART10"]
     assert uart == [(200_000, "$PMTK220,100*2F", "ecu")]
