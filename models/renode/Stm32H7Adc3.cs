@@ -351,9 +351,38 @@ namespace Antmicro.Renode.Peripherals.Analog
             {
                 return;   // superseded, or the ADC was reset
             }
+            if(OnOtherBoardsCpu())
+            {
+                // Its results land through the DMA in this board's RAM, which
+                // another board's CPU thread must not write while this
+                // board's CPU runs: wait for the sync point, where every CPU
+                // is stopped (see OnOtherBoardsCpu).
+                machine.LocalTimeSource.ExecuteInNearestSyncedState(_ => OnResultDue(g));
+                return;
+            }
             pendingAt = -1;
             CatchUp(Now());
             Schedule();
+        }
+
+        // Whether this runs on another board's CPU thread. A machine made by
+        // `mach create` (the wall-clock bench, vhil/bench.py) has the master
+        // time source as its own, so its clock, and the actions scheduled on
+        // it, advance on whichever board's CPU thread moved the master's time
+        // (VhilMachine.cs). A DMA write into this board's RAM from there,
+        // while this board's CPU runs and waits for that same master, froze
+        // the two-board bench (#243). Never true for a machine on a time
+        // source of its own (vhil.sim) or for a single board.
+        private bool OnOtherBoardsCpu()
+        {
+            foreach(var other in EmulationManager.Instance.CurrentEmulation.Machines)
+            {
+                if(other != machine && other.SystemBus.TryGetCurrentCPU(out var _))
+                {
+                    return true;
+                }
+            }
+            return false;
         }
 
         private double Now()

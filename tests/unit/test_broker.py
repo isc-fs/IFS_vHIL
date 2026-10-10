@@ -110,8 +110,8 @@ def test_the_pacing_watch_flags_a_stalled_emulation(monkeypatch, caplog):
         def execute(self, command):
             return f"Elapsed Virtual Time: 00:00:{next(virt):09.6f}\n"
 
-    monkeypatch.setattr(broker.time, "sleep", lambda s: None)
-    monkeypatch.setattr(broker.time, "monotonic", lambda: next(wall))
+    monkeypatch.setattr(broker.host, "sleep", lambda s: None)
+    monkeypatch.setattr(broker.host, "monotonic", lambda: next(wall))
     with caplog.at_level("WARNING", logger="vhil.broker"):
         broker.watch_pacing(Monitor(), threading.Lock(), iterations=4)
     stalls = [r for r in caplog.records if "behind host time" in r.getMessage()]

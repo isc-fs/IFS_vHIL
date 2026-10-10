@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Iterable
 
 from vhil import renode as rn
+from vhil.benchclock import host
 from vhil.broker import make_backend, probe_commands, watch_pacing
 from vhil.renode import RenodeMonitor
 from vhil.system import System
@@ -21,17 +22,22 @@ REPO = Path(__file__).resolve().parent.parent
 DEFAULT_RENODE = os.environ.get(
     "RENODE", str(Path.home() / "vhil-tools/renode_1.17.0-portable/renode"))
 
-# IFS_HIL's suites measure wall-clock time, so the bench must keep up with the
-# host clock. The ECU never sleeps (its idle task spins), so host cost scales
-# with the core's MIPS: at the platform's faithful 528 an i9 manages 0.6x real
-# time, at Renode's default 100 about 1.3x. The bench trades busy-wait timing
-# fidelity for real time; native tests (vhil.sim) keep the platform's value.
+# Every core runs at this rate on the bench, whatever the catalogue's cpu.mips
+# (set after the generated script). Busy-waits (the bootloader's poll loop,
+# the ECU's bit-banged nRF24) cost host time in proportion to it: at the
+# platform's 528 an i9 managed 0.6x real time with one ECU, at 100 about 1.3x.
+# The bench trades busy-wait timing fidelity for host speed; native tests
+# (vhil.sim) keep the catalogue's rates. IFS_HIL's tests run on the bench's
+# time either way (vhil/benchclock.py), so a slower host only takes longer.
 WALL_CLOCK_MIPS = 100
 
 PACER_SOURCE = REPO / "models" / "renode" / "VhilPacer.cs"
 # A deficit beyond this is forgiven rather than repaid; within it the bench
 # catches up, so wall-clock periods stay within this of nominal.
 PACER_MAX_LAG_S = 0.05
+# Publishes the emulation's virtual time for the test process's clock
+# (vhil/benchclock.py).
+CLOCK_SOURCE = REPO / "models" / "renode" / "VhilClock.cs"
 
 
 def _free_port() -> int:
@@ -60,6 +66,7 @@ class VirtualBench:
         self.renode, self.socketcan = renode, socketcan
         self.socket_path, self.log_path = socket_path, log_path
         self._proc = self._monitor = self._backend = None
+        self.clock_path: Path | None = None
 
     def start(self) -> "VirtualBench":
         for image in self.system.images():
@@ -81,6 +88,11 @@ class VirtualBench:
         m.execute(f"include {rn.file_arg(PACER_SOURCE)}")
         m.execute("emulation SetGlobalAdvanceImmediately true")
         m.execute(f"emulation EnableVhilPacer {rn.number(PACER_MAX_LAG_S)}")
+        # After the pacer: each pair is published once the pacer has let that
+        # sync point go, so virtual time never runs ahead of the host's in it.
+        self.clock_path = script.parent / "bench.clock"
+        m.execute(f"include {rn.file_arg(CLOCK_SOURCE)}")
+        m.execute(f"emulation EnableVhilClock {rn.quote(self.clock_path.as_posix())}")
         for board in self.system.boards:
             m.execute(f"mach set {rn.quote(rn.ident(board))}")
             m.execute(f"cpu PerformanceInMips {WALL_CLOCK_MIPS}")
@@ -123,17 +135,16 @@ class VirtualBench:
     def _wait_for_socket(self, timeout_s: float = 10.0) -> None:
         """Ready means a client can connect: the file exists from bind(),
         a moment before listen()."""
-        import time
-        deadline = time.monotonic() + timeout_s
+        deadline = host.monotonic() + timeout_s
         while True:
             try:
                 with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
                     s.connect(self.socket_path)
                 return
             except OSError:
-                if time.monotonic() > deadline:
+                if host.monotonic() > deadline:
                     raise TimeoutError(f"virtual broker never listened on {self.socket_path}")
-                time.sleep(0.05)
+                host.sleep(0.05)
 
     def stop(self) -> None:
         if self._monitor is not None:

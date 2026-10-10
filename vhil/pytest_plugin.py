@@ -16,6 +16,13 @@ step itself (vhil/bench_operator.py).
 --vhil-system picks the system (default systems/ecu.yaml). --vhil-elf is
 shorthand for a one-board system; --vhil-firmware BOARD=ELF names each board's
 image.
+
+The tests run on the bench's time, not the host's (vhil/benchclock.py, #243):
+a host that emulates the system slower than real time makes them take longer,
+not miss their deadlines. Each test's report says how fast the bench ran
+(section "vhil bench time, setup to teardown"), and the session's summary
+for the whole run.
+--vhil-host-clock keeps them on the host's clock instead.
 """
 from __future__ import annotations
 
@@ -28,11 +35,15 @@ import yaml
 
 from vhil import bench_operator as operator
 from vhil.bench import DEFAULT_RENODE, REPO, VirtualBench
+from vhil.benchclock import BenchClock, BenchStalled, host
 from vhil.system import System
 
 _bench = None
 _operator = None
+_clock: BenchClock | None = None
 _stepped: dict = {}         # item nodeid -> the step to do after it
+_started: dict = {}         # item nodeid -> (host s, bench s) at its start
+_rates: list = []           # (nodeid, bench s, host s) per test
 
 
 def pytest_addoption(parser):
@@ -51,6 +62,8 @@ def pytest_addoption(parser):
                 help="unmodelled hardware the firmware may touch (peripheral guard)")
     g.addoption("--vhil-gaps", default=str(REPO / "configs" / "gaps.yaml"),
                 help="known model gaps to skip with their reason")
+    g.addoption("--vhil-host-clock", action="store_true",
+                help="time the tests by the host's clock, not the bench's (vhil/benchclock.py)")
 
 
 def _firmware(config) -> dict[str, Path]:
@@ -71,7 +84,7 @@ def _firmware(config) -> dict[str, Path]:
 
 
 def pytest_configure(config):
-    global _bench, _operator
+    global _bench, _operator, _clock
     firmware = _firmware(config)
     if not firmware:
         return
@@ -88,6 +101,45 @@ def pytest_configure(config):
     ).start()
     # Before collection: IFS_HIL's gated modules read their env vars on import.
     _operator = operator.Operator(_bench)
+    if not config.getoption("--vhil-host-clock"):
+        _clock = BenchClock(_bench.clock_path).install()
+
+
+def _bench_now():
+    """(host s, bench s) now, or None without the bench clock or once the
+    emulation stalled (the test that saw it fails with BenchStalled)."""
+    if _clock is None:
+        return None
+    try:
+        return host.monotonic(), _clock.virtual()
+    except BenchStalled:
+        return None
+
+
+def pytest_runtest_logstart(nodeid, location):
+    now = _bench_now()
+    if now is not None:
+        _started[nodeid] = now
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    """After teardown: how much bench time the test took, in how much host
+    time. Below real time the test simply took longer on the host; its
+    deadlines were the firmware's."""
+    outcome = yield
+    report = outcome.get_result()
+    if report.when != "teardown":
+        return
+    start, now = _started.pop(item.nodeid, None), _bench_now()
+    if start is None or now is None:
+        return
+    host_s, bench_s = now[0] - start[0], now[1] - start[1]
+    _rates.append((item.nodeid, bench_s, host_s))
+    rate = bench_s / host_s if host_s > 0 else float("nan")
+    # pytest prints a teardown report's sections whose name says teardown.
+    report.sections.append(("vhil bench time, setup to teardown", f"{bench_s:.2f} s of bench (firmware) time in "
+                            f"{host_s:.2f} s of host time: {rate:.2f}x real time"))
 
 
 @pytest.hookimpl(hookwrapper=True)
@@ -191,9 +243,12 @@ def pytest_sessionfinish(session, exitstatus):
     """Stop Renode (so its log is complete), then fail the session if the
     firmware touched hardware the bench does not model and nobody explained
     it in configs/peripherals.yaml."""
-    global _bench
+    global _bench, _clock
     if _bench is None:
         return
+    if _clock is not None:
+        _clock.uninstall()
+        _clock = None
     _bench.stop()
     log_path, _bench = _bench.log_path, None
     if log_path is None or not Path(log_path).exists():
@@ -212,12 +267,30 @@ def pytest_sessionfinish(session, exitstatus):
 
 
 def pytest_unconfigure(config):
+    if _clock is not None:
+        _clock.uninstall()
     if _bench is not None:
         _bench.stop()
+
+
+def pytest_terminal_summary(terminalreporter):
+    """The bench's speed over the session: how much longer than real time it
+    took, and the slowest test."""
+    if not _rates:
+        return
+    bench_s = sum(r[1] for r in _rates)
+    host_s = sum(r[2] for r in _rates)
+    slowest = min((r for r in _rates if r[2] > 1.0), key=lambda r: r[1] / r[2], default=None)
+    line = (f"vhil bench clock: {bench_s:.0f} s of bench time in {host_s:.0f} s of host time "
+            f"({bench_s / host_s:.2f}x real time)")
+    if slowest is not None:
+        line += f"; slowest {slowest[0]} at {slowest[1] / slowest[2]:.2f}x"
+    terminalreporter.write_line(line)
 
 
 def pytest_report_header(config):
     if _bench is not None:
         images = ", ".join(f"{b}={p.name}" for b, p in _bench.firmware.items())
         return (f"vhil: system {_bench.system.id} ({images}), "
-                f"socketcan={'on' if _bench.socketcan else 'off'}")
+                f"socketcan={'on' if _bench.socketcan else 'off'}, "
+                f"clock={'host' if _clock is None else 'bench'}")

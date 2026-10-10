@@ -29,11 +29,11 @@ import logging
 import re
 import sys
 import threading
-import time
 from pathlib import Path
 
 
 from vhil import renode as rn
+from vhil.benchclock import host
 from vhil.renode import RenodeMonitor
 
 log = logging.getLogger("vhil.broker")
@@ -394,7 +394,7 @@ def watch_pacing(monitor: RenodeMonitor, lock: threading.Lock,
     while iterations is None or iterations > 0:
         if iterations is not None:
             iterations -= 1
-        time.sleep(period_s)
+        host.sleep(period_s)
         try:
             with lock:
                 virt = virtual_seconds(monitor.execute("emulation GetTimeSourceInfo"))
@@ -403,7 +403,7 @@ def watch_pacing(monitor: RenodeMonitor, lock: threading.Lock,
                 log.warning("pacing watch: cannot read virtual time (%s)", e)
                 failed = True
             continue
-        wall = time.monotonic()
+        wall = host.monotonic()
         if last_wall is not None:
             lag = (wall - last_wall) - (virt - last_virt)
             if lag > stall_s:
