@@ -13,7 +13,12 @@ AMS facts (IFS08-CE-AMS Core/Inc/can/messages/*.def, app_init_task.cpp):
   stream is 0x680..0x697 cells, 0x6A0..0x6B8 temps and 0x6C0..0x6CC status,
   once per second each.
   0x4A2[7] heartbeat, +1 per frame mod 256; 0x6C9 bytes 0-3 LE FDCAN1
-  bus-off recovery count (pit_comms_health.def).
+  bus-off recovery count (pit_comms_health.def). 0x6CA (fw_health) is NOT
+  gated on pit-diag: 1 Hz always (acu_can_task.cpp:486, :582).
+  A scan blocks AcuCanTask while it pushes its ~60 frames through the 16-deep
+  TX FIFO, one free slot at a time (acu_can_task.cpp:267, main.c:510); the
+  ECU matrix and 0x6CA are non-blocking (:241). Every 1 s the 50/100/250 ms
+  matrix and 0x6CA fall due together, 0x6CA last.
   Run (E-051): 0x100 every 10 ms (LE u16 link volts, bit 17 valid), TSMS
   PF9 held, one DASH_CHG PF10 press on a drained link locks Car and
   precharges; the link at the pack voltage completes it (state 3).
@@ -28,8 +33,22 @@ PIT_CELLS = range(0x680, 0x698)
 PIT_TEMPS = range(0x6A0, 0x6B9)
 PIT_CMD, PIT_ACK = 0x7F0, 0x7F1
 ENABLE, DISABLE = bytes.fromhex("DEADBEEF"), bytes(4)
-TEMPS, COMMS_HEALTH, VCU = 0x4A2, 0x6C9, 0x100
+TEMPS, COMMS_HEALTH, VCU, FW_HEALTH = 0x4A2, 0x6C9, 0x100, 0x6CA
+PIT_STATUS = [i for i in range(0x6C0, 0x6CD) if i != FW_HEALTH]
 BOOT_MS = 4000
+# Pit-diag armed this long before the AMS's own 1 s TX group (the 0x6CA that
+# closes it), so its first scan's ~13 ms on the wire spans the group: where
+# the burst can crowd the matrix out of the FIFO (IFS08-CE-AMS#638; on dev
+# 8ae5bf7 and #637 ea3552c alike, -16 .. -3 ms loses frames, -2 .. +5 ms and
+# -20 ms don't). Taken from the firmware's own phase, not from a fixed arm
+# time, so a change in boot timing (as #637's wake train) can't move the
+# sweep out of that window or into it.
+ARM_PHASES_MS = (-12, -8, -4)
+ARMED_MS, DISARMED_MS = 3500, 1500
+STARVED = pytest.mark.xfail(strict=True, reason=(
+    "IFS08-CE-AMS#638: a pit-diag scan that spans the 1 s TX group leaves the FIFO full when "
+    "the matrix and 0x6CA fall due; 0x6CA, 0x130, 0x134, 0x136, 0x137 refused every second, "
+    "and last_* = now2 (acu_can_task.cpp:682-709) locks the group to the scan's end"))
 
 
 @pytest.fixture(scope="module")
@@ -54,6 +73,31 @@ def armed(make_sim):
     return sim
 
 
+@pytest.fixture(scope="module")
+def sweep(make_sim):
+    """One boot: unarmed until ~3.5 s after the app starts, then pit-diag
+    armed at each ARM_PHASES_MS before the AMS's next 1 s TX group for
+    ARMED_MS, disarmed for DISARMED_MS in between. Returns (sim, unarmed
+    window, [(phase_ms, t_arm, t_end)])."""
+    sim = make_sim("ams")
+    can = sim.can("can_acu")
+    sim.run_for(ms=3500)
+    unarmed, windows = None, []
+    for phase in ARM_PHASES_MS:
+        group = can.last(FW_HEALTH).t_us + 1_000_000
+        while group + phase * 1000 <= sim.now_us():
+            group += 1_000_000
+        sim.run_for(us=group + phase * 1000 - sim.now_us())
+        t_arm = sim.now_us()
+        unarmed = unarmed or (sim.app_started["ams"] + 1_000_000, t_arm)
+        can.send(PIT_CMD, ENABLE)
+        sim.run_for(ms=ARMED_MS)
+        windows.append((phase, t_arm, sim.now_us()))
+        can.send(PIT_CMD, DISABLE)
+        sim.run_for(ms=DISARMED_MS)
+    return sim, unarmed, windows
+
+
 @pytest.fixture
 def ams(images):
     with Sim(REPO / "systems" / "ams.yaml", images("ams")) as sim:
@@ -67,10 +111,30 @@ def _since_boot(sim):
             if f.id != PIT_CMD]
 
 
+def _cyclic(contract, gated=True):
+    """{id: period_us} of the contract's cyclic frames; gated=False leaves
+    out the ones only a pit-diag scan sends."""
+    return {i: p * 1000 for i, (_, p) in sorted(contract.items())
+            if p and (gated or i not in (*PIT_CELLS, *PIT_TEMPS, *PIT_STATUS))}
+
+
+def _off_period(can, periods, since_us, until_us):
+    """{id: (period us, frames, off deltas)} of each frame that is missing,
+    sent once, or off its period by more than 5 % in [since_us, until_us]."""
+    off = {}
+    for can_id, period_us in periods.items():
+        t = [f.t_us for f in can.frames(can_id, since_us=since_us) if f.t_us <= until_us]
+        bad = [b - a for a, b in zip(t, t[1:]) if abs(b - a - period_us) > period_us // 20]
+        if len(t) < 2 or bad:
+            off[hex(can_id)] = (period_us, len(t), bad[:5])
+    return off
+
+
 def test_every_frame_has_its_contract_dlc(armed, contract):
     """A-011: each AMS frame, cyclic and pit-diag, carries its declared DLC,
     and the AMS sends nothing outside the contract (IFS_HIL's list omits
-    0x130 and 0x021: drift)."""
+    0x130 and 0x021: drift). That every cyclic frame is sent is checked
+    below, with and without pit-diag."""
     expected = contract
     seen = {}
     for f in _since_boot(armed):
@@ -79,24 +143,43 @@ def test_every_frame_has_its_contract_dlc(armed, contract):
     assert not unknown, f"frames outside the contract: {unknown}"
     wrong = {hex(i): (sorted(d), expected[i][0]) for i, d in seen.items() if d != {expected[i][0]}}
     assert not wrong, f"DLC (seen, contract): {wrong}"
-    missing = sorted(hex(i) for i, (_, period) in expected.items() if period and i not in seen)
-    assert not missing, f"contract frames never sent: {missing}"
 
 
-def test_every_cyclic_frame_keeps_its_period(armed, contract):
-    """A-008, A-014: every cyclic frame at its declared period, to 5 % of it."""
-    off = {}
-    for can_id, (_, period_ms) in sorted(contract.items()):
-        if not period_ms:
-            continue
-        period_us = period_ms * 1000
-        since = armed.app_started["ams"] + BOOT_MS * 1000 + 1_100_000
-        t = [f.t_us for f in armed.can("can_acu").frames(can_id, since_us=since)]
-        deltas = [b - a for a, b in zip(t, t[1:])]
-        bad = [d for d in deltas if abs(d - period_us) > period_us // 20]
-        if len(deltas) < 2 or bad:
-            off[hex(can_id)] = (period_us, len(t), bad[:5])
+def test_every_cyclic_frame_keeps_its_period(sweep, contract):
+    """A-008: unarmed, every cyclic frame but the pit-diag stream at its
+    declared period, to 5 % of it, 0x6CA included."""
+    sim, (since, until), _ = sweep
+    off = _off_period(sim.can("can_acu"), _cyclic(contract, gated=False), since, until)
     assert not off, f"(period us, frames, off deltas): {off}"
+
+
+@STARVED
+def test_pit_diag_starves_no_frame_at_any_arm_phase(sweep, contract):
+    """A-011, A-014: armed at any phase of the AMS's 1 s TX group, every
+    cyclic frame is still sent, 0x6CA (ungated) included."""
+    sim, _, windows = sweep
+    can = sim.can("can_acu")
+    missing = {}
+    for phase, t_arm, t_end in windows:
+        seen = {f.id for f in can.frames(since_us=t_arm) if f.t_us <= t_end}
+        gone = sorted(hex(i) for i in _cyclic(contract) if i not in seen)
+        if gone:
+            missing[f"{phase} ms"] = gone
+    assert not missing, f"contract frames never sent, by arm phase: {missing}"
+
+
+@STARVED
+def test_every_cyclic_frame_keeps_its_period_at_any_arm_phase(sweep, contract):
+    """A-008, A-014: armed at any phase of the AMS's 1 s TX group, every
+    cyclic frame, the pit-diag stream's included, at its declared period
+    (to 5 %) from 1.1 s after arming."""
+    sim, _, windows = sweep
+    off = {}
+    for phase, t_arm, t_end in windows:
+        o = _off_period(sim.can("can_acu"), _cyclic(contract), t_arm + 1_100_000, t_end)
+        if o:
+            off[f"{phase} ms"] = o
+    assert not off, f"(period us, frames, off deltas), by arm phase: {off}"
 
 
 def test_the_pit_grid_is_complete_once_a_second(armed):
