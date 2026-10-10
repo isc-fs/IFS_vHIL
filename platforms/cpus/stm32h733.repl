@@ -54,6 +54,20 @@ watchdog:
 cpu:
     PerformanceInMips: 528
 
+// DWT cycle counter (DWT_BASE 0xE0001000, core_cm7.h). CYCCNT counts core
+// clock cycles (ARMv7-M ARM DDI0403E C1.8, "The Data Watchpoint and Trace
+// unit"), so it runs at SYSCLK: 528 MHz on every MainLite image (HSE 24 MHz /
+// PLLM 2 * PLLN 44 / PLLP 1: AMS, ECU and CAN bootloader main.c
+// SystemClock_Config). stm32h7.repl clocks it at 250 MHz, so every
+// CYCCNT-timed wait ran 2.1x long in virtual time (the bootloader's erase
+// timing, the AMS's delay_us after IFS08-CE-AMS#637). Renode's DWT counts
+// virtual time at this frequency and syncs the CPU's time on every CYCCNT
+// read, so a read is exact to the instruction: with a firmware rate of
+// cpu.mips, each instruction adds 528 / cpu.mips cycles (docs/cpu-timing.md,
+// "The cycle counter").
+dwt:
+    frequency: 528000000
+
 // --- Peripherals the H733 has and the H743 platform lacks
 
 // FDCAN1..3 with fault hooks (bus-off, TX FIFO full, failed bring-up) for
