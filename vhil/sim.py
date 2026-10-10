@@ -124,9 +124,14 @@ class BusFrame:
 
 @dataclass(frozen=True)
 class Edge:
+    """t_us: virtual time, only as fine as the sync quantum. instructions:
+    the board CPU's executed instructions at the write, exact (it restarts at
+    a reset); the CPU-bound width of a pulse is their difference over the
+    core's MIPS (docs/cpu-timing.md)."""
     t_us: int
     pin: str
     level: bool
+    instructions: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -171,8 +176,9 @@ def parse_edges(text: str) -> list[Edge]:
     out = []
     for line in text.splitlines():
         parts = line.split()
-        if len(parts) == 3 and parts[0].isdigit():
-            out.append(Edge(int(parts[0]), parts[1], parts[2] == "1"))
+        if len(parts) in (3, 4) and parts[0].isdigit():
+            out.append(Edge(int(parts[0]), parts[1], parts[2] == "1",
+                            int(parts[3]) if len(parts) == 4 else None))
     return out
 
 

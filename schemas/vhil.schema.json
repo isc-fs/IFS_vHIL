@@ -379,6 +379,22 @@
             }
           }
         },
+        "cpu": {
+          "type": "object",
+          "required": [
+            "mips"
+          ],
+          "additionalProperties": false,
+          "description": "How fast the chip runs this firmware's code (docs/cpu-timing.md): the board's core is timed at this rate instead of the platform's. It depends on what the firmware sets up (clock tree, caches, where code and data live), so it belongs to the firmware.",
+          "properties": {
+            "mips": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 4000,
+              "description": "Instructions per microsecond (Renode's PerformanceInMips)."
+            }
+          }
+        },
         "can": {
           "type": "object",
           "required": [

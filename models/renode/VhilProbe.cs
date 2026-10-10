@@ -14,6 +14,10 @@
 //                      emulation CreateVhilGpioProbe "probe_gpio_ecu" "ecu"
 //                      probe_gpio_ecu Watch "sysbus.gpioPortB" 4
 //                      probe_gpio_ecu Drive "sysbus.gpioPortE" 3 true
+//                  Each edge also carries the board CPU's executed-instruction
+//                  count, exact at the instruction that wrote the pin, where
+//                  its time is only as fine as the sync quantum: the CPU-bound
+//                  width of a pulse (docs/cpu-timing.md).
 //                  It also samples firmware globals at a period, in the
 //                  emulation's own sync points, so a run need not stop
 //                  for each sample (vhil/worker.py):
@@ -34,6 +38,7 @@ using Antmicro.Renode.Core.CAN;
 using Antmicro.Renode.Peripherals;
 using Antmicro.Renode.Peripherals.Bus;
 using Antmicro.Renode.Peripherals.CAN;
+using Antmicro.Renode.Peripherals.CPU;
 using Antmicro.Renode.Time;
 using Antmicro.Renode.Utilities;
 
@@ -485,11 +490,24 @@ namespace Antmicro.Renode.Testing
                     return;   // not an edge
                 }
                 levels[name] = value;
-                edges.Add(Tuple.Create(VhilCanProbe.NowMicros(), name, value));
+                edges.Add(Tuple.Create(VhilCanProbe.NowMicros(), name, value, Instructions()));
             }
         }
 
-        // "t_us name 0|1" per line, for edges at or after sinceUs.
+        // The board CPU's executed instructions now: exact at the instruction
+        // that wrote the pin (a GPIO write runs on the CPU's thread), unlike
+        // virtual time, which a CPU reports only at sync points. Renode
+        // restarts the count at a reset.
+        private ulong Instructions()
+        {
+            if(cpu == null)
+            {
+                cpu = machine.SystemBus.GetCPUs().OfType<TranslationCPU>().FirstOrDefault();
+            }
+            return cpu?.ExecutedInstructions ?? 0;
+        }
+
+        // "t_us name 0|1 instructions" per line, for edges at or after sinceUs.
         public string Edges(string name = "", ulong sinceUs = 0)
         {
             var sb = new StringBuilder();
@@ -499,7 +517,8 @@ namespace Antmicro.Renode.Testing
                 {
                     if(e.Item1 >= sinceUs && (name == "" || e.Item2 == name))
                     {
-                        sb.Append(e.Item1).Append(' ').Append(e.Item2).Append(' ').Append(e.Item3 ? 1 : 0).Append('\n');
+                        sb.Append(e.Item1).Append(' ').Append(e.Item2).Append(' ').Append(e.Item3 ? 1 : 0)
+                          .Append(' ').Append(e.Item4).Append('\n');
                     }
                 }
             }
@@ -639,6 +658,7 @@ namespace Antmicro.Renode.Testing
         private readonly Dictionary<Tuple<string, int>, bool> driven = new Dictionary<Tuple<string, int>, bool>();
         private readonly HashSet<string> hookedPorts = new HashSet<string>();
         private const long IdrOffset = 0x10;
-        private readonly List<Tuple<ulong, string, bool>> edges = new List<Tuple<ulong, string, bool>>();
+        private readonly List<Tuple<ulong, string, bool, ulong>> edges = new List<Tuple<ulong, string, bool, ulong>>();
+        private TranslationCPU cpu;
     }
 }

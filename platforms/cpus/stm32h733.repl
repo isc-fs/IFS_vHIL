@@ -45,9 +45,12 @@ watchdog:
 // Renode times the core at 100 MIPS unless told otherwise, so code that busy-
 // waits (the ECU's bit-banged nRF24, cycle-counted delays) took 5x longer in
 // virtual time than on the 528 MHz part and delayed lower-priority tasks: the
-// ECU's 0x704 landed up to 25 ms late. One instruction per cycle is the M7's
-// nominal rate. The wall-clock bench lowers it to keep up with real time
-// (vhil/bench.py, WALL_CLOCK_MIPS).
+// ECU's 0x704 landed up to 25 ms late. 528, one instruction per cycle, is the
+// default for an image the catalogue gives no rate. How fast the chip really
+// runs code depends on the firmware's caches and memory placement, so each
+// firmware sets its own (catalog/firmware/*.yaml `cpu.mips`,
+// docs/cpu-timing.md). The wall-clock bench lowers it to keep up with real
+// time (vhil/bench.py, WALL_CLOCK_MIPS).
 cpu:
     PerformanceInMips: 528
 

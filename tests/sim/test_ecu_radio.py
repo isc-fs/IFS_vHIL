@@ -41,6 +41,7 @@ radio's registers survive an MCU-only reset on the car) is in its header.
 """
 import pytest
 
+from cpu_timing import mips
 from vhil.sim import assert_cadence
 
 PERIOD_US = 200_000                       # telemetry_task.cpp:35 PeriodMs
@@ -50,6 +51,10 @@ SEND_TIMEOUT_US = 10_000                  # telemetry_task.cpp:24
 PACE_US = 5_000                           # telemetry_task.cpp:40
 KERNEL_TICK_US = 1000
 RUN_MS = 2000
+# One bit-banged SCK period, NRF24_BitBangTransfer's three delays and pin
+# accesses: 2875 + 5692 instructions in ECU dev 2026-10-09
+# (test_ecu_cpu_timing.py).
+BIT_INSTRUCTIONS = 8600
 
 
 @pytest.fixture(scope="module")
@@ -90,14 +95,20 @@ def test_every_send_ends_on_tx_ds_not_the_timeout(run):
     assert len(payloads) >= FRAGMENTS * (RUN_MS * 1000 // PERIOD_US - 1)
     assert radio.count("ShortCePulses") == 0
     cleared = dict(radio.tx_ds_cleared(since_us=payloads[0].t_us))
+    # A poll is a 2-byte bit-banged transfer, as fast as the core: a poll or
+    # two, then the clearing write (docs/cpu-timing.md).
+    poll_us = 16 * BIT_INSTRUCTIONS / mips(sim, "ecu")
     for p in payloads[:-1]:
         assert p.t_us in cleared, f"TX_DS at {p.t_us} us never cleared"
-        assert cleared[p.t_us] - p.t_us < 1000, (p.t_us, cleared[p.t_us])
-    # Back to back in a cycle: the bit-banged transfers and the 5 ms pace.
-    # The timeout path took 10 ms more per fragment.
+        assert cleared[p.t_us] - p.t_us < 3 * poll_us, (p.t_us, cleared[p.t_us], poll_us)
+    # Back to back in a cycle: the 5 ms pace, then a send's bit-banged bytes
+    # (nrf24.c:576-642: STATUS clear 2, FLUSH_TX 1, W_TX_PAYLOAD 33, a STATUS
+    # poll or two of 2, STATUS clear 2, CONFIG 2), at most 50 at the core's
+    # speed. The timeout path took 10 ms more per fragment.
+    send_us = 50 * 8 * BIT_INSTRUCTIONS / mips(sim, "ecu")
     for frags in _cycles(payloads).values():
         gaps = [b.t_us - a.t_us for a, b in zip(frags, frags[1:])]
-        assert all(PACE_US <= g < PACE_US + SEND_TIMEOUT_US for g in gaps), gaps
+        assert all(PACE_US <= g < PACE_US + send_us for g in gaps), (gaps, send_us)
 
 
 def test_a_snapshot_every_200_ms_in_five_fragments(run):

@@ -28,6 +28,11 @@ def test_parse_edges_reads_probe_lines():
     ]
 
 
+def test_parse_edges_reads_instruction_counts():
+    text = "14743 sysbus.gpioPortB:9 0 1064201011\n14743 sysbus.gpioPortB:9 1 1064218917\n"
+    assert [e.instructions for e in parse_edges(text)] == [1064201011, 1064218917]
+
+
 def _frames(times):
     return [Frame(t, 0x100, False, b"") for t in times]
 
