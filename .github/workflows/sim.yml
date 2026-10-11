@@ -44,9 +44,9 @@ jobs:
         # min; with the bus model the default, other-2 of 2 reached 40; ecu-1 and
         # ecu-2 of 3 reached 36 with the AS Emergency suite, other-2 of 3 39 with
         # the discharge interlock run). Every boot spends
-        # the bootloader's 2 s window first, ~16 s of
-        # wall time on a desktop (its FDCAN polling loop emulates at ~1/8 real
-        # time): the same app suites take ~1.7x as long as without it.
+        # the bootloader's 2 s window first; its FDCAN polling loop emulated at
+        # ~1/8 real time until the busy-wait fast-forward (#154,
+        # docs/performance.md), which halved the shards' total time.
         # Flashing over CAN at the bus rate is minutes of emulation per image,
         # so the *bootloader* files get shards of their own: ams-bootloader,
         # and bootloader (the rest).

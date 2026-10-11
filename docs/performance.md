@@ -183,6 +183,9 @@ Colima, limited to 4 cores (median of 2) and to 2 (one run), `VHIL_DOCKER_CPUS`.
   board now boots at about real time on CI; two boards at 0.6-0.7x.
 - **Steady state**: 1.0-1.3x. The ECU's nRF24 delays are skipped; what the
   firmwares do between their busy-waits is executed as before.
+- Native tests on CI: the 15 shards of `sim.yml` took 151 min in total
+  (longest 18 min) against 294 min (longest 41 min) for the same tests on dev
+  the same day (#261 against #259).
 - IFS_HIL's AMS suite on CI (bench path): 855 s against 909-1003 s for the
   same 76 cases on dev; most of a suite is paced to real time, and only its
   boots and sub-real-time stretches get shorter.
