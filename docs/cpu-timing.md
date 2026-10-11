@@ -32,7 +32,7 @@ core to `WALL_CLOCK_MIPS` (100, `vhil/bench.py`) to keep close to real
 time. That gives up fidelity to the rates below on purpose.
 
 The host does not keep real time anyway. On a 4-vCPU CI runner the two-board
-`ecu-ams` bench runs at 0.1-0.4x while both bootloaders poll and at 0.4-0.9x
+`ecu-ams` bench ran at 0.1-0.4x while both bootloaders polled and at 0.4-0.9x
 after, and an 8-core M-series host at 0.4-0.9x (#243). IFS_HIL's tests time
 the bench with `time.sleep`, `time.monotonic` and CAN frame timestamps, so the
 vHIL's pytest plugin puts them on the emulation's virtual time
@@ -42,6 +42,13 @@ firmware's boot. Each test's report gives the bench's speed during it, and a
 stopped emulation fails the test that waits on it (`BenchStalled`) instead of
 timing it out. `--vhil-host-clock` restores the host's clock.
 
+The busy-wait fast-forward (`models/renode/VhilFastForward.cs`) leaves this
+document's rates exactly as they are: it charges a skipped busy-wait the
+instructions it would have executed, at the board's `cpu.mips`, so virtual
+time, CYCCNT and `cpu ExecutedInstructions` are unchanged. What the host
+spends, how it was measured and what was made faster are in
+[`performance.md`](performance.md).
+
 ## Where the rate is set
 
 | Where | Value | Used by |
@@ -49,7 +56,7 @@ timing it out. `--vhil-host-clock` restores the host's clock.
 | `catalog/firmware/<fw>.yaml` `cpu.mips` | AMS 528, ECU 231 | Native tests and generated scripts (`vhil/system.py` renders `cpu PerformanceInMips` per board) |
 | `platforms/cpus/stm32h733.repl` `PerformanceInMips` | 528 | Any image the catalogue gives no rate (one instruction per cycle at SYSCLK) |
 | `vhil/bench.py` `WALL_CLOCK_MIPS` | 100 | The wall-clock bench only, to keep real time |
-| `scripts/speed.py --mips` | any | Host speed measurement only |
+| `scripts/speed.py --mips` | any | Host speed measurement only ([`performance.md`](performance.md)) |
 
 The rate belongs to the firmware, not the platform. It is decided by what the
 firmware sets up: the clock tree, the caches, and where code and data live.

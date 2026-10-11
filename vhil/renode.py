@@ -19,6 +19,7 @@ monitor command or a platform-description entry.
 from __future__ import annotations
 
 import math
+import os
 import re
 import socket
 import subprocess
@@ -111,11 +112,22 @@ def monitor_command(renode: str, port: int) -> list[str]:
             f"include {file_arg(MONITOR_SOURCE)}; emulation StartVhilMonitor {int(port)}"]
 
 
+# .NET runtime settings for Renode (#154). Tiered compilation first JITs a
+# method unoptimised and promotes it once it is hot, but holds every promotion
+# back while the process keeps calling new methods (a "startup" phase,
+# TC_CallCountingDelayMs, 100 ms each time). Renode's hot paths start that way
+# for every new Renode, which each native test is: with no delay they are
+# optimised within the first boot's bootloader window instead of after it.
+# Host speed only; nothing the emulation computes depends on it.
+RENODE_ENV = {"DOTNET_TC_CallCountingDelayMs": "0"}
+
+
 def launch(renode: str, port: int, stdout=subprocess.DEVNULL) -> subprocess.Popen:
     """Start Renode with a loopback-only monitor on `port`; connect with
     RenodeMonitor(port), which waits for it to listen."""
+    env = {**RENODE_ENV, **os.environ}
     return subprocess.Popen(monitor_command(renode, port), stdout=stdout,
-                            stderr=subprocess.STDOUT)
+                            stderr=subprocess.STDOUT, env=env)
 
 
 class RenodeMonitor:
