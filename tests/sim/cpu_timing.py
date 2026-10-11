@@ -1,7 +1,8 @@
-"""CPU timing references (docs/cpu-timing.md, #246): one CPU-bound window
-of each firmware that a logic analyzer sees on the chip as well, a pin held
-by a busy-wait loop. Shared by test_ams_cpu_timing.py and
-test_ecu_cpu_timing.py.
+"""CPU timing references (docs/cpu-timing.md, #246): a CPU-bound window
+of a firmware that a logic analyzer sees on the chip as well, a pin held by a
+busy-wait loop. The ECU has one (test_ecu_cpu_timing.py); the AMS has none
+since IFS08-CE-AMS#637 timed its delay on the cycle counter, and
+test_ams_cpu_timing.py uses only `mips`.
 
 The emulator charges each instruction 1 / mips us, so a window's width in
 virtual time is its executed instructions over the board's rate; GPIO edges

@@ -29,7 +29,8 @@ specific to that backend, platform or board.
 How fast the emulated core runs firmware code (virtual-time fidelity of
 busy-waits, ISR and task CPU time; not #154's wall-clock speed) is each
 firmware's `cpu.mips` in the catalogue, not the platform's: the H733 runs
-these firmwares with the caches off, from flash
+the ECU with its caches off, from flash, the AMS with its I-cache on since
+IFS08-CE-AMS#637
 ([`docs/cpu-timing.md`](docs/cpu-timing.md), #246).
 
 ---
