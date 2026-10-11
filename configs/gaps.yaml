@@ -69,6 +69,18 @@
   why: "flashes without --yes and can-flasher 3 cancels at its erase prompt (IFS_HIL#149)"
 - path: tests/hil/ams/test_block_d_bootloader.py::test_d052_jump_reason_in_pit_diag
   why: "flashes without --yes and can-flasher 3 cancels at its erase prompt (IFS_HIL#149)"
+# Still flaky on the bench's time (#253): 1 of 4 CI runs on 2026-10-11, so
+# not the host's speed (#154) but the test's own race.
+- path: tests/hil/ams/test_block_a_boot.py::test_a012
+  why: "races its own acu_heartbeat: two standard 0x100 streams (100 V and 0 V) at once; the 0 V one can be the last the AMS reads (IFS_HIL#153)"
+# C-039c's tail expects a TSMS drop in Charge to de-energise back to Start
+# (IFS_HIL's #327). AMS dev latches Error instead, by design since
+# IFS08-CE-AMS#491: in Charger mode the charge output must not be
+# re-activatable after the SDC opens (safety_predicates.hpp FaultReason
+# ChargerTsmsOpen = 15, state_machine.hpp:231; docs/analysis/ifs-hil-tests-ams.md). Failed 4 of 4 CI runs on the
+# bench's time, always "did not reach Start ... Last observed: Error".
+- path: tests/hil/ams/test_block_c_fsm.py::test_c039c_charge_survives_dash_release
+  why: "test and firmware disagree: it expects a TSMS drop in Charge to return to Start (IFS_HIL #327), AMS dev latches Error with ChargerTsmsOpen (reason 15) since IFS08-CE-AMS#491"
 
 - path: tests/hil/ams/test_block_i_current.py::test_i100_reported_current_tracks_injection
   why: "physical-only: analog accuracy. The firmware's current gain and zero (AMS #350) are commissioned on bench-01's own sensor front-end and VREF; the virtual ADC is ideal and reads -200 A as -218 A"
