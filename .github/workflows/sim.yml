@@ -121,24 +121,76 @@ jobs:
           echo "$files"
           python -m pytest $files -v --sim-log-dir sim-logs
 
-      - name: Emulation speed on this runner
-        if: always() && matrix.shard == 'ecu-1'
-        env:
-          RENODE: ${{ runner.temp }}/renode/renode
-          ECU_ELF: ${{ steps.fw.outputs.ecu }}
-          BL_ELF: ${{ steps.fw.outputs.bootloader }}
-        run: |
-          nproc
-          python scripts/speed.py systems/ecu.yaml "ecu=$ECU_ELF" "ecu.bootloader=$BL_ELF" \
-            --mips 100 528 \
-            | tee -a "$GITHUB_STEP_SUMMARY"
-
       - name: Upload Renode logs
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: sim-logs-${{ matrix.shard }}
           path: sim-logs/
+          if-no-files-found: ignore
+
+  # The bench's real-time factor on this runner (#154): every system, the
+  # wall-clock bench's emulation and lock-step vhil.sim, boot and steady
+  # state, and the same again as before #154's speed-ups (--baseline), so
+  # one run gives both on the same host. Recorded in the job summary and as
+  # an artifact; it fails only if the benchmark can't run.
+  speed:
+    name: emulation speed
+    if: github.event_name != 'pull_request' || github.base_ref == 'main' || contains(github.event.pull_request.labels.*.name, 'full-ci')
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'schedule' && 'dev' || '' }}
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+
+      - name: Arm GNU toolchain (pinned like IFS_HIL's recipe)
+        uses: carlosperate/arm-none-eabi-gcc-action@98c40e51546516419841748d3210c290df0d2c6c # v1.13.0
+        with:
+          release: '14.2.Rel1'
+
+      - name: Build the ECU and AMS firmware their systems declare
+        id: fw
+        run: |
+          pip install -q pyyaml "jsonschema>=4"
+          for s in ecu ams; do
+            python -m vhil.system build "systems/$s.yaml" --workdir "$RUNNER_TEMP/fw" | tee -a built.txt
+          done
+          echo "ecu=$(sed -n 's/^ecu=//p' built.txt | tail -1)" >> "$GITHUB_OUTPUT"
+          echo "ams=$(sed -n 's/^ams=//p' built.txt | tail -1)" >> "$GITHUB_OUTPUT"
+          echo "bootloader=$(sed -n 's/^ecu.bootloader=//p' built.txt | tail -1)" >> "$GITHUB_OUTPUT"
+
+      - name: Install Renode ${{ env.RENODE_VERSION }}
+        run: |
+          curl -fsSL -o renode.tar.gz \
+            "https://github.com/renode/renode/releases/download/v${RENODE_VERSION}/renode-${RENODE_VERSION}.linux-portable.tar.gz"
+          echo "${RENODE_SHA256}  renode.tar.gz" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/renode"
+          tar xzf renode.tar.gz -C "$RUNNER_TEMP/renode" --strip-components=1
+
+      - name: Real-time factor on this runner
+        env:
+          RENODE: ${{ runner.temp }}/renode/renode
+          ECU_ELF: ${{ steps.fw.outputs.ecu }}
+          AMS_ELF: ${{ steps.fw.outputs.ams }}
+          BL_ELF: ${{ steps.fw.outputs.bootloader }}
+        run: |
+          nproc
+          python scripts/speed.py "ecu=$ECU_ELF" "ams=$AMS_ELF" "bootloader=$BL_ELF" \
+            --baseline --json speed/speed.json --log-dir speed/logs \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the measurements
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: emulation-speed
+          path: speed/
           if-no-files-found: ignore
 
   sim:

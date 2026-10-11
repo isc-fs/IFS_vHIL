@@ -16,7 +16,8 @@
 #   scripts/vhil-docker.sh coverage [glob] [pytest args]
 #                                                firmware coverage of tests/sim/<glob>.py
 #                                                (default test_*) into results/coverage
-#   scripts/vhil-docker.sh speed [mips ...]      scripts/speed.py on the ECU
+#   scripts/vhil-docker.sh speed [args]          scripts/speed.py: real-time factor of ams, ecu
+#                                                and ecu-ams, bench and sim paths (results/speed)
 #   scripts/vhil-docker.sh ifs-hil [suite] [pytest args]
 #                                                IFS_HIL's ECU suite over vcan (VHIL_DUT=ams: AMS suite)
 #                                                (VHIL_SYSTEM=systems/ecu-ams.yaml: with the AMS)
@@ -34,7 +35,8 @@
 # Firmware, the IFS_HIL checkout and their build trees live in the Docker
 # volume `vhil-data` (/vhil in the container). IFS_HIL_REF picks IFS_HIL's
 # ref (default dev); FW_REFS passes --ref pairs to the firmware build
-# (e.g. FW_REFS="ecu=feat/x").
+# (e.g. FW_REFS="ecu=feat/x"). VHIL_DOCKER_CPUS=N limits the container to N
+# cores (--cpus, --cpuset-cpus), as a CI-class host: GitHub's runners have 4.
 set -euo pipefail
 repo=$(cd "$(dirname "$0")/.." && pwd)
 profile=${VHIL_COLIMA_PROFILE:-vhil}
@@ -51,6 +53,10 @@ compose=("${docker[@]}" compose -f "$repo/docker/compose.yaml")
 run_args=()
 vcan_args=(--privileged --network host)
 [ "${VHIL_DOCKER_VCAN:-0}" = 1 ] && run_args=("${vcan_args[@]}")
+cpu_args=()
+if [ -n "${VHIL_DOCKER_CPUS:-}" ]; then
+    cpu_args=(--cpus "$VHIL_DOCKER_CPUS" --cpuset-cpus "0-$((VHIL_DOCKER_CPUS - 1))")
+fi
 
 vm() {
     if ! colima status "$profile" >/dev/null 2>&1; then
@@ -92,6 +98,7 @@ in_container() {
     local tty=()
     [ -t 0 ] && [ -t 1 ] && tty=(-it)
     "${docker[@]}" run --rm ${tty[@]+"${tty[@]}"} ${run_args[@]+"${run_args[@]}"} \
+        ${cpu_args[@]+"${cpu_args[@]}"} \
         -v "$repo:/work" -v vhil-data:/vhil \
         -e IFS_HIL_REF="${IFS_HIL_REF:-dev}" -e FW_REFS="${FW_REFS:-}" \
         -e VHIL_SYSTEM="${VHIL_SYSTEM:-}" -e VHIL_DUT="${VHIL_DUT:-ecu}" \
@@ -157,11 +164,11 @@ coverage)
             python -m pytest $files -v --sim-log-dir results/sim-logs \
                 --vhil-coverage results/coverage "$@"' "$@" ;;
 speed)
-    [ $# -gt 0 ] || set -- 100 528
     in_container "$prelude"'
-        need_elf ecu; need_elf ecu.bootloader; nproc
-        python scripts/speed.py systems/ecu.yaml "ecu=$(elf ecu)" \
-            "ecu.bootloader=$(elf ecu.bootloader)" --mips "$@"' "$@" ;;
+        need_elf ecu; need_elf ams; need_elf ecu.bootloader; nproc
+        mkdir -p results/speed
+        python scripts/speed.py "ecu=$(elf ecu)" "ams=$(elf ams)" \
+            "bootloader=$(elf ecu.bootloader)" --json results/speed/speed.json "$@"' "$@" ;;
 ifs-hil)
     run_args=("${vcan_args[@]}")
     in_container "$prelude"'
@@ -220,5 +227,5 @@ prune)
     in_container 'export VHIL_DATA=/vhil/server VHIL_FW_DIR=/vhil/fw; exec python -m vhil.worker prune "$@"' "$@" ;;
 shell) in_container 'exec bash' ;;
 run) in_container 'exec "$@"' "$@" ;;
-*) sed -n '2,36p' "$0" | sed 's/^# \{0,1\}//'; [ "$cmd" = help ] ;;
+*) sed -n '2,39p' "$0" | sed 's/^# \{0,1\}//'; [ "$cmd" = help ] ;;
 esac
