@@ -37,6 +37,8 @@
 # ref (default dev); FW_REFS passes --ref pairs to the firmware build
 # (e.g. FW_REFS="ecu=feat/x"). VHIL_DOCKER_CPUS=N limits the container to N
 # cores (--cpus, --cpuset-cpus), as a CI-class host: GitHub's runners have 4.
+# VHIL_FAST_FORWARD=0 passes through, to run Renode without the busy-wait
+# fast-forward (docs/performance.md).
 set -euo pipefail
 repo=$(cd "$(dirname "$0")/.." && pwd)
 profile=${VHIL_COLIMA_PROFILE:-vhil}
@@ -102,6 +104,7 @@ in_container() {
         -v "$repo:/work" -v vhil-data:/vhil \
         -e IFS_HIL_REF="${IFS_HIL_REF:-dev}" -e FW_REFS="${FW_REFS:-}" \
         -e VHIL_SYSTEM="${VHIL_SYSTEM:-}" -e VHIL_DUT="${VHIL_DUT:-ecu}" \
+        ${VHIL_FAST_FORWARD:+-e VHIL_FAST_FORWARD="$VHIL_FAST_FORWARD"} \
         "$image" bash -c "$1" vhil "${@:2}"
 }
 
@@ -227,5 +230,5 @@ prune)
     in_container 'export VHIL_DATA=/vhil/server VHIL_FW_DIR=/vhil/fw; exec python -m vhil.worker prune "$@"' "$@" ;;
 shell) in_container 'exec bash' ;;
 run) in_container 'exec "$@"' "$@" ;;
-*) sed -n '2,39p' "$0" | sed 's/^# \{0,1\}//'; [ "$cmd" = help ] ;;
+*) sed -n '2,41p' "$0" | sed 's/^# \{0,1\}//'; [ "$cmd" = help ] ;;
 esac

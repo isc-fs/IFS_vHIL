@@ -14,6 +14,7 @@ scripts/vhil-docker.sh unit
 scripts/vhil-docker.sh smoke ecu   # or ams
 scripts/vhil-docker.sh sim
 scripts/vhil-docker.sh coverage   # firmware coverage of tests/sim (below)
+scripts/vhil-docker.sh speed --baseline  # real-time factor per system and path (below)
 scripts/vhil-docker.sh ifs-hil     # IFS_HIL's ECU smoke suite over vcan can0..can2
 scripts/vhil-docker.sh editor      # system editor on http://localhost:8080/editor/
 scripts/vhil-docker.sh shell
@@ -101,6 +102,28 @@ range, a BusFault (IBUSERR) on the chip, aborts the Renode machine. Any
 machine abort fails the run at once: the monitor command waiting on it raises
 `vhil.renode.MachineAborted` (`models/renode/VhilMonitor.cs`), where a
 `RunFor` would otherwise never return.
+
+### Emulation speed
+
+`scripts/vhil-docker.sh speed` measures how many virtual seconds the host
+emulates per wall second, for ams, ecu and ecu-ams, on the wall-clock bench's
+emulation and in lock-step `vhil.sim`, at boot and in steady state, into
+`results/speed/speed.json` ([`scripts/speed.py`](../../scripts/speed.py);
+[`docs/performance.md`](../performance.md)). `--baseline` measures each again
+as before #154's speed-ups, `--profile DIR` samples the guest PCs the host's
+time went to. Any job takes `VHIL_DOCKER_CPUS=N` to run on N cores, as a CI
+runner does (4):
+
+```sh
+VHIL_DOCKER_CPUS=4 scripts/vhil-docker.sh speed --baseline --repeat 2
+VHIL_DOCKER_CPUS=2 scripts/vhil-docker.sh speed --systems ecu-ams --paths bench
+```
+
+Busy-waits are fast-forwarded by default (`models/renode/VhilFastForward.cs`):
+exact, so no test changes with it. `VHIL_FAST_FORWARD=0` in the environment
+turns it off for every Renode a run starts (`vhil.renode.launch` passes the
+environment on), and `vhil_ff_<board> Stats` at the monitor says what it
+skipped.
 
 ### Firmware coverage
 
