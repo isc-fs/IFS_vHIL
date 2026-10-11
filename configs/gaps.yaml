@@ -69,27 +69,23 @@
   why: "flashes without --yes and can-flasher 3 cancels at its erase prompt (IFS_HIL#149)"
 - path: tests/hil/ams/test_block_d_bootloader.py::test_d052_jump_reason_in_pit_diag
   why: "flashes without --yes and can-flasher 3 cancels at its erase prompt (IFS_HIL#149)"
+# Still flaky on the bench's time (#253): 1 of 4 CI runs on 2026-10-11, so
+# not the host's speed (#154) but the test's own race.
 - path: tests/hil/ams/test_block_a_boot.py::test_a012
-  why: "races its own acu_heartbeat: two standard 0x100 streams (100 V and 0 V) at once; fails on CI, passes locally (IFS_HIL#153)"
+  why: "races its own acu_heartbeat: two standard 0x100 streams (100 V and 0 V) at once; the 0 V one can be the last the AMS reads (IFS_HIL#153)"
+# C-039c's tail expects a TSMS drop in Charge to de-energise back to Start
+# (IFS_HIL's #327). AMS dev latches Error instead, by design since
+# IFS08-CE-AMS#491: in Charger mode the charge output must not be
+# re-activatable after the SDC opens (safety_predicates.hpp FaultReason
+# ChargerTsmsOpen = 15, state_machine.hpp:231; docs/analysis/ifs-hil-tests-ams.md). Failed 4 of 4 CI runs on the
+# bench's time, always "did not reach Start ... Last observed: Error".
+- path: tests/hil/ams/test_block_c_fsm.py::test_c039c_charge_survives_dash_release
+  why: "test and firmware disagree: it expects a TSMS drop in Charge to return to Start (IFS_HIL #327), AMS dev latches Error with ChargerTsmsOpen (reason 15) since IFS08-CE-AMS#491"
 
 - path: tests/hil/ams/test_block_i_current.py::test_i100_reported_current_tracks_injection
   why: "physical-only: analog accuracy. The firmware's current gain and zero (AMS #350) are commissioned on bench-01's own sensor front-end and VREF; the virtual ADC is ideal and reads -200 A as -218 A"
 - path: tests/hil/ams/test_block_i_current.py::test_j102_under_limit_does_not_trip
   why: "physical-only: analog accuracy. 190 A reads above the 200 A trip through the bench-commissioned gain (see I-100)"
-
-- path: tests/hil/ams/test_block_d_bootloader.py::test_d050
-  why: "a virtual power-on is slower than real time: first telemetry 3.4-4.1 s of wall time after K_n close, the test allows 3 s (#154)"
-- path: tests/hil/ams/test_block_s_sdcard.py::test_s144_boot_time_no_sd_stall
-  why: "a virtual power-on is slower than real time: first telemetry 4.1 s on CI, the test allows 4.0 s (#154)"
-- path: tests/hil/ams/test_block_c_fsm.py::test_c039c_charge_survives_dash_release
-  why: "its wall-clock margins are tighter than the virtual bench's power-on stalls (#154)"
-# A-008 counts 0x4A2 frames in 60 s of wall time (120 ± 2 at 500 ms): an
-# emulation a few per cent below real time sends 117 on a slow runner. The
-# cadence itself holds in virtual time (tests/sim/test_ams_can.py
-# test_every_cyclic_frame_keeps_its_period); the speed that would let a wall
-# window count right comes with the idle task sleeping instead of spinning.
-- path: tests/hil/ams/test_block_a_boot.py::test_a008_cadence_60s
-  why: "counts frames in a 60 s wall-clock window; the emulation runs below real time on slow runners (117 of ~120) (#154; WFI: isc-fs/IFS08-CE-AMS#624, isc-fs/IFS08-CE-ECU#258)"
 
 # K-103 watches 1000 0x4A2 heartbeats (500 s) beside IFS_HIL's 20 Hz 0x100.
 # The IWDG reset ~100 s into it (#151) was IFS08-CE-AMS#599 on AMS main:
