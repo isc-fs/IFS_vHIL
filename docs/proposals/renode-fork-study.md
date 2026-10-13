@@ -3,8 +3,14 @@
 Part of #260. A feasibility study: prototype patches to Renode's own C#
 (renode-infrastructure) and tlib, measured with the vHIL's
 `scripts/speed.py`, checked for exact equivalence, and weighed against the
-cost of carrying them. Nothing here changes the vHIL; the patches are under
-[`renode-patches/`](renode-patches/) for review.
+cost of carrying them.
+
+**Adopted** (decision 1, 2026-10-13): P2, P3 and P5 are the patch queue the
+image builds Renode with, maintained in [`docker/renode/`](../../docker/renode/)
+(its README: pins, what each patch does, the rebase recipe). Upstreaming is a
+separate decision. The study's tooling and every measurement stay here
+([`renode-patches/`](renode-patches/), with the dropped P1); the patches that
+were here are `docker/renode/patches/0001-0003`.
 
 ## Recommendation
 
@@ -151,7 +157,7 @@ conversions). It also keeps two flags in `ThreadLocal<bool>`, read several
 times per update although they are only ever touched with the source's lock
 held, and allocates a list per update.
 
-**P2** (`02-p2-clock.patch`, +102/-41 in `BaseClockSource.cs`) keeps a
+**P2** (`docker/renode/patches/0001-*.patch`, +102/-41 in `BaseClockSource.cs`) keeps a
 dictionary from handler to index beside the entry list (same delegate
 equality, rebuilt from the removal point on a removal, as the list shifts),
 makes the two flags plain fields (they are only read and written under
@@ -180,7 +186,7 @@ peripheral, `SystemBus` (stock):
   dictionary look-ups);
 - searches the tags with a closure (`Misc.BinarySearch(r => ...)`).
 
-**P3** (`03-p3-mmio.patch`, +138/-12 in `SystemBus.cs`) keeps a per-thread
+**P3** (`docker/renode/patches/0002-*.patch`, +138/-12 in `SystemBus.cs`) keeps a per-thread
 stack of initiators with one reusable disposer (a thread-static one-entry
 cache in front of the `ThreadLocal`), skips the locked-range look-ups until a
 range is first locked, caches the last successful context look-up until the
@@ -232,7 +238,7 @@ bus context, the per-access allocations were:
 - `$"..."` noisy logs built on every call before the level check: every
   opcode hook (the fast-forward's CMP.W hook) and every scheduled action.
 
-**P5** (`04-p5-alloc.patch`, +113/-42 in five files) removes each: lists only
+**P5** (`docker/renode/patches/0003-*.patch`, +113/-42 in five files) removes each: lists only
 when a field changes, a reused scratch list for writes (a fresh one if a write
 handler re-enters), `Distinct` only when there are two or more fields, a
 plain loop for the tags, messages built only when `Logger.MinimumLogLevel`
@@ -326,7 +332,7 @@ samples) and `VhilCanBus.Decide` (2.6 %).
 
 ## Reproducing
 
-Layout under `.claude/worktrees/renode-fork-study/`: `renode/` (clone of
+The study's layout (a local work tree, since removed; recreate it to rerun): `renode/` (clone of
 renode at v1.17.0 with submodules), `vhil/` (this repository), `fw/` (the
 pinned ELFs), `scripts/` (a copy of `renode-patches/tooling/`; the scripts find the
 others relative to it):
@@ -334,10 +340,10 @@ others relative to it):
 ```sh
 docker build -t renode-fork-builder -f tooling/builder.Dockerfile tooling
 docker build -t renode-fork-runtime -f tooling/runtime.Dockerfile tooling   # ifs-vhil + perf
-git -C renode/src/Infrastructure am $PWD/vhil/docs/proposals/renode-patches/0[234]-*.patch
+git -C renode/src/Infrastructure am $PWD/vhil/docker/renode/patches/*.patch
 tooling/build-variant.sh patched                # portable package into a Docker volume
 tooling/ab.sh m 5 "stock patched"               # interleaved speed.py runs
 python3 tooling/summarize.py m                  # medians
 tooling/fingerprint-variant.sh patched          # byte-for-byte observation
-tooling/fork.Dockerfile                         # ifs-vhil with the patched package
+docker build -t ifs-vhil docker/               # the image with the patched build (docker/renode/)
 ```
