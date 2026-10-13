@@ -52,18 +52,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # <group>-<k>: the group's test files, sorted, round-robin over its
-        # shards (ams 3, ecu 2, other 2), so each stays well inside the
-        # timeout as suites are added. Each shard runs its files two at a
-        # time (scripts/sim-shard.sh): one emulated system keeps one to two
+        # Shard k of 8 runs the files scripts/sim-balance.py gives it: split
+        # by each file's wall time on CI (tests/sim/durations.json, from the
+        # per-file tables sim-shard.sh writes to the job summaries), longest
+        # first, so the shards end together. Each shard runs its files two at
+        # a time (scripts/sim-shard.sh): one emulated system keeps one to two
         # of the runner's 4 cores busy, so two run at nearly twice the rate
         # (#260; it was 15 shards of one file at a time, 156 runner-minutes,
         # the longest 17). Every boot spends the bootloader's 2 s window
         # first; its FDCAN polling loop is fast-forwarded (#154,
-        # docs/performance.md). Flashing over CAN at the bus rate is minutes
-        # of emulation per image, so the *bootloader* files get a shard of
-        # their own.
-        shard: [ams-1, ams-2, ams-3, ecu-1, ecu-2, bootloader, other-1, other-2]
+        # docs/performance.md).
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -97,11 +96,18 @@ jobs:
       - name: FAT tools for SD card images
         run: sudo apt-get install -y -qq dosfstools mtools >/dev/null
 
-      # The debugger's tests (tests/sim/test_debugger.py, an `other` file):
-      # the toolchain's arm-none-eabi-gdb links libncurses.so.5, which
-      # ubuntu-latest no longer has, so they use gdb-multiarch (VHIL_GDB).
+      - name: This shard's test files
+        id: files
+        run: |
+          files=$(python scripts/sim-balance.py 8 ${{ matrix.shard }})
+          echo "$files"
+          echo "list=$(echo $files)" >> "$GITHUB_OUTPUT"
+
+      # The debugger's tests (tests/sim/test_debugger.py): the toolchain's
+      # arm-none-eabi-gdb links libncurses.so.5, which ubuntu-latest no
+      # longer has, so they use gdb-multiarch (VHIL_GDB).
       - name: GDB for the debugger tests
-        if: startsWith(matrix.shard, 'other')
+        if: contains(steps.files.outputs.list, 'test_debugger')
         run: |
           sudo apt-get update -qq >/dev/null
           sudo apt-get install -y -qq gdb-multiarch >/dev/null
@@ -113,20 +119,8 @@ jobs:
           VHIL_ECU_ELF: ${{ steps.fw.outputs.ecu }}
           VHIL_AMS_ELF: ${{ steps.fw.outputs.ams }}
           VHIL_CAN_BOOTLOADER_ELF: ${{ steps.fw.outputs.bootloader }}
-          SHARD: ${{ matrix.shard }}
-        run: |
-          # ams-k: test_ams_*, ecu-k: test_ecu_*, other-k: every other test file.
-          bl='bootloader'
-          case "$SHARD" in
-            bootloader) all=$(ls tests/sim/test_*.py | grep "$bl"); n=1 ;;
-            ams-*) all=$(ls tests/sim/test_ams_*.py | grep -v "$bl"); n=3 ;;
-            ecu-*) all=$(ls tests/sim/test_ecu_*.py | grep -v "$bl"); n=2 ;;
-            other-*) all=$(ls tests/sim/test_*.py | grep -v -e '/test_ams_' -e '/test_ecu_' -e "$bl"); n=2 ;;
-          esac
-          k=${SHARD##*-}; case "$k" in [0-9]*) ;; *) k=1 ;; esac
-          files=$(echo "$all" | sort | awk -v n="$n" -v k="$k" '(NR - 1) % n == k - 1')
-          echo "$files"
-          scripts/sim-shard.sh 2 sim-logs $files
+          FILES: ${{ steps.files.outputs.list }}
+        run: scripts/sim-shard.sh 2 sim-logs $FILES
 
       - name: Upload Renode logs
         if: always()
