@@ -25,10 +25,19 @@ bootloaders' 2 s auto-jump window, invariant 5, then the apps' start), and
 - **bench**: the wall-clock bench's emulation (`vhil/bench.py`): Renode's
   shared time source (`mach create`), every core at `WALL_CLOCK_MIPS` (100),
   the bench clock and GPIO probes, without the pacer, so the factor is the
-  host's headroom;
+  host's headroom. Each bus the bench bridges to SocketCAN (`host_netdev`)
+  gets a passive node that acknowledges in place of the bridge (#260): before,
+  a board alone on such a bus retried every frame with an ACK error, a load
+  the bench never has (half the ECU's bench cost was its bus model deciding
+  those retries);
 - **sim**: lock-step `vhil.sim` as native tests run it: the catalogue's
   `cpu.mips` (ECU 231, AMS 528), a time source per board (invariant 11), a CAN
   probe on every bus.
+
+Each phase also records the host CPU seconds Renode's process used per
+virtual second (all its threads, from `/proc`): what a run costs a host that
+runs several at once (throughput), and steadier than the factor on a host
+that is busy with something else.
 
 `--baseline` runs each configuration a second time as the bench ran before
 #154's speed-ups, on the same host (`VHIL_FAST_FORWARD=0`, .NET's default
