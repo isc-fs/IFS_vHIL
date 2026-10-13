@@ -131,6 +131,10 @@ namespace Antmicro.Renode.Peripherals.Analog
                 return 0;
             }
             CatchUp(Now());
+            if(offset != DR)
+            {
+                VhilOnRead?.Invoke(offset);
+            }
             if(offset == DR)
             {
                 var data = regs[DR / 4];
@@ -144,6 +148,37 @@ namespace Antmicro.Renode.Peripherals.Analog
             }
             return regs[offset / 4];
         }
+
+        // For the busy-wait fast-forward (VhilFastForward.cs, #260): the
+        // virtual time (ticks, exclusive) up to which a read at `offset`
+        // returns what it returns now and changes nothing. A read changes
+        // the registers only through CatchUp, which delivers the next result
+        // when the time reaches nextAt; DR's read clears EOC. With
+        // ConversionFault a read moves nextAt on (CatchUp), so its time
+        // matters: not stable.
+        public bool VhilStableUntil(long offset, out ulong ticks)
+        {
+            ticks = 0;
+            if(offset == DR || offset < 0 || offset >= Size)
+            {
+                return false;
+            }
+            if(!running)
+            {
+                ticks = ulong.MaxValue;
+                return true;
+            }
+            if(ConversionFault)
+            {
+                return false;
+            }
+            ticks = (ulong)Math.Ceiling(nextAt);
+            return true;
+        }
+
+        // Called on every read but DR's, after the result due by then has
+        // landed: the fast-forward's cue that a poll may be under way.
+        public Action<long> VhilOnRead { get; set; }
 
         public void WriteDoubleWord(long offset, uint value)
         {
