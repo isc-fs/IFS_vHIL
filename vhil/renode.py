@@ -21,6 +21,7 @@ from __future__ import annotations
 import math
 import os
 import re
+import shutil
 import socket
 import subprocess
 import threading
@@ -129,10 +130,34 @@ RENODE_ENV = {"DOTNET_TC_CallCountingDelayMs": "0"}
 LOCKSTEP_ENV = {"VHIL_LOCKSTEP": "1"}
 
 
+# Beside the launcher of a Renode built by docker/renode/build.sh: one line
+# naming the release, its commit and the vHIL's patch set.
+BUILD_FILE = "VHIL_RENODE_BUILD"
+RELEASE_BUILD = f"renode (no {BUILD_FILE}: a release package, without the vHIL's patches)"
+
+
+def build_id(renode: str) -> str:
+    """Which Renode `renode` (a launcher path or a name on PATH) is: the line
+    docker/renode/build.sh wrote beside it, or RELEASE_BUILD without one. What
+    a run computes is the same either way (docker/renode/README.md); how fast
+    it runs is not, so speed results and run summaries record it."""
+    found = shutil.which(renode) or renode
+    try:
+        lines = (Path(found).resolve().parent / BUILD_FILE).read_text().splitlines()
+    except OSError:
+        return RELEASE_BUILD
+    return comment(lines[0].strip()) if lines and lines[0].strip() else RELEASE_BUILD
+
+
 def launch(renode: str, port: int, stdout=subprocess.DEVNULL, lockstep: bool = False) -> subprocess.Popen:
     """Start Renode with a loopback-only monitor on `port`; connect with
-    RenodeMonitor(port), which waits for it to listen."""
+    RenodeMonitor(port), which waits for it to listen. A log file given as
+    `stdout` starts with the Renode build (build_id)."""
     env = {**RENODE_ENV, **(LOCKSTEP_ENV if lockstep else {}), **os.environ}
+    if hasattr(stdout, "write"):
+        line = f"vhil: {build_id(renode)}\n"
+        stdout.write(line.encode() if "b" in getattr(stdout, "mode", "") else line)
+        stdout.flush()
     return subprocess.Popen(monitor_command(renode, port), stdout=stdout,
                             stderr=subprocess.STDOUT, env=env)
 

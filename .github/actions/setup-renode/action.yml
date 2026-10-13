@@ -1,0 +1,52 @@
+name: Renode (vHIL build)
+description: >
+  Renode as the vHIL image has it: 1.17.0 built from source with
+  docker/renode's patch queue (docker/Dockerfile's renode-package stage),
+  from the GitHub Actions cache of that stage when it is there, else built.
+  Unpacks it into $RUNNER_TEMP/renode, sets RENODE, and records the build
+  (renode --version, VHIL_RENODE_BUILD) in the log and the job summary.
+
+inputs:
+  save:
+    description: >
+      Write the stage to the cache too: one job per workflow (`renode`) does,
+      the jobs that need it only read it.
+    default: 'false'
+
+outputs:
+  build:
+    description: The build's VHIL_RENODE_BUILD line
+    value: ${{ steps.unpack.outputs.build }}
+
+runs:
+  using: composite
+  steps:
+    - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+    # The stage's layers by their BuildKit cache keys (docker/renode/ and the
+    # SDK image's digest): built again only when one of them changes.
+    - name: Renode package (cached stage, or a build)
+      uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+      env:
+        DOCKER_BUILD_SUMMARY: 'false'
+        DOCKER_BUILD_RECORD_UPLOAD: 'false'
+      with:
+        context: docker
+        file: docker/Dockerfile
+        target: renode-package
+        outputs: type=local,dest=${{ runner.temp }}/renode
+        cache-from: type=gha,scope=renode
+        cache-to: ${{ inputs.save == 'true' && 'type=gha,scope=renode,mode=max,ignore-error=true' || '' }}
+
+    - name: Which Renode
+      id: unpack
+      shell: bash
+      run: |
+        r="$RUNNER_TEMP/renode"
+        test -x "$r/renode" && test -x "$r/renode-test" && test -s "$r/VHIL_RENODE_BUILD"
+        echo "RENODE=$r/renode" >> "$GITHUB_ENV"
+        build=$(head -1 "$r/VHIL_RENODE_BUILD")
+        echo "build=$build" >> "$GITHUB_OUTPUT"
+        "$r/renode" --version
+        echo "$build"
+        echo "Renode: \`$build\`" >> "$GITHUB_STEP_SUMMARY"

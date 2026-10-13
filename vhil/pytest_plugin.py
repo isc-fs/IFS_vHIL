@@ -34,6 +34,7 @@ import pytest
 import yaml
 
 from vhil import bench_operator as operator
+from vhil import renode as rn
 from vhil.bench import DEFAULT_RENODE, REPO, VirtualBench
 from vhil.benchclock import BenchClock, BenchStalled, host
 from vhil.system import System
@@ -293,4 +294,5 @@ def pytest_report_header(config):
         images = ", ".join(f"{b}={p.name}" for b, p in _bench.firmware.items())
         return (f"vhil: system {_bench.system.id} ({images}), "
                 f"socketcan={'on' if _bench.socketcan else 'off'}, "
-                f"clock={'host' if _clock is None else 'bench'}")
+                f"clock={'host' if _clock is None else 'bench'}\n"
+                f"vhil: {rn.build_id(_bench.renode)}")
