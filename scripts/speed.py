@@ -91,7 +91,8 @@ class Run:
     def __enter__(self):
         lockstep = self.path == "sim"
         script = Path(tempfile.mkdtemp(prefix="vhil-speed-")) / f"{self.system.id}.resc"
-        script.write_text(self.system.render_renode(self.firmware, lockstep=lockstep))
+        script.write_text(self.system.render_renode(self.firmware, lockstep=lockstep,
+                                                    sources=(PROBE_SOURCE,) if lockstep else ()))
         port = _free_port()
         out = open(self.log, "w") if self.log else None
         self.proc = rn.launch(self.renode, port, **({"stdout": out} if out else {}))
@@ -100,7 +101,6 @@ class Run:
         if lockstep:
             # As vhil.sim.Sim.start does.
             m.execute("emulation SetSeed 1")
-            m.execute(f"include {rn.file_arg(PROBE_SOURCE)}")
             m.execute(f"include {rn.file_arg(script)}")
             for bus in self.system.buses:
                 probe = f"vhil_probe_{rn.ident(bus)}"
@@ -290,7 +290,8 @@ def main() -> int:
         Path(args.log_dir).mkdir(parents=True, exist_ok=True)
 
     host = {"cpus": os.cpu_count(), "machine": platform.machine(),
-            "affinity": len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else None}
+            "affinity": len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else None,
+            "renode": rn.build_id(args.renode)}
     results = []
     print(f"host: {host}")
     variants = ["baseline", "current"] if args.baseline else ["current"]

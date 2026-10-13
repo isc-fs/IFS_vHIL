@@ -185,11 +185,13 @@ namespace Antmicro.Renode.Peripherals.SPI
 
         private IEnumerable<Ltc6811> Chain => ChildCollection.OrderBy(kv => kv.Key).Select(kv => kv.Value);
 
-        private Ltc6811 First => Chain.FirstOrDefault();
+        // The IC nearest the bridge, kept by Relink: looked up on every byte.
+        private Ltc6811 First => first;
 
         private void Relink()
         {
             var chain = Chain.ToList();
+            first = chain.Count > 0 ? chain[0] : null;
             for(var i = 0; i < chain.Count; i++)
             {
                 chain[i].Position = i;
@@ -204,6 +206,7 @@ namespace Antmicro.Renode.Peripherals.SPI
             First?.BeginTransaction();
         }
 
+        private Ltc6811 first;
         private bool frameOpen;
         private int bytesInFrame;
         private int wakes;
