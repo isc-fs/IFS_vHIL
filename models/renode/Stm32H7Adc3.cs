@@ -299,10 +299,13 @@ namespace Antmicro.Renode.Peripherals.Analog
                         nextAt = now + PeriodTicks(rank);   // never ends
                         break;
                     }
-                    if(!DmaEnabled && rank == 1)
+                    if(!DmaEnabled && rank == 1 && (regs[CFGR / 4] & CFGR_CONT) != 0)
                     {
                         // Nobody takes results one by one: skip whole
                         // sequences that ended unread, keeping the last.
+                        // Continuous mode only: a single-mode sequence
+                        // runs once, so a read that comes late finds one
+                        // result, not an overrun.
                         var sequence = SequenceTicks();
                         var whole = Math.Floor((now - nextAt) / sequence);
                         if(whole >= 2)
