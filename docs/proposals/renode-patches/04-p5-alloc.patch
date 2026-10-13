@@ -1,0 +1,298 @@
+From 06f466a1493240531a17f4050bdfc1f93e571d9c Mon Sep 17 00:00:00 2001
+From: Raul Moran <moranguerra18@gmail.com>
+Date: Tue, 13 Oct 2026 20:35:57 +0200
+Subject: [PATCH] Avoid per-access allocations: register framework, pause
+ guard, hook activation, noisy logs
+
+---
+ src/Emulator/Main/Core/Machine.cs             |   5 +-
+ .../Structure/Registers/PeripheralRegister.cs | 127 +++++++++++++-----
+ .../Peripherals/CPU/HookDescriptor.cs         |   8 +-
+ .../Peripherals/CPU/TranslationCPU.cs         |   5 +-
+ .../TranslationCPU_OpcodesExecutionHooks.cs   |  10 +-
+ 5 files changed, 113 insertions(+), 42 deletions(-)
+
+diff --git a/src/Emulator/Main/Core/Machine.cs b/src/Emulator/Main/Core/Machine.cs
+index 9bdec130f..4999cfd48 100644
+--- a/src/Emulator/Main/Core/Machine.cs
++++ b/src/Emulator/Main/Core/Machine.cs
+@@ -607,7 +607,10 @@ public void ScheduleAction(TimeInterval delay, Action<TimeInterval> action, stri
+             Action clockEntryHandler = null;
+             clockEntryHandler = () =>
+             {
+-                this.Log(LogLevel.Noisy, "{0}: Executing action scheduled at {1} (current time: {2})", name ?? "unnamed", startTime, currentTime);
++                if(LogLevel.Noisy >= Logger.MinimumLogLevel)
++                {
++                    this.Log(LogLevel.Noisy, "{0}: Executing action scheduled at {1} (current time: {2})", name ?? "unnamed", startTime, currentTime);
++                }
+                 action(currentTime);
+                 if(!ClockSource.TryRemoveClockEntry(clockEntryHandler))
+                 {
+diff --git a/src/Emulator/Main/Core/Structure/Registers/PeripheralRegister.cs b/src/Emulator/Main/Core/Structure/Registers/PeripheralRegister.cs
+index 29d5778e5..55dbd3ccf 100644
+--- a/src/Emulator/Main/Core/Structure/Registers/PeripheralRegister.cs
++++ b/src/Emulator/Main/Core/Structure/Registers/PeripheralRegister.cs
+@@ -9,6 +9,7 @@
+ using System.Collections.Generic;
+ using System.Linq;
+ 
++using Antmicro.Migrant;
+ using Antmicro.Renode.Logging;
+ using Antmicro.Renode.Peripherals;
+ using Antmicro.Renode.Utilities;
+@@ -548,7 +549,8 @@ protected ulong ReadInner()
+             }
+             var baseValue = UnderlyingValue;
+             var valueToRead = UnderlyingValue;
+-            var changedFields = new List<RegisterField>();
++            // Allocated only when a field changes on read (rare): every register read went through here.
++            List<RegisterField> changedFields = null;
+             foreach(var registerField in registerFields)
+             {
+                 if(!registerField.FieldMode.IsReadable())
+@@ -560,26 +562,29 @@ protected ulong ReadInner()
+                    && BitHelper.AreAnyBitsSet(UnderlyingValue, registerField.Position, registerField.Width))
+                 {
+                     BitHelper.ClearBits(ref UnderlyingValue, registerField.Position, registerField.Width);
+-                    changedFields.Add(registerField);
++                    (changedFields ??= new List<RegisterField>()).Add(registerField);
+                 }
+                 if(registerField.FieldMode.IsFlagSet(FieldMode.ReadToSet)
+                    && !BitHelper.AreAllBitsSet(UnderlyingValue, registerField.Position, registerField.Width))
+                 {
+                     BitHelper.SetBits(ref UnderlyingValue, registerField.Position, registerField.Width);
+-                    changedFields.Add(registerField);
++                    (changedFields ??= new List<RegisterField>()).Add(registerField);
+                 }
+             }
+             foreach(var registerField in registerFields)
+             {
+                 registerField.CallReadHandler(baseValue, UnderlyingValue);
+             }
+-            foreach(var changedRegister in changedFields.Distinct())
++            if(changedFields != null)
+             {
+-                changedRegister.CallChangeHandler(baseValue, UnderlyingValue);
++                foreach(var changedRegister in DistinctInOrder(changedFields))
++                {
++                    changedRegister.CallChangeHandler(baseValue, UnderlyingValue);
++                }
+             }
+ 
+             CallReadHandlers(baseValue, UnderlyingValue);
+-            if(changedFields.Any())
++            if(changedFields != null)
+             {
+                 CallChangeHandlers(baseValue, UnderlyingValue);
+             }
+@@ -591,7 +596,70 @@ protected void WriteInner(long offset, ulong value)
+         {
+             var baseValue = UnderlyingValue;
+             var difference = UnderlyingValue ^ value;
+-            var changedRegisters = new List<RegisterField>();
++            var changedRegisters = writeScratch ??= new List<RegisterField>();
++            // A write handler may write this register again: then use a list of its own.
++            if(changedRegisters.Count != 0 || writeScratchInUse)
++            {
++                changedRegisters = new List<RegisterField>();
++            }
++            var ownsScratch = ReferenceEquals(changedRegisters, writeScratch);
++            writeScratchInUse |= ownsScratch;
++            try
++            {
++            WriteFields(value, difference, changedRegisters);
++            foreach(var registerField in registerFields)
++            {
++                registerField.CallWriteHandler(baseValue, value);
++            }
++            foreach(var changedRegister in DistinctInOrder(changedRegisters))
++            {
++                changedRegister.CallChangeHandler(baseValue, UnderlyingValue);
++            }
++
++            CallWriteHandlers(baseValue, value);
++            if(changedRegisters.Count != 0)
++            {
++                CallChangeHandlers(baseValue, UnderlyingValue);
++            }
++            }
++            finally
++            {
++                if(ownsScratch)
++                {
++                    changedRegisters.Clear();
++                    writeScratchInUse = false;
++                }
++            }
++
++            var unhandledWrites = difference & ~definedFieldsMask;
++            if(unhandledWrites != 0)
++            {
++                LogUnhandledWrites(offset, unhandledWrites, value);
++            }
++
++            if(InvalidTagValues(offset, value, out var invalidValueLog))
++            {
++                parent.Log(LogLevel.Error, invalidValueLog);
++            }
++        }
++
++        // Enumerable.Distinct's order (first occurrence) without its HashSet for the usual 0-2 fields.
++        private static IEnumerable<RegisterField> DistinctInOrder(List<RegisterField> fields)
++        {
++            if(fields.Count < 2)
++            {
++                return fields;
++            }
++            return fields.Distinct();
++        }
++
++        [Transient]
++        private List<RegisterField> writeScratch;
++        [Transient]
++        private bool writeScratchInUse;
++
++        private void WriteFields(ulong value, ulong difference, List<RegisterField> changedRegisters)
++        {
+             foreach(var registerField in registerFields)
+             {
+                 //switch is OK, because write modes are exclusive.
+@@ -664,31 +732,6 @@ protected void WriteInner(long offset, ulong value)
+                     break;
+                 }
+             }
+-            foreach(var registerField in registerFields)
+-            {
+-                registerField.CallWriteHandler(baseValue, value);
+-            }
+-            foreach(var changedRegister in changedRegisters.Distinct())
+-            {
+-                changedRegister.CallChangeHandler(baseValue, UnderlyingValue);
+-            }
+-
+-            CallWriteHandlers(baseValue, value);
+-            if(changedRegisters.Any())
+-            {
+-                CallChangeHandlers(baseValue, UnderlyingValue);
+-            }
+-
+-            var unhandledWrites = difference & ~definedFieldsMask;
+-            if(unhandledWrites != 0)
+-            {
+-                LogUnhandledWrites(offset, unhandledWrites, value);
+-            }
+-
+-            if(InvalidTagValues(offset, value, out var invalidValueLog))
+-            {
+-                parent.Log(LogLevel.Error, invalidValueLog);
+-            }
+         }
+ 
+         protected void CallHandlers<T>(List<Action<T>> handlers, T oldValue)
+@@ -725,12 +768,20 @@ protected void CallHandlers<T>(List<Action<T, T>> handlers, T oldValue, T newVal
+ 
+         private void LogUnhandledWrites(long offset, ulong unhandledWrites, ulong originalValue)
+         {
+-            var warningLogMessage = TagLogger(offset, unhandledWrites, originalValue, matchSilent: false);
+-            if(warningLogMessage != "")
++            // The messages are built with LINQ and string formatting: only when they can be logged.
++            if(LogLevel.Warning >= Logger.MinimumLogLevel)
+             {
+-                parent.Log(LogLevel.Warning, warningLogMessage);
++                var warningLogMessage = TagLogger(offset, unhandledWrites, originalValue, matchSilent: false);
++                if(warningLogMessage != "")
++                {
++                    parent.Log(LogLevel.Warning, warningLogMessage);
++                }
+             }
+ 
++            if(LogLevel.Noisy < Logger.MinimumLogLevel)
++            {
++                return;
++            }
+             var noisyLogMessage = TagLogger(offset, unhandledWrites, originalValue, matchSilent: true);
+             if(noisyLogMessage != "")
+             {
+@@ -767,8 +818,12 @@ private bool InvalidTagValues(long offset, ulong originalValue, out string log)
+             ulong allowedValuesMask = 0;
+             ulong allowedValues = 0;
+ 
+-            foreach(var tag in tags.Where(x => x.AllowedValue != null))
++            foreach(var tag in tags)
+             {
++                if(tag.AllowedValue == null)
++                {
++                    continue;
++                }
+                 allowedValuesMask |= BitHelper.CalculateQuadWordMask(tag.Width, tag.Position);
+                 allowedValues |= tag.AllowedValue.Value << tag.Position;
+             }
+diff --git a/src/Emulator/Peripherals/Peripherals/CPU/HookDescriptor.cs b/src/Emulator/Peripherals/Peripherals/CPU/HookDescriptor.cs
+index be17b2f82..df2b63b76 100644
+--- a/src/Emulator/Peripherals/Peripherals/CPU/HookDescriptor.cs
++++ b/src/Emulator/Peripherals/Peripherals/CPU/HookDescriptor.cs
+@@ -37,9 +37,13 @@ public void ActivateNewHooks()
+         {
+             lock(hooks)
+             {
+-                foreach(var newHook in hooks.Where(x => x.Value.IsNew))
++                // Called before every execution chunk: no LINQ iterator and closure each time.
++                foreach(var hook in hooks.Values)
+                 {
+-                    Activate(newHook.Value);
++                    if(hook.IsNew)
++                    {
++                        Activate(hook);
++                    }
+                 }
+             }
+         }
+diff --git a/src/Emulator/Peripherals/Peripherals/CPU/TranslationCPU.cs b/src/Emulator/Peripherals/Peripherals/CPU/TranslationCPU.cs
+index 3f312e2a8..f36ca0a5d 100644
+--- a/src/Emulator/Peripherals/Peripherals/CPU/TranslationCPU.cs
++++ b/src/Emulator/Peripherals/Peripherals/CPU/TranslationCPU.cs
+@@ -2459,9 +2459,12 @@ public void Leave()
+ 
+             public void Initialize()
+             {
+-                guard.Value = new object();
++                // Only its being non-null matters; set on every bus access, so no allocation.
++                guard.Value = InitializedMarker;
+             }
+ 
++            private static readonly object InitializedMarker = new object();
++
+             public void InitializeForWriting(ulong address, SysbusAccessWidth width, ulong value)
+             {
+                 InterruptTransaction = !ExecuteWatchpoints(address, width, value);
+diff --git a/src/Emulator/Peripherals/Peripherals/CPU/TranslationCPU_OpcodesExecutionHooks.cs b/src/Emulator/Peripherals/Peripherals/CPU/TranslationCPU_OpcodesExecutionHooks.cs
+index be0d48101..4493f7268 100644
+--- a/src/Emulator/Peripherals/Peripherals/CPU/TranslationCPU_OpcodesExecutionHooks.cs
++++ b/src/Emulator/Peripherals/Peripherals/CPU/TranslationCPU_OpcodesExecutionHooks.cs
+@@ -74,7 +74,10 @@ private void CheckArchitectureForOpcodeExecutionHooks()
+         [Export]
+         private void HandlePreOpcodeExecutionHook(UInt32 id, UInt64 pc, UInt64 opcode)
+         {
+-            this.NoisyLog($"Got pre-opcode hook for opcode `0x{opcode:X}` with id {id} from PC {pc}");
++            if(LogLevel.Noisy >= Logger.MinimumLogLevel)
++            {
++                this.NoisyLog($"Got pre-opcode hook for opcode `0x{opcode:X}` with id {id} from PC {pc}");
++            }
+             if(id < (uint)preOpcodeExecutionHooks.Count)
+             {
+                 preOpcodeExecutionHooks[(int)id].Invoke(pc, opcode);
+@@ -88,7 +91,10 @@ private void HandlePreOpcodeExecutionHook(UInt32 id, UInt64 pc, UInt64 opcode)
+         [Export]
+         private void HandlePostOpcodeExecutionHook(UInt32 id, UInt64 pc, UInt64 opcode)
+         {
+-            this.NoisyLog($"Got post-opcode hook for opcode `0x{opcode:X}` with id {id} from PC {pc}");
++            if(LogLevel.Noisy >= Logger.MinimumLogLevel)
++            {
++                this.NoisyLog($"Got post-opcode hook for opcode `0x{opcode:X}` with id {id} from PC {pc}");
++            }
+             if(id < (uint)postOpcodeExecutionHooks.Count)
+             {
+                 postOpcodeExecutionHooks[(int)id].Invoke(pc, opcode);
+-- 
+2.51.0
+
