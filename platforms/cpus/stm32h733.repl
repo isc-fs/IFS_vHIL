@@ -105,6 +105,12 @@ timer23: Timers.STM32_Timer @ sysbus 0x4000E000
     frequency: 264000000
     -> nvic@161
 
+// FDCAN clock calibration unit, over stm32h7.repl's "CAN_CCU" tag: IR/IE,
+// which HAL_FDCAN_IRQHandler reads on every FDCAN interrupt. Our model,
+// models/renode/Stm32H7FdcanCcu.cs. FDCAN_CCU_BASE = D2_APB1PERIPH_BASE +
+// 0xA800 (stm32h733xx.h:2340).
+fdcan_ccu: CAN.STM32H7_FDCAN_CCU @ sysbus 0x4000A800
+
 // USART10 — ECU GPS (NMEA @ 9600). Kernel clock = PCLK2 = 132 MHz.
 usart10: UART.STM32F7_USART @ sysbus 0x40011C00
     frequency: 132000000
