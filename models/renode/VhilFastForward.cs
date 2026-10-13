@@ -13,7 +13,7 @@
 // window (invariant 5), half a billion instructions on the ECU and a billion
 // on the AMS, and the ECU's bit-banged nRF24 waits a 400-iteration counter
 // loop per half bit (a third of its instructions in steady state). This
-// recognises two kinds of busy-wait and, instead of executing their
+// recognises these busy-waits and, instead of executing their
 // iterations, charges the exact instructions they would have executed, ending
 // in the exact state they would have ended in (docs/performance.md):
 //
@@ -50,7 +50,18 @@
 //       before them found them,
 //   the machine is at a fixed point: each further iteration repeats the last
 //   until an event changes a peripheral. Iterations are then skipped by
-//   charging their instructions alone, never past the next event.
+//   charging their instructions alone, never past the next event. The pass
+//   that closes the second iteration must also read what the first two did:
+//   it starts the next iteration, which repeats only if it does.
+//
+//   Time-bounded polls (#260). A peripheral that computes a register from the
+//   time when it is read, but knows until when the value stands, says so with
+//   `bool VhilStableUntil(long offset, out ulong ticks)` (ADC3: up to its
+//   next result, Stm32H7Adc3.cs). Such a read joins the whitelist, and a skip
+//   in a loop that makes one ends before that time: every skipped read comes
+//   before it, by a margin for Renode's instruction-to-time rounding
+//   (BoundedIterations). Its `VhilOnRead` cue arms the detector as soon as a
+//   poll on it starts (HAL_ADC_PollForConversion), not at the next quantum.
 //
 // Exactness. Renode runs a CPU in chunks that end at the nearest clock entry
 // (a timer's limit) or the end of the quantum (BaseCPU.CpuThreadBodyInner):
@@ -82,8 +93,9 @@
 // logs why, it never guesses. Renode 1.17.0 (tlib 167decf).
 //
 // Not accelerated: anything else, including a loop reading a time-dependent
-// register (DWT CYCCNT, SysTick VAL, a timer's CNT: not in the whitelist) or
-// a GPIO input a device model drives on its own clock.
+// register that cannot say until when it stands (DWT CYCCNT, SysTick VAL, a
+// timer's CNT: not in the whitelist) or a GPIO input a device model drives on
+// its own clock.
 //
 using System;
 using System.Collections.Generic;
@@ -147,6 +159,19 @@ namespace Antmicro.Renode.Testing
             // opcode's first halfword (SUBS.W Rd, Rn, #const shares it).
             cpu.AddPreOpcodeExecutionHook(0xFBF0, 0xF1B0, OnCompare);
             machine.MachineReset += _ => OnReset();
+            // Peripherals whose register reads are stable up to a time they
+            // know (VhilStableUntil, ADC3's lazily computed conversions): a
+            // read of one in Thread mode arms the detector at once, so a
+            // HAL poll on it is caught where it starts (#260).
+            foreach(var peripheral in machine.GetPeripheralsOfType<IBusPeripheral>())
+            {
+                var cue = peripheral.GetType().GetProperty("VhilOnRead", typeof(Action<long>));
+                var stable = cue == null ? null : StableUntilOf(peripheral);
+                if(stable != null)
+                {
+                    cue.SetValue(peripheral, (Action<long>)(offset => OnTimeBoundedRead(stable, offset)));
+                }
+            }
         }
 
         public void Reset()
@@ -194,11 +219,13 @@ namespace Antmicro.Renode.Testing
                 + $"; counter loops: {counterSkips} skips, {counterInstructions} instructions"
                 + $" ({compareCalls} CMP.W hooks, {Ms(compareTicks)} ms)"
                 + $"; polling loops: {pollSkips} skips, {pollInstructions} instructions"
-                + $" ({pollAttempts} armed, {pollRefusals} refused, {accessCalls} accesses, {Ms(accessTicks)} ms)";
+                + $" ({pollAttempts} armed, {pollRefusals} refused, {accessCalls} accesses, {Ms(accessTicks)} ms)"
+                + $"; time-bounded polls: {boundedSkips} skips, {boundedInstructions} instructions ({cues} cues)";
         }
 
         public void OnSync(TimeInterval _)
         {
+            cueRefused.Clear();
             // Master thread, between quanta: arm the polling detector for the
             // next quantum, on the CPU's thread (tlib is not thread-safe). A
             // detector armed for a whole quantum without finding an iteration
@@ -345,6 +372,7 @@ namespace Antmicro.Renode.Testing
                 return;   // another user of the hook (flash programming): later
             }
             armed = true;
+            cuePc = null;
             armedQuanta = 0;
             pollAttempts++;
             state = PollState.Seek;
@@ -368,6 +396,10 @@ namespace Antmicro.Renode.Testing
         private void Refuse(string why)
         {
             Disarm();
+            if(cuePc != null)
+            {
+                cueRefused.Add(cuePc.Value);   // not from this read again this quantum
+            }
             pollRefusals++;
             backoff = Math.Min(MaxBackoff, Math.Max(1, lastBackoff * 2));
             lastBackoff = backoff;
@@ -460,9 +492,13 @@ namespace Antmicro.Renode.Testing
         private void OnBoundary(Access access, ulong position)
         {
             var k = position - boundaryPosition;
-            if(interrupts != boundaryInterrupts || k == 0)
+            if(interrupts != boundaryInterrupts || k == 0 || !access.Equals(boundary))
             {
-                Begin(PollState.First, access, position);   // an interrupt in between: start again
+                // An interrupt in between, or the boundary read itself
+                // returned something new (a time-bounded register changes
+                // within a chunk): the next iteration need not repeat the
+                // last. Start again from here.
+                Begin(PollState.First, access, position);
                 return;
             }
             if(state == PollState.First || !SameIteration(k))
@@ -497,11 +533,23 @@ namespace Antmicro.Renode.Testing
             // branch, and a block ends at one), before the chunk ends.
             var budget = tlib.Budget();
             var n = budget > 2 * k ? (budget - 2 * k) / k : 0;
+            var bounded = false;
+            var hasBound = BoundOfTrace(out var until);
+            if(n > 0 && hasBound)
+            {
+                bounded = true;
+                n = Math.Min(n, BoundedIterations(until, k, position));
+            }
             if(n > 0)
             {
                 tlib.Charge(n * k);
                 pollSkips++;
                 pollInstructions += n * k;
+                if(bounded)
+                {
+                    boundedSkips++;
+                    boundedInstructions += n * k;
+                }
                 if(Trace)
                 {
                     cpu.Log(LogLevel.Info, "fast-forward: {0} iterations of {1} instructions at 0x{2:X8} ({3} accesses)",
@@ -513,6 +561,113 @@ namespace Antmicro.Renode.Testing
             lastBackoff = 0;
             Disarm();
             RequestArm();
+        }
+
+        // The earliest time (ticks, exclusive) up to which every time-bounded
+        // read of the iteration returns what it returned; false if it has none.
+        private bool BoundOfTrace(out ulong until)
+        {
+            until = ulong.MaxValue;
+            var any = false;
+            foreach(var access in trace)
+            {
+                if(access.Write || !kinds.TryGetValue(access.Address, out var kind) || kind != RegisterKind.TimeBounded)
+                {
+                    continue;
+                }
+                any = true;
+                var r = timeBounded[access.Address];
+                if(!r.Stable(r.Offset, out var t))
+                {
+                    until = 0;
+                    return true;
+                }
+                until = Math.Min(until, t);
+            }
+            return any;
+        }
+
+        // Iterations of k instructions, from the iteration starting at
+        // `position`, whose reads all come before `until`. The time a read
+        // sees is Renode's: tlib's executed instructions reported to the time
+        // source (cpu.SyncTime) at the CPU's rate, less a residuum of fewer
+        // than mips / gcd(mips, ticks per us) instructions (BaseCPU
+        // ReportProgress, TimeInterval.FromCPUCycles). Synced here, the time T
+        // covers at least the instructions before this block (E), so a read
+        // at instruction X >= E sees at most T + (X - E + residuum) / rate.
+        // Every skipped read is at X < position + n * k; a margin of one more
+        // iteration and a few instructions keeps that bound strict whatever
+        // tlib counts of the current block.
+        private ulong BoundedIterations(ulong until, ulong k, ulong position)
+        {
+            if(until == ulong.MaxValue)
+            {
+                return ulong.MaxValue;
+            }
+            cpu.SyncTime();
+            var now = machine.ElapsedVirtualTime.TimeElapsed.Ticks;
+            var e = cpu.GetCurrentInstructionsCount();
+            if(until <= now || position < e)
+            {
+                return 0;
+            }
+            var mips = (ulong)cpu.PerformanceInMips;
+            var ticksPerUs = TimeInterval.FromMicroseconds(1).Ticks;
+            var residuum = mips / Gcd(mips, ticksPerUs);
+            var room = (until - now - 1) * mips / ticksPerUs;   // instructions after E, all before `until`
+            var margin = (position - e) + residuum + k + 16;
+            if(Trace)
+            {
+                cpu.Log(LogLevel.Info, "fast-forward: bounded until {0} now {1} room {2} margin {3}", until, now, room, margin);
+            }
+            return room > margin ? (room - margin) / k : 0;
+        }
+
+        private static ulong Gcd(ulong a, ulong b)
+        {
+            while(b != 0)
+            {
+                var t = a % b;
+                a = b;
+                b = t;
+            }
+            return a;
+        }
+
+        // A read of a time-bounded register (VhilOnRead): arm the detector now,
+        // on the CPU's thread, in Thread mode, when the register will not
+        // change for at least MinCueTicks, no attempt is armed, and none armed
+        // from this read was refused this quantum.
+        private void OnTimeBoundedRead(StableUntil stable, long offset)
+        {
+            if(armed || !enabled || !Polls || disabledWhy != null)
+            {
+                return;
+            }
+            if(!machine.SystemBus.TryGetCurrentCPU(out var current) || current != cpu
+               || ((uint)cpu.GetRegister(XpsrIndex).RawValue & 0x1FF) != 0)
+            {
+                return;
+            }
+            var pc = cpu.PC.RawValue;
+            if(cueRefused.Contains(pc) || !stable(offset, out var until) || until == ulong.MaxValue
+               || until < machine.ElapsedVirtualTime.TimeElapsed.Ticks + MinCueTicks)
+            {
+                return;   // refused here this quantum, or no wait worth skipping ahead
+            }
+            cues++;
+            Arm();
+            cuePc = pc;
+        }
+
+        private static StableUntil StableUntilOf(IPeripheral peripheral)
+        {
+            var method = peripheral.GetType().GetMethod("VhilStableUntil", new[] { typeof(long), typeof(ulong).MakeByRefType() });
+            if(method == null || method.ReturnType != typeof(bool))
+            {
+                return null;
+            }
+            return (StableUntil)Delegate.CreateDelegate(typeof(StableUntil), peripheral, method);
         }
 
         private bool SameIteration(ulong k)
@@ -566,6 +721,16 @@ namespace Antmicro.Renode.Testing
                     return true;
                 }
                 break;
+            case RegisterKind.TimeBounded:
+                if(!write)
+                {
+                    var r = timeBounded[address];
+                    if(r.Stable(r.Offset, out var _))
+                    {
+                        return true;
+                    }
+                }
+                break;
             case RegisterKind.WatchdogKey:
                 // KR = 0xAAAA reloads the counter (RM0468 IWDG_KR): a restart
                 // at the time of the last write, which a skip keeps (it leaves
@@ -609,6 +774,12 @@ namespace Antmicro.Renode.Testing
                         return RegisterKind.EventDrivenRead;
                     }
                     return RegisterKind.Other;
+                }
+                var stable = StableUntilOf(at.Peripheral);
+                if(stable != null)
+                {
+                    timeBounded[address] = new TimeBoundedRegister { Stable = stable, Offset = (long)offset };
+                    return RegisterKind.TimeBounded;
                 }
                 if(t.FullName == "Antmicro.Renode.Peripherals.Timers.STM32_IndependentWatchdog")
                 {
@@ -658,6 +829,7 @@ namespace Antmicro.Renode.Testing
         {
             loops.Clear();
             kinds.Clear();
+            timeBounded.Clear();
             Disarm();
         }
 
@@ -673,6 +845,9 @@ namespace Antmicro.Renode.Testing
         private const int MaxRetries = 2;
         private const int MaxBackoff = 64;             // quanta
         private const int MaxArmedQuanta = 2;
+        // A time-bounded read arms the detector only for a wait at least this
+        // long (ADC3's single conversions on the ECU take 156 ns).
+        private static readonly ulong MinCueTicks = TimeInterval.FromMicroseconds(5).Ticks;
 
         private readonly IMachine machine;
         private readonly TranslationCPU cpu;
@@ -680,6 +855,12 @@ namespace Antmicro.Renode.Testing
         private readonly MemoryAccessHook accessHook;
         private readonly Dictionary<ulong, CounterLoop> loops = new Dictionary<ulong, CounterLoop>();
         private readonly Dictionary<ulong, RegisterKind> kinds = new Dictionary<ulong, RegisterKind>();
+        private readonly Dictionary<ulong, TimeBoundedRegister> timeBounded = new Dictionary<ulong, TimeBoundedRegister>();
+        private ulong? cuePc;                         // the read that armed this attempt, if one did
+        private readonly HashSet<ulong> cueRefused = new HashSet<ulong>();
+        private ulong cues;
+        private ulong boundedSkips;
+        private ulong boundedInstructions;
         private readonly List<Access> trace = new List<Access>();
         private readonly List<Access> firstTrace = new List<Access>();
         private readonly Snapshot snapshot = new Snapshot();
@@ -720,7 +901,15 @@ namespace Antmicro.Renode.Testing
 
         private enum PollState { Off, Seek, First, Second }
 
-        private enum RegisterKind { Other, EventDrivenRead, WatchdogKey }
+        private enum RegisterKind { Other, EventDrivenRead, WatchdogKey, TimeBounded }
+
+        private delegate bool StableUntil(long offset, out ulong ticks);
+
+        private struct TimeBoundedRegister
+        {
+            public StableUntil Stable;
+            public long Offset;
+        }
 
         private struct Access : IEquatable<Access>
         {
