@@ -39,9 +39,24 @@
 //         overflow. The HAL also ignores OVR on a TX-only transfer.
 //   UDR   a slave-mode error.
 //
+// Writes to bits Renode's model tags: the HAL writes CFG2.COMM on every
+// transmit and IFCR.TXTFC on every transfer's close (SPI_CloseTransfer), and
+// Renode's register framework logs a warning for each, formatted on the CPU's
+// thread (half the AMS's log lines, #260). A tagged bit is neither stored nor
+// acted on (PeripheralRegister.WriteInner: only defined fields take a write;
+// the warning is the whole effect), so after the first write of a given
+// pattern at an offset, which Renode logs and the peripheral guard
+// (vhil/peripheral_guard.py) checks against configs/peripherals.yaml, the
+// same pattern goes in with the tagged bits as the register already holds
+// them: no warning, the same register state.
+//
 using System;
+using System.Collections.Generic;
+using System.Linq.Expressions;
+using System.Reflection;
 using Antmicro.Renode.Core;
 using Antmicro.Renode.Logging;
+using Antmicro.Renode.Core.Structure.Registers;
 using Antmicro.Renode.Peripherals.Bus;
 
 namespace Antmicro.Renode.Peripherals.SPI
@@ -145,8 +160,74 @@ namespace Antmicro.Renode.Peripherals.SPI
                     return;   // CSTART never takes: no transfer starts
                 }
             }
+            if(offset == Cfg2 || offset == Ifcr)
+            {
+                value = QuietTags(offset, value);
+            }
             base.WriteDoubleWord(offset, value);
         }
+
+        // The value to write so that Renode logs a tagged-bit write only the
+        // first time (see the header). (underlying ^ value) & ~defined is what
+        // Renode reports as unhandled.
+        private uint QuietTags(long offset, uint value)
+        {
+            if(!tagged.TryGetValue(offset, out var register))
+            {
+                register = TaggedRegister.Of(this, offset);
+                tagged[offset] = register;
+            }
+            if(register == null)
+            {
+                return value;
+            }
+            var underlying = register.Underlying();
+            var unhandled = (underlying ^ value) & ~register.Defined;
+            if(unhandled == 0 || logged.Add(((ulong)offset << 32) | (unhandled & 0xFFFFFFFF)))
+            {
+                return value;
+            }
+            return (uint)((value & register.Defined) | (underlying & ~register.Defined));
+        }
+
+        // One register of Renode's model: its defined-fields mask and current
+        // value (PeripheralRegister.definedFieldsMask, UnderlyingValue), read
+        // by reflection; null if this Renode keeps them otherwise.
+        private sealed class TaggedRegister
+        {
+            public static TaggedRegister Of(STM32H7_SPI spi, long offset)
+            {
+                try
+                {
+                    var flags = BindingFlags.Instance | BindingFlags.NonPublic;
+                    var collection = typeof(STM32H7_SPI).GetField("registers", flags)?.GetValue(spi);
+                    var map = collection?.GetType().BaseType?.GetField("registers", flags)?.GetValue(collection)
+                        as System.Collections.IDictionary;
+                    var selector = map?[offset];
+                    var register = selector?.GetType().GetMethod("GetRegister", flags)?.Invoke(selector, null);
+                    var definedField = typeof(PeripheralRegister).GetField("definedFieldsMask", flags);
+                    var underlyingField = typeof(PeripheralRegister).GetField("UnderlyingValue", flags);
+                    if(!(register is PeripheralRegister) || definedField == null || underlyingField == null)
+                    {
+                        return null;
+                    }
+                    var target = Expression.Constant(register);
+                    var read = Expression.Lambda<Func<ulong>>(
+                        Expression.Field(Expression.Convert(target, typeof(PeripheralRegister)), underlyingField)).Compile();
+                    return new TaggedRegister { Defined = (ulong)definedField.GetValue(register), Underlying = read };
+                }
+                catch(Exception)
+                {
+                    return null;
+                }
+            }
+
+            public ulong Defined;
+            public Func<ulong> Underlying;
+        }
+
+        private readonly Dictionary<long, TaggedRegister> tagged = new Dictionary<long, TaggedRegister>();
+        private readonly HashSet<ulong> logged = new HashSet<ulong>();
 
         private bool stalled;
         private int queuedBytes;
@@ -157,6 +238,8 @@ namespace Antmicro.Renode.Peripherals.SPI
         private const int FifoBytes = 16;
 
         private const long Cr1 = 0x00;
+        private const long Cfg2 = 0x0C;
+        private const long Ifcr = 0x18;
         private const long Sr = 0x14;
         private const long Txdr = 0x20;
         private const uint Cr1Spe = 1u << 0;
