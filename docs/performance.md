@@ -201,13 +201,42 @@ Colima, limited to 4 cores (median of 2) and to 2 (one run), `VHIL_DOCKER_CPUS`.
   same 76 cases on dev; most of a suite is paced to real time, and only its
   boots and sub-real-time stretches get shorter.
 
+### Renode's own hot paths (#260)
+
+Since #271 the image and CI run Renode 1.17.0 built from source with three
+patches to renode-infrastructure ([`docker/renode/`](../docker/renode/README.md);
+[the study](proposals/renode-fork-study.md)): clock entries found by index,
+bus accesses without allocations, and the register framework's allocations
+and unused log formatting gone. What a run computes is the same, byte for
+byte. Same GitHub runner (4 vCPU, x86-64), the release package and the
+patched build interleaved, median of 3 (2026-10-13, dev 6363b2e, fast-forward
+on):
+
+| System | Path | Boot 0-3 s: release | patched | | Steady +5 s: release | patched | |
+|---|---|---|---|---|---|---|---|
+| ams | bench | 1.76x | 1.91x | +8 % | 3.14x | **5.84x** | +86 % |
+| ams | sim | 1.50x | 1.83x | +22 % | 4.19x | **7.11x** | +70 % |
+| ecu | bench | 1.85x | 2.11x | +14 % | 2.85x | **4.45x** | +56 % |
+| ecu | sim | 1.96x | 2.37x | +21 % | 5.91x | **8.36x** | +41 % |
+| ecu-ams | bench | 1.36x | 1.56x | +15 % | 1.64x | **2.49x** | +52 % |
+| ecu-ams | sim | 1.12x | 1.35x | +21 % | 2.08x | **2.96x** | +42 % |
+
+On x86 the steady state gains more than the study measured on Apple silicon
+(+13-58 %); the boot, which the bootloaders' fast-forwarded polling
+dominates, less. Runners differ by up to 2x between jobs, so compare a
+build with another only on the same runner (as here), not across the
+`emulation speed` job's runs. The 15 native-test shards took 125 min of
+pytest in total (longest 15 min), against 148 min (18 min) for the same
+540 tests on dev's last full run (#265), on other runners.
+
 ## What is left
 
 The speed-ups take the boot from the bootloader's polling to the apps' own
-start. What remains is Renode's cost per peripheral access and per timer
-event (the managed transitions and the time framework above), and, for two
-boards, the lock-step barrier at every sync point. Neither is something the
-vHIL's models can skip without changing what the firmware sees. #260 tracks
+start, and Renode's patches above cut its cost per peripheral access and per
+timer event. What remains is executing the firmware (tlib and every model's
+work) and, for two boards, the lock-step barrier at every sync point, which
+only the quantum moves. Neither is something the vHIL's models can skip
+without changing what the firmware sees. #260 tracks
 them, with the candidates that are this repo's: ADC3's lazily computed
 conversions, which keep `HAL_ADC_PollForConversion` from being
 fast-forwarded, and the CAN bus model's wakes on a single-board bus.
