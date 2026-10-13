@@ -19,7 +19,7 @@ are planned; today there is one of each:
 
 | Layer | Current | Where |
 |---|---|---|
-| Emulation backend | [Renode](https://github.com/renode/renode) 1.17.0 | `.repl` platforms, generated `.resc` scripts, C# models in `models/renode/` |
+| Emulation backend | [Renode](https://github.com/renode/renode) 1.17.0 + the vHIL's patch queue ([`docker/renode/`](docker/renode/README.md)) | `.repl` platforms, generated `.resc` scripts, C# models in `models/renode/` |
 | Platform | `stm32h733` | [`platforms/cpus/stm32h733.repl`](platforms/cpus/stm32h733.repl) |
 | Board | MainLite (`role:` ecu, ams or udv) | [`catalog/boards/mainlite.yaml`](catalog/boards/mainlite.yaml) |
 
@@ -235,7 +235,11 @@ vm|fw|unit|smoke <s>|sim|coverage|speed|ifs-hil [suite]|shell` runs the same job
 as CI ([`docs/development/setup.md`](docs/development/setup.md#docker-any-host-nothing-installed-natively)).
 
 Pinned versions: Renode **1.17.0** (the current backend), Arm GNU
-**14.2.Rel1**. Bump deliberately, in their own PR.
+**14.2.Rel1**. Bump deliberately, in their own PR. The image and CI build
+Renode from the release's source with the patches in `docker/renode/`
+(speed only: a run computes the same as on the release package; a log's
+first line names the build, `vhil: renode 1.17.0 ... + vhil patches ...`);
+a new release means rebasing them ([`docker/renode/README.md`](docker/renode/README.md)).
 
 ## Style
 

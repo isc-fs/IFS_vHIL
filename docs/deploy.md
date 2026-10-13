@@ -265,6 +265,9 @@ img=ghcr.io/isc-fs/ifs-vhil
 echo "$GHCR_TOKEN" | docker login ghcr.io -u <github-user> --password-stdin
 docker buildx build --platform linux/amd64,linux/arm64 \
     -t "$img:$tag" -t "$img:latest" --push docker/
+# (Renode builds from source in the image, about 6-8 min per platform; a
+# platform the builder can't run natively builds under emulation, much
+# slower: docker/renode/README.md)
 docker buildx build --platform linux/amd64,linux/arm64 \
     --build-arg BASE="$img:$tag" -f docker/editor.Dockerfile \
     -t "$img-editor:$tag" -t "$img-editor:latest" --push .
@@ -278,11 +281,15 @@ and digest in production rather than `latest`, so an upgrade is a
 deliberate edit. Build the editor with `--build-arg BASE="$img:$tag@sha256:…"`
 to pin its base the same way.
 
-The images' inputs are pinned too: `python:3.11-bookworm` by digest, and
-every download in `docker/Dockerfile` and `docker/editor.Dockerfile`
-(Renode, the Arm GNU toolchain, can-flasher, Node) is checked against a
-SHA-256 hard-coded there (`sha256sum -c`), from the publisher's checksum file
-or GitHub's release asset digest; Pipeline Manager is vendored in the repo
+The images' inputs are pinned too: `python:3.11-bookworm` and the .NET SDK
+image Renode builds in by digest, Renode's sources by commit (the release
+tag, its submodules and renode-resources, checked by
+`docker/renode/build.sh` against `docker/renode/pins.env`, with the vHIL's
+patch queue from `docker/renode/patches/`), and every download in
+`docker/Dockerfile` and `docker/editor.Dockerfile` (the Arm GNU toolchain,
+can-flasher, Node) is checked against a SHA-256 hard-coded there
+(`sha256sum -c`), from the publisher's checksum file or GitHub's release
+asset digest; Pipeline Manager is vendored in the repo
 (`editor/pipeline-manager/`) and its npm dependencies come from its lockfile.
 Bumping a version means fetching its new hash the same way (the Dockerfiles
 say where). Without a registry, build on the

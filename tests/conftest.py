@@ -56,3 +56,11 @@ def pytest_terminal_summary(terminalreporter, config):
         terminalreporter.section("firmware coverage")
         terminalreporter.write(text)
         terminalreporter.write_line(f"per file: {config.getoption('--vhil-coverage')}/summary.txt")
+
+
+def pytest_report_header(config):
+    """The Renode the native tests run (RENODE): the release and the vHIL's
+    patch set (docker/renode/), so a log says which build it came from."""
+    from vhil import renode as rn
+    from vhil.bench import DEFAULT_RENODE
+    return f"vhil: {rn.build_id(DEFAULT_RENODE)}"
