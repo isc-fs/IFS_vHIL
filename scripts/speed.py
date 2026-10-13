@@ -261,7 +261,8 @@ def main() -> int:
         Path(args.log_dir).mkdir(parents=True, exist_ok=True)
 
     host = {"cpus": os.cpu_count(), "machine": platform.machine(),
-            "affinity": len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else None}
+            "affinity": len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else None,
+            "renode": rn.build_id(args.renode)}
     results = []
     print(f"host: {host}")
     variants = ["baseline", "current"] if args.baseline else ["current"]

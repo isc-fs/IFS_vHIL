@@ -1257,6 +1257,14 @@ def _default_sim(system_path: Path, firmware: dict, log_path: Path):
     return Sim(system_path, firmware, log_path=log_path, uart_log_dir=log_path.parent / "uart")
 
 
+def renode_build() -> str:
+    """The Renode this worker's runs use (RENODE, vhil.bench's default), as
+    vhil.renode.build_id names it: the release and the vHIL's patch set."""
+    from vhil import renode as rn
+    from vhil.bench import DEFAULT_RENODE
+    return rn.build_id(DEFAULT_RENODE)
+
+
 class Worker:
     def __init__(self, settings: Settings, *, worker_id: Optional[str] = None,
                  sim_factory: Callable = _default_sim,
@@ -1425,6 +1433,7 @@ class Worker:
                 raise ValueError(f"unknown scenario kind '{scenario['kind']}'")
             summary["firmware"] = {k: str(p) for k, p in firmware.items()}
             summary["firmware_commits"] = commits
+            summary["renode"] = renode_build()
             if run.get("ref"):
                 summary["system_ref"] = run["ref"]
         except Lost:
