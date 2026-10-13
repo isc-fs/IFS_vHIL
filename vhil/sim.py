@@ -500,7 +500,8 @@ class Sim:
 
     def start(self) -> "Sim":
         script = Path(tempfile.mkdtemp(prefix="vhil-sim-")) / f"{self.system.id}.resc"
-        script.write_text(self.system.render_renode(self.firmware, lockstep=True))
+        # The probes' source is compiled with the system's models, in one go.
+        script.write_text(self.system.render_renode(self.firmware, lockstep=True, sources=(PROBE_SOURCE,)))
         port = _free_port()
         log = open(self.log_path, "w") if self.log_path else subprocess.DEVNULL
         # The monitor listens on 127.0.0.1 only (vhil/renode.py, launch).
@@ -508,7 +509,6 @@ class Sim:
         self._monitor = RenodeMonitor(port, timeout_s=600)
         m = self._monitor
         m.execute(f"emulation SetSeed {_int(self.seed)}")
-        m.execute(f"include {rn.file_arg(PROBE_SOURCE)}")
         m.execute(f"include {rn.file_arg(script)}")
         for bus in self.system.buses:
             probe = f"vhil_probe_{rn.ident(bus)}"
