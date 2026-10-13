@@ -287,13 +287,14 @@ def test_a_gpio_device_renders_its_pins():
                      "gpioPortB:\n    0 -> radio@0\n\n"
                      "gpioPortA:\n    5 -> radio@1\n    7 -> radio@2\n\n"
                      "gpioPortC:\n    5 -> radio@3\n")
-    assert "include @" + str(REPO / "models/renode/Nrf24l01p.cs") in system.render_renode()
+    assert " @" + str(REPO / "models/renode/Nrf24l01p.cs") in system.render_renode()
 
 
 @pytest.mark.parametrize("name", ["ecu.yaml", "ecu-ams.yaml"])
 def test_the_radio_changes_the_ecu_scripts_only_by_itself(tmp_path, name):
     """systems/ecu.yaml and ecu-ams.yaml render as they did before the radio
-    (#193), plus its source and its device block, and nothing else."""
+    (#193), plus its source (in the one include of every model) and its
+    device block, and nothing else."""
     import difflib
 
     path = REPO / "systems" / name
@@ -305,10 +306,15 @@ def test_the_radio_changes_the_ecu_scripts_only_by_itself(tmp_path, name):
     before.write_text(yaml.safe_dump(doc, sort_keys=False))
     old = System(before).render_renode().replace(f"from {name}", "from X").splitlines()
     new = System(path).render_renode().replace(f"from {name}", "from X").splitlines()
+    # Every model is compiled in one include: the radio's source joins it.
+    def models(lines):
+        return [set(line.split()[1:]) for line in lines if line.startswith("include ") and ".cs" in line]
+    assert models(new) == [models(old)[0] | {f"@{REPO / 'models/renode/Nrf24l01p.cs'}"}]
+    old = [line for line in old if not (line.startswith("include ") and ".cs" in line)]
+    new = [line for line in new if not (line.startswith("include ") and ".cs" in line)]
     added = [line for line in difflib.ndiff(old, new) if line.startswith(("+ ", "- "))]
     assert all(line.startswith("+ ") for line in added), added
     assert [line[2:] for line in added] == [
-        f"include @{REPO / 'models/renode/Nrf24l01p.cs'}",
         "# device radio: nrf24l01p", 'machine LoadPlatformDescriptionFromString """',
         "radio: Wireless.Nrf24l01p @ sysbus", "    Miso -> gpioPortA@6", "    Irq -> gpioPortC@4",
         "", "gpioPortB:", "    0 -> radio@0", "", "gpioPortA:", "    5 -> radio@1",
