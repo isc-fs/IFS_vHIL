@@ -80,6 +80,15 @@ perf map) and by sampling each board's PC on host time
 - **A fresh Renode.** Every native test starts one. .NET first JITs Renode's
   hot paths unoptimised and, by default, holds their promotion back while new
   methods keep being called: the first boot ran on tier-0 code.
+- **Starting a Renode** (#260): every native test starts one, and the
+  generated script compiled each C# model with its own `include`. Renode's
+  `AdHocCompiler` references every loaded assembly in each compilation, so
+  each file took 0.15-0.2 s and ~120 MB the process kept: 3 s and a 1.66 GB
+  peak per start. The script now compiles every model, and `vhil.sim`'s
+  probes, in one `include` (Renode compiles several `.cs` files into one
+  assembly), and the monitor connection polls every 50 ms instead of 500:
+  a start (process to ready to run) went from 5.4 to 3.4 s, and the peak RSS
+  from 1.66 to 0.6 GB, which is what bounds how many runs a host holds.
 - **On an aarch64 host** (Apple silicon) tlib's TCG backend calls its softmmu
   helpers for every guest load and store (`tcg/aarch64/tcg-target.c`
   `tcg_out_qemu_st`/`_ld`: no inline TLB look-up), where x86 has a fast path.

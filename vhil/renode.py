@@ -166,7 +166,9 @@ class RenodeMonitor:
             except OSError:
                 if hostclock.monotonic() > deadline:
                     raise
-                hostclock.sleep(0.5)
+                # Renode takes ~1.5 s to listen; a coarse poll added up to its
+                # own period to every start (#260).
+                hostclock.sleep(0.05)
         self._lock = threading.Lock()
         self._buf = b""
         self.aborted: str | None = None   # the VHIL-ABORT line, once a machine aborted
