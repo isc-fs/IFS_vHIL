@@ -1,0 +1,61 @@
+From d398fb2cb56641951e2235198db2154f5a0120e5 Mon Sep 17 00:00:00 2001
+From: Raul Moran <moranguerra18@gmail.com>
+Date: Tue, 13 Oct 2026 20:26:23 +0200
+Subject: [PATCH] MonitorCondition: block without spinning in Waiter
+
+---
+ .../Main/Utilities/MonitorCondition.cs        | 28 +++++++++++++------
+ 1 file changed, 20 insertions(+), 8 deletions(-)
+
+diff --git a/src/Emulator/Main/Utilities/MonitorCondition.cs b/src/Emulator/Main/Utilities/MonitorCondition.cs
+index b2e048ef8..b430aa38f 100644
+--- a/src/Emulator/Main/Utilities/MonitorCondition.cs
++++ b/src/Emulator/Main/Utilities/MonitorCondition.cs
+@@ -165,24 +165,36 @@ private void ReleaseWaiter()
+         private readonly Queue<Waiter> waiters;
+         private readonly Queue<Waiter> waitersPool;
+ 
++        // A one-shot binary event that blocks at once. SemaphoreSlim.Wait spins
++        // (SpinWait, with sched_yield) before it blocks; with a time source's
++        // dispatcher, its CPU threads and the master all waiting on each other
++        // at every sync point, those spinning threads compete for the cores the
++        // CPU threads need when the host has fewer cores than threads.
+         private class Waiter
+         {
+-            public Waiter()
+-            {
+-                semaphore = new(0, 1);
+-            }
+-
+             public void Wait()
+             {
+-                semaphore.Wait();
++                lock(sync)
++                {
++                    while(!signaled)
++                    {
++                        Monitor.Wait(sync);
++                    }
++                    signaled = false;
++                }
+             }
+ 
+             public void Signal()
+             {
+-                semaphore.Release();
++                lock(sync)
++                {
++                    signaled = true;
++                    Monitor.Pulse(sync);
++                }
+             }
+ 
+-            private readonly SemaphoreSlim semaphore;
++            private bool signaled;
++            private readonly object sync = new object();
+         }
+     }
+ }
+-- 
+2.51.0
+
