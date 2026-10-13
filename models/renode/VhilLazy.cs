@@ -31,6 +31,16 @@ namespace Antmicro.Renode.Peripherals
 
         // Where the next `requests` requests write: [start, start + length).
         bool TryNextWrites(uint requests, out ulong start, out ulong length);
+
+        // Whether the next requests read `source` (a fixed peripheral
+        // address: no PINC) `size` bytes at a time, as TakeMany assumes.
+        bool ReadsFrom(ulong source, out int size);
+
+        // What `values.Count` requests in a row do, each reading the next
+        // value at `source` (ReadsFrom): the same items written, counters,
+        // flags and interrupt line, with no flag in between (at most
+        // RequestsToNextFlag of them). For a requester that knows the values.
+        void TakeMany(IReadOnlyList<uint> values);
     }
 
     public sealed class VhilLazy
