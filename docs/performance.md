@@ -175,7 +175,10 @@ something looks: ADC3's registers catch up as before, the DMA's
 pages the stream will write go through the bus (`SetPageAccessViaIo`) with
 hooks that catch up before a read or write lands. The result that sets the
 stream's next flag keeps its clock event, so its interrupt is taken at the
-same instruction.
+same instruction. Lock-step runs only (`vhil.sim` and `speed.py`'s sim path
+launch Renode with `VHIL_LOCKSTEP=1`): there a monitor command lands only
+while every machine is paused; on the wall-clock bench the broker's commands
+land while the CPU runs, and the bench keeps an event per result.
 
 [`tests/sim/test_lazy_dma.py`](../tests/sim/test_lazy_dma.py) runs ams and
 ecu-ams to steady state both ways (`VHIL_LAZY_DMA=0`: an event per result)

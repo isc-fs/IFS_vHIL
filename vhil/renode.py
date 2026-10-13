@@ -122,10 +122,17 @@ def monitor_command(renode: str, port: int) -> list[str]:
 RENODE_ENV = {"DOTNET_TC_CallCountingDelayMs": "0"}
 
 
-def launch(renode: str, port: int, stdout=subprocess.DEVNULL) -> subprocess.Popen:
+# Set by a caller that drives Renode in lock-step (vhil.sim): monitor commands
+# only between RunFor steps, while every machine is paused. Models may then
+# defer work to whoever next looks (Stm32H7Adc3.cs's lazy DMA hand-over),
+# which a command landing while a CPU runs (the wall-clock bench) would race.
+LOCKSTEP_ENV = {"VHIL_LOCKSTEP": "1"}
+
+
+def launch(renode: str, port: int, stdout=subprocess.DEVNULL, lockstep: bool = False) -> subprocess.Popen:
     """Start Renode with a loopback-only monitor on `port`; connect with
     RenodeMonitor(port), which waits for it to listen."""
-    env = {**RENODE_ENV, **os.environ}
+    env = {**RENODE_ENV, **(LOCKSTEP_ENV if lockstep else {}), **os.environ}
     return subprocess.Popen(monitor_command(renode, port), stdout=stdout,
                             stderr=subprocess.STDOUT, env=env)
 

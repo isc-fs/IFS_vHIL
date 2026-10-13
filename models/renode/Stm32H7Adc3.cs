@@ -39,8 +39,10 @@
 // every result due lands, in order, before anything looks (ADC3's or the
 // DMA's registers, the DMAMUX, the RAM the stream writes, a test), and only
 // the result that sets one of the stream's flags takes a clock event of its
-// own. LazyDma false (or VHIL_LAZY_DMA=0) keeps an event per result;
-// tests/sim/test_lazy_dma.py runs both and compares them.
+// own. Only in lock-step runs (VHIL_LOCKSTEP=1, vhil.sim), whose monitor
+// commands land while every machine is paused; LazyDma false (or
+// VHIL_LAZY_DMA=0) keeps an event per result; tests/sim/test_lazy_dma.py runs
+// both and compares them.
 //
 // Oversampling: each of the N conversions of a result reads the same input
 // (the emulated inputs are noise-free), the N codes are summed, shifted right
@@ -95,7 +97,11 @@ namespace Antmicro.Renode.Peripherals.Analog
             DmaRequest = new GPIO();
             lazy = VhilLazy.For(machine);
             lazy.Register(CatchUpForObserver, Replan);
-            LazyDma = Environment.GetEnvironmentVariable("VHIL_LAZY_DMA") != "0";
+            // Only in lock-step runs (vhil.sim, VHIL_LOCKSTEP=1), where a
+            // monitor command never lands while a CPU runs; VHIL_LAZY_DMA=0
+            // keeps an event per result there too.
+            lazyDma = Environment.GetEnvironmentVariable("VHIL_LOCKSTEP") == "1"
+                && Environment.GetEnvironmentVariable("VHIL_LAZY_DMA") != "0";
             Reset();
         }
 
@@ -540,6 +546,10 @@ namespace Antmicro.Renode.Peripherals.Analog
             {
                 return;
             }
+            if(!machine.SystemBus.TryGetCurrentCPU(out var _) && !machine.IsPaused)
+            {
+                return;   // another thread while this board runs: not ours to touch (see LazyDma)
+            }
             var before = conversions;
             CatchUp(Now());
             lazyDelivered += conversions - before;
@@ -911,7 +921,7 @@ namespace Antmicro.Renode.Peripherals.Analog
 
         private readonly VhilLazy lazy;
         private IVhilDmaStream dmaStream;
-        private bool lazyDma = true;
+        private bool lazyDma;
         private bool lazyWindow;
         private bool conversionFault;
         private ulong conversions;

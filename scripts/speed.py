@@ -88,7 +88,7 @@ class Run:
         script.write_text(self.system.render_renode(self.firmware, lockstep=lockstep))
         port = _free_port()
         out = open(self.log, "w") if self.log else None
-        self.proc = rn.launch(self.renode, port, **({"stdout": out} if out else {}))
+        self.proc = rn.launch(self.renode, port, lockstep=lockstep, **({"stdout": out} if out else {}))
         self.m = rn.RenodeMonitor(port, timeout_s=3600)
         m = self.m
         if lockstep:
