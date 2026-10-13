@@ -118,7 +118,7 @@ once (`BaseCPU`, `ExecutionResult.WaitingForInterrupt`, with
 
 [`models/renode/VhilFastForward.cs`](../models/renode/VhilFastForward.cs),
 one per board (`vhil_ff_<board>`, created by the platform's setup in
-`catalog/platforms/stm32h733.yaml`), recognises two kinds of busy-wait and
+`catalog/platforms/stm32h733.yaml`), recognises three kinds of busy-wait and
 charges their instructions instead of executing them:
 
 - **Counter loops**: the `-O0` volatile counter delay of
@@ -135,8 +135,17 @@ charges their instructions instead of executing them:
   a frame, a transmission's end or the firmware changes them; IWDG KR = 0xAAAA
   with the window off), the same instruction count and no exception or WFI,
   that leave tlib's whole architectural CPU state and every RAM byte as they
-  found them, are a fixed point: the next iterations repeat them until an
+  found them, and a third pass through the first access that reads what the
+  other two did, are a fixed point: the next iterations repeat them until an
   event.
+- **Time-bounded polls** (#260): a poll on a register computed from the time
+  when read, whose model knows until when it stands (`VhilStableUntil`): ADC3,
+  up to its next result, so `HAL_ADC_PollForConversion` (the AMS's
+  `read_leg_q4`, 80 us a call). The read joins the whitelist above and a skip
+  ends before that time, every skipped read before it with a margin for
+  Renode's instruction-to-time rounding (time advances in steps of
+  `mips / gcd(mips, ticks per us)` instructions: 231 on the ECU, 66 on the
+  AMS). The model's `VhilOnRead` cue arms the detector when the poll starts.
 
 Exact by construction:
 
@@ -155,15 +164,17 @@ Exact by construction:
   a repeated time-dependent write (the IWDG reload) happens last at the same
   instruction.
 - Not accelerated: anything else, including a poll on a register whose value
-  is computed from the time when read (DWT CYCCNT, SysTick, a timer's CNT,
-  ADC3's lazily computed conversions) or on a GPIO a device model drives.
+  is computed from the time when read and whose model cannot say until when
+  it stands (DWT CYCCNT, SysTick, a timer's CNT) or on a GPIO a device model
+  drives.
 
 [`tests/sim/test_fast_forward.py`](../tests/sim/test_fast_forward.py) runs
 ecu, ams and ecu-ams from power-on into steady state with and without it and
 compares every bus's timeline (offer, start, end, outcome, in ns), GPIO edges
 with the executed-instruction count at each write, the radio's payloads, and
 at the end each CPU's executed instructions, its registers and every RAM byte
-(a SHA-256): identical, and the run with it must have skipped both kinds.
+(a SHA-256): identical, and the run with it must have skipped every kind (the
+AMS's ADC3 polls included).
 
 `VHIL_FAST_FORWARD=0` in Renode's environment turns it off for a run, hooks
 and all; `vhil_ff_<board> Enabled false` (or `Counters`, `Polls`) at the

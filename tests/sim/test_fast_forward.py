@@ -2,8 +2,9 @@
 
 models/renode/VhilFastForward.cs charges a busy-wait's instructions instead of
 executing them one by one: the ECU's volatile counter delay (nrf24.c
-NRF24_BitBangDelay) and the CAN bootloader's polling main loop (main.c
-Bootloader_MainLoop) at a fixed point. These run each system from power-on,
+NRF24_BitBangDelay), the CAN bootloader's polling main loop (main.c
+Bootloader_MainLoop) at a fixed point, and the AMS's poll for an ADC3
+conversion up to the time the result lands. These run each system from power-on,
 through the bootloader's 2 s window and the apps' boot into steady state,
 once with it and once without (VHIL_FAST_FORWARD=0: Renode as it is), and
 compare everything the run produced:
@@ -83,6 +84,10 @@ def test_fast_forward_changes_nothing_observable(images, system, monkeypatch):
     for board, stats in fast["skipped"].items():
         assert "polling loops: 0 skips" not in stats, f"{board}: {stats}"
         assert "VHIL_FAST_FORWARD" not in stats, f"{board}: {stats}"
+    if "ams" in fast["skipped"]:
+        # The AMS's HAL_ADC_PollForConversion on ADC3 (current_task.cpp
+        # read_leg_q4), whose result lands at a time the model knows.
+        assert "time-bounded polls: 0 skips" not in fast["skipped"]["ams"], fast["skipped"]["ams"]
     if "ecu" in fast["skipped"]:
         assert "counter loops: 0 skips" not in fast["skipped"]["ecu"], fast["skipped"]["ecu"]
         assert any(e for e in plain["edges"]["ecu"]), "the ECU's nRF24 pins never moved"
