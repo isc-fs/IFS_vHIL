@@ -50,3 +50,16 @@ runs:
         "$r/renode" --version
         echo "$build"
         echo "Renode: \`$build\`" >> "$GITHUB_STEP_SUMMARY"
+
+    # The vHIL's C# models as one assembly, compiled from this checkout into
+    # Renode's compiler cache (vhil/models.py); every later step requires it
+    # (VHIL_MODELS=prebuilt): a Renode start whose models are not these
+    # sources fails instead of compiling them again.
+    - name: The models' assembly (this commit)
+      shell: bash
+      run: |
+        export VHIL_MODELS_CACHE="$RUNNER_TEMP/renode-models"
+        python3 -m vhil.models build --renode "$RENODE"
+        echo "VHIL_MODELS_CACHE=$VHIL_MODELS_CACHE" >> "$GITHUB_ENV"
+        echo "VHIL_MODELS=prebuilt" >> "$GITHUB_ENV"
+        echo "Models: \`$(python3 -c 'from vhil import models; print(models.digest()[:12])')\` ($(git rev-parse --short HEAD))" >> "$GITHUB_STEP_SUMMARY"
