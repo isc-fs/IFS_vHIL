@@ -43,10 +43,6 @@ permissions:
   contents: read
 
 env:
-  RENODE_VERSION: 1.17.0
-  # GitHub's sha256 digest for the release asset (gh release view v1.17.0 -R
-  # renode/renode --json assets), checked against a download.
-  RENODE_SHA256: 4ba7c68b59e2447f188ef4b4b112fcccd2802582c460beedceb63b84e5605a5f
   # IFS_HIL's suite tracks its `dev` branch on purpose: these jobs check that
   # the bench's tests still pass against the virtual boards, so they follow
   # what the physical bench runs. Pull requests and pushes always use `dev`;
@@ -55,12 +51,32 @@ env:
   IFS_HIL_REF: ${{ inputs.ifs_hil_ref || 'dev' }}
 
 jobs:
+  # Renode as the image builds it (docker/renode/,
+  # .github/actions/setup-renode), into the Actions cache once; the jobs below
+  # read it from there.
+  renode:
+    name: renode build
+    if: github.event_name != 'pull_request' || github.base_ref == 'main' || contains(github.event.pull_request.labels.*.name, 'full-ci')
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'schedule' && 'dev' || '' }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup-renode
+        with:
+          save: 'true'
+
   # The ECU boots through its CAN bootloader, as every MainLite does, so the
   # smoke suite's boot block (A-002 discover, A-006 round trip, A-003 flash
   # and jump through can-flasher over vcan, #4) runs here: a skip in it fails
   # the job, as it would mean the flashing path never ran.
   ecu:
-    if: github.event_name != 'pull_request' || github.base_ref == 'main' || contains(github.event.pull_request.labels.*.name, 'full-ci')
+    needs: renode
+    # After the build, which a failed `renode` doesn't skip: the job then
+    # builds Renode itself (and fails loudly if it can't).
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.base_ref == 'main' || contains(github.event.pull_request.labels.*.name, 'full-ci')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     env:
@@ -98,13 +114,9 @@ jobs:
           echo "elf=$(sed -n 's/^ecu=//p' built.txt)" >> "$GITHUB_OUTPUT"
           echo "bootloader=$(sed -n 's/^ecu.bootloader=//p' built.txt)" >> "$GITHUB_OUTPUT"
 
-      - name: Install Renode ${{ env.RENODE_VERSION }}
-        run: |
-          curl -fsSL -o renode.tar.gz \
-            "https://github.com/renode/renode/releases/download/v${RENODE_VERSION}/renode-${RENODE_VERSION}.linux-portable.tar.gz"
-          echo "${RENODE_SHA256}  renode.tar.gz" | sha256sum -c -
-          mkdir -p "$RUNNER_TEMP/renode"
-          tar xzf renode.tar.gz -C "$RUNNER_TEMP/renode" --strip-components=1
+      # Renode 1.17.0 + docker/renode's patches, as the image builds it.
+      - name: Renode (vHIL build)
+        uses: ./.github/actions/setup-renode
 
       - name: Install can-flasher ${{ env.CAN_FLASHER_VERSION }}
         run: |
@@ -174,7 +186,10 @@ jobs:
   # IFS_HIL's real-AMS block against the emulated AMS. Every test must run:
   # a skip here means the live AMS was not there.
   ecu-ams:
-    if: github.event_name != 'pull_request' || github.base_ref == 'main' || contains(github.event.pull_request.labels.*.name, 'full-ci')
+    needs: renode
+    # After the build, which a failed `renode` doesn't skip: the job then
+    # builds Renode itself (and fails loudly if it can't).
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.base_ref == 'main' || contains(github.event.pull_request.labels.*.name, 'full-ci')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
@@ -208,13 +223,9 @@ jobs:
           echo "ams=$(sed -n 's/^ams=//p' built.txt)" >> "$GITHUB_OUTPUT"
           echo "bootloader=$(sed -n 's/^ecu.bootloader=//p' built.txt)" >> "$GITHUB_OUTPUT"
 
-      - name: Install Renode ${{ env.RENODE_VERSION }}
-        run: |
-          curl -fsSL -o renode.tar.gz \
-            "https://github.com/renode/renode/releases/download/v${RENODE_VERSION}/renode-${RENODE_VERSION}.linux-portable.tar.gz"
-          echo "${RENODE_SHA256}  renode.tar.gz" | sha256sum -c -
-          mkdir -p "$RUNNER_TEMP/renode"
-          tar xzf renode.tar.gz -C "$RUNNER_TEMP/renode" --strip-components=1
+      # Renode 1.17.0 + docker/renode's patches, as the image builds it.
+      - name: Renode (vHIL build)
+        uses: ./.github/actions/setup-renode
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -275,7 +286,10 @@ jobs:
   # What the virtual bench can't run yet is skipped with its reason from
   # configs/gaps.yaml.
   ams:
-    if: github.event_name != 'pull_request' || github.base_ref == 'main' || contains(github.event.pull_request.labels.*.name, 'full-ci')
+    needs: renode
+    # After the build, which a failed `renode` doesn't skip: the job then
+    # builds Renode itself (and fails loudly if it can't).
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.base_ref == 'main' || contains(github.event.pull_request.labels.*.name, 'full-ci')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 50
     env:
@@ -308,13 +322,9 @@ jobs:
           echo "elf=$(sed -n 's/^ams=//p' built.txt)" >> "$GITHUB_OUTPUT"
           echo "bootloader=$(sed -n 's/^ams.bootloader=//p' built.txt)" >> "$GITHUB_OUTPUT"
 
-      - name: Install Renode ${{ env.RENODE_VERSION }}
-        run: |
-          curl -fsSL -o renode.tar.gz \
-            "https://github.com/renode/renode/releases/download/v${RENODE_VERSION}/renode-${RENODE_VERSION}.linux-portable.tar.gz"
-          echo "${RENODE_SHA256}  renode.tar.gz" | sha256sum -c -
-          mkdir -p "$RUNNER_TEMP/renode"
-          tar xzf renode.tar.gz -C "$RUNNER_TEMP/renode" --strip-components=1
+      # Renode 1.17.0 + docker/renode's patches, as the image builds it.
+      - name: Renode (vHIL build)
+        uses: ./.github/actions/setup-renode
 
       - name: Install can-flasher ${{ env.CAN_FLASHER_VERSION }}
         run: |

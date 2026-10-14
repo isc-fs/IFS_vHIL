@@ -32,9 +32,17 @@
 // sequence; in continuous mode it runs until ADSTP.
 //
 // Results are computed when the firmware next looks (a register access) or,
-// with DMAEN set, at their own time, raising a DMA request each (DmaRequest,
-// for DMAMUX1 request 115, DMA_REQUEST_ADC3 in stm32h7xx_hal_dma.h:377). A
-// rate above 100 kHz is delivered in 10 us batches.
+// with DMAEN set, raising a DMA request each (DmaRequest, for DMAMUX1 request
+// 115, DMA_REQUEST_ADC3 in stm32h7xx_hal_dma.h:377): at their own time, a
+// clock event each (a rate above 100 kHz in 10 us batches), or, when nothing
+// but a look could tell them apart, handed over lazily (#260, TryPlanAhead):
+// every result due lands, in order, before anything looks (ADC3's or the
+// DMA's registers, the DMAMUX, the RAM the stream writes, a test), and only
+// the result that sets one of the stream's flags takes a clock event of its
+// own. Only in lock-step runs (VHIL_LOCKSTEP=1, vhil.sim), whose monitor
+// commands land while every machine is paused; LazyDma false (or
+// VHIL_LAZY_DMA=0) keeps an event per result; tests/sim/test_lazy_dma.py runs
+// both and compares them.
 //
 // Oversampling: each of the N conversions of a result reads the same input
 // (the emulated inputs are noise-free), the N codes are summed, shifted right
@@ -58,9 +66,12 @@
 //
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Antmicro.Renode.Core;
 using Antmicro.Renode.Logging;
 using Antmicro.Renode.Peripherals.Bus;
+using Antmicro.Renode.Peripherals.CPU;
+using Antmicro.Renode.Peripherals.Memory;
 using Antmicro.Renode.Time;
 
 namespace Antmicro.Renode.Peripherals.Analog
@@ -84,6 +95,13 @@ namespace Antmicro.Renode.Peripherals.Analog
             }
             IRQ = new GPIO();
             DmaRequest = new GPIO();
+            lazy = VhilLazy.For(machine);
+            lazy.Register(CatchUpForObserver, Replan);
+            // Only in lock-step runs (vhil.sim, VHIL_LOCKSTEP=1), where a
+            // monitor command never lands while a CPU runs; VHIL_LAZY_DMA=0
+            // keeps an event per result there too.
+            lazyDma = Environment.GetEnvironmentVariable("VHIL_LOCKSTEP") == "1"
+                && Environment.GetEnvironmentVariable("VHIL_LAZY_DMA") != "0";
             Reset();
         }
 
@@ -93,14 +111,54 @@ namespace Antmicro.Renode.Peripherals.Analog
 
         // Results (oversampled ones count once) since reset: lets a test see
         // the firmware sample.
-        public ulong Conversions { get; private set; }
+        public ulong Conversions
+        {
+            get
+            {
+                CatchUpForObserver();
+                return conversions;
+            }
+        }
 
         // Fault injection (see the header): started conversions never end.
-        public bool ConversionFault { get; set; }
+        public bool ConversionFault
+        {
+            get => conversionFault;
+            set
+            {
+                CatchUpForObserver();   // results due before the fault land
+                conversionFault = value;
+                Schedule();
+            }
+        }
+
+        // Hand DMA results over lazily (see the header); false: a clock event
+        // per result, as before #260. VHIL_LAZY_DMA=0 turns it off for a run.
+        public bool LazyDma
+        {
+            get => lazyDma;
+            set
+            {
+                CatchUpForObserver();
+                lazyDma = value;
+                Schedule();
+            }
+        }
+
+        // Deliver every result due by now (the lazy ones included).
+        public void Flush()
+        {
+            CatchUpForObserver();
+        }
+
+        // "lazy <results delivered on an observer's cue> horizon <clock events
+        // at a DMA flag> eager <clock events, one per result>".
+        public string LazyStats => $"lazy {lazyDelivered} horizon {horizonEvents} eager {eagerEvents}";
 
         public void SetVoltage(ulong microvolts, int channel)
         {
             CheckChannel(channel);
+            CatchUpForObserver();   // results due before the change convert the old voltage
             volts[channel] = microvolts / 1e6;
         }
 
@@ -112,10 +170,16 @@ namespace Antmicro.Renode.Peripherals.Analog
 
         public void Reset()
         {
+            if(lazy != null)
+            {
+                CatchUpForObserver();   // what was due before the reset landed then
+                EndLazy();
+            }
             Array.Clear(regs, 0, regs.Length);
             regs[CR / 4] = CR_DEEPPWD;   // reset value 0x2000_0000
             warned.Clear();
-            Conversions = 0;
+            conversions = 0;
+            dmaStream = null;
             rank = 1;
             running = false;
             generation++;                // drop a pending result
@@ -311,7 +375,7 @@ namespace Antmicro.Renode.Peripherals.Analog
                         if(whole >= 2)
                         {
                             nextAt += (whole - 1) * sequence;
-                            Conversions += (ulong)(whole - 1) * (ulong)SequenceLength;
+                            conversions += (ulong)(whole - 1) * (ulong)SequenceLength;
                             regs[ISR / 4] |= ISR_OVR;
                         }
                     }
@@ -339,7 +403,7 @@ namespace Antmicro.Renode.Peripherals.Analog
                 regs[ISR / 4] |= ISR_OVR;   // the previous result was never read
             }
             regs[DR / 4] = Convert(SequenceChannel(rank));
-            Conversions++;
+            conversions++;
             regs[ISR / 4] |= ISR_EOSMP | ISR_EOC;
             if(rank < length)
             {
@@ -357,21 +421,48 @@ namespace Antmicro.Renode.Peripherals.Analog
             }
             if(DmaEnabled)
             {
-                // The DMA reads DR inside the request, which clears EOC.
+                // The DMA reads DR inside the request, which clears EOC. The
+                // stream that took it (Stm32H7Dma.cs) is the one the lazy
+                // hand-over plans with.
+                lazy.LastRequest = null;
                 DmaRequest.Set(true);
                 DmaRequest.Set(false);
+                dmaStream = lazy.LastRequest;
+                lazy.LastRequest = null;
             }
         }
 
         // With DMAEN, results land at their own time: one pending action at
-        // the next result (or 10 us on, for faster rates).
+        // the next result (or 10 us on, for faster rates), or, handed over
+        // lazily, at the result that sets a DMA flag (see the header).
         private void Schedule()
         {
             if(!running || !DmaEnabled)
             {
+                EndLazy();
                 return;
             }
             var now = Now();
+            if(TryPlanAhead(now, out var horizon))
+            {
+                if(lazyWindow && pendingAt == horizon)
+                {
+                    return;   // the same plan: its action stands
+                }
+                lazyWindow = true;
+                horizonEvents++;
+                var lg = ++generation;
+                pendingAt = horizon;
+                machine.ScheduleAction(TimeInterval.FromTicks((ulong)Math.Max(1, Math.Ceiling(horizon - now))),
+                                       _ => OnResultDue(lg), "adc3");
+                return;
+            }
+            if(lazyWindow)
+            {
+                EndLazy();
+                generation++;   // its action is not the next result's
+                pendingAt = -1;
+            }
             var at = Math.Max(nextAt, now + MinStepTicks);
             if(pendingAt >= 0 && pendingAt <= at)
             {
@@ -380,7 +471,198 @@ namespace Antmicro.Renode.Peripherals.Analog
             var g = ++generation;
             pendingAt = at;
             var delay = (ulong)Math.Max(1, Math.Ceiling(at - now));
+            eagerEvents++;
             machine.ScheduleAction(TimeInterval.FromTicks(delay), _ => OnResultDue(g), "adc3");
+        }
+
+        // Lazy hand-over (#260). The DMA takes every result the moment it
+        // lands (DmaRequest -> DMAMUX1 -> the stream, which reads DR and
+        // writes one item to RAM), so between two of the stream's flags a
+        // result changes only what someone has to look at to see: ADC3's
+        // registers, the stream's registers (NDTR, the flags), and the RAM it
+        // writes. Each of those catches up first (CatchUp here, VhilLazy for
+        // the DMA and the DMAMUX, bus hooks on the RAM), and catching up
+        // delivers every result due by then, at once and in order: what
+        // they see is what a clock event per result would have shown. The one
+        // effect nobody has to look for, an interrupt, comes only with a
+        // flag: ADC3's are kept out (no enabled flag a result could raise,
+        // EOC never left set), and the result that sets the stream's HTIF or
+        // TCIF lands at its own time, by one clock event. So it is exact
+        // when, and only planned when:
+        //   - continuous conversions, no ConversionFault, every result period
+        //     above MinStepTicks (the eager path's own times, one per result);
+        //   - the stream that took the last request still takes them;
+        //   - no ADC3 interrupt a result could raise (EOSMP, EOS enabled and
+        //     clear; EOC set, which the next result would turn into OVR);
+        //   - the RAM it will write can be guarded (MappedMemory).
+        // Anything that changes these (an ADC3 or DMA register write, the
+        // DMAMUX, a reset) catches up first and plans again.
+        private bool TryPlanAhead(double now, out double horizon)
+        {
+            horizon = 0;
+            if(!lazyDma || conversionFault || (regs[CFGR / 4] & CFGR_CONT) == 0
+               || dmaStream == null || !dmaStream.TakesRequests)
+            {
+                return false;
+            }
+            var isr = regs[ISR / 4];
+            var ier = regs[IER / 4];
+            if((isr & ISR_EOC) != 0
+               || ((ier & ISR_EOSMP) != 0 && (isr & ISR_EOSMP) == 0)
+               || ((ier & ISR_EOS) != 0 && (isr & ISR_EOS) == 0))
+            {
+                return false;
+            }
+            var length = SequenceLength;
+            for(var r = 1; r <= length; r++)
+            {
+                if(PeriodTicks(r) <= MinStepTicks + 1)
+                {
+                    return false;
+                }
+            }
+            // The k-th result from here sets the next flag.
+            var k = Math.Max(1u, dmaStream.RequestsToNextFlag);
+            var t = nextAt;
+            var at = rank;
+            for(var i = 1u; i < k; i++)
+            {
+                t += PeriodTicks(at);
+                at = at == length ? 1 : at + 1;
+            }
+            if(!WatchRouting() || !dmaStream.TryNextWrites(k, out var start, out var bytes) || !Guard(start, bytes))
+            {
+                return false;
+            }
+            horizon = t;
+            return true;
+        }
+
+        // Before something looks at what the lazy hand-over may still owe:
+        // a DMA register, the guarded RAM, the DMAMUX, a test.
+        private void CatchUpForObserver()
+        {
+            if(!lazyWindow || catchingUp)
+            {
+                return;
+            }
+            if(!machine.SystemBus.TryGetCurrentCPU(out var _) && !machine.IsPaused)
+            {
+                return;   // another thread while this board runs: not ours to touch (see LazyDma)
+            }
+            var before = conversions;
+            CatchUp(Now());
+            lazyDelivered += conversions - before;
+        }
+
+        // After a DMA's configuration changed (VhilLazy.Replan).
+        private void Replan()
+        {
+            if(running && DmaEnabled)
+            {
+                Schedule();
+            }
+        }
+
+        private void EndLazy()
+        {
+            lazyWindow = false;
+            SetIoPages(0, 0);
+        }
+
+        // Whatever routes DmaRequest to a stream (DMAMUX1's channel
+        // configuration) catches up before it changes, and the stream is
+        // learned again from the next request, delivered eagerly.
+        private bool WatchRouting()
+        {
+            if(routingWatched)
+            {
+                return true;
+            }
+            var endpoints = DmaRequest.Endpoints;
+            if(endpoints.Count != 1 || !(endpoints[0].Receiver is IBusPeripheral router))
+            {
+                return false;
+            }
+            machine.SystemBus.SetHookBeforePeripheralWrite<uint>(router, (value, offset) =>
+            {
+                CatchUpForObserver();
+                dmaStream = null;
+                Schedule();
+                return value;
+            });
+            routingWatched = true;
+            return true;
+        }
+
+        // Route the CPU's accesses to [start, start + bytes) through the bus
+        // (tlib otherwise reads RAM directly) and catch up on each one there.
+        private bool Guard(ulong start, ulong bytes)
+        {
+            var at = machine.SystemBus.WhatIsAt(start);
+            if(!(at?.Peripheral is MappedMemory memory) || start + bytes > at.RegistrationPoint.Range.EndAddress + 1)
+            {
+                return false;
+            }
+            if(guarded != memory)
+            {
+                if(guarded != null)
+                {
+                    return false;   // one memory at a time; the next plan is eager
+                }
+                var bus = machine.SystemBus;
+                bus.SetHookAfterPeripheralRead<byte>(memory, (v, o) => AfterGuardedRead(v, o, guarded.ReadByte));
+                bus.SetHookAfterPeripheralRead<ushort>(memory, (v, o) => AfterGuardedRead(v, o, guarded.ReadWord));
+                bus.SetHookAfterPeripheralRead<uint>(memory, (v, o) => AfterGuardedRead(v, o, guarded.ReadDoubleWord));
+                bus.SetHookAfterPeripheralRead<ulong>(memory, (v, o) => AfterGuardedRead(v, o, guarded.ReadQuadWord));
+                bus.SetHookBeforePeripheralWrite<byte>(memory, (v, o) => { CatchUpForObserver(); return v; });
+                bus.SetHookBeforePeripheralWrite<ushort>(memory, (v, o) => { CatchUpForObserver(); return v; });
+                bus.SetHookBeforePeripheralWrite<uint>(memory, (v, o) => { CatchUpForObserver(); return v; });
+                bus.SetHookBeforePeripheralWrite<ulong>(memory, (v, o) => { CatchUpForObserver(); return v; });
+                guarded = memory;
+            }
+            SetIoPages(start, bytes);
+            return true;
+        }
+
+        private T AfterGuardedRead<T>(T value, long offset, Func<long, T> reread)
+        {
+            if(!lazyWindow || catchingUp)
+            {
+                return value;
+            }
+            var before = conversions;
+            CatchUpForObserver();
+            return conversions == before ? value : reread(offset);
+        }
+
+        // The pages tlib sends through the bus: those holding [start, start +
+        // bytes), none when bytes is 0.
+        private void SetIoPages(ulong start, ulong bytes)
+        {
+            var want = new HashSet<ulong>();
+            if(bytes > 0)
+            {
+                for(var page = start & ~(PageBytes - 1); page < start + bytes; page += PageBytes)
+                {
+                    want.Add(page);
+                }
+            }
+            foreach(var page in ioPages)
+            {
+                if(!want.Contains(page))
+                {
+                    foreach(var cpu in MappedCpus) { cpu.ClearPageAccessViaIo(page); }
+                }
+            }
+            foreach(var page in want)
+            {
+                if(!ioPages.Contains(page))
+                {
+                    foreach(var cpu in MappedCpus) { cpu.SetPageAccessViaIo(page); }
+                }
+            }
+            ioPages = want;
         }
 
         private void OnResultDue(ulong g)
@@ -633,6 +915,25 @@ namespace Antmicro.Renode.Peripherals.Analog
         private static readonly double TicksPerSecond = TimeInterval.FromSeconds(1).Ticks;
         private static readonly double MinStepTicks = TicksPerSecond / 100000;   // 10 us
 
+        // tlib's smallest page on ARM (TARGET_PAGE_BITS 10); a larger one
+        // covers several of these.
+        private const ulong PageBytes = 0x400;
+
+        private readonly VhilLazy lazy;
+        private IVhilDmaStream dmaStream;
+        private bool lazyDma;
+        private bool lazyWindow;
+        private bool conversionFault;
+        private ulong conversions;
+        private ulong lazyDelivered;
+        private ulong horizonEvents;
+        private ulong eagerEvents;
+        private MappedMemory guarded;
+        private bool routingWatched;
+        private List<ICPUWithMappedMemory> mappedCpus;
+        private List<ICPUWithMappedMemory> MappedCpus =>
+            mappedCpus ?? (mappedCpus = new List<ICPUWithMappedMemory>(machine.SystemBus.GetCPUs().OfType<ICPUWithMappedMemory>()));
+        private HashSet<ulong> ioPages = new HashSet<ulong>();
         private int rank = 1;
         private bool running;
         private bool catchingUp;

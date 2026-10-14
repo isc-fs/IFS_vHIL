@@ -1,0 +1,243 @@
+From 7b7377617e35543767807fc96ba2670a58931e58 Mon Sep 17 00:00:00 2001
+From: Raul Moran <moranguerra18@gmail.com>
+Date: Tue, 13 Oct 2026 20:32:58 +0200
+Subject: [PATCH] SystemBus: allocation-free access context, cached context
+ look-up, closure-free tag search
+
+---
+ .../Main/Peripherals/Bus/SystemBus.cs         | 150 ++++++++++++++++--
+ 1 file changed, 138 insertions(+), 12 deletions(-)
+
+diff --git a/src/Emulator/Main/Peripherals/Bus/SystemBus.cs b/src/Emulator/Main/Peripherals/Bus/SystemBus.cs
+index 5a438c71f..011b6c31b 100644
+--- a/src/Emulator/Main/Peripherals/Bus/SystemBus.cs
++++ b/src/Emulator/Main/Peripherals/Bus/SystemBus.cs
+@@ -489,6 +489,11 @@ public void Clear()
+         /// <returns>True if any part of the <c>range</c> is locked for the given CPU (globally if <c>null</c> passed as <c>context</c>).</returns>
+         public bool IsAddressRangeLocked(Range range, IPeripheral context = null)
+         {
++            // Every bus access asks this; nothing to look up until a range was ever locked.
++            if(!anyRangeLocked)
++            {
++                return false;
++            }
+             // The locked range is either mapped for the CPU context, or globally (that is the reason for the OR)
+             return (lockedRangesCollectionByContext.TryGetValue(context, initiatorState: null, out var collection) && collection.ContainsOverlappingRange(range))
+                 || lockedRangesCollectionByContext[null].ContainsOverlappingRange(range);
+@@ -521,6 +526,10 @@ public void SetAddressRangeLocked(Range range, bool locked, IPeripheral context
+ 
+                 using(Machine.ObtainPausedState(internalPause: true))
+                 {
++                    if(locked)
++                    {
++                        anyRangeLocked = true;
++                    }
+                     RelockRange(range, locked, context);
+ 
+                     lockedRangesCollectionByContext.WithStateCollection(context, stateMask: null, collection =>
+@@ -2467,7 +2476,38 @@ private bool RemoveMappingsForPeripheral(IBusPeripheral peripheral, ICPU context
+ 
+         private bool TryGetTag(ulong address, out TagEntry? foundTag)
+         {
+-            var tagIdx = tags.Keys.BinarySearch(r => address.CompareTo(r.StartAddress));
++            var keys = tags.Keys;
++            if(keys.Count == 0)
++            {
++                foundTag = null;
++                return false;
++            }
++            // Same result as Misc.BinarySearch(r => address.CompareTo(r.StartAddress)), without its closure.
++            var lo = 0;
++            var hi = keys.Count - 1;
++            var tagIdx = -1;
++            while(lo <= hi)
++            {
++                var mid = lo + ((hi - lo) >> 1);
++                var start = keys[mid].StartAddress;
++                if(start == address)
++                {
++                    tagIdx = mid;
++                    break;
++                }
++                if(address > start)
++                {
++                    lo = mid + 1;
++                }
++                else
++                {
++                    hi = mid - 1;
++                }
++            }
++            if(tagIdx < 0)
++            {
++                tagIdx = ~lo;
++            }
+             if(tagIdx >= 0)
+             {
+                 // Direct hit - the address is the start address of a tag
+@@ -2609,6 +2649,8 @@ private void PostDeserializationInitStructures()
+         private SymbolLookup globalLookup;
+         [Transient]
+         private ThreadLocalContext threadLocalContext;
++        // Set once any address range is locked (never cleared): lets the bus skip the locked-range look-ups.
++        private volatile bool anyRangeLocked;
+ 
+         [Constructor]
+         private ThreadLocal<int> cachedCpuId;
+@@ -2759,22 +2801,23 @@ private class ThreadLocalContext : IDisposable
+         {
+             public ThreadLocalContext()
+             {
+-                context = new ThreadLocal<Tuple<IPeripheral, ulong?>>(() => null, true);
++                context = new ThreadLocal<Frame>(() => new Frame(), true);
+                 emptyDisposable.Disable();
+             }
+ 
++            // Every CPU bus access sets the context and restores it after:
++            // a per-thread stack of (initiator, state) and one popper per
++            // thread, instead of a Tuple, a closure and a DisposableWrapper
++            // each time. `using` disposes in LIFO order on the same thread.
+             public IDisposable Initialize(IPeripheral cpu, ulong? initiatorState)
+             {
+                 if(cpu == null)
+                 {
+                     return emptyDisposable;
+                 }
+-                var previousContext = context.Value;
+-                context.Value = Tuple.Create(cpu, initiatorState);
+-                return DisposableWrapper.New(() =>
+-                {
+-                    context.Value = previousContext;
+-                });
++                var frame = Current;
++                frame.Push(cpu, initiatorState);
++                return frame;
+             }
+ 
+             public void Dispose()
+@@ -2782,15 +2825,66 @@ public void Dispose()
+                 context.Dispose();
+             }
+ 
+-            public bool InUse => context.Value != null;
++            public bool InUse => Current.Depth > 0;
+ 
+-            public IPeripheral Initiator => context.Value.Item1;
++            public IPeripheral Initiator => Current.Initiator;
+ 
+-            public ulong? InitiatorState => context.Value.Item2;
++            public ulong? InitiatorState => Current.InitiatorState;
+ 
+-            private readonly ThreadLocal<Tuple<IPeripheral, ulong?>> context;
++            private Frame Current
++            {
++                get
++                {
++                    // One-entry thread-static cache in front of the ThreadLocal: a CPU thread talks to its own bus.
++                    if(ReferenceEquals(cachedOwner, this))
++                    {
++                        return cachedFrame;
++                    }
++                    var frame = context.Value;
++                    cachedOwner = this;
++                    cachedFrame = frame;
++                    return frame;
++                }
++            }
++
++            [ThreadStatic]
++            private static ThreadLocalContext cachedOwner;
++            [ThreadStatic]
++            private static Frame cachedFrame;
++
++            private readonly ThreadLocal<Frame> context;
+ 
+             private static readonly DisposableWrapper emptyDisposable = new DisposableWrapper();
++
++            private class Frame : IDisposable
++            {
++                public void Push(IPeripheral initiator, ulong? state)
++                {
++                    if(Depth == initiators.Length)
++                    {
++                        Array.Resize(ref initiators, Depth * 2);
++                        Array.Resize(ref states, Depth * 2);
++                    }
++                    initiators[Depth] = initiator;
++                    states[Depth] = state;
++                    Depth++;
++                }
++
++                public void Dispose()
++                {
++                    Depth--;
++                    initiators[Depth] = null;
++                }
++
++                public int Depth { get; private set; }
++
++                public IPeripheral Initiator => Depth > 0 ? initiators[Depth - 1] : throw new NullReferenceException();
++
++                public ulong? InitiatorState => Depth > 0 ? states[Depth - 1] : throw new NullReferenceException();
++
++                private IPeripheral[] initiators = new IPeripheral[4];
++                private ulong?[] states = new ulong?[4];
++            }
+         }
+ 
+         // It doesn't implement IDictionary because serialization doesn't work correctly for dictionaries without two generic parameters.
+@@ -2888,9 +2982,28 @@ public IEnumerable<StateMask> GetAllStateKeys(IPeripheral context)
+             }
+ 
+             public bool TryGetValue(IPeripheral key, ulong? initiatorState, out TValue value)
++            {
++                // Every bus access looks up its initiator's collection; the last hit is kept until the
++                // collections change (DropCaches). Only successful look-ups are cached.
++                var last = lastLookup;
++                if(last != null && last.Version == version && ReferenceEquals(last.Key, key) && last.State == initiatorState)
++                {
++                    value = last.Value;
++                    return true;
++                }
++                var found = TryGetValueLocked(key, initiatorState, out value, out var atVersion);
++                if(found)
++                {
++                    lastLookup = new LookupCacheEntry { Key = key, State = initiatorState, Value = value, Version = atVersion };
++                }
++                return found;
++            }
++
++            private bool TryGetValueLocked(IPeripheral key, ulong? initiatorState, out TValue value, out long atVersion)
+             {
+                 lock(locker)
+                 {
++                    atVersion = version;
+                     if(!initiatorState.HasValue)
+                     {
+                         if(key == null)
+@@ -2961,9 +3074,22 @@ private void DropCaches()
+                 {
+                     cpuInStateCache.Clear();
+                     globalCache.Clear();
++                    version++;
+                 }
+             }
+ 
++            private class LookupCacheEntry
++            {
++                public IPeripheral Key;
++                public ulong? State;
++                public TValue Value;
++                public long Version;
++            }
++
++            [Transient]
++            private volatile LookupCacheEntry lastLookup;
++            private long version;
++
+             private readonly Dictionary<IPeripheral, Dictionary<StateMask, TValue>> cpuLocalValues = new Dictionary<IPeripheral, Dictionary<StateMask, TValue>>();
+             private readonly Dictionary<IPeripheral, Dictionary<ulong, TValue>> cpuInStateCache = new Dictionary<IPeripheral, Dictionary<ulong, TValue>>();
+             private readonly Func<TValue> defaultFactory;
+-- 
+2.51.0
+

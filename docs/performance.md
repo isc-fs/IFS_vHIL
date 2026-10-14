@@ -25,10 +25,19 @@ bootloaders' 2 s auto-jump window, invariant 5, then the apps' start), and
 - **bench**: the wall-clock bench's emulation (`vhil/bench.py`): Renode's
   shared time source (`mach create`), every core at `WALL_CLOCK_MIPS` (100),
   the bench clock and GPIO probes, without the pacer, so the factor is the
-  host's headroom;
+  host's headroom. Each bus the bench bridges to SocketCAN (`host_netdev`)
+  gets a passive node that acknowledges in place of the bridge (#260): before,
+  a board alone on such a bus retried every frame with an ACK error, a load
+  the bench never has (half the ECU's bench cost was its bus model deciding
+  those retries);
 - **sim**: lock-step `vhil.sim` as native tests run it: the catalogue's
   `cpu.mips` (ECU 231, AMS 528), a time source per board (invariant 11), a CAN
   probe on every bus.
+
+Each phase also records the host CPU seconds Renode's process used per
+virtual second (all its threads, from `/proc`): what a run costs a host that
+runs several at once (throughput), and steadier than the factor on a host
+that is busy with something else.
 
 `--baseline` runs each configuration a second time as the bench ran before
 #154's speed-ups, on the same host (`VHIL_FAST_FORWARD=0`, .NET's default
@@ -80,6 +89,15 @@ perf map) and by sampling each board's PC on host time
 - **A fresh Renode.** Every native test starts one. .NET first JITs Renode's
   hot paths unoptimised and, by default, holds their promotion back while new
   methods keep being called: the first boot ran on tier-0 code.
+- **Starting a Renode** (#260): every native test starts one, and the
+  generated script compiled each C# model with its own `include`. Renode's
+  `AdHocCompiler` references every loaded assembly in each compilation, so
+  each file took 0.15-0.2 s and ~120 MB the process kept: 3 s and a 1.66 GB
+  peak per start. The script now compiles every model, and `vhil.sim`'s
+  probes, in one `include` (Renode compiles several `.cs` files into one
+  assembly), and the monitor connection polls every 50 ms instead of 500:
+  a start (process to ready to run) went from 5.4 to 3.4 s, and the peak RSS
+  from 1.66 to 0.6 GB, which is what bounds how many runs a host holds.
 - **On an aarch64 host** (Apple silicon) tlib's TCG backend calls its softmmu
   helpers for every guest load and store (`tcg/aarch64/tcg-target.c`
   `tcg_out_qemu_st`/`_ld`: no inline TLB look-up), where x86 has a fast path.
@@ -159,6 +177,34 @@ Exact by construction:
   it stands (DWT CYCCNT, SysTick, a timer's CNT) or on a GPIO a device model
   drives.
 
+## ADC3's DMA results, handed over lazily
+
+The AMS samples its pack current through ADC3 and DMA1 at 12.5 kHz
+(`current_task.cpp`), and `Stm32H7Adc3.cs` landed each result with a clock
+event of its own: Renode ends a chunk of execution there (in WFI as well), runs
+the time framework, the action and the DMA's transfer, and schedules the next.
+That was a fifth of the AMS's host time in steady state. Between two of the
+stream's flags (half and full transfer) a result changes only what someone
+must look at to see: ADC3's registers, the stream's (NDTR, the flags) and the
+RAM it writes. So, when ADC3's own interrupts can't be raised by a result and
+the stream takes every request (`TryPlanAhead`), results are handed over when
+something looks: ADC3's registers catch up as before, the DMA's
+(`Stm32H7Dma.cs`) and the DMAMUX's catch up first (`VhilLazy.cs`), and the
+pages the stream will write go through the bus (`SetPageAccessViaIo`) with
+hooks that catch up before a read or write lands. The result that sets the
+stream's next flag keeps its clock event, so its interrupt is taken at the
+same instruction. Lock-step runs only (`vhil.sim` and `speed.py`'s sim path
+launch Renode with `VHIL_LOCKSTEP=1`): there a monitor command lands only
+while every machine is paused; on the wall-clock bench the broker's commands
+land while the CPU runs, and the bench keeps an event per result.
+
+[`tests/sim/test_lazy_dma.py`](../tests/sim/test_lazy_dma.py) runs ams and
+ecu-ams to steady state both ways (`VHIL_LAZY_DMA=0`: an event per result)
+and compares the bus timelines, GPIO edges by instruction count, ADC3's and
+DMA1's counts, executed instructions and every register and RAM byte:
+identical. Not an edge's `t_us`: the GPIO probe stamps the time the CPU last
+reported, which moves with where Renode ends a chunk (`VhilProbe.cs`).
+
 [`tests/sim/test_fast_forward.py`](../tests/sim/test_fast_forward.py) runs
 ecu, ams and ecu-ams from power-on into steady state with and without it and
 compares every bus's timeline (offer, start, end, outcome, in ns), GPIO edges
@@ -201,13 +247,42 @@ Colima, limited to 4 cores (median of 2) and to 2 (one run), `VHIL_DOCKER_CPUS`.
   same 76 cases on dev; most of a suite is paced to real time, and only its
   boots and sub-real-time stretches get shorter.
 
+### Renode's own hot paths (#260)
+
+Since #271 the image and CI run Renode 1.17.0 built from source with three
+patches to renode-infrastructure ([`docker/renode/`](../docker/renode/README.md);
+[the study](proposals/renode-fork-study.md)): clock entries found by index,
+bus accesses without allocations, and the register framework's allocations
+and unused log formatting gone. What a run computes is the same, byte for
+byte. Same GitHub runner (4 vCPU, x86-64), the release package and the
+patched build interleaved, median of 3 (2026-10-13, dev 6363b2e, fast-forward
+on):
+
+| System | Path | Boot 0-3 s: release | patched | | Steady +5 s: release | patched | |
+|---|---|---|---|---|---|---|---|
+| ams | bench | 1.76x | 1.91x | +8 % | 3.14x | **5.84x** | +86 % |
+| ams | sim | 1.50x | 1.83x | +22 % | 4.19x | **7.11x** | +70 % |
+| ecu | bench | 1.85x | 2.11x | +14 % | 2.85x | **4.45x** | +56 % |
+| ecu | sim | 1.96x | 2.37x | +21 % | 5.91x | **8.36x** | +41 % |
+| ecu-ams | bench | 1.36x | 1.56x | +15 % | 1.64x | **2.49x** | +52 % |
+| ecu-ams | sim | 1.12x | 1.35x | +21 % | 2.08x | **2.96x** | +42 % |
+
+On x86 the steady state gains more than the study measured on Apple silicon
+(+13-58 %); the boot, which the bootloaders' fast-forwarded polling
+dominates, less. Runners differ by up to 2x between jobs, so compare a
+build with another only on the same runner (as here), not across the
+`emulation speed` job's runs. The 15 native-test shards took 125 min of
+pytest in total (longest 15 min), against 148 min (18 min) for the same
+540 tests on dev's last full run (#265), on other runners.
+
 ## What is left
 
 The speed-ups take the boot from the bootloader's polling to the apps' own
-start. What remains is Renode's cost per peripheral access and per timer
-event (the managed transitions and the time framework above), and, for two
-boards, the lock-step barrier at every sync point. Neither is something the
-vHIL's models can skip without changing what the firmware sees. #260 tracks
+start, and Renode's patches above cut its cost per peripheral access and per
+timer event. What remains is executing the firmware (tlib and every model's
+work) and, for two boards, the lock-step barrier at every sync point, which
+only the quantum moves. Neither is something the vHIL's models can skip
+without changing what the firmware sees. #260 tracks
 them, with the candidates that are this repo's: ADC3's lazily computed
 conversions, which keep `HAL_ADC_PollForConversion` from being
 fast-forwarded, and the CAN bus model's wakes on a single-board bus.

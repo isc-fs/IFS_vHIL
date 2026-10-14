@@ -10,14 +10,20 @@ Paths:
          time source (`mach create`), every core at WALL_CLOCK_MIPS, the bench
          clock (VhilClock.cs) and GPIO probes, run flat out, without the
          pacer, so the factor is the host's headroom (the bench itself paces
-         to 1x at most);
+         to 1x at most). Each bus the bench bridges to SocketCAN (a bus's
+         host_netdev) gets a passive node that acknowledges, as the bridge
+         does: without one a board alone on a bus retries every frame with an
+         ACK error, a load the bench never has;
   sim    lock-step vhil.sim as native tests run it: the catalogue's cpu.mips,
          a time source per board in a multi-board system (invariant 11), a
          CAN probe on every bus and a GPIO probe per board.
 
 Each system boots from power-on: `boot` is its first --boot seconds of virtual
 time (the bootloaders' 2 s auto-jump window, then the apps' start), `steady`
-the --steady seconds after. Above 1.0x the wall-clock bench keeps real time;
+the --steady seconds after. Besides the factor, each phase records the host
+CPU seconds Renode's process used per virtual second (user + system, all its
+threads, from /proc on Linux): what a run costs a host that runs several, and
+steadier than the factor on a busy host. Above 1.0x the wall-clock bench keeps real time;
 IFS_HIL's tests run on the bench's time either way (vhil/benchclock.py), so
 below it a suite only takes longer, as native tests do.
 
@@ -85,16 +91,16 @@ class Run:
     def __enter__(self):
         lockstep = self.path == "sim"
         script = Path(tempfile.mkdtemp(prefix="vhil-speed-")) / f"{self.system.id}.resc"
-        script.write_text(self.system.render_renode(self.firmware, lockstep=lockstep))
+        script.write_text(self.system.render_renode(self.firmware, lockstep=lockstep,
+                                                    sources=(PROBE_SOURCE,) if lockstep else ()))
         port = _free_port()
         out = open(self.log, "w") if self.log else None
-        self.proc = rn.launch(self.renode, port, **({"stdout": out} if out else {}))
+        self.proc = rn.launch(self.renode, port, lockstep=lockstep, **({"stdout": out} if out else {}))
         self.m = rn.RenodeMonitor(port, timeout_s=3600)
         m = self.m
         if lockstep:
             # As vhil.sim.Sim.start does.
             m.execute("emulation SetSeed 1")
-            m.execute(f"include {rn.file_arg(PROBE_SOURCE)}")
             m.execute(f"include {rn.file_arg(script)}")
             for bus in self.system.buses:
                 probe = f"vhil_probe_{rn.ident(bus)}"
@@ -113,8 +119,19 @@ class Run:
             for board in self.system.boards:
                 m.execute(f"mach set {rn.quote(rn.ident(board))}")
                 m.execute(f"cpu PerformanceInMips {WALL_CLOCK_MIPS}")
-            for command in probe_commands(self.system.bench_config()):
+            commands = probe_commands(self.system.bench_config())
+            for command in commands:
                 m.execute(command)
+            bridged = [bus for bus, spec in self.system.buses.items()
+                       if spec.get("host_netdev") and spec.get("kind", "can") == "can"]
+            if bridged and not any(c.startswith("include ") and "VhilProbe" in c for c in commands):
+                m.execute(f"include {rn.file_arg(PROBE_SOURCE)}")
+            for bus in bridged:
+                # In place of the bench's SocketCAN bridge (vhil/system.py,
+                # render_renode socketcan=True): a passive node that acks.
+                node = f"vhil_bridge_{rn.ident(bus)}"
+                m.execute(f"emulation CreateVhilCanProbe {rn.quote(node)}")
+                m.execute(f"connector Connect {node} {bus}")
         m.execute("emulation SetGlobalAdvanceImmediately true")
         if self.mips is not None:
             for board in self.system.boards:
@@ -140,9 +157,20 @@ class Run:
         q = self.system.sync_quantum_us()
         us = round(seconds * 1e6)
         us -= us % q
+        c0 = self.cpu_seconds()
         t0 = time.monotonic()
         self.m.execute(f'emulation RunFor "{us / 1e6:.6f}"')
-        return time.monotonic() - t0
+        wall = time.monotonic() - t0
+        self.last_cpu = None if c0 is None else self.cpu_seconds() - c0
+        return wall
+
+    def cpu_seconds(self) -> float | None:
+        """User + system CPU time of Renode's process so far (Linux), else None."""
+        try:
+            fields = Path(f"/proc/{self.proc.pid}/stat").read_text().rsplit(")", 1)[1].split()
+            return (int(fields[11]) + int(fields[12])) / os.sysconf("SC_CLK_TCK")
+        except (OSError, IndexError, ValueError):
+            return None
 
     def fast_forward_stats(self) -> dict:
         """Each board's busy-wait fast-forward counters (VhilFastForward.cs)."""
@@ -224,6 +252,7 @@ def _measure(sys_path: Path, firmware: dict[str, str], path: str, args, variant:
             wall = run.run_for(seconds)
             result[phase] = round(seconds / wall, 3)
             result[f"{phase}_wall_s"] = round(wall, 2)
+            result[f"{phase}_cpu"] = None if run.last_cpu is None else round(run.last_cpu / seconds, 3)
             if args.profile:
                 result[f"{phase}_profile"] = run.dump_profile(phase)
             result[f"{phase}_fast_forward"] = run.fast_forward_stats()
@@ -261,12 +290,14 @@ def main() -> int:
         Path(args.log_dir).mkdir(parents=True, exist_ok=True)
 
     host = {"cpus": os.cpu_count(), "machine": platform.machine(),
-            "affinity": len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else None}
+            "affinity": len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else None,
+            "renode": rn.build_id(args.renode)}
     results = []
     print(f"host: {host}")
     variants = ["baseline", "current"] if args.baseline else ["current"]
-    print(f"| system | path | variant | boot 0-{args.boot:g} s | steady +{args.steady:g} s |")
-    print("|---|---|---|---|---|")
+    print(f"| system | path | variant | boot 0-{args.boot:g} s | steady +{args.steady:g} s "
+          f"| boot CPU s/s | steady CPU s/s |")
+    print("|---|---|---|---|---|---|---|")
     for system in args.systems:
         for path in args.paths:
             for variant in variants:
@@ -275,8 +306,12 @@ def main() -> int:
                 for phase in ("boot", "steady"):
                     r[phase] = statistics.median(x[phase] for x in runs)
                     r[f"{phase}_runs"] = [x[phase] for x in runs]
+                    cpu = [x[f"{phase}_cpu"] for x in runs if x[f"{phase}_cpu"] is not None]
+                    r[f"{phase}_cpu"] = statistics.median(cpu) if cpu else None
                 results.append(r)
-                print(f"| {r['system']} | {path} | {variant} | {r['boot']:.2f}x | {r['steady']:.2f}x |",
+                cpu = " | ".join("-" if r[f"{p}_cpu"] is None else f"{r[f'{p}_cpu']:.3f}"
+                                 for p in ("boot", "steady"))
+                print(f"| {r['system']} | {path} | {variant} | {r['boot']:.2f}x | {r['steady']:.2f}x | {cpu} |",
                       flush=True)
     if args.json:
         args.json.parent.mkdir(parents=True, exist_ok=True)

@@ -24,11 +24,6 @@ concurrency:
 permissions:
   contents: read
 
-env:
-  RENODE_VERSION: 1.17.0
-  # GitHub's sha256 digest for the release asset (as in sim.yml).
-  RENODE_SHA256: 4ba7c68b59e2447f188ef4b4b112fcccd2802582c460beedceb63b84e5605a5f
-
 jobs:
   scenarios:
     if: github.event_name != 'pull_request' || github.base_ref == 'main' || contains(github.event.pull_request.labels.*.name, 'full-ci')
@@ -62,13 +57,11 @@ jobs:
           echo "ams=$(sed -n 's/^ams=//p' built.txt | tail -1)" >> "$GITHUB_OUTPUT"
           echo "bootloader=$(sed -n 's/^ecu.bootloader=//p' built.txt | tail -1)" >> "$GITHUB_OUTPUT"
 
-      - name: Install Renode ${{ env.RENODE_VERSION }}
-        run: |
-          curl -fsSL -o renode.tar.gz \
-            "https://github.com/renode/renode/releases/download/v${RENODE_VERSION}/renode-${RENODE_VERSION}.linux-portable.tar.gz"
-          echo "${RENODE_SHA256}  renode.tar.gz" | sha256sum -c -
-          mkdir -p "$RUNNER_TEMP/renode"
-          tar xzf renode.tar.gz -C "$RUNNER_TEMP/renode" --strip-components=1
+      # Renode 1.17.0 + docker/renode's patches, as the image builds it.
+      - name: Renode (vHIL build)
+        uses: ./.github/actions/setup-renode
+        with:
+          save: 'true'
 
       - name: FAT tools for SD card images
         run: sudo apt-get install -y -qq dosfstools mtools >/dev/null

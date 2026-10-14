@@ -152,7 +152,7 @@ backend and toolchain.
 
 | Tool | Version | Where |
 |---|---|---|
-| Renode (emulation backend) | 1.17.0 portable | `renode-1.17.0.linux-portable.tar.gz` from the [Renode releases](https://github.com/renode/renode/releases) |
+| Renode (emulation backend) | 1.17.0 + the vHIL's patches | the image and CI build it from source ([`docker/renode/`](../../docker/renode/README.md)); natively, `docker buildx build --target renode-package --output type=local,dest=<dir> docker/` gives the same package, or the release's `renode-1.17.0.linux-portable.tar.gz` runs every test the same, slower |
 | Arm GNU Toolchain | 14.2.Rel1 | developer.arm.com (pinned by IFS_HIL's recipes) |
 | Python | ≥ 3.10 | venv with `robotframework==6.1 robotframework-retryfailed==0.2.0 psutil==5.9.4 "pyyaml==6.0.*" "telnetlib3==2.0.*"` (Renode 1.17's own `tests/requirements.txt`) |
 | CMake | ≥ 3.22 | distro package |

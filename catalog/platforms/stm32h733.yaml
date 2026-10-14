@@ -12,6 +12,8 @@ renode:
   repl: platforms/cpus/stm32h733.repl
   cpu: cpu
   sources:
+    # What lazily computed models and the DMA share (#260): loaded first.
+    - models/renode/VhilLazy.cs
     # The H72x/H73x ADC3 (Renode models only the H743's).
     - models/renode/Stm32H7Adc3.cs
     # DMA1 with half-transfer, errors and circular mode (Renode's tags them).
@@ -25,6 +27,8 @@ renode:
     - models/renode/Stm32H7Flash.cs
     # FDCAN with fault hooks for tests (Renode's MCAN has no error states).
     - models/renode/Stm32H7Fdcan.cs
+    # The FDCAN clock calibration unit's IR/IE (Renode tags the range).
+    - models/renode/Stm32H7FdcanCcu.cs
     # SPI with a fault hook for tests: a transfer that never runs (Renode's
     # never fails one).
     - models/renode/Stm32H7Spi.cs

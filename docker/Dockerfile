@@ -6,24 +6,49 @@
 # Firmware sources, build output and the IFS_HIL checkout live in a volume
 # mounted at /vhil, not in the image: they change per run.
 #
-# Supply chain: the base image is pinned by digest and every download is
-# checked against a SHA-256 hard-coded here before it is unpacked. Where each
-# hash comes from (re-fetch them when bumping a version, in the same PR):
-#   Renode       GitHub's asset digest for the release:
-#                gh api repos/renode/renode/releases/tags/v<ver> --jq '.assets[]|.name+" "+.digest'
+# Renode is built from source in the renode-build stage below: the release
+# tag plus the vHIL's patch queue (docker/renode/: README.md, pins.env,
+# patches/), as a portable headless package in /opt/renode, the release
+# tarball's layout. `--target renode-package` exports just the package (CI's
+# setup-renode action).
+#
+# Supply chain: the base images are pinned by digest and every download is
+# checked against a SHA-256 hard-coded here before it is unpacked; Renode's
+# sources against the commits in docker/renode/pins.env and submodules.txt.
+# Where each hash comes from (re-fetch them when bumping a version, in the
+# same PR):
 #   Arm GNU      Arm's published <tarball>.sha256asc next to each download
-#   can-flasher  GitHub's asset digest, as for Renode (isc-fs/can-flasher)
-#   base image   docker buildx imagetools inspect python:3.11-bookworm (the index digest)
+#   can-flasher  GitHub's asset digest for the release:
+#                gh api repos/isc-fs/can-flasher/releases/tags/v<ver> --jq '.assets[]|.name+" "+.digest'
+#   base images  docker buildx imagetools inspect <image>:<tag> (the index digest):
+#                python:3.11-bookworm, mcr.microsoft.com/dotnet/sdk:8.0-bookworm-slim
 #
 # The user: every service of deploy/compose.prod.yaml runs as `vhil` (uid/gid
 # 10001), never root. The image's default user stays root for the dev wrapper
 # (scripts/vhil-docker.sh creates vcan links); compose sets `user:`.
+
+# --- Renode 1.17.0 + docker/renode/patches, from source ----------------------
+# The .NET 8 SDK and a C toolchain (tlib), per Renode's build docs; the
+# package bundles its own .NET runtime. One RUN fetches, checks, patches,
+# builds and deletes the tree, so the layer is the package alone (~180 MB).
+FROM mcr.microsoft.com/dotnet/sdk:8.0-bookworm-slim@sha256:ec9c0a0dc5f60adc2065762050638dd5ed5facfc53716d4580a42d86027c8e80 AS renode-build
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        cmake ninja-build build-essential git python3 automake autoconf libtool \
+        pkg-config zip xz-utils file \
+    && rm -rf /var/lib/apt/lists/*
+ENV DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1
+COPY renode/ /vhil-renode/
+RUN /vhil-renode/build.sh /opt/renode && rm -rf /root/.nuget /root/.local /tmp/*
+
+# The package alone: `docker buildx build --target renode-package --output
+# type=local,dest=<dir> docker/` (CI, .github/actions/setup-renode).
+FROM scratch AS renode-package
+COPY --from=renode-build /opt/renode/ /
+
+# --- the vHIL image ----------------------------------------------------------
 FROM python:3.11-bookworm@sha256:3fd8382c50bae84184460a6e1a8ff4eeac0e3ca6a560691cb56bd84d2b6ec9ca
 
 ARG TARGETARCH
-ARG RENODE_VERSION=1.17.0
-ARG RENODE_SHA256_AMD64=4ba7c68b59e2447f188ef4b4b112fcccd2802582c460beedceb63b84e5605a5f
-ARG RENODE_SHA256_ARM64=e9051578411441bfb47b77de0381cfba3badce03663367fab561472fd7807f1f
 ARG ARM_GNU_VERSION=14.2.rel1
 ARG ARM_GNU_SHA256_AMD64=62a63b981fe391a9cbad7ef51b17e49aeaa3e7b0d029b36ca1e9c3b2a9b78823
 ARG ARM_GNU_SHA256_ARM64=87330bab085dd8749d4ed0ad633674b9dc48b237b61069e3b481abd364d0a684
@@ -38,18 +63,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libicu72 libgtk-3-0 libncurses5 \
     && rm -rf /var/lib/apt/lists/*
 
-# Renode portable: linux-portable is x86_64, linux-arm64-portable aarch64.
-RUN case "$TARGETARCH" in \
-        amd64) asset=linux-portable; sum=$RENODE_SHA256_AMD64 ;; \
-        arm64) asset=linux-arm64-portable; sum=$RENODE_SHA256_ARM64 ;; \
-        *) echo "unsupported arch $TARGETARCH" >&2; exit 1 ;; \
-    esac \
-    && curl -fsSL -o /tmp/renode.tar.gz \
-        "https://github.com/renode/renode/releases/download/v${RENODE_VERSION}/renode-${RENODE_VERSION}.${asset}.tar.gz" \
-    && echo "$sum  /tmp/renode.tar.gz" | sha256sum -c - \
-    && mkdir -p /opt/renode \
-    && tar xzf /tmp/renode.tar.gz -C /opt/renode --strip-components=1 \
-    && rm /tmp/renode.tar.gz
+# Renode (the stage above): /opt/renode/VHIL_RENODE_BUILD names the release
+# and the patch set; vhil.renode logs it when it starts Renode.
+COPY --from=renode-build /opt/renode/ /opt/renode/
 
 # Arm GNU toolchain, pinned like IFS_HIL's firmware recipes.
 RUN case "$TARGETARCH" in \
