@@ -379,6 +379,10 @@ namespace Antmicro.Renode.Peripherals.Analog
                             regs[ISR / 4] |= ISR_OVR;
                         }
                     }
+                    if(lazyWindow && DeliverInBulk(now))
+                    {
+                        continue;
+                    }
                     Deliver();
                     if(running)
                     {
@@ -391,6 +395,71 @@ namespace Antmicro.Renode.Peripherals.Analog
                 catchingUp = false;
             }
             UpdateIrq();
+        }
+
+        // Several results due at once in the lazy hand-over: what Deliver and
+        // the stream's request would do for each, done once (TakeMany). Per
+        // result, Deliver sets DR, counts it, sets EOSMP and EOC (EOS at the
+        // sequence's end) and the stream reads DR (clearing EOC; no ADC3
+        // interrupt can change, TryPlanAhead) and writes it to RAM. So after
+        // n of them: DR the last, EOSMP set, EOC clear, EOS set if a sequence
+        // ended, n more conversions, and the stream's n items written with
+        // its counters and flags as the last request leaves them. Up to the
+        // stream's next flag only; false when it doesn't apply (fewer than
+        // two due, or the stream doesn't read DR as assumed).
+        private bool DeliverInBulk(double now)
+        {
+            if(dmaStream == null || !dmaStream.ReadsFrom(DrAddress, out var size))
+            {
+                return false;
+            }
+            var cap = dmaStream.RequestsToNextFlag;
+            bulkValues.Clear();
+            var t = nextAt;
+            var r = rank;
+            var length = SequenceLength;
+            var sequenceEnded = false;
+            uint last = 0;
+            while(t <= now && bulkValues.Count < cap)
+            {
+                last = Convert(SequenceChannel(r));
+                bulkValues.Add(size == 4 ? last : last & (size == 2 ? 0xFFFFu : 0xFFu));
+                if(r < length)
+                {
+                    r++;
+                }
+                else
+                {
+                    r = 1;
+                    sequenceEnded = true;
+                }
+                t += PeriodTicks(r);
+            }
+            if(bulkValues.Count < 2)
+            {
+                return false;
+            }
+            regs[DR / 4] = last;
+            conversions += (ulong)bulkValues.Count;
+            regs[ISR / 4] = (regs[ISR / 4] | ISR_EOSMP | (sequenceEnded ? ISR_EOS : 0)) & ~ISR_EOC;
+            rank = r;
+            nextAt = t;
+            dmaStream.TakeMany(bulkValues);
+            return true;
+        }
+
+        // DR's address on the bus, where the DMA reads results.
+        private ulong DrAddress
+        {
+            get
+            {
+                if(drAddress == 0)
+                {
+                    var point = machine.SystemBus.GetRegistrationPoints(this).FirstOrDefault();
+                    drAddress = point == null ? ulong.MaxValue : point.Range.StartAddress + (ulong)DR;
+                }
+                return drAddress;
+            }
         }
 
         // One result of the regular sequence, at `rank`. After the last
@@ -930,6 +999,8 @@ namespace Antmicro.Renode.Peripherals.Analog
         private ulong eagerEvents;
         private MappedMemory guarded;
         private bool routingWatched;
+        private ulong drAddress;
+        private readonly List<uint> bulkValues = new List<uint>();
         private List<ICPUWithMappedMemory> mappedCpus;
         private List<ICPUWithMappedMemory> MappedCpus =>
             mappedCpus ?? (mappedCpus = new List<ICPUWithMappedMemory>(machine.SystemBus.GetCPUs().OfType<ICPUWithMappedMemory>()));
