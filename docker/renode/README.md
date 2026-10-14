@@ -21,14 +21,14 @@ stage (`.github/actions/setup-renode`). Why and how they were measured:
 
 | # | Study name | What it does | Upstream |
 |---|---|---|---|
-| 0001 | P2 | `BaseClockSource`: a dictionary from handler to clock-entry index beside the list (no linear delegate search per timer reload, `GetClockEntry` or `ScheduleAction`), plain fields for two `ThreadLocal<bool>` flags only touched under the source's lock, one reused list per update; `TryRemoveClockEntry` looks the entry up again after `UpdateLimits` (stock Renode can remove the wrong entry if a handler removed one below it) | Not submitted (awaiting the CLA) |
-| 0002 | P3 | `SystemBus`: a per-thread initiator stack with one reusable disposer instead of a `Tuple`, closure and wrapper per access; locked-range look-ups skipped until a range is first locked; the last context look-up cached until the peripheral collections change; tags binary-searched without a closure | Not submitted |
-| 0003 | P5 | Register framework (`PeripheralRegister`): lists only when a field changes, a reused scratch list, `Distinct` only with two or more fields, a plain loop for tag checks, unhandled-write messages built only when logged; `CpuThreadPauseGuard`'s per-access `new object()` becomes a static marker; `HookDescriptorBase.ActivateNewHooks` a plain loop; noisy `$"..."` logs (opcode hooks, scheduled actions) built only when the level lets them through | Not submitted |
+| 0001 | P2 | `BaseClockSource`: a dictionary from handler to clock-entry index beside the list (no linear delegate search per timer reload, `GetClockEntry` or `ScheduleAction`), plain fields for two `ThreadLocal<bool>` flags only touched under the source's lock, one reused list per update; `TryRemoveClockEntry` looks the entry up again after `UpdateLimits` (stock Renode can remove the wrong entry if a handler removed one below it) | Prepared as PRs 01 + 02, not submitted (CLA) |
+| 0002 | P3 | `SystemBus`: a per-thread initiator stack with one reusable disposer instead of a `Tuple`, closure and wrapper per access; locked-range look-ups skipped until a range is first locked; the last context look-up cached until the peripheral collections change; tags binary-searched without a closure | Prepared as PRs 03 + 04 + 05, not submitted |
+| 0003 | P5 | Register framework (`PeripheralRegister`): lists only when a field changes, a reused scratch list, `Distinct` only with two or more fields, a plain loop for tag checks, unhandled-write messages built only when logged; `CpuThreadPauseGuard`'s per-access `new object()` becomes a static marker; `HookDescriptorBase.ActivateNewHooks` a plain loop; noisy `$"..."` logs (opcode hooks, scheduled actions) built only when the level lets them through | Prepared as PRs 06 + 07, not submitted |
 
 The study's P1 (blocking instead of spinning at the lock-step barrier) is
 slower on 4 cores and P4 (aarch64 inline TLB) not worth it; neither is here.
 When upstream takes a patch, the next release carries it: drop it from the
-queue on that bump.
+queue on that bump (plan below, "Upstreaming").
 
 **What a run computes is unchanged**: bus timelines, GPIO edges with the
 instruction count at each write, radio payloads, each CPU's executed
@@ -36,6 +36,36 @@ instructions, PC, state and RAM are byte-identical against the release
 package (the study's fingerprint, and the identity check of this queue's
 PR). `tests/sim/test_fast_forward.py` and
 `test_two_board_runs_give_the_same_bus_timeline` hold it in CI.
+
+## Upstreaming
+
+The three patches are prepared as seven pull requests to
+renode/renode-infrastructure, rebased on upstream master, tested with
+Renode's own suites and measured there:
+[`docs/proposals/renode-upstream/`](../../docs/proposals/renode-upstream/README.md)
+(submission order, commands, the CLA). Plan for the queue:
+
+| Local patch | Replaced by upstream PRs | Drop it when |
+|---|---|---|
+| 0001 | 01 (bug fix) + 02 | the Renode release the vHIL moves to contains both |
+| 0002 | 03 + 04 + 05 | the release contains all three |
+| 0003 | 06 + 07 | the release contains both |
+
+Upstream lands a PR through Antmicro's tree (the PR shows "Closed" when its
+commit is on master), possibly rewritten, and a release follows. Until the
+vHIL bumps to a release with every PR that replaces a patch, that patch
+stays here unchanged on 1.17.0; on the bump, a patch whose PRs all landed is
+deleted instead of rebased (step 2 of "Moving to a new Renode release"),
+after checking the landed commits do what the patch did (the fingerprint
+identity check covers the result). A patch whose PRs are partly in is
+rebased down to what is still missing. If upstream rejects a PR, its part of
+the patch stays in the queue.
+
+The PRs differ from the local patches in details reviewed for upstream (a
+separate bug fix and its tests, an exact first-match index, per-thread
+look-up cache, no reused scratch list; table in the upstream README), not in
+what a run computes: the vHIL's fingerprint is byte-identical between
+upstream master and master with the seven PRs.
 
 ## Which build ran
 
