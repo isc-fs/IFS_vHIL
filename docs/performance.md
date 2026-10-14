@@ -193,7 +193,11 @@ something looks: ADC3's registers catch up as before, the DMA's
 pages the stream will write go through the bus (`SetPageAccessViaIo`) with
 hooks that catch up before a read or write lands. The result that sets the
 stream's next flag keeps its clock event, so its interrupt is taken at the
-same instruction. Lock-step runs only (`vhil.sim` and `speed.py`'s sim path
+same instruction. Results that come due together are handed over in one
+go (`DeliverInBulk`, `TakeMany`): ADC3's registers and the stream's counters
+as the last of them leaves them, and the items written to RAM at once,
+instead of a DMA request through the DMAMUX, a bus read of DR and a bus
+write per result. Lock-step runs only (`vhil.sim` and `speed.py`'s sim path
 launch Renode with `VHIL_LOCKSTEP=1`): there a monitor command lands only
 while every machine is paused; on the wall-clock bench the broker's commands
 land while the CPU runs, and the bench keeps an event per result.
