@@ -11,7 +11,7 @@ has been posted**: Raul submits them after signing the CLA.
 Which repository each change belongs in:
 
 - [renode/renode-infrastructure](https://github.com/renode/renode-infrastructure),
-  the emulator's C# core: PRs 01-09 and 11;
+  the emulator's C# core: PRs 01-08 and 11;
 - [antmicro/tlib](https://github.com/antmicro/tlib), the translation library
   (C, a submodule of renode-infrastructure at `src/Emulator/Cores/tlib`):
   PR 10, which PR 11 needs;
@@ -37,7 +37,6 @@ the new base (`git am`, same trees), so only 05's (reworked, below) is new.
 | 06 | renode-infrastructure | [`06-register-framework-allocations/`](06-register-framework-allocations/) | PeripheralRegister: Avoid allocations on every register access | 2 | +60/-30, 1 file | - |
 | 07 | renode-infrastructure | [`07-cpu-hot-path-allocations/`](07-cpu-hot-path-allocations/) | TranslationCPU, Machine: Avoid allocations and noisy log formatting on hot paths | 2 | +25/-6, 4 files | - |
 | 08 | renode-infrastructure | [`08-stm32-timer-unused-channels/`](08-stm32-timer-unused-channels/) | STM32_Timer: Leave unused compare channels alone on update events | 1 | +14/-1, 1 file | - |
-| 09 | renode-infrastructure | [`09-clock-entry-integer-arithmetic/`](09-clock-entry-integer-arithmetic/) | ClockSource: Compute clock entry updates in integers when exact | 2 | +135/-0, 2 files (43 lines are tests) | - |
 | 10 | **antmicro/tlib** | [`10-tlib-pre-opcode-hook-exclusions/`](10-tlib-pre-opcode-hook-exclusions/) | Allow excluding a pre-opcode execution hook at an address | 1 | +89/-1, 4 files | - |
 | 11 | renode-infrastructure | [`11-cpu-pre-opcode-hook-exclusions/`](11-cpu-pre-opcode-hook-exclusions/) | TranslationCPU: Allow excluding a pre-opcode execution hook at an address | 1 (+ the tlib bump) | +50/-0, 1 file | 10 (in the tlib submodule) |
 | 12 | **renode/renode** | [`12-tests-pre-opcode-hook-exclusions/`](12-tests-pre-opcode-hook-exclusions/) | tests: Test excluding a pre-opcode execution hook at an address | 1 | +53/-0, 1 file (tests) | 11 (in `src/Infrastructure`) |
@@ -76,9 +75,6 @@ What the series does, in one line each:
 - **08**: `STM32_Timer`'s update event stops re-applying unused compare
   channels (eight clock entry exchanges per period on a timer with no
   channel in use).
-- **09**: the clock source's per-entry update arithmetic in integers instead
-  of `Fraction` (GCDs) when that is exact, with tests for fractional ticks;
-  checked against the `Fraction` path on 20 million random cases.
 - **10 + 11 + 12** (new API): a pre-opcode execution hook can be excluded at
   an address (`ExcludePreOpcodeExecutionHookAt`), so a hook that only has
   work at some of the addresses its mask matches stops costing a managed
@@ -91,7 +87,7 @@ How they map to the local queue:
 | 0001 (P2, clock source) | 01 + 02 | The `TryRemoveClockEntry` re-lookup is its own bug-fix PR (01), extended to the same stale index in `GetClockEntry` (after the entry's own handler, and after a full update), with tests that fail on master. 02 keeps the first entry per handler (what the linear search found, also with duplicates), searches null handlers linearly, updates the index incrementally on removal, and has a test |
 | 0002 (P3, system bus) | 03 + 04 + 05 | The tag search mirrors `Misc.BinarySearch` exactly. The access context restores the depth from before each push (stock's "put the previous context back", also out of order) and drops the thread-static cache. The context look-up cache is per thread, never allocates on a hit, is also invalidated when a context key is (re-)added, which stock code can do without dropping its caches, and is owned by the dictionary with threads referring to it weakly (no machine kept alive by a thread that outlives it) |
 | 0003 (P5, allocations) | 06 + 07 | No reused scratch list for writes (it needed a re-entrancy flag): the changed-fields list is allocated when the first field changes; no enumerator boxing; log checks use `Logger.MinimumLogLevel <= level`, as `PL330_DMA` already does |
-| 0004 (timers) | 08 + 09 | Split in two. 09's integer path takes operands below 2^31 instead of 2^21 (so 32.768 kHz entries, q = 125,000,000, and periods up to 2^31 qualify; still no overflow on either path, and the same results: the harness checks it), has its own tests, and drops an unreachable branch |
+| 0004 (timers) | 08 | Only the timer half is submitted. The clock source's integer arithmetic (prepared as PR 09) was dropped: exact, but no measurable host-time gain |
 | 0005 + tlib/0001 (hook exclusion) | 10 + 11 + 12 | tlib keys the set by (pc, hook id) pairs; the local patch packs them as `(pc << 3) \| id`, which collides for hook ids of 8 or more (`CPU_HOOKS_MASKS_LIMIT` is 256; harmless for the vHIL, whose only pre-opcode hook is id 0). Same API names and semantics, so `VhilFastForward` uses the upstream version as is; tests added |
 
 The differences are review-driven, not behavioural: the vHIL's fingerprint
@@ -133,12 +129,11 @@ host (no other emulation running; every run checked).
   passed (the 24 new tests), 18 skipped, 0 failed; 47 Robot files 422 → 427
   passed (12's four new cases and a `ramn` flake), 5 skipped, 3 → 2 failed
   (all in `ramn.robot`, failing on master as well). 01's tests fail on
-  master; 12's four fail without 11. Each PR builds alone and passes
+  master; 12's four fail without 11. (Measured with PR 09 in the series; its 20 tests are gone with it.) Each PR builds alone and passes
   `dotnet format` (`clang-format` for 10).
 - **Identity**: the vHIL's fingerprint (bus timelines, GPIO edges with
   instruction counts, CPU state and RAM digests, 3.5 s of ecu, ams and
-  ecu-ams) is the same file on master and on all. 09's integer path matches the `Fraction` path on
-  20 million random cases.
+  ecu-ams) is the same file on master and on all.
 - **Speed, all**: the vHIL's systems 9-62 % faster (steady state 15-62 %);
   upstream's bus-performance loop 2.76x, a register read 2.24x, a register
   write 1.91x, an STM32 timer's update path 2.64x as fast; allocation per
@@ -148,8 +143,7 @@ host (no other emulation running; every run checked).
   (timer path 1.26x; 25 % of the series' timer speed) and 11 (a hook that
   excludes itself costs nothing: 0.68 s → 0.022 s on a `nop` loop, the same
   as no hook). 05 and 07 are within the noise alone (05: removing it from
-  the series costs 7-12 %). **09 shows no measurable host-time gain**,
-  alone or in the series: correct, but the weakest PR (see "Order").
+  the series costs 7-12 %).
 - **Renode's demos**: no measurable change (they allocate 600-3,800 times
   less than the loops: idle or in translated code most of the time).
 - **Found on the way**: the local tlib patch's (pc, hook) key collides for
@@ -163,13 +157,16 @@ host (no other emulation running; every run checked).
   all). A bump item for the vHIL, not for these PRs (results.md, end of
   "Speed").
 
+## Dropped
+
+- **09, ClockSource integer arithmetic.** Raul dropped it (2026-10-14). It was exact, checked against the `Fraction` path on 60 million cases, and tested, but it showed no measurable host-time gain alone, within the series, or by leave-one-out. Its preparation is in this branch's history (commit before the drop) if it's ever wanted.
+
 ## Order and dependencies
 
 01 first; 02 after it (02's commits sit on 01's: the index must be right
-after handlers run, which is 01's fix). 03 to 09 are independent of each
-other and of 01/02: each applies to master alone, and 01-09 apply together
-in any order (03, 04 and 05 touch different parts of `SystemBus.cs`; 01, 02
-and 09 different parts of `BaseClockSource.cs`). 10-12 are a chain across
+after handlers run, which is 01's fix). 03 to 08 are independent of each
+other and of 01/02: each applies to master alone, and 01-08 apply together
+in any order (03, 04 and 05 touch different parts of `SystemBus.cs`). 10-12 are a chain across
 repositories: 10 (tlib) must be merged and the tlib submodule moved before
 11 can land (11 adds `[Import]`s of 10's exports, and a missing import fails
 every CPU's creation), and 12's tests need 11 in renode's
@@ -179,13 +176,10 @@ every CPU's creation), and 12's tests need 11 in renode's
 2. 03, 07 and 08 (a few lines each)
 3. 06, 04, 05
 4. 02 (once 01 is in, or at least reviewed)
-5. 09 last, or not at all: it is exact (fuzzed against `Fraction`) and
-   tested, but its gain is below what this host resolves; submit it only if
-   the others land easily, saying so (its `PR.md` does)
-6. issue C; once Antmicro agrees on the shape: 10, then 11 (after tlib's
+5. issue C; once Antmicro agrees on the shape: 10, then 11 (after tlib's
    master has 10 and renode-infrastructure's submodule points there), then 12
 
-Opening 03-09 at once is fine too; each says it is one of a series from
+Opening 03-08 at once is fine too; each says it is one of a series from
 issue B. Upstream merges through its own tree (often rewriting: they
 simplified renode-infrastructure#217 and "modified and merged" #207; tlib#45
 landed with the issue added to the subject and the submodule bumped by
@@ -227,7 +221,7 @@ issue B (feature request template, the performance series) and issue C
 
 ### 3. Fork, apply, push, open
 
-renode-infrastructure, PRs 01-09:
+renode-infrastructure, PRs 01-08:
 
 ```sh
 gh repo fork renode/renode-infrastructure --clone=false     # once, under your account
@@ -256,7 +250,6 @@ pr 08-stm32-timer-unused-channels    $B-stm32_timer_unused_channels
 pr 06-register-framework-allocations $B-register_framework_allocations
 pr 04-sysbus-access-context          $B-sysbus_access_context
 pr 05-sysbus-context-lookup-cache    $B-sysbus_context_lookup_cache
-pr 09-clock-entry-integer-arithmetic $B-clock_entry_integer_arithmetic
 ```
 
 02 goes on 01's branch until 01 lands, and is opened against master with
@@ -336,8 +329,8 @@ nicety.
 
 Upstream's PR template also asks for a reproduction repository from
 <https://github.com/renode/renode-issue-reproduction-template>. 01 has NUnit
-tests that fail on master instead, 09 tests that pin the arithmetic, 10-12
-Robot tests; 02-09 change no behaviour, and the benchmark scripts quoted in
+tests that fail on master instead, 10-12
+Robot tests; 02-08 change no behaviour, and the benchmark scripts quoted in
 issue B are their reproduction. Each `PR.md` says so; build the repository
 only if a reviewer asks.
 
@@ -355,8 +348,7 @@ only if a reviewer asks.
   --verify-no-changes --include <files>` from renode's root (its
   `.editorconfig`) in the builder image, and `clang-format` 19.1.0 for tlib,
   check the formatting. For an optimisation, re-run the fingerprint
-  (`tooling/vhil-ab.sh fingerprint <name>`) and compare with master's; for
-  09, `tooling/clock-fuzz/run.sh`.
+  (`tooling/vhil-ab.sh fingerprint <name>`) and compare with master's.
 - A PR is done when its commit (possibly rewritten) is on upstream master,
   even if GitHub shows it "Closed". Check the landed commit against the
   local patch it replaces before dropping that patch (below).
@@ -390,8 +382,8 @@ git clone https://github.com/renode/renode $RENODE_UPSTREAM
 git -C $RENODE_UPSTREAM submodule update --init --recursive
 # Branches in the clone (each directory's patches `git am`'d on master):
 #   src/Infrastructure: up/master = origin/master; up/01-..., up/02-... (on 01),
-#     up/03-... to up/09-...; up/11-... = a commit moving the tlib submodule to
-#     tlib's up/10-..., then 11's patch; up/all = 01-09 + 11
+#     up/03-... to up/08-...; up/11-... = a commit moving the tlib submodule to
+#     tlib's up/10-..., then 11's patch; up/all = 01-08 + 11
 #   src/Infrastructure/src/Emulator/Cores/tlib: up/master, up/10-...
 #   renode itself: master, up/12-... (12's patch), up/all = up/12-...
 docker build -t renode-up-builder -f $T/builder.Dockerfile $T
@@ -400,7 +392,6 @@ $T/build.sh master up/master $(grep -v '^#' $T/tests.txt)              # build +
 RENODE_REF=up/all $T/build.sh all up/all $(grep -v '^#' $T/tests.txt)
 $T/build.sh pr03 up/03-sysbus-lookups                                   # one PR alone (no tests)
 python3 $T/summarize_tests.py <renode-up-pkgs:/master.tests> <.../all.tests>   # in a container
-$T/clock-fuzz/run.sh                                                    # 09 against Fraction
 $T/bench.sh $WORK/results/loops.jsonl 5 "master pr02 pr03 pr04 pr05 pr06 pr07 pr08 pr09 pr11 all" \
     "bus-trivial register-read register-write stm32-timer"
 python3 $T/summarize_perpr.py $WORK/results/loops.jsonl master

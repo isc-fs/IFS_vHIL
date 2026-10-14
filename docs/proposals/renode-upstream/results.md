@@ -1,3 +1,5 @@
+> **Note (2026-10-14):** PR 09 was dropped after these measurements (no measurable gain). The "all" figures below include it; by its leave-one-out result (no measurable effect) they stand for 01-08 + 11 as well.
+
 # Results: the twelve PRs on upstream master
 
 Base: renode master `9b5195e6`, renode-infrastructure master `3e4301cf` and
