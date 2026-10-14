@@ -56,13 +56,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from vhil import elf as elfsyms  # noqa: E402
 from vhil import renode as rn  # noqa: E402
-from vhil.bench import CLOCK_SOURCE, DEFAULT_RENODE, WALL_CLOCK_MIPS  # noqa: E402
+from vhil.bench import DEFAULT_RENODE, WALL_CLOCK_MIPS  # noqa: E402
 from vhil.broker import probe_commands  # noqa: E402
-from vhil.sim import PROBE_SOURCE, _free_port  # noqa: E402
+from vhil.sim import _free_port  # noqa: E402
 from vhil.system import System  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
-SAMPLER_SOURCE = REPO / "models" / "renode" / "VhilPcSampler.cs"
 
 
 def firmware_for(system: System, given: dict[str, str]) -> dict[str, Path]:
@@ -91,8 +90,7 @@ class Run:
     def __enter__(self):
         lockstep = self.path == "sim"
         script = Path(tempfile.mkdtemp(prefix="vhil-speed-")) / f"{self.system.id}.resc"
-        script.write_text(self.system.render_renode(self.firmware, lockstep=lockstep,
-                                                    sources=(PROBE_SOURCE,) if lockstep else ()))
+        script.write_text(self.system.render_renode(self.firmware, lockstep=lockstep, preloaded=True))
         port = _free_port()
         out = open(self.log, "w") if self.log else None
         self.proc = rn.launch(self.renode, port, lockstep=lockstep, **({"stdout": out} if out else {}))
@@ -114,7 +112,6 @@ class Run:
             # broker: the bench clock on every sync point, every core at the
             # bench's rate, the GPIO probes its routes need.
             m.execute(f"include {rn.file_arg(script)}")
-            m.execute(f"include {rn.file_arg(CLOCK_SOURCE)}")
             m.execute(f"emulation EnableVhilClock {rn.quote((script.parent / 'bench.clock').as_posix())}")
             for board in self.system.boards:
                 m.execute(f"mach set {rn.quote(rn.ident(board))}")
@@ -124,8 +121,6 @@ class Run:
                 m.execute(command)
             bridged = [bus for bus, spec in self.system.buses.items()
                        if spec.get("host_netdev") and spec.get("kind", "can") == "can"]
-            if bridged and not any(c.startswith("include ") and "VhilProbe" in c for c in commands):
-                m.execute(f"include {rn.file_arg(PROBE_SOURCE)}")
             for bus in bridged:
                 # In place of the bench's SocketCAN bridge (vhil/system.py,
                 # render_renode socketcan=True): a passive node that acks.
@@ -144,7 +139,6 @@ class Run:
                 print(f"[speed] {board}: {command} -> "
                       f"{m.execute(command.format(board=board)).strip()}", file=sys.stderr)
         if self.profile:
-            m.execute(f"include {rn.file_arg(SAMPLER_SOURCE)}")
             for board in self.system.boards:
                 m.execute(f"emulation CreateVhilPcSampler {rn.quote('vhil_pcs_' + rn.ident(board))} "
                           f"{rn.quote(board)} 1")

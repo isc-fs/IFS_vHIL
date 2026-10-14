@@ -76,6 +76,11 @@ native node where you can.
 A source build's .NET runtime is the SDK image's (8.0.x), not the one the
 release packaged.
 
+The package's assemblies are compiled ReadyToRun (`-p:PublishReadyToRun=true`,
+crossgen2): a Renode starts on native code instead of JIT-compiling every
+method it runs, and tiering still re-JITs the hot ones. Same IL, so what a
+run computes is unchanged ([`docs/performance.md`](../../docs/performance.md)).
+
 ## Moving to a new Renode release
 
 1. Clone the new tag with its submodules, and record them:

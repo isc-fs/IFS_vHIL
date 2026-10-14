@@ -76,7 +76,7 @@ def probe_commands(config: dict) -> list[str]:
     routes = config.get("gpio_routes", []) + config.get("adc_routes", [])
     if not routes:
         return []
-    out = [f"include {rn.file_arg(PROBE_SOURCE)}"]
+    out = []
     for machine in dict.fromkeys(r["machine"] for r in routes):
         out += [f"mach set {rn.quote(rn.ident(machine))}",
                 f"emulation CreateVhilGpioProbe {rn.quote(probe_name(machine))} "

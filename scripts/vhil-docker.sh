@@ -38,7 +38,9 @@
 # (e.g. FW_REFS="ecu=feat/x"). VHIL_DOCKER_CPUS=N limits the container to N
 # cores (--cpus, --cpuset-cpus), as a CI-class host: GitHub's runners have 4.
 # VHIL_FAST_FORWARD=0 passes through, to run Renode without the busy-wait
-# fast-forward (docs/performance.md).
+# fast-forward (docs/performance.md). The models' assembly (vhil/models.py)
+# is cached in the volume (/vhil/renode-models): compiled on the first start
+# after a model changes; VHIL_MODELS=prebuilt passes through.
 set -euo pipefail
 repo=$(cd "$(dirname "$0")/.." && pwd)
 profile=${VHIL_COLIMA_PROFILE:-vhil}
@@ -105,6 +107,7 @@ in_container() {
         -e IFS_HIL_REF="${IFS_HIL_REF:-dev}" -e FW_REFS="${FW_REFS:-}" \
         -e VHIL_SYSTEM="${VHIL_SYSTEM:-}" -e VHIL_DUT="${VHIL_DUT:-ecu}" \
         ${VHIL_FAST_FORWARD:+-e VHIL_FAST_FORWARD="$VHIL_FAST_FORWARD"} \
+        -e VHIL_MODELS_CACHE=/vhil/renode-models ${VHIL_MODELS:+-e VHIL_MODELS="$VHIL_MODELS"} \
         "$image" bash -c "$1" vhil "${@:2}"
 }
 

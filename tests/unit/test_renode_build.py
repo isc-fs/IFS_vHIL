@@ -51,6 +51,9 @@ def test_launch_writes_the_build_first_in_the_log(tmp_path, monkeypatch):
         return "proc"
 
     monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    from vhil import models
+    monkeypatch.setattr(models, "ensure", lambda renode: "X")    # no Renode to compile with
+    monkeypatch.setenv("VHIL_MODELS_CACHE", str(tmp_path / "models"))
     log = io.StringIO()
     assert rn.launch(str(exe), 40123, stdout=log) == "proc"
     assert log.getvalue() == "vhil: renode 1.17.0 + vhil patches X\n"
