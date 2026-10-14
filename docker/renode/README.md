@@ -1,14 +1,16 @@
 # Renode 1.17.0 with the vHIL's patch queue
 
-The vHIL runs Renode **1.17.0** built from source with three patches to
-renode-infrastructure that make every system 13-58 % faster and change
-nothing a run computes. They are a patch queue on the release tag, not a
-fork: `build.sh` fetches the tag, checks every input against a pin, applies
-`patches/` in order and builds the portable headless package, the release
-tarball's layout. `docker/Dockerfile`'s `renode-build` stage runs it; the
-vHIL image copies the package to `/opt/renode`, and CI exports the same
-stage (`.github/actions/setup-renode`). Why and how they were measured:
-[`docs/proposals/renode-fork-study.md`](../../docs/proposals/renode-fork-study.md) (#260).
+The vHIL runs Renode **1.17.0** built from source with four patches to
+renode-infrastructure that make every system faster (the first three
+13-58 %) and change nothing a run computes. They are a patch queue on the
+release tag, not a fork: `build.sh` fetches the tag, checks every input
+against a pin, applies `patches/` in order and builds the portable headless
+package, the release tarball's layout. `docker/Dockerfile`'s `renode-build`
+stage runs it; the vHIL image copies the package to `/opt/renode`, and CI
+exports the same stage (`.github/actions/setup-renode`). Why and how they
+were measured:
+[`docs/proposals/renode-fork-study.md`](../../docs/proposals/renode-fork-study.md)
+(#260).
 
 | File | What |
 |---|---|
@@ -24,6 +26,7 @@ stage (`.github/actions/setup-renode`). Why and how they were measured:
 | 0001 | P2 | `BaseClockSource`: a dictionary from handler to clock-entry index beside the list (no linear delegate search per timer reload, `GetClockEntry` or `ScheduleAction`), plain fields for two `ThreadLocal<bool>` flags only touched under the source's lock, one reused list per update; `TryRemoveClockEntry` looks the entry up again after `UpdateLimits` (stock Renode can remove the wrong entry if a handler removed one below it) | Not submitted (awaiting the CLA) |
 | 0002 | P3 | `SystemBus`: a per-thread initiator stack with one reusable disposer instead of a `Tuple`, closure and wrapper per access; locked-range look-ups skipped until a range is first locked; the last context look-up cached until the peripheral collections change; tags binary-searched without a closure | Not submitted |
 | 0003 | P5 | Register framework (`PeripheralRegister`): lists only when a field changes, a reused scratch list, `Distinct` only with two or more fields, a plain loop for tag checks, unhandled-write messages built only when logged; `CpuThreadPauseGuard`'s per-access `new object()` becomes a static marker; `HookDescriptorBase.ActivateNewHooks` a plain loop; noisy `$"..."` logs (opcode hooks, scheduled actions) built only when the level lets them through | Not submitted |
+| 0004 | — | `STM32_Timer`'s update event leaves a compare channel with neither its interrupt nor its output enabled, whose timer is off and counts the parent's way, as it is (it re-applied all four every period: two clock-entry exchanges and CPU return requests each); `BaseClockSource`'s update handlers compute an entry's ticks, residuum and ticks to the limit in integers when its ratio is p/q, its residuum a multiple of 1/q and every operand below 2^21, the same values in the same reduced form as the `Fraction` path (several GCDs per entry per update), which takes everything else (#260) | Not submitted |
 
 The study's P1 (blocking instead of spinning at the lock-step barrier) is
 slower on 4 cores and P4 (aarch64 inline TLB) not worth it; neither is here.
@@ -42,7 +45,7 @@ PR). `tests/sim/test_fast_forward.py` and
 `build.sh` writes `VHIL_RENODE_BUILD` beside the launcher, one line:
 
 ```
-renode 1.17.0 (ab721d88e135) + vhil patches 1.17.0-vhil.1 [0001,0002,0003] queue <sha256 of the patches, 12 hex>
+renode 1.17.0 (ab721d88e135) + vhil patches 1.17.0-vhil.2 [0001,0002,0003,0004] queue <sha256 of the patches, 12 hex>
 ```
 
 `vhil.renode.build_id()` reads it: `launch()` writes it as the first line

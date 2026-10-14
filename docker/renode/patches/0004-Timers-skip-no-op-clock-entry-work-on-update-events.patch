@@ -1,0 +1,203 @@
+From da8cbba27dceb9cf8850259c0b53c610234cf0aa Mon Sep 17 00:00:00 2001
+From: Raul Moran <moranguerra18@gmail.com>
+Date: Wed, 14 Oct 2026 09:45:26 +0200
+Subject: [PATCH] Timers: skip no-op clock-entry work on STM32 update events
+ and in BaseClockSource
+
+STM32_Timer's update event re-applied all four compare channels' timers
+(an Enabled and a Direction write, each a clock-entry exchange with a new
+ClockEntry, a Fraction reduction and a return request) every period, even
+for channels with neither their interrupt nor their output enabled, whose
+timer is off and stays off. Inside the event the auto-reload write has
+already asked the clock source for another pass and the CPU to return, so
+such a channel is now left as it is.
+
+BaseClockSource's update handlers did the entry's tick arithmetic in
+Fraction, several GCDs per enabled entry per update. For an entry whose
+ratio is p/q and whose residuum has a denominator dividing q (always,
+unless its step changed), with every operand below 2^21, they now compute
+the same values in integers: ticks x/q with x = ticks * p + residuum * q,
+the new residuum (x % q)/q reduced as Fraction reduces it, and the ticks to
+the limit by one division by p. Every Fraction involved is reduced and no
+intermediate overflows in that range, so the entry, its residuum and the
+nearest limit come out identical; anything else takes the Fraction path.
+---
+ src/Emulator/Main/Time/BaseClockSource.cs     | 109 ++++++++++++++++++
+ .../Peripherals/Timers/STM32_Timer.cs         |  17 ++-
+ 2 files changed, 125 insertions(+), 1 deletion(-)
+
+diff --git a/src/Emulator/Main/Time/BaseClockSource.cs b/src/Emulator/Main/Time/BaseClockSource.cs
+index 11196db..027e878 100644
+--- a/src/Emulator/Main/Time/BaseClockSource.cs
++++ b/src/Emulator/Main/Time/BaseClockSource.cs
+@@ -273,8 +273,96 @@ public bool HasEntries
+ 
+         public event Action<int, int> NumberOfEntriesChanged;
+ 
++        // The exact integer form of the Fraction arithmetic in the two handlers
++        // below, for an entry whose ratio is p/q and whose residuum is r/q
++        // (every residuum is, until the entry's step changes): the entry's ticks
++        // in `time` are x/q with x = ticks * p + r, whole = x / q and the new
++        // residuum (x % q)/q, reduced as Fraction reduces it. Every Fraction
++        // involved is reduced and every intermediate below 2^63 when no operand
++        // reaches 2^21, so the result is the same value in the same form,
++        // without the GCDs each Fraction operation takes. Anything else goes
++        // the Fraction way.
++        private static bool TryEntryTicks(ref ClockEntry entry, ulong emulatorTicks, out ulong whole, out ulong rest, out ulong p, out ulong q)
++        {
++            var ratio = entry.Ratio;
++            var residuum = entry.ValueResiduum;
++            p = ratio.Numerator;
++            q = ratio.Denominator;
++            whole = 0;
++            rest = 0;
++            if(p == 0 || ratio.Minus || residuum.Minus
++                || (p | q | emulatorTicks | entry.Period | entry.Value) >= FastPathOperandLimit)
++            {
++                return false;
++            }
++            var scaledResiduum = 0UL;
++            if(residuum.Numerator != 0)
++            {
++                if(q % residuum.Denominator != 0)
++                {
++                    return false;
++                }
++                scaledResiduum = residuum.Numerator * (q / residuum.Denominator);
++            }
++            var x = emulatorTicks * p + scaledResiduum;
++            whole = x / q;
++            rest = x % q;
++            return true;
++        }
++
++        private static Fraction Residuum(ulong rest, ulong q)
++        {
++            return rest == 0 ? Fraction.Zero : new Fraction(rest, q);
++        }
++
++        // Emulator ticks to the limit for d/q entry ticks left: d/q divided by
++        // the ratio p/q, rounded up (the Fraction way: its integer part, plus
++        // one when there is a fractional part and the integer part is below
++        // uint.MaxValue).
++        private static ulong WholeTicksToLimit(ulong d, ulong p)
++        {
++            var wholeTicksToLimit = d / p;
++            if(wholeTicksToLimit < uint.MaxValue && d % p != 0)
++            {
++                wholeTicksToLimit += 1;
++            }
++            return wholeTicksToLimit;
++        }
++
+         private static bool HandleDirectionDescendingPositiveRatio(ref ClockEntry entry, TimeInterval time, ref TimeInterval nearestTickIn)
+         {
++            if(TryEntryTicks(ref entry, time.Ticks, out var whole, out var rest, out var p, out var q))
++            {
++                var reached = whole >= entry.Value;
++                entry.ValueResiduum = Residuum(rest, q);
++                if(reached)
++                {
++                    entry.Value = entry.Period;
++                    entry.ValueResiduum = Fraction.Zero;
++                    entry = entry.With(enabled: entry.Enabled & (entry.WorkMode != WorkMode.OneShot));
++                    rest = 0;
++                }
++                else
++                {
++                    entry.Value -= whole;
++                }
++                // (Value - residuum) / ratio; a Value of 0 with a residuum left
++                // (not reachable from here) goes the Fraction way.
++                if(entry.Value != 0 || rest == 0)
++                {
++                    nearestTickIn = nearestTickIn.WithTicksMin(WholeTicksToLimit(entry.Value * q - rest, p));
++                    return reached;
++                }
++                var left = (entry.Value - entry.ValueResiduum) / entry.Ratio;
++                var leftTicks = left.Integer;
++                if(leftTicks < uint.MaxValue && left.Fractional.Numerator != 0)
++                {
++                    leftTicks += 1;
++                }
++                nearestTickIn = nearestTickIn.WithTicksMin(leftTicks);
++                return reached;
++            }
++
+             var emulatorTicks = time.Ticks;
+             var entryTicks = emulatorTicks * entry.Ratio + entry.ValueResiduum;
+             var isReached = entryTicks.Integer >= entry.Value;
+@@ -302,6 +390,24 @@ private static bool HandleDirectionDescendingPositiveRatio(ref ClockEntry entry,
+ 
+         private static bool HandleDirectionAscendingPositiveRatio(ref ClockEntry entry, TimeInterval time, ref TimeInterval nearestTickIn)
+         {
++            if(TryEntryTicks(ref entry, time.Ticks, out var whole, out var rest, out var p, out var q))
++            {
++                var reached = false;
++                entry.Value += whole;
++                entry.ValueResiduum = Residuum(rest, q);
++                if(entry.Value >= entry.Period)
++                {
++                    reached = true;
++                    entry.Value = 0;
++                    entry.ValueResiduum = Fraction.Zero;
++                    entry = entry.With(enabled: entry.Enabled & (entry.WorkMode != WorkMode.OneShot));
++                    rest = 0;
++                }
++                // (Period - Value - residuum) / ratio, Value < Period here.
++                nearestTickIn = nearestTickIn.WithTicksMin(WholeTicksToLimit((entry.Period - entry.Value) * q - rest, p));
++                return reached;
++            }
++
+             var emulatorTicks = time.Ticks;
+             var entryTicks = emulatorTicks * entry.Ratio + entry.ValueResiduum;
+             var isReached = false;
+@@ -518,6 +624,9 @@ private void UpdateUpdateHandler(int clockEntryIndex)
+         private readonly List<TimeInterval> unaccountedTimes;
+         private readonly object sync;
+ 
++        // Below this, a product of three operands stays below 2^63.
++        private const ulong FastPathOperandLimit = 1UL << 21;
++
+         private delegate bool UpdateHandlerDelegate(ref ClockEntry entry, TimeInterval time, ref TimeInterval nearestTickIn);
+     }
+ }
+\ No newline at end of file
+diff --git a/src/Emulator/Peripherals/Peripherals/Timers/STM32_Timer.cs b/src/Emulator/Peripherals/Peripherals/Timers/STM32_Timer.cs
+index 47a492f..8d90e23 100644
+--- a/src/Emulator/Peripherals/Peripherals/Timers/STM32_Timer.cs
++++ b/src/Emulator/Peripherals/Peripherals/Timers/STM32_Timer.cs
+@@ -66,7 +66,7 @@ public STM32_Timer(IMachine machine, ulong frequency, uint initialLimit) : base(
+                 for(var i = 0; i < NumberOfCCChannels; ++i)
+                 {
+                     var channel = channels[i];
+-                    channel.UpdateTimer();
++                    channel.UpdateTimerOnUpdateEvent();
+                     if(!channel.Timer.Enabled || !channel.IsOutputMode)
+                     {
+                         continue;
+@@ -842,6 +842,21 @@ public void SetInput(bool value)
+                 Signal = value;
+             }
+ 
++            // In the update event (LimitReached), after `Limit = autoReloadValue`
++            // has already asked the clock source for another pass and the CPU
++            // to return: a channel with neither its interrupt nor its output
++            // enabled whose timer is off and counts the parent's way would get
++            // the same clock entry back, so it is left as it is (no clock
++            // entry exchange per unused channel every period).
++            public void UpdateTimerOnUpdateEvent()
++            {
++                if(!IsInterruptOrOutputEnabled && !Timer.Enabled && Timer.Direction == parent.Direction)
++                {
++                    return;
++                }
++                UpdateTimer();
++            }
++
+             public void UpdateTimer()
+             {
+                 Timer.Enabled = parent.Enabled && IsInterruptOrOutputEnabled && parent.Value < Timer.Limit;
+-- 
+2.51.0
+
