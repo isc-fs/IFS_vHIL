@@ -38,6 +38,28 @@ def test_another_renode_build_gets_another_directory(tmp_path, monkeypatch):
     assert "compiler-cache-enabled = true" in (models.home(str(a)) / "renode" / "config").read_text()
 
 
+def test_renodes_shell_keeps_no_history(tmp_path, monkeypatch):
+    """Renode's shell rewrote its whole history file after every command, and
+    every run sharing the directory added to it (#260): the config points it
+    at /dev/null, a config from before is brought up to date, and the history
+    it let grow goes."""
+    monkeypatch.setenv("VHIL_MODELS_CACHE", str(tmp_path))
+    renode = tmp_path / "renode"
+    renode.write_text("")
+    user = models.home(str(renode)) / "renode"
+    user.mkdir(parents=True)
+    (user / "config").write_text("[general]\ncompiler-cache-enabled = true\nterminal = Termsharp\n")
+    (user / "history").write_text("emulation RunFor \"0.01\"\n" * 1000)
+    models.env(str(renode))
+    config = (user / "config").read_text()
+    assert "history-path = /dev/null" in config and "compiler-cache-enabled = true" in config
+    assert not (user / "history").exists()
+    # Renode adds its defaults to the file; that one is left as it is.
+    (user / "config").write_text(config + "terminal = Termsharp\n[monitor]\nnumber-format = Hexadecimal\n")
+    models.env(str(renode))
+    assert "[monitor]" in (user / "config").read_text()
+
+
 def test_prebuilt_mode_fails_loudly_without_the_assembly(tmp_path, monkeypatch):
     monkeypatch.setenv("VHIL_MODELS_CACHE", str(tmp_path))
     monkeypatch.setenv("VHIL_MODELS", "prebuilt")

@@ -13,6 +13,16 @@
 // PrepareShell), on 127.0.0.1 only. One client at a time: a second connects
 // once the first closes.
 //
+// The shell keeps no history file (#260): Renode's (ShellProvider) rewrites
+// every command so far, in this process and in every one before it that
+// shared the user directory (vhil/models.py: one per Renode build, so every
+// run of a CI job or a worker), to <user dir>/history after each command
+// (AntShell Shell.HandleCommand, CommandHistory.Save): a cost per command that
+// grew without bound, and a third of a bare command's. It also reads the
+// client's bytes a buffer at a time and sends its output in batches, from a
+// thread that sleeps until there is output, instead of a system call per
+// byte each way.
+//
 // A machine abort ends the client's connection, after one line naming it:
 //
 //     VHIL-ABORT machine 'ams' aborted (PC 0x40000000); see the Renode log
@@ -23,7 +33,6 @@
 // instead of a prompt that never comes.
 //
 using System;
-using System.Collections.Concurrent;
 using System.Linq;
 using System.Text;
 using System.Net;
@@ -89,7 +98,7 @@ namespace Antmicro.Renode.Testing
                 }
                 using(var io = new LoopbackIO(socket))
                 {
-                    var shell = ShellProvider.GenerateShell(monitor);
+                    var shell = GenerateShell(monitor);
                     shell.Terminal = new NavigableTerminalEmulator(new IOProvider { Backend = io }, null);
                     shell.Terminal.PlainMode = true;
                     monitor.Interaction = shell.Writer;
@@ -102,11 +111,37 @@ namespace Antmicro.Renode.Testing
             }
         }
 
+        // ShellProvider.GenerateShell's shell (Renode 1.17), without a history file.
+        private static Shell GenerateShell(RenodeMonitor monitor)
+        {
+            var settings = new ShellSettings
+            {
+                NormalPrompt = new Prompt("(monitor) ", ConsoleColor.Red),
+                BannerProvider = () => string.Concat(Enumerable.Repeat(Environment.NewLine, ShellProvider.NumberOfDummyLines))
+                    + EmulationManager.Instance.VersionString,
+                PreprocessSuggestionsInput = RenodeMonitor.SanitizePathSeparator,
+                UseBuiltinQuit = false,
+                UseBuiltinHelp = false,
+                UseBuiltinSave = false,
+                ClearScreen = false,
+                DirectorySeparator = '/',
+                HistorySavePath = null,
+            };
+            var shell = new Shell(monitor, settings);
+            var startupCommand = Environment.GetEnvironmentVariable(RenodeMonitor.StartupCommandEnv);
+            if(!string.IsNullOrEmpty(startupCommand))
+            {
+                shell.StartupCommand = startupCommand;
+            }
+            return shell;
+        }
+
         private static volatile LoopbackIO client;
     }
 
-    // A client socket as AntShell's passive I/O source: blocking reads, and
-    // writes drained by a thread so no output waits for a Flush.
+    // A client socket as AntShell's passive I/O source: blocking reads, a
+    // buffer at a time, and writes sent by a thread so no output waits for a
+    // Flush: it sleeps until there is output and sends all there is.
     public class LoopbackIO : IPassiveIOSource
     {
         public LoopbackIO(Socket socket)
@@ -145,9 +180,21 @@ namespace Antmicro.Renode.Testing
 
         public void Write(byte b)
         {
-            if(!output.IsAddingCompleted)
+            lock(gate)
             {
-                try { output.Add(b); } catch(InvalidOperationException) { }
+                if(closing)
+                {
+                    return;
+                }
+                if(pendingCount == pending.Length)
+                {
+                    Array.Resize(ref pending, pending.Length * 2);
+                }
+                pending[pendingCount++] = b;
+                if(pendingCount == 1)
+                {
+                    System.Threading.Monitor.Pulse(gate);
+                }
             }
         }
 
@@ -162,35 +209,60 @@ namespace Antmicro.Renode.Testing
 
         private bool Available()
         {
+            if(readPosition < readCount)
+            {
+                return true;
+            }
             try { return socket.Available > 0; } catch(Exception) { return false; }
         }
 
         private int ReadOne()
         {
+            if(readPosition < readCount)
+            {
+                return input[readPosition++];
+            }
             try
             {
-                return socket.Receive(one, 0, 1, SocketFlags.None) == 1 ? one[0] : -1;
+                readCount = socket.Receive(input, 0, input.Length, SocketFlags.None);
             }
             catch(Exception)
             {
-                return -1;
+                readCount = 0;
             }
+            readPosition = 0;
+            return readCount > 0 ? input[readPosition++] : -1;
         }
 
         private void Drain()
         {
-            var buffer = new byte[4096];
+            var batch = new byte[4096];
             try
             {
-                foreach(var first in output.GetConsumingEnumerable())
+                while(true)
                 {
-                    var n = 0;
-                    buffer[n++] = first;
-                    while(n < buffer.Length && output.TryTake(out var next))
+                    int n;
+                    lock(gate)
                     {
-                        buffer[n++] = next;
+                        while(pendingCount == 0 && !closing)
+                        {
+                            System.Threading.Monitor.Wait(gate);
+                        }
+                        if(pendingCount == 0)
+                        {
+                            return;   // closing, and everything written went out
+                        }
+                        // Swap the buffers: the shell writes into the empty one meanwhile.
+                        var full = pending;
+                        n = pendingCount;
+                        pending = batch.Length >= full.Length ? batch : new byte[full.Length];
+                        pendingCount = 0;
+                        batch = full;
                     }
-                    socket.Send(buffer, 0, n, SocketFlags.None);
+                    for(var sent = 0; sent < n;)
+                    {
+                        sent += socket.Send(batch, sent, n - sent, SocketFlags.None);
+                    }
                 }
             }
             catch(Exception)
@@ -205,7 +277,11 @@ namespace Antmicro.Renode.Testing
             {
                 return;
             }
-            output.CompleteAdding();
+            lock(gate)
+            {
+                closing = true;
+                System.Threading.Monitor.Pulse(gate);
+            }
             writer.Join(1000);
             try { socket.Shutdown(SocketShutdown.Both); } catch(Exception) { }
             socket.Close();
@@ -213,8 +289,13 @@ namespace Antmicro.Renode.Testing
 
         private readonly Socket socket;
         private readonly Thread writer;
-        private readonly BlockingCollection<byte> output = new BlockingCollection<byte>();
-        private readonly byte[] one = new byte[1];
+        private readonly object gate = new object();
+        private byte[] pending = new byte[4096];
+        private int pendingCount;
+        private bool closing;
+        private readonly byte[] input = new byte[4096];
+        private int readPosition;
+        private int readCount;
         private int peeked = -1;
         private int closed;
     }

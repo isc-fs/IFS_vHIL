@@ -51,7 +51,12 @@ REPO = Path(__file__).resolve().parent.parent
 MODELS_DIR = REPO / "models" / "renode"
 DEFAULT_CACHE = Path.home() / ".cache" / "vhil" / "renode-models"
 MANIFEST = "vhil-models.json"
-CONFIG = "[general]\ncompiler-cache-enabled = true\n"
+# history-path: Renode's monitor shell rewrites its whole command history to
+# this file after every command and reads it back at every start, and every
+# run sharing the directory (a CI job's, a worker's) added to it: a cost per
+# command that grew without bound (#260). The vHIL's monitor keeps no history
+# (models/renode/VhilMonitor.cs); this covers the start-up shell's.
+CONFIG = "[general]\ncompiler-cache-enabled = true\nhistory-path = /dev/null\n"
 BUILD_TIMEOUT_S = 600
 
 
@@ -106,11 +111,25 @@ def env(renode: str) -> dict[str, str]:
     user = h / "renode"
     user.mkdir(parents=True, exist_ok=True)
     config = user / "config"
-    if not config.exists():
+    if not _config_has(config, CONFIG):
         tmp = user / f".config.{os.getpid()}"
         tmp.write_text(CONFIG)
         os.replace(tmp, config)
+        # The history an earlier config let grow (CONFIG's history-path).
+        with contextlib.suppress(OSError):
+            (user / "history").unlink()
     return {"XDG_CONFIG_HOME": str(h)}
+
+
+def _config_has(config: Path, wanted: str) -> bool:
+    """Whether Renode's config file sets every setting `wanted` does (Renode
+    adds its own defaults to the file when it reads it)."""
+    try:
+        text = config.read_text()
+    except OSError:
+        return False
+    have = {line.replace(" ", "") for line in text.splitlines()}
+    return all(line.replace(" ", "") in have for line in wanted.splitlines())
 
 
 def _cache(renode: str) -> Path:
