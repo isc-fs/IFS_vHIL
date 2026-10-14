@@ -229,7 +229,7 @@ namespace Antmicro.Renode.Testing
             return $"enabled={Enabled && disabledWhy == null}"
                 + (disabledWhy != null ? $" ({disabledWhy})" : "")
                 + $"; counter loops: {counterSkips} skips, {counterInstructions} instructions"
-                + $" ({compareCalls} CMP.W hooks, {Ms(compareTicks)} ms, {excludedCompares} CMP.W excluded)"
+                + $" ({compareCalls} CMP.W hooks, {Ms(compareTicks)} ms, {excludedCompares.Count} CMP.W excluded)"
                 + $"; polling loops: {pollSkips} skips, {pollInstructions} instructions"
                 + $" ({pollAttempts} armed, {pollRefusals} refused, {accessCalls} accesses, {Ms(accessTicks)} ms)"
                 + $"; time-bounded polls: {boundedSkips} skips, {boundedInstructions} instructions ({cues} cues)"
@@ -299,7 +299,7 @@ namespace Antmicro.Renode.Testing
                 if(loop == null && excludeCompare != null && excludeCompare(compareHook, pc))
                 {
                     // The blocks holding it are invalidated at the next sync.
-                    excludedCompares++;
+                    excludedCompares.Add(pc);
                     pendingInvalidation = true;
                 }
             }
@@ -893,15 +893,24 @@ namespace Antmicro.Renode.Testing
         private void OnReset()
         {
             loops.Clear();
-            if(clearExclusions != null && excludedCompares > 0)
+            if(clearExclusions != null && excludedCompares.Count > 0)
             {
                 // Every CMP.W is looked at again after a reset, as the
-                // remembered decodes are gone: the hook back everywhere.
-                excludedCompares = 0;
+                // remembered decodes are gone: the hook back everywhere, in
+                // the blocks holding an excluded one invalidated, on the CPU's
+                // thread before it next executes (not ClearTranslationCache,
+                // which pauses the machine: from the CPU's thread it waits on
+                // itself).
+                var excluded = excludedCompares.ToArray();
+                excludedCompares.Clear();
                 tlib.InvokeOnCpuThread(() =>
                 {
                     clearExclusions();
-                    cpu.ClearTranslationCache();
+                    foreach(var pc in excluded)
+                    {
+                        cpu.OrderTranslationBlocksInvalidation(new IntPtr(unchecked((long)pc)), new IntPtr(unchecked((long)pc + 4)), true);
+                    }
+                    cpu.InvalidateTranslationBlocks();
                 });
             }
             kinds.Clear();
@@ -933,7 +942,7 @@ namespace Antmicro.Renode.Testing
         private readonly Action<ulong, ulong> compareHook;
         private readonly Func<Action<ulong, ulong>, ulong, bool> excludeCompare;
         private readonly Action clearExclusions;
-        private long excludedCompares;
+        private readonly List<ulong> excludedCompares = new List<ulong>();
         private bool pendingInvalidation;
         private readonly Dictionary<ulong, RegisterKind> kinds = new Dictionary<ulong, RegisterKind>();
         private readonly Dictionary<ulong, TimeBoundedRegister> timeBounded = new Dictionary<ulong, TimeBoundedRegister>();
