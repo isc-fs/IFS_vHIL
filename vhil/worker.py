@@ -1512,6 +1512,18 @@ def prune_main(argv) -> int:
     return 0 if result is not None and not result.skipped else 1
 
 
+def prepare_models() -> None:
+    """Compile the models' assembly from this worker's own checkout (its
+    workspace: the code its runs use) once, then require it for every run
+    (VHIL_MODELS=prebuilt, vhil/models.py): a run whose models are not those
+    sources fails instead of compiling its own."""
+    from vhil import models
+    from vhil.bench import DEFAULT_RENODE
+    sha = models.build(DEFAULT_RENODE)
+    os.environ["VHIL_MODELS"] = "prebuilt"
+    print(f"worker: models assembly {sha[:12]} ({models.home(DEFAULT_RENODE)})", file=sys.stderr, flush=True)
+
+
 def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else list(argv)
     if argv[:1] == ["prune"]:
@@ -1532,6 +1544,7 @@ def main(argv=None) -> int:
     a = p.parse_args(argv)
     # docker stop sends SIGTERM: end the current run as error, not silently.
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
+    prepare_models()
     worker = Worker(Settings.from_env(), resolver=FirmwareResolver(
         a.fw_dir, build=not a.no_build, log=lambda m: print(m, file=sys.stderr, flush=True)),
         heartbeat_s=a.heartbeat, reclaim_after_s=a.reclaim_after,

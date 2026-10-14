@@ -500,8 +500,8 @@ class Sim:
 
     def start(self) -> "Sim":
         script = Path(tempfile.mkdtemp(prefix="vhil-sim-")) / f"{self.system.id}.resc"
-        # The probes' source is compiled with the system's models, in one go.
-        script.write_text(self.system.render_renode(self.firmware, lockstep=True, sources=(PROBE_SOURCE,)))
+        # Every model, the probes' included, is loaded at launch (vhil/models.py).
+        script.write_text(self.system.render_renode(self.firmware, lockstep=True, preloaded=True))
         port = _free_port()
         log = open(self.log_path, "w") if self.log_path else subprocess.DEVNULL
         # The monitor listens on 127.0.0.1 only (vhil/renode.py, launch).
@@ -519,7 +519,6 @@ class Sim:
                       f"{rn.quote(board)}")
         m.execute(f"emulation SetGlobalAdvanceImmediately {_arg(bool(self.advance_immediately))}")
         if self.trace_blocks:
-            m.execute(f"include {rn.file_arg(TRACE_SOURCE)}")
             for board in self.system.boards:
                 m.execute(f"emulation CreateVhilTrace {rn.quote('vhil_trace_' + rn.ident(board))} "
                           f"{rn.quote(board)} {_int(self.trace_blocks)}")

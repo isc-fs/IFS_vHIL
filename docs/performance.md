@@ -98,6 +98,9 @@ perf map) and by sampling each board's PC on host time
   assembly), and the monitor connection polls every 50 ms instead of 500:
   a start (process to ready to run) went from 5.4 to 3.4 s, and the peak RSS
   from 1.66 to 0.6 GB, which is what bounds how many runs a host holds.
+  That one compilation was still 1.4 s and kept Roslyn loaded: every model
+  is now one assembly compiled once per model change (`vhil/models.py`,
+  below), and Renode's own assemblies are ReadyToRun.
 - **On an aarch64 host** (Apple silicon) tlib's TCG backend calls its softmmu
   helpers for every guest load and store (`tcg/aarch64/tcg-target.c`
   `tcg_out_qemu_st`/`_ld`: no inline TLB look-up), where x86 has a fast path.
@@ -329,6 +332,52 @@ A Renode is not kept across tests: each test starts from a real power-on
 through the CAN bootloader's window, and virtual time, flash and the bus
 models' records would carry over.
 
+### Start-up: the models' assembly and ReadyToRun
+
+Every Renode the vHIL starts (`vhil.renode.launch`) loads every C# model in
+`models/renode/` at start, in one `include`, from Renode's compiler cache
+([`vhil/models.py`](../vhil/models.py)): the cache is content-addressed
+(Renode files an assembly under the SHA-256 of its sources' bytes), so the
+assembly is compiled once per change to a model, by Renode itself, and every
+later start loads it without Roslyn. Generated scripts then include no model
+(`render_renode(preloaded=True)`); renode-test's smoke suites still compile
+theirs. Locally (`VHIL_MODELS` unset or `auto`) the first start after a model
+changes compiles it; CI (`.github/actions/setup-renode`, after the checkout)
+and the web app's workers (at start, from their workspace) build it with
+`python -m vhil.models build` and run with `VHIL_MODELS=prebuilt`, where a
+start whose sources' hash is not built fails, naming the hash and what is
+built, instead of compiling. The Docker wrapper keeps the cache in its
+volume. Renode's own assemblies are compiled ReadyToRun at the image build
+(`docker/renode/build.sh`): native code in the package, still re-JIT by
+tiering when hot. What a run computes is unchanged (the identity
+fingerprint, 10 s of ecu, ams and ecu-ams, is byte-identical to dev's).
+
+Dev → the models' assembly → plus ReadyToRun, on the patched image, the
+M-series host through Colima, `VHIL_DOCKER_CPUS=4`, interleaved, median of 3
+(2026-10-14). Start: process launch to the system loaded (`Sim.start`); to
+the app: through the bootloader's window to the app running; bare: a Renode
+with its monitor up and nothing loaded.
+
+| | Start | To the app | Peak RSS | Bare RSS |
+|---|---|---|---|---|
+| ecu | 4.02 → 2.28 → **1.93 s** | 6.58 → 4.19 → **3.89 s** | 570 → 360 → 382 MB | |
+| ams | 3.90 → 2.20 → **1.86 s** | 6.04 → 4.17 → **3.81 s** | 573 → 361 → 383 MB | |
+| ecu-ams | 4.14 → 2.40 → **2.12 s** | 7.25 → 5.46 → **5.17 s** | 621 → 406 → 427 MB | |
+| bare | 1.94 → 1.05 → **0.83 s** | | | 427 → **280** → 302 MB |
+
+ReadyToRun takes another 0.3 s off a start for 20 MB more RSS (its native
+code is mapped) and 74 MB more package; steady state is unchanged and the
+boot's host CPU is up to 10 % higher (the boot runs ReadyToRun code before
+tiering promotes it), yet runs an hour are as many or more. Scenario runs
+(`ecu-ams/car-arms-through-the-ecu`) an hour, K at once in one container,
+dev → the models' assembly → plus ReadyToRun (one 240 s window each, so ±1
+run):
+
+| Host | K=1 | K=4 | K=8 |
+|---|---|---|---|
+| 4 cores | 165 → 180 → **195** | 480 → 600 → **600** | 570 → 675 → **720** |
+| 8 cores | 180 → 180 → **195** | 615 → 720 → **720** | 960 → 1080 → **1185** |
+
 CI (`sim.yml`): 15 shards running their files one at a time (156-165
 runner-minutes, the longest 17-19 min) → 8 shards running two files at a
 time (`scripts/sim-shard.sh`, #272), split by each file's measured time
@@ -413,6 +462,5 @@ could still buy, most first:
 5. **Hooks dispatched in C#**: the CMP.W pre-opcode hook reaches managed code
    for every CMP.W executed (~4 % of the ECU's CPU thread); a native filter
    by PC would leave only the delay loops'.
-6. **Start-up**: Roslyn compiles the models in every process (1.4 s since
-   #269) and a bare Renode is 445 MB of RSS; a cached plugin assembly and
-   ReadyToRun images would cut both.
+6. **Start-up**: done (the models' assembly and ReadyToRun, above): a start
+   is 1.9-2.1 s, of which a bare Renode (its runtime, the monitor) is 0.8 s.

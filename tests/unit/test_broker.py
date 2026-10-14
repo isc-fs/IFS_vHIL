@@ -253,7 +253,7 @@ def test_the_bench_cell_source_is_reapplied_after_each_power_on():
 def test_probe_commands_watch_each_routed_output():
     from vhil.broker import probe_commands
     cmds = probe_commands(ROUTES)
-    assert cmds[0].startswith("include ") and "VhilProbe.cs" in cmds[0]
+    assert not any(c.startswith("include ") for c in cmds)   # loaded at launch (vhil/models.py)
     assert 'emulation CreateVhilGpioProbe "vhil_gpio_ams" "ams"' in cmds
     assert 'vhil_gpio_ams Watch "sysbus.gpioPortB" 4' in cmds
     assert probe_commands({"power": [], "dac_routes": []}) == []
