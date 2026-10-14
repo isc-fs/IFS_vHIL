@@ -177,6 +177,34 @@ Exact by construction:
   it stands (DWT CYCCNT, SysTick, a timer's CNT) or on a GPIO a device model
   drives.
 
+## ADC3's DMA results, handed over lazily
+
+The AMS samples its pack current through ADC3 and DMA1 at 12.5 kHz
+(`current_task.cpp`), and `Stm32H7Adc3.cs` landed each result with a clock
+event of its own: Renode ends a chunk of execution there (in WFI as well), runs
+the time framework, the action and the DMA's transfer, and schedules the next.
+That was a fifth of the AMS's host time in steady state. Between two of the
+stream's flags (half and full transfer) a result changes only what someone
+must look at to see: ADC3's registers, the stream's (NDTR, the flags) and the
+RAM it writes. So, when ADC3's own interrupts can't be raised by a result and
+the stream takes every request (`TryPlanAhead`), results are handed over when
+something looks: ADC3's registers catch up as before, the DMA's
+(`Stm32H7Dma.cs`) and the DMAMUX's catch up first (`VhilLazy.cs`), and the
+pages the stream will write go through the bus (`SetPageAccessViaIo`) with
+hooks that catch up before a read or write lands. The result that sets the
+stream's next flag keeps its clock event, so its interrupt is taken at the
+same instruction. Lock-step runs only (`vhil.sim` and `speed.py`'s sim path
+launch Renode with `VHIL_LOCKSTEP=1`): there a monitor command lands only
+while every machine is paused; on the wall-clock bench the broker's commands
+land while the CPU runs, and the bench keeps an event per result.
+
+[`tests/sim/test_lazy_dma.py`](../tests/sim/test_lazy_dma.py) runs ams and
+ecu-ams to steady state both ways (`VHIL_LAZY_DMA=0`: an event per result)
+and compares the bus timelines, GPIO edges by instruction count, ADC3's and
+DMA1's counts, executed instructions and every register and RAM byte:
+identical. Not an edge's `t_us`: the GPIO probe stamps the time the CPU last
+reported, which moves with where Renode ends a chunk (`VhilProbe.cs`).
+
 [`tests/sim/test_fast_forward.py`](../tests/sim/test_fast_forward.py) runs
 ecu, ams and ecu-ams from power-on into steady state with and without it and
 compares every bus's timeline (offer, start, end, outcome, in ns), GPIO edges

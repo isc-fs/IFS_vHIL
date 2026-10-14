@@ -123,6 +123,13 @@ def monitor_command(renode: str, port: int) -> list[str]:
 RENODE_ENV = {"DOTNET_TC_CallCountingDelayMs": "0"}
 
 
+# Set by a caller that drives Renode in lock-step (vhil.sim): monitor commands
+# only between RunFor steps, while every machine is paused. Models may then
+# defer work to whoever next looks (Stm32H7Adc3.cs's lazy DMA hand-over),
+# which a command landing while a CPU runs (the wall-clock bench) would race.
+LOCKSTEP_ENV = {"VHIL_LOCKSTEP": "1"}
+
+
 # Beside the launcher of a Renode built by docker/renode/build.sh: one line
 # naming the release, its commit and the vHIL's patch set.
 BUILD_FILE = "VHIL_RENODE_BUILD"
@@ -142,11 +149,11 @@ def build_id(renode: str) -> str:
     return comment(lines[0].strip()) if lines and lines[0].strip() else RELEASE_BUILD
 
 
-def launch(renode: str, port: int, stdout=subprocess.DEVNULL) -> subprocess.Popen:
+def launch(renode: str, port: int, stdout=subprocess.DEVNULL, lockstep: bool = False) -> subprocess.Popen:
     """Start Renode with a loopback-only monitor on `port`; connect with
     RenodeMonitor(port), which waits for it to listen. A log file given as
     `stdout` starts with the Renode build (build_id)."""
-    env = {**RENODE_ENV, **os.environ}
+    env = {**RENODE_ENV, **(LOCKSTEP_ENV if lockstep else {}), **os.environ}
     if hasattr(stdout, "write"):
         line = f"vhil: {build_id(renode)}\n"
         stdout.write(line.encode() if "b" in getattr(stdout, "mode", "") else line)

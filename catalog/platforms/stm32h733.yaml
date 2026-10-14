@@ -12,6 +12,8 @@ renode:
   repl: platforms/cpus/stm32h733.repl
   cpu: cpu
   sources:
+    # What lazily computed models and the DMA share (#260): loaded first.
+    - models/renode/VhilLazy.cs
     # The H72x/H73x ADC3 (Renode models only the H743's).
     - models/renode/Stm32H7Adc3.cs
     # DMA1 with half-transfer, errors and circular mode (Renode's tags them).
