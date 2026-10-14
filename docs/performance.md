@@ -339,6 +339,13 @@ A Renode is not kept across tests: each test starts from a real power-on
 through the CAN bootloader's window, and virtual time, flash and the bus
 models' records would carry over.
 
+CI (`sim.yml`): 15 shards running their files one at a time (156-165
+runner-minutes, the longest 17-19 min) → 8 shards running two files at a
+time (`scripts/sim-shard.sh`, #272), split by each file's measured time
+(`scripts/sim-balance.py`, `tests/sim/durations.json`, #273): 86
+runner-minutes, the longest 12.3 min. Refresh `durations.json` from the
+per-file tables in the shards' job summaries when suites change much.
+
 ### Start-up: the models' assembly and ReadyToRun
 
 Every Renode the vHIL starts (`vhil.renode.launch`) loads every C# model in
@@ -384,13 +391,6 @@ run):
 |---|---|---|---|
 | 4 cores | 165 → 180 → **195** | 480 → 600 → **600** | 570 → 675 → **720** |
 | 8 cores | 180 → 180 → **195** | 615 → 720 → **720** | 960 → 1080 → **1185** |
-
-CI (`sim.yml`): 15 shards running their files one at a time (156-165
-runner-minutes, the longest 17-19 min) → 8 shards running two files at a
-time (`scripts/sim-shard.sh`, #272), split by each file's measured time
-(`scripts/sim-balance.py`, `tests/sim/durations.json`, #273): 86
-runner-minutes, the longest 12.3 min. Refresh `durations.json` from the
-per-file tables in the shards' job summaries when suites change much.
 
 ### Several quanta at once: studied, not done (#260)
 
@@ -438,38 +438,84 @@ anything looser changes when a firmware sees the other board's frames.
 What could still cut the hand-off's cost is making each one cheaper (the
 spin, the master's loop), not skipping them.
 
+### This round, end to end (#260)
+
+Dev before it (212b827, patch set 1.17.0-vhil.1) → after it (#278 the models'
+assembly and ReadyToRun, #279 patch 0004, #281 patch 0005 and tlib/0001; #280
+the study above). On x86: one GitHub runner (4 vCPU) building both Renode
+packages from their trees and running both interleaved, median of 3
+(2026-10-14, a temporary branch since deleted):
+
+| | Start | To the app | Peak RSS |
+|---|---|---|---|
+| ecu | 7.63 → **3.50 s** | 10.25 → **5.53 s** | 590 → 460 MB |
+| ams | 7.10 → **3.32 s** | 9.31 → **5.64 s** | 590 → 461 MB |
+| ecu-ams | 7.63 → **4.01 s** | 11.34 → **7.39 s** | 584 → 511 MB |
+| bare Renode | 3.14 → **1.37 s** | | 471 → 335 MB |
+
+| System | Path | Boot 0-3 s | Steady +8 s | Steady CPU s / virtual s |
+|---|---|---|---|---|
+| ams | bench | 0.99x → **2.04x** | 3.55x → 3.61x | 0.415 → 0.397 |
+| ams | sim | 1.34x → **1.82x** | 5.92x → 5.63x | 0.256 → 0.260 |
+| ecu | bench | 1.14x → **2.25x** | 4.55x → **6.04x** | 0.405 → 0.254 |
+| ecu | sim | 1.41x → **2.27x** | 4.70x → 4.88x | 0.291 → 0.287 |
+| ecu-ams | bench | 0.74x → **1.27x** | 1.91x → 2.00x | 0.868 → 0.853 |
+| ecu-ams | sim | 0.97x → **1.12x** | 2.32x → 2.43x | 0.965 → 0.924 |
+
+On the M-series host (Colima, 4 cores, interleaved, median of 3) the same
+comparison gave boot 1.08-1.48x → 1.17-1.84x and steady state within
+-1 to +8 % (its run-to-run noise is ±10-20 %). The boot gains most: a start
+no longer runs Roslyn beside the bootloader's window, and ReadyToRun code
+runs from the first instruction. Steady state moves little: patch 0004
+takes about one point of the samples off the time framework and patch 0005
+the AMS's one point of CMP.W hooks, near the noise of a single run.
+Runs an hour, scenario `ecu-ams/car-arms-through-the-ecu` (#278): 4 cores
+480 → 600 at K=4 and 570 → 720 at K=8; 8 cores 615 → 720 and 960 → 1185.
+
 ## What is left
 
-Host `perf` of the CPU threads in lock-step steady state, on the patched
-build: the vHIL's own models are a few percent of a board's CPU thread
-(ADC3/DMA delivery on the AMS, the fast-forward's hooks on the ECU, the CAN
-bus model), the rest Renode's, tlib's and .NET's. What only a change there
-could still buy, most first:
+Host `perf` of Renode in lock-step steady state on the final build of this
+round (patch set 1.17.0-vhil.3, ReadyToRun, the models' assembly), 20 s at
+1999 Hz on the M-series host through Colima (aarch64), share of all of
+Renode's samples (its CPU threads, the master time source's loop, which runs
+on the monitor's thread, and the slave time sources):
 
-1. **The lock-step hand-off.** Each 500 us quantum a board's CPU thread waits
-   for the master and the master for it, spinning (`SemaphoreSlim.Wait` →
-   `SpinWait`, `sched_yield`): ~14 % of the ECU's CPU thread and ~16 % of the
-   master thread on one board; on ecu-ams the slave time sources spin for ~19 %
-   of all samples. A board asleep in WFI pays it every quantum, and on a host
-   running several runs the spinning takes cores from the others. The study's
-   blocking barrier (P1) was slower on 4 cores, and granting several quanta
-   at once is exact almost never (above): what is left is a cheaper
-   hand-off.
-2. **`STM32_Timer`'s update event** reprograms its four compare-channel
-   timers every period even when unused, and `BaseClockSource.Update` runs
-   `Fraction` arithmetic (a GCD) per entry per update: the 1 kHz HAL
-   timebase (TIM23/TIM6) was ~10 % of the ECU's CPU thread before P2.
-3. **Managed transitions per MMIO access**: tlib → C# reverse P/Invoke for
-   every peripheral access (the AMS's SPI/DMA, the ECU's GPIO bit-bang),
-   20-30 % of a CPU thread before P3/P5.
-4. **tlib's aarch64 softmmu** (Apple silicon): every load and store through a
-   helper; and while the fast-forward's detector is armed, a C# call with an
-   address translation per RAM access (~16 % of the ECU's boot there; x86
-   never calls it for RAM).
-5. **Hooks dispatched in C#**: done for the CMP.W hook (patch 0005 and
-   tlib/0001, above): only the delay loops' reach C#. What is left of it on
-   the ECU is the skips' own work (writing the counter back to RAM and
-   invalidating the blocks there as a bus write would, ~2 % of its CPU
-   thread).
-6. **Start-up**: done (the models' assembly and ReadyToRun, above): a start
-   is 1.9-2.1 s, of which a bare Renode (its runtime, the monitor) is 0.8 s.
+| Where | ecu | ams | ecu-ams |
+|---|---|---|---|
+| The lock-step hand-off: CoreCLR's spin (one address in `libcoreclr`) and the kernel's scheduling and `sched_yield` | 25 % | 31 % | 16 % |
+| The rest of CoreCLR (stubs, P/Invoke and reverse P/Invoke transitions, GC; no symbols) | 27 % | 17 % | 24 % |
+| Managed code (Renode's bus, peripherals and time framework, the vHIL's models, the BCL) | 19 % | 29 % | 31 % |
+| tlib's helpers and softmmu | 15 % | 10 % | 17 % |
+| Translated guest code | 5 % | 6 % | 6 % |
+| libc, the loader | 7 % | 7 % | 6 % |
+
+The vHIL's own models are under 1 % on the AMS and ecu-ams; on the ECU the
+fast-forward's counter-loop skips are ~4 % (their useful work, half of it
+writing the counter back and invalidating the blocks there as a bus write
+would). Renode's time framework and timers are 1.5-2 % in their own code (patch 0004).
+What could still buy something, most first:
+
+1. **The lock-step hand-off**, 16-31 %: each 500 us quantum a board's CPU
+   thread and the master wait for each other spinning (`SemaphoreSlim.Wait` →
+   `SpinWait`, `sched_yield`), and on a host running several runs the spin
+   takes cores from the others. P1 (a blocking barrier) was slower on 4
+   cores, and granting several quanta at once is exact almost never (above);
+   what is left is a cheaper hand-off in Renode's time framework (a short
+   spin then a futex, the master's loop doing less per quantum). Upstream
+   Renode work.
+2. **CoreCLR outside the spin**, 17-27 %: mostly the transitions between tlib
+   and C# (every MMIO access is a reverse P/Invoke into the bus, every CPU
+   register read a P/Invoke the other way) and their stubs. Profiling it
+   needs CoreCLR's symbols (the study had them); batching or avoiding
+   transitions is a Renode/tlib change (P3/P5 took the allocations out, not
+   the transitions).
+3. **tlib's aarch64 softmmu** (Apple silicon): every load and store through a
+   helper (`__ldl_mmu`, `__stl_mmu`: 2-3 % alone on the ECU); x86 has an
+   inline TLB fast path. While the fast-forward's detector is armed, a C#
+   call per RAM access as well (the boot there).
+4. **The fast-forward's skips on the ECU** (~4 %, vHIL side): a skip writes
+   the counter back and orders the block invalidation a bus write would for
+   that RAM; a page known to hold no translated code could skip it.
+5. Done this round: start-up (the models' assembly, ReadyToRun), the timer
+   update events and the clock source's arithmetic (patch 0004), the CMP.W
+   hook only at delay loops (patch 0005 and tlib/0001).
