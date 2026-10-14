@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Interleaved A/B of Renode packages built by build.sh on generic workloads
 # (bench/*.resc: upstream's bus-performance loop, the register framework's
-# read and write, three of Renode's own demos). For each repeat, each
+# read and write, an STM32 timer's update path, a pre-opcode execution hook
+# on a loop (none / every call / excluding itself: hook-exclude needs PR 11),
+# three of Renode's own demos). For each repeat, each
 # benchmark runs once on each package, in turn, in its own container limited
 # to 4 cores (--cpuset-cpus 4-7, as the vHIL study measured).
 #
@@ -16,7 +18,7 @@ set -uo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 . "$here/idle.sh"
 out=${1:?out.jsonl}; reps=${2:?repeats}; pkgs=${3:?packages}
-benches=${4:-"bus-trivial register-read register-write demo-stm32f4_discovery demo-nucleo_h753zi_hubris demo-nrf52840"}
+benches=${4:-"bus-trivial register-read register-write stm32-timer hook-none hook-always hook-exclude demo-stm32f4_discovery demo-nucleo_h753zi_hubris demo-nrf52840"}
 for r in $(seq 1 "$reps"); do
   for b in $benches; do
     for p in $pkgs; do

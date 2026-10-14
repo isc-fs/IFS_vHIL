@@ -3,7 +3,8 @@
 # Robot suites that exercise the time framework, the system bus (tags, locked and
 # per-core registrations, isolation, TrustZone state-aware look-ups), the register
 # framework (every peripheral model), CPU hooks, opcode hooks, pausing, snapshots and
-# logging, plus Cortex-M platforms and the demos.
+# logging, plus Cortex-M platforms and the demos; for PRs 08-12, every STM32 platform
+# suite (STM32_Timer is in all of them), timers and opcode hooks / execution tracing.
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj
 src/Infrastructure/src/Emulator/Peripherals/Test/PeripheralsTests/PeripheralsTests.csproj
 src/Infrastructure/src/Emulator/Extensions/MonitorTests/MonitorTests.csproj
@@ -19,6 +20,7 @@ tests/unit-tests/peripheral-hooks.robot
 tests/unit-tests/hooks.robot
 tests/unit-tests/opcodes-execution-hooks.robot
 tests/unit-tests/opcodes-counting.robot
+tests/unit-tests/execution-tracing.robot
 tests/unit-tests/instructions-counting.robot
 tests/unit-tests/timer-reconfiguration.robot
 tests/unit-tests/virtual-time.robot
@@ -43,6 +45,14 @@ tests/platforms/STM32F4_Discovery.robot
 tests/platforms/STM32F103.robot
 tests/platforms/nucleo_h753zi.robot
 tests/platforms/NXP-K64F.robot
+tests/platforms/STM32F7.robot
+tests/platforms/STM32F072b.robot
+tests/platforms/STM32L072.robot
+tests/platforms/STM32W108.robot
+tests/platforms/nucleo_f429zi.robot
+tests/platforms/nucleo_f767zi.robot
+tests/platforms/nucleo_wba52cg.robot
+tests/platforms/ramn.robot
 tests/platforms/SAME70.robot
 tests/peripherals/STM32H7_RCC.robot
 tests/peripherals/STM32_UART.robot

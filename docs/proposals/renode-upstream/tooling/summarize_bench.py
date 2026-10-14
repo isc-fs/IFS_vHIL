@@ -4,7 +4,8 @@ Speed is virtual time per host second relative to the baseline (higher is
 better); allocation is bytes per virtual second."""
 import json, statistics, sys
 from collections import defaultdict
-VIRTUAL = {"bus-trivial": 0.25, "register-read": 0.25, "register-write": 0.25,
+VIRTUAL = {"bus-trivial": 0.25, "register-read": 0.25, "register-write": 0.25, "stm32-timer": 0.25,
+           "hook-none": 0.25, "hook-always": 0.25, "hook-exclude": 0.25,
            "demo-stm32f4_discovery": 10.0, "demo-nucleo_h753zi_hubris": 60.0, "demo-nrf52840": 60.0}
 rows = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
 # Runs that ended with another container running may have shared the CPUs
