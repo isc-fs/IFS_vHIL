@@ -275,14 +275,93 @@ build with another only on the same runner (as here), not across the
 pytest in total (longest 15 min), against 148 min (18 min) for the same
 540 tests on dev's last full run (#265), on other runners.
 
+### The vHIL's models, start-up, throughput and CI (#260)
+
+Dev before #260's model changes (3ab9041) → after them (#263-#270, #272,
+#273, #275), both on the patched image above, the M-series host through
+Colima, `VHIL_DOCKER_CPUS=4`, interleaved, median of 3 (2026-10-14). The host
+was shared with other jobs, so the factor moves ±15 % between runs; the
+host CPU seconds Renode's process spends per virtual second (`speed.py`'s
+CPU column, #266) is the steadier measure. Steady state, 8 s after a 3 s boot:
+
+| System | Path | Steady factor | CPU s per virtual s |
+|---|---|---|---|
+| ams | sim | 3.19x → **4.74x** | 0.423 → **0.269** |
+| ecu | sim | 3.76x → **3.91x** | 0.336 → **0.329** |
+| ecu-ams | sim | 1.67x → **1.73x** | 1.211 → **1.107** |
+| ams | bench | 2.59x → **2.75x** | 0.528 → **0.456** |
+| ecu | bench | 2.28x → **4.23x** | 0.510 → **0.300** |
+| ecu-ams | bench | 1.16x → **1.73x** | 1.205 → **0.830** |
+
+- **AMS**: ADC3's DMA results handed over lazily (#268) and in bulk (#275)
+  in lock-step runs, its `HAL_ADC_PollForConversion` fast-forwarded (#263),
+  SPI1's and the FDCAN CCU's per-access warnings gone (#265).
+- **Bench path**: `speed.py` acknowledges the buses the bench bridges, as the
+  bench's SocketCAN bridge does (#266); before, the ECU's lone buses retried
+  every frame (the bus model's "eager wakes" of #260 were those retries).
+  The bench itself keeps ADC3's event per result.
+- **ecu-ams** gains least: its two boards meet every 500 us, and the
+  lock-step hand-off, not either board's work, is most of its time (below).
+- **Boot (0-3 s)**: unchanged within noise: the bootloaders' window was
+  already fast-forwarded; what is left is the new process's JIT and the
+  apps' own start.
+- **Starting a Renode** (#269): 5.4 → 3.4 s; peak RSS 1.66 → 0.60 GB.
+
+Throughput: scenario runs (`ecu-ams/car-arms-through-the-ecu`) an hour, K at
+once in one container, before → after. The VM has 8 GB shared with other
+jobs; before, Renodes were OOM-killed first.
+
+| Host | K=1 | K=4 | K=8 |
+|---|---|---|---|
+| 4 cores | 163 → 171 | 408 → 474 | 280, 2 OOM → **590** |
+| 8 cores | 158 → 169 | 552 → 636 | 752, 1 OOM → **919** |
+
+A run keeps one to two cores busy (its CPU threads and Renode's time
+source), so a host saturates at about one to two runs per core, and at 0.6 GB
+a run memory no longer limits it. Tried with no effect beyond noise:
+`DOTNET_EnableWriteXorExecute=0`, and (earlier, #154) `DOTNET_gcServer`,
+`DOTNET_GCgen0size`; worse: `DOTNET_TieredPGO=0`, `DOTNET_TieredCompilation=0`.
+A Renode is not kept across tests: each test starts from a real power-on
+through the CAN bootloader's window, and virtual time, flash and the bus
+models' records would carry over.
+
+CI (`sim.yml`): 15 shards running their files one at a time (156-165
+runner-minutes, the longest 17-19 min) → 8 shards running two files at a
+time (`scripts/sim-shard.sh`, #272), split by each file's measured time
+(`scripts/sim-balance.py`, `tests/sim/durations.json`, #273): 86
+runner-minutes, the longest 12.3 min. Refresh `durations.json` from the
+per-file tables in the shards' job summaries when suites change much.
+
 ## What is left
 
-The speed-ups take the boot from the bootloader's polling to the apps' own
-start, and Renode's patches above cut its cost per peripheral access and per
-timer event. What remains is executing the firmware (tlib and every model's
-work) and, for two boards, the lock-step barrier at every sync point, which
-only the quantum moves. Neither is something the vHIL's models can skip
-without changing what the firmware sees. #260 tracks
-them, with the candidates that are this repo's: ADC3's lazily computed
-conversions, which keep `HAL_ADC_PollForConversion` from being
-fast-forwarded, and the CAN bus model's wakes on a single-board bus.
+Host `perf` of the CPU threads in lock-step steady state, on the patched
+build: the vHIL's own models are a few percent of a board's CPU thread
+(ADC3/DMA delivery on the AMS, the fast-forward's hooks on the ECU, the CAN
+bus model), the rest Renode's, tlib's and .NET's. What only a change there
+could still buy, most first:
+
+1. **The lock-step hand-off.** Each 500 us quantum a board's CPU thread waits
+   for the master and the master for it, spinning (`SemaphoreSlim.Wait` →
+   `SpinWait`, `sched_yield`): ~14 % of the ECU's CPU thread and ~16 % of the
+   master thread on one board; on ecu-ams the slave time sources spin for ~19 %
+   of all samples. A board asleep in WFI pays it every quantum, and on a host
+   running several runs the spinning takes cores from the others. The study's
+   blocking barrier (P1) was slower on 4 cores; granting a board with nothing
+   to synchronise several quanta at once would not be.
+2. **`STM32_Timer`'s update event** reprograms its four compare-channel
+   timers every period even when unused, and `BaseClockSource.Update` runs
+   `Fraction` arithmetic (a GCD) per entry per update: the 1 kHz HAL
+   timebase (TIM23/TIM6) was ~10 % of the ECU's CPU thread before P2.
+3. **Managed transitions per MMIO access**: tlib → C# reverse P/Invoke for
+   every peripheral access (the AMS's SPI/DMA, the ECU's GPIO bit-bang),
+   20-30 % of a CPU thread before P3/P5.
+4. **tlib's aarch64 softmmu** (Apple silicon): every load and store through a
+   helper; and while the fast-forward's detector is armed, a C# call with an
+   address translation per RAM access (~16 % of the ECU's boot there; x86
+   never calls it for RAM).
+5. **Hooks dispatched in C#**: the CMP.W pre-opcode hook reaches managed code
+   for every CMP.W executed (~4 % of the ECU's CPU thread); a native filter
+   by PC would leave only the delay loops'.
+6. **Start-up**: Roslyn compiles the models in every process (1.4 s since
+   #269) and a bare Renode is 445 MB of RSS; a cached plugin assembly and
+   ReadyToRun images would cut both.
