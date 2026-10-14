@@ -1,0 +1,108 @@
+From 68be19edd523fa115a9473ff057bfd7283876e5e Mon Sep 17 00:00:00 2001
+From: Raul Moran <rmg@raulmoranguerra.com>
+Date: Wed, 14 Oct 2026 02:34:27 +0200
+Subject: [PATCH] SystemBus: Keep each thread's last context look-up
+
+Every bus access looks up its initiator's peripheral collection
+(ContextKeyDictionary.TryGetValue): a lock and one to three dictionary
+look-ups. A CPU thread asks for the same initiator and state every
+time, so keep each thread's last successful look-up and return it
+while the dictionary's version is unchanged. The version changes,
+under the lock, whenever a value the method returned could change:
+when the caches are dropped, which every mutation does, and when a
+context key is added.
+---
+ .../Main/Peripherals/Bus/SystemBus.cs         | 53 +++++++++++++++++++
+ 1 file changed, 53 insertions(+)
+
+diff --git a/src/Emulator/Main/Peripherals/Bus/SystemBus.cs b/src/Emulator/Main/Peripherals/Bus/SystemBus.cs
+index b7291845f..191b35ccd 100644
+--- a/src/Emulator/Main/Peripherals/Bus/SystemBus.cs
++++ b/src/Emulator/Main/Peripherals/Bus/SystemBus.cs
+@@ -2836,6 +2836,8 @@ public void AddContextKey(IPeripheral key)
+                     }
+                     cpuLocalValues[key] = new Dictionary<StateMask, TValue>();
+                     cpuAllAccess[key] = cpuLocalValues[key][StateMask.AllAccess] = defaultFactory();
++                    // cpuAllAccess may have had a value for this key, which TryGetValue could have cached
++                    InvalidateLastLookups();
+                 }
+             }
+ 
+@@ -2907,6 +2909,33 @@ public IEnumerable<StateMask> GetAllStateKeys(IPeripheral context)
+             }
+ 
+             public bool TryGetValue(IPeripheral key, ulong? initiatorState, out TValue value)
++            {
++                // Every bus access looks up its initiator's collection: each thread keeps its last
++                // successful look-up until the values change (InvalidateLastLookups).
++                var last = lastLookup;
++                if(last != null && last.Owner == this && last.Version == Volatile.Read(ref version)
++                   && ReferenceEquals(last.Key, key) && last.InitiatorState == initiatorState)
++                {
++                    value = last.Value;
++                    return true;
++                }
++                lock(locker)
++                {
++                    if(!TryGetValueInner(key, initiatorState, out value))
++                    {
++                        return false;
++                    }
++                    last = lastLookup ?? (lastLookup = new LastLookup());
++                    last.Owner = this;
++                    last.Key = key;
++                    last.InitiatorState = initiatorState;
++                    last.Value = value;
++                    last.Version = version;
++                    return true;
++                }
++            }
++
++            private bool TryGetValueInner(IPeripheral key, ulong? initiatorState, out TValue value)
+             {
+                 lock(locker)
+                 {
+@@ -2980,9 +3009,22 @@ private void DropCaches()
+                 {
+                     cpuInStateCache.Clear();
+                     globalCache.Clear();
++                    InvalidateLastLookups();
+                 }
+             }
+ 
++            private void InvalidateLastLookups()
++            {
++                lock(locker)
++                {
++                    Volatile.Write(ref version, version + 1);
++                }
++            }
++
++            // Each thread's last successful look-up (in any ContextKeyDictionary of this type: see Owner)
++            [ThreadStatic]
++            private static LastLookup lastLookup;
++
+             private readonly Dictionary<IPeripheral, Dictionary<StateMask, TValue>> cpuLocalValues = new Dictionary<IPeripheral, Dictionary<StateMask, TValue>>();
+             private readonly Dictionary<IPeripheral, Dictionary<ulong, TValue>> cpuInStateCache = new Dictionary<IPeripheral, Dictionary<ulong, TValue>>();
+             private readonly Func<TValue> defaultFactory;
+@@ -2993,6 +3035,17 @@ private void DropCaches()
+             // in a Dictionary<StateMask, TValue> was very slow)
+             private readonly Dictionary<IPeripheral, TValue> cpuAllAccess = new Dictionary<IPeripheral, TValue>();
+             private readonly TValue globalAllAccess;
++            // Changed (under the lock) whenever a value TryGetValue returned could change
++            private long version;
++
++            private class LastLookup
++            {
++                public ContextKeyDictionary<TValue, TReadOnlyValue> Owner;
++                public IPeripheral Key;
++                public ulong? InitiatorState;
++                public TValue Value;
++                public long Version;
++            }
+         }
+ 
+         private readonly struct FoundRegistrationInfo
+-- 
+2.51.0
+

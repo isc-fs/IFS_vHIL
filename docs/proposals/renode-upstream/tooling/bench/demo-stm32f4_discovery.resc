@@ -1,0 +1,5 @@
+# Renode's own demo scripts/single-node/stm32f4_discovery.resc, run headless.
+$warmup?="1"
+$measure?="10"
+include @scripts/single-node/stm32f4_discovery.resc
+include $ORIGIN/_measure.resc

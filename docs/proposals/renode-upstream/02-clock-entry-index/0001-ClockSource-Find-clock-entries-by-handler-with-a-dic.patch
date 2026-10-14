@@ -1,0 +1,299 @@
+From e22d86cf16ceb7df1b58595b413abca17aa5ff84 Mon Sep 17 00:00:00 2001
+From: Raul Moran <rmg@raulmoranguerra.com>
+Date: Wed, 14 Oct 2026 02:31:48 +0200
+Subject: [PATCH 1/2] ClockSource: Find clock entries by handler with a
+ dictionary
+
+Every timer reload or read (ExchangeClockEntryWith, GetClockEntry) and
+every Machine.ScheduleAction (AddClockEntry, then TryRemoveClockEntry
+when the action runs) looks its entry up with a linear search comparing
+delegates, allocating a closure each time. On a two-machine STM32H7
+workload this search was 5.5% of all host samples (Misc.IndexOf and
+Delegate.Equals under perf).
+
+Keep a dictionary from each handler to the index of its first entry
+beside the list, updated when entries are added, replaced or removed.
+It finds what the linear search found: the same delegate equality and
+the first entry for a handler. Entries without a handler are still
+searched linearly.
+---
+ .../Main/Tests/UnitTests/TimeTests.cs         |  34 +++++
+ src/Emulator/Main/Time/BaseClockSource.cs     | 116 ++++++++++++++----
+ 2 files changed, 127 insertions(+), 23 deletions(-)
+
+diff --git a/src/Emulator/Main/Tests/UnitTests/TimeTests.cs b/src/Emulator/Main/Tests/UnitTests/TimeTests.cs
+index 9f89bdcff..702045e3f 100644
+--- a/src/Emulator/Main/Tests/UnitTests/TimeTests.cs
++++ b/src/Emulator/Main/Tests/UnitTests/TimeTests.cs
+@@ -120,6 +120,40 @@ public void ShouldObserveShorterPeriodClockAfterAdd()
+             Assert.AreEqual(entryB.Period, 100);
+         }
+ 
++        [Test]
++        public void ShouldFindEveryEntryByHandlerAfterAddingAndRemovingEntries()
++        {
++            var clockSource = new BaseClockSource();
++            var handlers = new Action[10];
++            var calls = new int[handlers.Length];
++            for(var i = 0; i < handlers.Length; i++)
++            {
++                // Capture the index: every non-capturing lambda here would be the same cached delegate
++                var index = i;
++                handlers[i] = () => calls[index]++;
++                clockSource.AddClockEntry(new ClockEntry((ulong)(100 + i), 1, handlers[i], null, String.Empty));
++            }
++
++            Assert.IsTrue(clockSource.TryRemoveClockEntry(handlers[3]));
++            Assert.IsTrue(clockSource.TryRemoveClockEntry(handlers[0]));
++            Assert.IsTrue(clockSource.TryRemoveClockEntry(handlers[9]));
++            Assert.IsFalse(clockSource.TryRemoveClockEntry(handlers[3]));
++            clockSource.AddClockEntry(new ClockEntry(103, 1, handlers[3], null, String.Empty));
++            clockSource.ExchangeClockEntryWith(handlers[5], entry => entry.With(period: 205), null);
++
++            for(var i = 0; i < handlers.Length; i++)
++            {
++                if(i == 0 || i == 9)
++                {
++                    Assert.Throws<KeyNotFoundException>(() => clockSource.GetClockEntry(handlers[i]));
++                    continue;
++                }
++                Assert.AreEqual(i == 5 ? 205 : 100 + i, clockSource.GetClockEntry(handlers[i]).Period);
++                Assert.Throws<ArgumentException>(() => clockSource.AddClockEntry(new ClockEntry(1, 1, handlers[i], null, String.Empty)));
++            }
++            CollectionAssert.AreEqual(new[] { 1, 2, 4, 5, 6, 7, 8, 3 }.Select(i => handlers[i]), clockSource.GetAllClockEntries().Select(x => x.Handler));
++        }
++
+         [Test]
+         public void ShouldRemoveTheGivenEntryWhenAHandlerRemovesAnEntryBeforeIt()
+         {
+diff --git a/src/Emulator/Main/Time/BaseClockSource.cs b/src/Emulator/Main/Time/BaseClockSource.cs
+index 7ade717d4..bb8b0e191 100644
+--- a/src/Emulator/Main/Time/BaseClockSource.cs
++++ b/src/Emulator/Main/Time/BaseClockSource.cs
+@@ -28,6 +28,7 @@ public BaseClockSource(bool skipAdvancesHigherThanNearestLimit = false)
+             sync = new object();
+             reupdateNeeded = new ThreadLocal<bool>();
+             updateAlreadyInProgress = new ThreadLocal<bool>();
++            indexByHandler = new Dictionary<Action, int>();
+         }
+ 
+         public virtual void ExecuteInLock(Action action)
+@@ -42,15 +43,12 @@ public virtual void AddClockEntry(ClockEntry entry)
+         {
+             lock(sync)
+             {
+-                if(clockEntries.FindIndex(x => x.Handler == entry.Handler) != -1)
++                if(IndexOfHandler(entry.Handler) != -1)
+                 {
+                     throw new ArgumentException("A clock entry with given handler already exists in the clock source.");
+                 }
+                 UpdateLimits();
+-                clockEntries.Add(entry);
+-                clockEntriesUpdateHandlers.Add(null);
+-                unaccountedTimes.Add(TimeInterval.Empty);
+-                UpdateUpdateHandler(clockEntries.Count - 1);
++                AddEntry(entry);
+                 UpdateLimits();
+             }
+             NotifyNumberOfEntriesChanged(clockEntries.Count - 1, clockEntries.Count);
+@@ -62,16 +60,13 @@ public virtual void ExchangeClockEntryWith(Action handler, Func<ClockEntry, Cloc
+             lock(sync)
+             {
+                 UpdateLimits();
+-                var indexOfEntry = clockEntries.FindIndex(x => x.Handler == handler);
++                var indexOfEntry = IndexOfHandler(handler);
+ 
+                 if(indexOfEntry == -1)
+                 {
+                     if(factoryIfNonExistent != null)
+                     {
+-                        clockEntries.Add(factoryIfNonExistent());
+-                        clockEntriesUpdateHandlers.Add(null);
+-                        unaccountedTimes.Add(TimeInterval.Empty);
+-                        UpdateUpdateHandler(clockEntries.Count - 1);
++                        AddEntry(factoryIfNonExistent());
+                     }
+                     else
+                     {
+@@ -80,7 +75,7 @@ public virtual void ExchangeClockEntryWith(Action handler, Func<ClockEntry, Cloc
+                 }
+                 else
+                 {
+-                    clockEntries[indexOfEntry] = visitor(clockEntries[indexOfEntry]);
++                    SetEntry(indexOfEntry, visitor(clockEntries[indexOfEntry]));
+                     UpdateUpdateHandler(indexOfEntry);
+                 }
+                 UpdateLimits();
+@@ -91,7 +86,7 @@ public virtual ClockEntry GetClockEntry(Action handler)
+         {
+             lock(sync)
+             {
+-                var i = clockEntries.IndexOf(x => x.Handler == handler);
++                var i = IndexOfHandler(handler);
+                 if(i == -1)
+                 {
+                     throw new KeyNotFoundException();
+@@ -119,7 +114,7 @@ public virtual ClockEntry GetClockEntry(Action handler)
+                     {
+                         result.Handler();
+                         // The handler can add or remove clock entries, which moves this one in the list
+-                        i = clockEntries.FindIndex(x => x.Handler == handler);
++                        i = IndexOfHandler(handler);
+                     }
+                     if(i != -1)
+                     {
+@@ -136,7 +131,7 @@ public virtual ClockEntry GetClockEntry(Action handler)
+                     // A handler removed this entry
+                     return result;
+                 }
+-                clockEntries[i] = result;
++                SetEntry(i, result);
+ 
+                 // Clear elapsed and deposit it as unaccounted time on all other enabled clock entries
+                 var triggerFullUpdate = false;
+@@ -154,7 +149,7 @@ public virtual ClockEntry GetClockEntry(Action handler)
+                 {
+                     UpdateLimits();
+                     // unaccountedTimes cleared by Update, whose handlers can move this entry in the list
+-                    i = clockEntries.FindIndex(x => x.Handler == handler);
++                    i = IndexOfHandler(handler);
+                     if(i != -1)
+                     {
+                         result = clockEntries[i];
+@@ -170,12 +165,12 @@ public virtual void GetClockEntryInLockContext(Action handler, Action<ClockEntry
+             lock(sync)
+             {
+                 UpdateLimits();
+-                var result = clockEntries.FirstOrDefault(x => x.Handler == handler);
+-                if(result.Handler == null)
++                var i = IndexOfHandler(handler);
++                if(i == -1 || handler == null)
+                 {
+                     throw new KeyNotFoundException();
+                 }
+-                visitor(result);
++                visitor(clockEntries[i]);
+             }
+         }
+ 
+@@ -185,19 +180,17 @@ public virtual bool TryRemoveClockEntry(Action handler)
+             lock(sync)
+             {
+                 oldCount = clockEntries.Count;
+-                var indexToRemove = clockEntries.FindIndex(x => x.Handler == handler);
++                var indexToRemove = IndexOfHandler(handler);
+                 if(indexToRemove == -1)
+                 {
+                     return false;
+                 }
+                 UpdateLimits();
+                 // UpdateLimits can run handlers that add or remove clock entries, which moves this one in the list
+-                indexToRemove = clockEntries.FindIndex(x => x.Handler == handler);
++                indexToRemove = IndexOfHandler(handler);
+                 if(indexToRemove != -1)
+                 {
+-                    clockEntries.RemoveAt(indexToRemove);
+-                    clockEntriesUpdateHandlers.RemoveAt(indexToRemove);
+-                    unaccountedTimes.RemoveAt(indexToRemove);
++                    RemoveEntryAt(indexToRemove);
+                 }
+                 UpdateLimits();
+             }
+@@ -216,6 +209,7 @@ public virtual IEnumerable<ClockEntry> EjectClockEntries()
+                 clockEntries.Clear();
+                 clockEntriesUpdateHandlers.Clear();
+                 unaccountedTimes.Clear();
++                indexByHandler.Clear();
+             }
+             NotifyNumberOfEntriesChanged(oldCount, 0);
+             return result;
+@@ -457,6 +451,81 @@ private void Update(TimeInterval time, ref List<Action> alreadyRunHandlers)
+             }
+         }
+ 
++        // Clock entries are looked up by their handler on every timer reload or read (GetClockEntry,
++        // ExchangeClockEntryWith) and twice for every Machine.ScheduleAction: keep the index of each
++        // handler's first entry, which is what a linear search of clockEntries would find.
++        private int IndexOfHandler(Action handler)
++        {
++            if(handler == null)
++            {
++                // Not indexed (a dictionary key can't be null)
++                return clockEntries.FindIndex(x => x.Handler == null);
++            }
++            return indexByHandler.TryGetValue(handler, out var index) ? index : -1;
++        }
++
++        private void AddEntry(ClockEntry entry)
++        {
++            clockEntries.Add(entry);
++            clockEntriesUpdateHandlers.Add(null);
++            unaccountedTimes.Add(TimeInterval.Empty);
++            if(entry.Handler != null && !indexByHandler.ContainsKey(entry.Handler))
++            {
++                indexByHandler[entry.Handler] = clockEntries.Count - 1;
++            }
++            UpdateUpdateHandler(clockEntries.Count - 1);
++        }
++
++        private void SetEntry(int index, ClockEntry entry)
++        {
++            var oldHandler = clockEntries[index].Handler;
++            clockEntries[index] = entry;
++            if(oldHandler != entry.Handler)
++            {
++                RebuildIndex();
++            }
++        }
++
++        private void RemoveEntryAt(int index)
++        {
++            var removedHandler = clockEntries[index].Handler;
++            clockEntries.RemoveAt(index);
++            clockEntriesUpdateHandlers.RemoveAt(index);
++            unaccountedTimes.RemoveAt(index);
++            // The entries after the removed one move down by one
++            for(var i = index; i < clockEntries.Count; i++)
++            {
++                var handler = clockEntries[i].Handler;
++                if(handler != null && indexByHandler.TryGetValue(handler, out var oldIndex) && oldIndex == i + 1)
++                {
++                    indexByHandler[handler] = i;
++                }
++            }
++            if(removedHandler != null && indexByHandler.TryGetValue(removedHandler, out var removedIndex) && removedIndex == index)
++            {
++                // Point at the handler's next entry, if it has one
++                indexByHandler.Remove(removedHandler);
++                var next = clockEntries.FindIndex(index, x => x.Handler == removedHandler);
++                if(next != -1)
++                {
++                    indexByHandler[removedHandler] = next;
++                }
++            }
++        }
++
++        private void RebuildIndex()
++        {
++            indexByHandler.Clear();
++            for(var i = 0; i < clockEntries.Count; i++)
++            {
++                var handler = clockEntries[i].Handler;
++                if(handler != null && !indexByHandler.ContainsKey(handler))
++                {
++                    indexByHandler[handler] = i;
++                }
++            }
++        }
++
+         private void UpdateUpdateHandler(int clockEntryIndex)
+         {
+             if(clockEntries[clockEntryIndex].Direction == Direction.Descending)
+@@ -481,6 +550,7 @@ private void UpdateUpdateHandler(int clockEntryIndex)
+         private readonly List<Action> toNotify;
+         private readonly List<ClockEntry> clockEntries;
+         private readonly List<UpdateHandlerDelegate> clockEntriesUpdateHandlers;
++        private readonly Dictionary<Action, int> indexByHandler;
+         private readonly List<TimeInterval> unaccountedTimes;
+         private readonly object sync;
+ 

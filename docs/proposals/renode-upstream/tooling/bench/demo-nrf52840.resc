@@ -1,0 +1,5 @@
+# Renode's own demo scripts/single-node/nrf52840.resc, run headless.
+$warmup?="1"
+$measure?="60"
+include @scripts/single-node/nrf52840.resc
+include $ORIGIN/_measure.resc

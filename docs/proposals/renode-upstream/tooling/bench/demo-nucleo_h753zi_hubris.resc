@@ -1,0 +1,5 @@
+# Renode's own demo scripts/single-node/nucleo_h753zi_hubris.resc, run headless.
+$warmup?="1"
+$measure?="60"
+include @scripts/single-node/nucleo_h753zi_hubris.resc
+include $ORIGIN/_measure.resc

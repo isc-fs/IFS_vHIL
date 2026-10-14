@@ -1,0 +1,25 @@
+# renode/tests/unit-tests/bus-performance.robot's loop, run for a fixed
+# virtual time: a Cortex-M4 at 100 MIPS reading a peripheral that
+# implements IDoubleWordPeripheral directly (the bus access path alone).
+$warmup?="0.05"
+$measure?="0.25"
+i @tests/unit-tests/TrivialPeripheral.cs
+mach create
+machine LoadPlatformDescriptionFromString """
+cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m4"
+    nvic: nvic
+nvic: IRQControllers.NVIC @ sysbus 0xE000E000
+rom: Memory.MappedMemory @ sysbus 0x0
+    size: 0x40000
+trivial: Mocks.TrivialPeripheral @ sysbus 0x10000000
+"""
+cpu PerformanceInMips 100
+cpu AssembleBlock 0 """
+ldr r0, =0x10000000
+loop:
+ldr r2, [r0]
+b loop
+"""
+cpu PC 0
+include $ORIGIN/_measure.resc

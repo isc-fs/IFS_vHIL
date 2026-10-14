@@ -1,0 +1,50 @@
+From 3434f334b8e7252f11c27ba0c6e7362e1bdaab4c Mon Sep 17 00:00:00 2001
+From: Raul Moran <rmg@raulmoranguerra.com>
+Date: Wed, 14 Oct 2026 02:35:41 +0200
+Subject: [PATCH 2/2] PeripheralRegister: Build unhandled write messages only
+ when logged
+
+A write to bits no field handles builds a warning and a noisy message
+with LINQ and string formatting (TagLogger), which the logger then
+drops unless its level lets them through; the noisy one is dropped at
+the default level. Build each only when Logger.MinimumLogLevel would
+let it through, the check Logger.LogAs makes, as PL330_DMA already
+does. The output is the same.
+---
+ .../Structure/Registers/PeripheralRegister.cs | 19 +++++++++++++------
+ 1 file changed, 13 insertions(+), 6 deletions(-)
+
+diff --git a/src/Emulator/Main/Core/Structure/Registers/PeripheralRegister.cs b/src/Emulator/Main/Core/Structure/Registers/PeripheralRegister.cs
+index 558fbdf01..dcb6eecc1 100644
+--- a/src/Emulator/Main/Core/Structure/Registers/PeripheralRegister.cs
++++ b/src/Emulator/Main/Core/Structure/Registers/PeripheralRegister.cs
+@@ -744,16 +744,23 @@ private void CallFieldChangeHandlers(List<RegisterField> changedFields, ulong ol
+ 
+         private void LogUnhandledWrites(long offset, ulong unhandledWrites, ulong originalValue)
+         {
+-            var warningLogMessage = TagLogger(offset, unhandledWrites, originalValue, matchSilent: false);
+-            if(warningLogMessage != "")
++            // TagLogger builds the messages with LINQ and string formatting: only do it if they can be logged
++            if(Logger.MinimumLogLevel <= LogLevel.Warning)
+             {
+-                parent.Log(LogLevel.Warning, warningLogMessage);
++                var warningLogMessage = TagLogger(offset, unhandledWrites, originalValue, matchSilent: false);
++                if(warningLogMessage != "")
++                {
++                    parent.Log(LogLevel.Warning, warningLogMessage);
++                }
+             }
+ 
+-            var noisyLogMessage = TagLogger(offset, unhandledWrites, originalValue, matchSilent: true);
+-            if(noisyLogMessage != "")
++            if(Logger.MinimumLogLevel <= LogLevel.Noisy)
+             {
+-                parent.Log(LogLevel.Noisy, noisyLogMessage);
++                var noisyLogMessage = TagLogger(offset, unhandledWrites, originalValue, matchSilent: true);
++                if(noisyLogMessage != "")
++                {
++                    parent.Log(LogLevel.Noisy, noisyLogMessage);
++                }
+             }
+         }
+ 
