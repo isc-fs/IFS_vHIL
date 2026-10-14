@@ -505,7 +505,7 @@ class Sim:
         port = _free_port()
         log = open(self.log_path, "w") if self.log_path else subprocess.DEVNULL
         # The monitor listens on 127.0.0.1 only (vhil/renode.py, launch).
-        self._proc = rn.launch(self.renode, port, stdout=log)
+        self._proc = rn.launch(self.renode, port, stdout=log, lockstep=True)
         self._monitor = RenodeMonitor(port, timeout_s=600)
         m = self._monitor
         m.execute(f"emulation SetSeed {_int(self.seed)}")

@@ -220,7 +220,8 @@ namespace Antmicro.Renode.Testing
                 + $" ({compareCalls} CMP.W hooks, {Ms(compareTicks)} ms)"
                 + $"; polling loops: {pollSkips} skips, {pollInstructions} instructions"
                 + $" ({pollAttempts} armed, {pollRefusals} refused, {accessCalls} accesses, {Ms(accessTicks)} ms)"
-                + $"; time-bounded polls: {boundedSkips} skips, {boundedInstructions} instructions ({cues} cues)";
+                + $"; time-bounded polls: {boundedSkips} skips, {boundedInstructions} instructions ({cues} cues)"
+                + $"; core registers via {tlib.RegisterAccess}";
         }
 
         public void OnSync(TimeInterval _)
@@ -287,9 +288,9 @@ namespace Antmicro.Renode.Testing
             {
                 return;
             }
-            var i = (uint)cpu.GetRegister(loop.Rt).RawValue;
-            var address = (ulong)unchecked((uint)cpu.GetRegister(loop.Rb).RawValue + loop.Offset);
-            if(!RamAt(address, out var ram, out var ramOffset) || ram.ReadDoubleWord(ramOffset) != i)
+            var i = tlib.CoreRegister(loop.Rt);
+            var address = (ulong)unchecked(tlib.CoreRegister(loop.Rb) + loop.Offset);
+            if(!RamAt(address, out var ram, out var ramOffset) || ReadRam(ram, ramOffset) != i)
             {
                 return;   // not the loop's state as decoded: leave it alone
             }
@@ -299,8 +300,8 @@ namespace Antmicro.Renode.Testing
                 return;
             }
             var v = unchecked(i + (uint)m);
-            ram.WriteDoubleWord(ramOffset, v);
-            cpu.SetRegister(loop.Rt, v);
+            WriteRam(ram, ramOffset, address, v);
+            tlib.SetCoreRegister(loop.Rt, v);
             // The flags the last ADDS rT, #1 set (ARMv7-M ARM A7.7.3, AddWithCarry).
             var before = unchecked(v - 1);
             var nzcv = (v >> 31) << 3 | (v == 0 ? 1u : 0u) << 2
@@ -329,11 +330,52 @@ namespace Antmicro.Renode.Testing
                 lastRam = found;
                 lastRamStart = at.RegistrationPoint.Range.StartAddress;
                 lastRamEnd = at.RegistrationPoint.Range.EndAddress + 1;
+                // Where MappedMemory invalidates a write (GetRegistrationPoints:
+                // StartAddress + Offset of each); null: write through it.
+                lastRamPoints = DelayedInvalidationField == null ? null
+                    : machine.SystemBus.GetRegistrationPoints(found)
+                        .Select(p => (long)(p.Range.StartAddress + p.Offset)).ToList();
             }
             memory = lastRam;
             offset = (long)(address - lastRamStart);
             return true;
         }
+
+        // MappedMemory's ReadDoubleWord and WriteDoubleWord, without their
+        // per-access segment lock and the write's dynamic dispatch (#260):
+        // the same bytes, and the same translation-block invalidation over
+        // the word at each of the memory's registration points
+        // (MappedMemory.InvalidateMemoryFragment).
+        private unsafe uint ReadRam(MappedMemory memory, long offset)
+        {
+            var segment = memory.GetSegment((int)(offset / memory.SegmentSize));
+            var local = offset % memory.SegmentSize;
+            if(segment == IntPtr.Zero || local > memory.SegmentSize - 4)
+            {
+                return memory.ReadDoubleWord(offset);
+            }
+            return *(uint*)((byte*)segment + local);
+        }
+
+        private unsafe void WriteRam(MappedMemory memory, long offset, ulong address, uint value)
+        {
+            var segment = memory.GetSegment((int)(offset / memory.SegmentSize));
+            var local = offset % memory.SegmentSize;
+            if(segment == IntPtr.Zero || local > memory.SegmentSize - 4 || lastRamPoints == null)
+            {
+                memory.WriteDoubleWord(offset, value);
+                return;
+            }
+            *(uint*)((byte*)segment + local) = value;
+            var delayed = (bool)DelayedInvalidationField.GetValue(memory);
+            foreach(var point in lastRamPoints)
+            {
+                cpu.OrderTranslationBlocksInvalidation(new IntPtr(point + offset), new IntPtr(point + offset + 4), delayed);
+            }
+        }
+
+        private static readonly FieldInfo DelayedInvalidationField =
+            typeof(MappedMemory).GetField("delayedInvalidation", BindingFlags.Instance | BindingFlags.NonPublic);
 
         private void ApplyCompareHook()
         {
@@ -868,6 +910,7 @@ namespace Antmicro.Renode.Testing
         private List<MappedMemory> memoriesCache;
 
         private MappedMemory lastRam;
+        private List<long> lastRamPoints;
         private ulong lastRamStart;
         private ulong lastRamEnd;
         private bool enabled = true;
@@ -1274,8 +1317,58 @@ namespace Antmicro.Renode.Testing
 
         public bool Calibrated => totalOffset >= 0;
 
+        // The CPUState pointer, which tlib allocates once per CPU.
+        private IntPtr State => state != IntPtr.Zero ? state : (state = exportState());
+
+        // R0-R12 and SP: tlib keeps them in CPUState.regs[16], its first field
+        // (tlib arch/arm/cpu.h), which GetRegister and SetRegister read and
+        // write for these. Read from there once the layout is confirmed
+        // against GetRegister (RegistersConfirmed), else through it.
+        public uint CoreRegister(int n)
+        {
+            if(registersInState == 0)
+            {
+                ConfirmRegisters();
+            }
+            return registersInState > 0 ? (uint)Marshal.ReadInt32(State, 4 * n) : (uint)cpu.GetRegister(n).RawValue;
+        }
+
+        public string RegisterAccess => registersInState > 0 ? "CPUState" : registersInState < 0 ? "GetRegister" : "not used yet";
+
+        public void SetCoreRegister(int n, uint value)
+        {
+            if(registersInState > 0)
+            {
+                Marshal.WriteInt32(State, 4 * n, unchecked((int)value));
+            }
+            else
+            {
+                cpu.SetRegister(n, value);
+            }
+        }
+
+        // Confirmed, once, when R0-R12 and SP all equal GetRegister and a
+        // value written to R12 with SetRegister (then put back) shows up at
+        // its place; refuted otherwise.
+        private void ConfirmRegisters()
+        {
+            for(var n = 0; n <= 13; n++)
+            {
+                if((uint)Marshal.ReadInt32(State, 4 * n) != (uint)cpu.GetRegister(n).RawValue)
+                {
+                    registersInState = -1;
+                    return;
+                }
+            }
+            var r12 = (uint)cpu.GetRegister(12).RawValue;
+            cpu.SetRegister(12, r12 ^ 0x5A5AA5A5u);
+            var seen = (uint)Marshal.ReadInt32(State, 4 * 12);
+            cpu.SetRegister(12, r12);
+            registersInState = seen == (r12 ^ 0x5A5AA5A5u) && (uint)Marshal.ReadInt32(State, 4 * 12) == r12 ? 1 : -1;
+        }
+
         // The CPUState before CPU_COMMON (its first field is the limit).
-        public unsafe ReadOnlySpan<byte> Architectural => new ReadOnlySpan<byte>((void*)exportState(), limitOffset);
+        public unsafe ReadOnlySpan<byte> Architectural => new ReadOnlySpan<byte>((void*)State, limitOffset);
 
         public MemoryAccessHook MemoryAccessHook => (MemoryAccessHook)hookField.GetValue(cpu);
 
@@ -1293,7 +1386,7 @@ namespace Antmicro.Renode.Testing
         public bool FindMemoryAccessFlag(out string why)
         {
             var size = stateSize();
-            var state = exportState();
+            var state = State;
             var before = new byte[size];
             var after = new byte[size];
             Marshal.Copy(state, before, 0, size);
@@ -1313,7 +1406,7 @@ namespace Antmicro.Renode.Testing
 
         public void SetMemoryAccessFlag(bool on)
         {
-            Marshal.WriteInt32(exportState(), flagOffset, on ? 1 : 0);
+            Marshal.WriteInt32(State, flagOffset, on ? 1 : 0);
         }
 
         // The counters, found on the CPU thread inside a block (where the
@@ -1331,7 +1424,7 @@ namespace Antmicro.Renode.Testing
                 return false;   // too common a value to search for yet
             }
             var size = stateSize();
-            var state = exportState();
+            var state = State;
             var bytes = new byte[size];
             Marshal.Copy(state, bytes, 0, size);
             var found = new List<(int limit, int total)>();
@@ -1377,7 +1470,7 @@ namespace Antmicro.Renode.Testing
         // Instructions this chunk can still take after the current block.
         public ulong Budget()
         {
-            var state = exportState();
+            var state = State;
             var limit = (uint)Marshal.ReadInt32(state, limitOffset);
             var value = (uint)Marshal.ReadInt32(state, limitOffset + 4);
             var declaration = (uint)Marshal.ReadInt32(state, limitOffset + 8);
@@ -1387,7 +1480,7 @@ namespace Antmicro.Renode.Testing
         // Count `instructions` as executed now; never more than Budget().
         public void Charge(ulong instructions)
         {
-            var state = exportState();
+            var state = State;
             var value = (uint)Marshal.ReadInt32(state, limitOffset + 4);
             Marshal.WriteInt32(state, limitOffset + 4, (int)(value + (uint)instructions));
             var total = (ulong)Marshal.ReadInt64(state, totalOffset);
@@ -1432,6 +1525,8 @@ namespace Antmicro.Renode.Testing
         private readonly Action<int> memoryAccessEventEnabled;
         private readonly FieldInfo hookField;
         private readonly MethodInfo invoke;
+        private IntPtr state;
+        private int registersInState;
         private int flagOffset = -1;
         private int limitOffset = -1;
         private int totalOffset = -1;

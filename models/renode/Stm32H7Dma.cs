@@ -66,6 +66,7 @@ namespace Antmicro.Renode.Peripherals.DMA
         public STM32H7_DMA(IMachine machine)
         {
             sysbus = machine.GetSystemBus(this);
+            lazy = VhilLazy.For(machine);
             streams = Enumerable.Range(0, Streams).Select(i => new Stream(this, i)).ToArray();
             Connections = Enumerable.Range(0, Streams).ToDictionary(i => i, i => (IGPIO)streams[i].IRQ);
             Reset();
@@ -75,10 +76,15 @@ namespace Antmicro.Renode.Peripherals.DMA
         public IReadOnlyDictionary<int, IGPIO> Connections { get; }
 
         // Data items moved since reset, per stream: lets a test see a transfer.
-        public ulong Transfers(int stream) => streams[stream].Moved;
+        public ulong Transfers(int stream)
+        {
+            lazy.CatchUp();
+            return streams[stream].Moved;
+        }
 
         public void Reset()
         {
+            lazy?.CatchUp();   // what a lazy requester owed before the reset (VhilLazy.cs)
             foreach(var s in streams)
             {
                 s.Reset();
@@ -100,8 +106,12 @@ namespace Antmicro.Renode.Peripherals.DMA
             }
         }
 
+        // A lazy requester (ADC3, VhilLazy.cs) hands over what it owes before
+        // any register shows the streams' state, and plans again after any
+        // write.
         public uint ReadDoubleWord(long offset)
         {
+            lazy.CatchUp();
             switch(offset)
             {
             case LISR:
@@ -121,6 +131,13 @@ namespace Antmicro.Renode.Peripherals.DMA
         }
 
         public void WriteDoubleWord(long offset, uint value)
+        {
+            lazy.CatchUp();
+            WriteRegister(offset, value);
+            lazy.Replan();
+        }
+
+        private void WriteRegister(long offset, uint value)
         {
             switch(offset)
             {
@@ -221,7 +238,7 @@ namespace Antmicro.Renode.Peripherals.DMA
             }
         }
 
-        private class Stream
+        private class Stream : IVhilDmaStream
         {
             public Stream(STM32H7_DMA parent, int id)
             {
@@ -232,6 +249,99 @@ namespace Antmicro.Renode.Peripherals.DMA
             public GPIO IRQ { get; } = new GPIO();
             public ulong Moved { get; private set; }
             public uint FlagBits => flags;
+
+            // -- IVhilDmaStream (VhilLazy.cs) ---------------------------------
+
+            public bool TakesRequests => (cr & CR_EN) != 0 && Direction == DirP2M && ndtr > 0;
+
+            // Requests until HTIF (half the pass moved) or TCIF (NDTR 0).
+            public uint RequestsToNextFlag
+            {
+                get
+                {
+                    if(reload >= 2 && done < reload / 2)
+                    {
+                        return reload / 2 - done;
+                    }
+                    return Math.Max(1, ndtr);
+                }
+            }
+
+            public bool ReadsFrom(ulong source, out int size)
+            {
+                size = 1 << (int)((cr >> 11) & 0x3);   // PSIZE
+                return TakesRequests && size <= 4 && (cr & CR_PINC) == 0 && par == source
+                    && (cr & CR_PFCTRL) == 0;
+            }
+
+            // MoveOne for each value, with the peripheral read already done
+            // by the requester and the memory written in one go.
+            public void TakeMany(IReadOnlyList<uint> values)
+            {
+                var n = (uint)values.Count;
+                var size = 1 << (int)((cr >> 11) & 0x3);
+                var mStep = (cr & CR_MINC) != 0 ? (uint)size : 0;
+                var memory = (ulong)(((cr & CR_DBM) != 0 && (cr & CR_CT) != 0) ? m1ar : m0ar);
+                var start = memory + mOffset;
+                var length = mStep * (n - 1) + (uint)size;
+                if(n == 0 || n > ndtr || n > RequestsToNextFlag || !parent.Reachable(start, (int)length)
+                   || !parent.Reachable(start + length - (ulong)size, size))
+                {
+                    foreach(var v in values)
+                    {
+                        parent.lazy.LastRequest = this;
+                        MoveOneValue(v);
+                    }
+                    return;
+                }
+                var bytes = new byte[length];
+                for(var i = 0; i < n; i++)
+                {
+                    var v = values[i];
+                    var at = i * (int)mStep;
+                    for(var b = 0; b < size; b++)
+                    {
+                        bytes[at + b] = (byte)(v >> (8 * b));
+                    }
+                }
+                parent.sysbus.WriteBytes(bytes, start, true);
+                mOffset += mStep * n;
+                ndtr -= n;
+                var halfBefore = done < reload / 2;
+                done += n;
+                Moved += n;
+                if(reload >= 2 && halfBefore && done >= reload / 2)
+                {
+                    flags |= F_HTIF;
+                }
+                if(ndtr == 0)
+                {
+                    EndOfPass();
+                }
+                UpdateIrq();
+                parent.lazy.LastRequest = this;
+            }
+
+            // Only when every one of them reaches its source and destination
+            // (an unreachable one fails the stream: TEIF, an interrupt).
+            public bool TryNextWrites(uint requests, out ulong start, out ulong length)
+            {
+                start = length = 0;
+                var size = 1 << (int)((cr >> 11) & 0x3);   // PSIZE
+                if(size > 4 || requests == 0 || requests > ndtr)
+                {
+                    return false;
+                }
+                var memory = (ulong)(((cr & CR_DBM) != 0 && (cr & CR_CT) != 0) ? m1ar : m0ar);
+                var mStep = (cr & CR_MINC) != 0 ? (ulong)size : 0;
+                var pStep = (cr & CR_PINC) != 0 ? ((cr & CR_PINCOS) != 0 ? 4ul : (ulong)size) : 0;
+                start = memory + mOffset;
+                length = mStep * (requests - 1) + (ulong)size;
+                var pFirst = (ulong)par + pOffset;
+                var pLength = pStep * (requests - 1) + (ulong)size;
+                return parent.Reachable(start, (int)length) && parent.Reachable(start + length - (ulong)size, size)
+                    && parent.Reachable(pFirst, (int)pLength) && parent.Reachable(pFirst + pLength - (ulong)size, size);
+            }
 
             public void Reset()
             {
@@ -324,6 +434,7 @@ namespace Antmicro.Renode.Peripherals.DMA
                 // request at once (the I2C's next received byte): serve it
                 // after this one, not inside it.
                 pending++;
+                parent.lazy.LastRequest = this;
                 if(busy)
                 {
                     return;
@@ -445,24 +556,65 @@ namespace Antmicro.Renode.Peripherals.DMA
                 }
                 if(ndtr == 0)
                 {
-                    flags |= F_TCIF;
-                    if((cr & (CR_CIRC | CR_DBM)) != 0)
-                    {
-                        ndtr = reload;
-                        done = 0;
-                        pOffset = 0;
-                        mOffset = 0;
-                        if((cr & CR_DBM) != 0)
-                        {
-                            cr ^= CR_CT;
-                        }
-                    }
-                    else
-                    {
-                        cr &= ~CR_EN;   // normal mode: the stream stops itself
-                    }
+                    EndOfPass();
                 }
                 UpdateIrq();
+            }
+
+            // A P2M request whose peripheral read the requester did (TakeMany's
+            // fallback): MoveOne with `value` for the read.
+            private void MoveOneValue(uint value)
+            {
+                if((cr & CR_EN) == 0 || ndtr == 0)
+                {
+                    return;
+                }
+                var size = 1 << (int)((cr >> 11) & 0x3);
+                var memory = (ulong)(((cr & CR_DBM) != 0 && (cr & CR_CT) != 0) ? m1ar : m0ar);
+                var dst = memory + mOffset;
+                if(!parent.Reachable(dst, size))
+                {
+                    Fail();
+                    return;
+                }
+                if((cr & CR_MINC) != 0)
+                {
+                    mOffset += (uint)size;
+                }
+                ndtr--;
+                done++;
+                parent.Write(dst, value, size);
+                Moved++;
+                if(reload >= 2 && done == reload / 2)
+                {
+                    flags |= F_HTIF;
+                }
+                if(ndtr == 0)
+                {
+                    EndOfPass();
+                }
+                UpdateIrq();
+            }
+
+            // NDTR reached 0: TCIF, then reload (circular, double-buffer) or stop.
+            private void EndOfPass()
+            {
+                flags |= F_TCIF;
+                if((cr & (CR_CIRC | CR_DBM)) != 0)
+                {
+                    ndtr = reload;
+                    done = 0;
+                    pOffset = 0;
+                    mOffset = 0;
+                    if((cr & CR_DBM) != 0)
+                    {
+                        cr ^= CR_CT;
+                    }
+                }
+                else
+                {
+                    cr &= ~CR_EN;   // normal mode: the stream stops itself
+                }
             }
 
             private void Fail()
@@ -547,6 +699,7 @@ namespace Antmicro.Renode.Peripherals.DMA
         private const ulong DtcmEnd = 0x20020000;
 
         private readonly IBusController sysbus;
+        private readonly VhilLazy lazy;
         private readonly Stream[] streams;
         private readonly HashSet<string> warned = new HashSet<string>();
     }
