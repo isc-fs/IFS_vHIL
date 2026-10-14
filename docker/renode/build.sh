@@ -57,8 +57,12 @@ tree=$(git -C src/Infrastructure write-tree)
 [ "$tree" = "$RENODE_INFRA_PATCHED_TREE" ] \
     || fail "patched renode-infrastructure is tree $tree, pins.env says $RENODE_INFRA_PATCHED_TREE"
 
-# Portable headless package (no GUI: the vHIL runs Renode --disable-gui).
-./build.sh -t --no-gui --skip-fetch
+# Portable headless package (no GUI: the vHIL runs Renode --disable-gui),
+# its assemblies compiled ReadyToRun (crossgen2): native code in the package,
+# so a start JITs only what tiering later promotes, not every method it runs
+# (docs/performance.md). Same IL and the same tiered re-JIT of hot methods:
+# what a run computes is unchanged.
+./build.sh -t --no-gui --skip-fetch -- p:PublishReadyToRun=true
 pkg=$(ls output/packages/renode-*-portable-headless.tar.gz)
 [ "$(echo "$pkg" | wc -l)" = 1 ] || fail "expected one package, got: $pkg"
 
