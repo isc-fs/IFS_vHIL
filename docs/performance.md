@@ -13,9 +13,19 @@ take longer, not fail. The wall-clock bench paces itself to 1x at most
 ```sh
 VHIL_DOCKER_CPUS=4 scripts/vhil-docker.sh speed --baseline   # results/speed/speed.json
 python scripts/speed.py ecu=ECU08.elf ams=AMS.elf bootloader=CAN_BL.elf \
-    [--systems ams ecu ecu-ams] [--paths bench sim] [--boot 3] [--steady 5] \
-    [--baseline] [--repeat N] [--profile DIR] [--setup "vhil_ff_{board} Enabled false"]
+    [--systems ams ecu ecu-ams ecu-ams-ecu] [--paths bench sim] [--boot 3] [--steady 5] \
+    [--baseline] [--repeat N] [--threads] [--profile DIR] [--setup "vhil_ff_{board} Enabled false"]
 ```
+
+`ecu-ams-ecu` is a benchmark, not a car system
+([`scripts/speed-systems/`](../scripts/speed-systems/ecu-ams-ecu.yaml), named
+in `speed.py`'s `BENCH_ONLY`, so the catalogue, the editor and the scenarios
+never see it): ecu-ams plus a third MainLite running the ECU's application on
+buses of its own, to measure how the cost grows from one board to two to
+three before the uDV has a firmware. `--threads` splits each phase's host CPU
+by thread: each board's CPU thread, the master time source's loop (on the
+monitor's thread), the slave time sources of a lock-step multi-board run, and
+the JIT.
 
 [`scripts/speed.py`](../scripts/speed.py) boots each system from power-on
 and measures two phases: **boot**, the first 3 s of virtual time (the

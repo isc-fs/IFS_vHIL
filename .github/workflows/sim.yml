@@ -130,7 +130,8 @@ jobs:
           path: sim-logs/
           if-no-files-found: ignore
 
-  # The bench's real-time factor on this runner (#154): every system, the
+  # The bench's real-time factor on this runner (#154): every system (and
+  # ecu-ams-ecu, the three-board benchmark, scripts/speed-systems/), the
   # wall-clock bench's emulation and lock-step vhil.sim, boot and steady
   # state, and the same again as before #154's speed-ups (--baseline), so
   # one run gives both on the same host. Recorded in the job summary and as
@@ -182,6 +183,7 @@ jobs:
         run: |
           nproc
           python scripts/speed.py "ecu=$ECU_ELF" "ams=$AMS_ELF" "bootloader=$BL_ELF" \
+            --systems ams ecu ecu-ams ecu-ams-ecu --threads \
             --baseline --json speed/speed.json --log-dir speed/logs \
             | tee -a "$GITHUB_STEP_SUMMARY"
 
