@@ -45,6 +45,8 @@ touch .renode_libs_fetched
 
 # The patch queue, in order. Each must apply cleanly; the result must be the
 # tree pinned, so a patch edited without updating pins.env fails here too.
+# patches/*.patch go to renode-infrastructure, patches/tlib/*.patch to tlib
+# (its submodule, a repository of its own).
 patches=("$here"/patches/*.patch)
 [ -e "${patches[0]}" ] || fail "no patches in $here/patches"
 for p in "${patches[@]}"; do
@@ -56,6 +58,19 @@ git -C src/Infrastructure add -A
 tree=$(git -C src/Infrastructure write-tree)
 [ "$tree" = "$RENODE_INFRA_PATCHED_TREE" ] \
     || fail "patched renode-infrastructure is tree $tree, pins.env says $RENODE_INFRA_PATCHED_TREE"
+tlib=src/Infrastructure/src/Emulator/Cores/tlib
+tlib_patches=()
+for p in "$here"/patches/tlib/*.patch; do
+    [ -e "$p" ] || continue
+    tlib_patches+=("$p")
+    git -C "$tlib" apply --check "$p" || fail "tlib/$(basename "$p") does not apply to tlib"
+    git -C "$tlib" apply "$p"
+    echo "applied tlib/$(basename "$p")"
+done
+git -C "$tlib" add -A
+tree=$(git -C "$tlib" write-tree)
+[ "$tree" = "$RENODE_TLIB_PATCHED_TREE" ] \
+    || fail "patched tlib is tree $tree, pins.env says $RENODE_TLIB_PATCHED_TREE"
 
 # Portable headless package (no GUI: the vHIL runs Renode --disable-gui),
 # its assemblies compiled ReadyToRun (crossgen2): native code in the package,
@@ -70,8 +85,9 @@ rm -rf "$dest"
 mkdir -p "$dest"
 tar xzf "$pkg" -C "$dest" --strip-components=1
 [ -x "$dest/renode" ] && [ -x "$dest/renode-test" ] || fail "the package has no renode / renode-test"
-queue=$(cat "${patches[@]}" | sha256sum | cut -c1-12)
-names=$(for p in "${patches[@]}"; do basename "$p" .patch; done | cut -c1-4 | paste -sd, -)
+queue=$(cat "${patches[@]}" ${tlib_patches[@]+"${tlib_patches[@]}"} | sha256sum | cut -c1-12)
+names=$( (for p in "${patches[@]}"; do basename "$p" .patch | cut -c1-4; done
+          for p in ${tlib_patches[@]+"${tlib_patches[@]}"}; do echo "tlib/$(basename "$p" .patch | cut -c1-4)"; done) | paste -sd, -)
 echo "renode $RENODE_VERSION (${RENODE_COMMIT:0:12}) + vhil patches $VHIL_PATCH_SET [$names] queue $queue" \
     >"$dest/VHIL_RENODE_BUILD"
 cat "$dest/VHIL_RENODE_BUILD"
