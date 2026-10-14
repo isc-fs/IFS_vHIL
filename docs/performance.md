@@ -385,6 +385,52 @@ time (`scripts/sim-shard.sh`, #272), split by each file's measured time
 runner-minutes, the longest 12.3 min. Refresh `durations.json` from the
 per-file tables in the shards' job summaries when suites change much.
 
+### Several quanta at once: studied, not done (#260)
+
+The lock-step hand-off costs the same every quantum, so the question was
+whether a board could be granted several quanta at once when provably
+nothing could cross between boards in them, without changing any result and
+without changing the 500 us quantum. A sync point s can be passed over
+exactly only if nothing that happens at s would have been different, which
+needs all of:
+
+- **no board runs code before the grant ends.** A board running code may
+  write a frame, and the bus model delivers what is offered before a sync
+  point at that sync point: on a two-board system the other board would see
+  it a quantum later than it does now. Whether a running firmware transmits
+  in the next quantum is not known in advance (there is no lookahead), so
+  every board must be in WFI at s, and the grant must end before the
+  earliest clock entry of any board (its next timer interrupt wakes it);
+- **nothing pending on any bus** (the bus model acts at sync points: a
+  frame offered, in flight or due for delivery) and **no co-simulation step
+  due** before the grant ends;
+- the sync-point actions (`SyncHook`: the fast-forward's arming, the CAN bus
+  model, the bench clock) must have nothing to do at s. They are host-speed
+  only today but would need checking one by one.
+
+Measured upper bound, ignoring the bus and co-simulation conditions (a probe
+on `SyncHook` reading each CPU's WFI state through
+`AddHookAtWfiStateChange` and each machine's `NearestLimitIn`; lock-step,
+dev, 3 s boot then 8 s steady): the sync points at which every board is in
+WFI and the next clock entry of every board is more than a quantum away,
+i.e. the sync points a multi-quantum grant could pass over.
+
+| System | Boot 0-3 s: all in WFI / passable | Steady +8 s: all in WFI / passable |
+|---|---|---|
+| ecu | 700 / **289** of 6,001 | 1,652 / **34** of 16,000 |
+| ams | 200 / **112** of 6,001 | 3,639 / **0** of 16,000 |
+| ecu-ams | 24 / **18** of 6,001 | 1,103 / **0** of 16,000 |
+
+At most 0.2 % of the steady state's hand-offs, none on the AMS or ecu-ams,
+and under 5 % of the boot's. Both firmwares tick at 1 kHz (FreeRTOS's SysTick, the
+HAL's TIM23) and the AMS's ADC3/DMA flags and peripheral timers add more,
+so some board's next clock entry is almost always within one 500 us
+quantum; a board is in WFI at only 10-23 % of the sync points, and two at
+once rarely. So it is not implemented: an exact version buys nothing, and
+anything looser changes when a firmware sees the other board's frames.
+What could still cut the hand-off's cost is making each one cheaper (the
+spin, the master's loop), not skipping them.
+
 ## What is left
 
 Host `perf` of the CPU threads in lock-step steady state, on the patched
@@ -399,8 +445,9 @@ could still buy, most first:
    master thread on one board; on ecu-ams the slave time sources spin for ~19 %
    of all samples. A board asleep in WFI pays it every quantum, and on a host
    running several runs the spinning takes cores from the others. The study's
-   blocking barrier (P1) was slower on 4 cores; granting a board with nothing
-   to synchronise several quanta at once would not be.
+   blocking barrier (P1) was slower on 4 cores, and granting several quanta
+   at once is exact almost never (above): what is left is a cheaper
+   hand-off.
 2. **`STM32_Timer`'s update event** reprograms its four compare-channel
    timers every period even when unused, and `BaseClockSource.Update` runs
    `Fraction` arithmetic (a GCD) per entry per update: the 1 kHz HAL
