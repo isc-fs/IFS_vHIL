@@ -392,13 +392,13 @@ $T/build.sh master up/master $(grep -v '^#' $T/tests.txt)              # build +
 RENODE_REF=up/all $T/build.sh all up/all $(grep -v '^#' $T/tests.txt)
 $T/build.sh pr03 up/03-sysbus-lookups                                   # one PR alone (no tests)
 python3 $T/summarize_tests.py <renode-up-pkgs:/master.tests> <.../all.tests>   # in a container
-$T/bench.sh $WORK/results/loops.jsonl 5 "master pr02 pr03 pr04 pr05 pr06 pr07 pr08 pr09 pr11 all" \
+$T/bench.sh $WORK/results/loops.jsonl 5 "master pr02 pr03 pr04 pr05 pr06 pr07 pr08 pr11 all" \
     "bus-trivial register-read register-write stm32-timer"
 python3 $T/summarize_perpr.py $WORK/results/loops.jsonl master
 $T/bench.sh $WORK/results/hooks.jsonl 5 "master all" "hook-none hook-always hook-exclude"
 $T/bench.sh $WORK/results/demos.jsonl 5 "master all" "demo-stm32f4_discovery demo-nucleo_h753zi_hubris demo-nrf52840"
 $T/vhil-ab.sh speed ab 5 "master all"                                  # the vHIL's speed.py
-$T/vhil-ab.sh speed perpr 3 "master pr02 pr03 pr04 pr05 pr06 pr07 pr08 pr09 pr11 all" --paths sim
+$T/vhil-ab.sh speed perpr 3 "master pr02 pr03 pr04 pr05 pr06 pr07 pr08 pr11 all" --paths sim
 python3 $T/summarize_vhil.py $WORK/results/ab master
 $T/vhil-ab.sh fingerprint master; $T/vhil-ab.sh fingerprint all        # then compare the two files
 $T/profile.sh master stock-ecu-ams ecu-ams sim                         # perf; ../renode-patches/tooling/stacks.py
