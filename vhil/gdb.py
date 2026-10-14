@@ -302,9 +302,6 @@ class Debugger:
         else it stays stopped there, a stop like any other (`events`), for
         breakpoints to go in before it runs."""
         self.workdir.mkdir(parents=True, exist_ok=True)
-        if not getattr(self.sim, "_vhil_gdb_loaded", False):
-            self.sim.monitor(f"include {rn.file_arg(GDB_SOURCE)}")
-            self.sim._vhil_gdb_loaded = True
         port = _free_port()
         self.sim.monitor(f"machine StartVhilGdbServer {int(port)} "
                          f"{rn.quote(str(self.halt_log.resolve()))}", board=self.board)

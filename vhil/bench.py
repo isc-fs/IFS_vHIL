@@ -75,7 +75,8 @@ class VirtualBench:
             if not self.firmware[image].is_file():
                 raise FileNotFoundError(self.firmware[image])
         script = Path(tempfile.mkdtemp(prefix="vhil-")) / f"{self.system.id}.resc"
-        script.write_text(self.system.render_renode(self.firmware, socketcan=self.socketcan))
+        script.write_text(self.system.render_renode(self.firmware, socketcan=self.socketcan,
+                                                    preloaded=True))
         port = _free_port()
         log = open(self.log_path, "w") if self.log_path else subprocess.DEVNULL
         # The monitor listens on 127.0.0.1 only (vhil/renode.py, launch).
@@ -85,13 +86,11 @@ class VirtualBench:
         m.execute(f"include {rn.file_arg(script)}")
         # Pace to the wall clock ourselves: Renode's pacing repays every slow
         # stretch by running fast afterwards (see VhilPacer.cs).
-        m.execute(f"include {rn.file_arg(PACER_SOURCE)}")
         m.execute("emulation SetGlobalAdvanceImmediately true")
         m.execute(f"emulation EnableVhilPacer {rn.number(PACER_MAX_LAG_S)}")
         # After the pacer: each pair is published once the pacer has let that
         # sync point go, so virtual time never runs ahead of the host's in it.
         self.clock_path = script.parent / "bench.clock"
-        m.execute(f"include {rn.file_arg(CLOCK_SOURCE)}")
         m.execute(f"emulation EnableVhilClock {rn.quote(self.clock_path.as_posix())}")
         for board in self.system.boards:
             m.execute(f"mach set {rn.quote(rn.ident(board))}")

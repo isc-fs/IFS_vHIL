@@ -108,9 +108,12 @@ def monitor_command(renode: str, port: int) -> list[str]:
     """The command line that starts Renode headless with its monitor on
     127.0.0.1:<port> only (models/renode/VhilMonitor.cs). `-P -1` turns
     Renode's own all-interfaces monitor port off; the -e commands run in its
-    hidden monitor before ours listens."""
+    hidden monitor before ours listens. They load every vHIL model first, in
+    one `include` that Renode's compiler cache answers (vhil/models.py), so
+    nothing the process runs later includes a model again."""
+    from vhil import models
     return [renode, "--disable-gui", "--plain", "-P", "-1", "-e",
-            f"include {file_arg(MONITOR_SOURCE)}; emulation StartVhilMonitor {int(port)}"]
+            f"{models.include_command()}; emulation StartVhilMonitor {int(port)}"]
 
 
 # .NET runtime settings for Renode (#154). Tiered compilation first JITs a
@@ -152,8 +155,11 @@ def build_id(renode: str) -> str:
 def launch(renode: str, port: int, stdout=subprocess.DEVNULL, lockstep: bool = False) -> subprocess.Popen:
     """Start Renode with a loopback-only monitor on `port`; connect with
     RenodeMonitor(port), which waits for it to listen. A log file given as
-    `stdout` starts with the Renode build (build_id)."""
-    env = {**RENODE_ENV, **(LOCKSTEP_ENV if lockstep else {}), **os.environ}
+    `stdout` starts with the Renode build (build_id). The models' assembly
+    is compiled or checked first (vhil/models.py, VHIL_MODELS)."""
+    from vhil import models
+    models.ensure(renode)
+    env = {**RENODE_ENV, **(LOCKSTEP_ENV if lockstep else {}), **os.environ, **models.env(renode)}
     if hasattr(stdout, "write"):
         line = f"vhil: {build_id(renode)}\n"
         stdout.write(line.encode() if "b" in getattr(stdout, "mode", "") else line)

@@ -39,7 +39,7 @@ import tempfile
 from pathlib import Path
 
 from vhil import renode as rn
-from vhil.broker import PROBE_SOURCE, probe_name
+from vhil.broker import probe_name
 from vhil.system import System
 
 log = logging.getLogger("vhil.bench_operator")
@@ -148,8 +148,6 @@ class Card:
         routed = {r["machine"] for r in config.get("gpio_routes", []) + config.get("adc_routes", [])}
         if self.machine in routed:
             return
-        if not routed:
-            self.bench.on(self.machine, f"include {rn.file_arg(PROBE_SOURCE)}")
         self.bench.on(self.machine, f"emulation CreateVhilGpioProbe "
                                     f"{rn.quote(probe_name(self.machine))} {rn.quote(self.machine)}")
 
