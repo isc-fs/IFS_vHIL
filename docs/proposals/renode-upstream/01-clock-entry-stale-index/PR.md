@@ -56,17 +56,18 @@ PR, renode/renode#ISSUE_B), where indexing the entries by handler needs the inde
 after handlers run.
 
 Validated in Docker (`mcr.microsoft.com/dotnet/sdk:8.0-bookworm-slim`, Linux
-arm64), renode master 59f8f5d0 with renode-infrastructure master 5474222a:
+arm64), renode master 9b5195e6 with renode-infrastructure master 3e4301cf:
 
 - headless portable build (`./build.sh -t --no-gui`): succeeded, with this
   commit alone and with the whole series
 - `UnitTests.csproj` with the two new tests and master's `BaseClockSource`:
   the two tests fail, everything else passes; with this change: all pass
 - the whole series together: the NUnit projects of `tests/tests.yaml`
-  (`UnitTests`, `PeripheralsTests`, `MonitorTests`, `RenodeTests`) 1,099
+  (`UnitTests`, `PeripheralsTests`, `MonitorTests`, `RenodeTests`) 1,119
   passed, 18 skipped, 0 failed (master: 1,095 / 18 / 0, the difference being
-  the four tests the series adds), and 38 Robot suites around the time
+  the 24 tests the series adds), and 47 Robot files around the time
   framework, the system bus, the register framework, CPU hooks, pausing,
-  snapshots and Cortex-M platforms: 330 passed, 1 skipped, 0 failed, as on
-  master
+  snapshots and Cortex-M platforms: 427 passed, 5 skipped, 2
+  failed (master: 422 / 5 / 3; every failure is in `ramn.robot` and fails
+  on master too)
 - `dotnet format whitespace --verify-no-changes` on the changed files: passed

@@ -1,0 +1,78 @@
+From a22d6263db06e25730e11d50b695f7b1069684be Mon Sep 17 00:00:00 2001
+From: Raul Moran <rmg@raulmoranguerra.com>
+Date: Wed, 14 Oct 2026 18:04:26 +0200
+Subject: [PATCH] tests: Test excluding a pre-opcode execution hook at an
+ address
+
+---
+ .../unit-tests/opcodes-execution-hooks.robot  | 53 +++++++++++++++++++
+ 1 file changed, 53 insertions(+)
+
+diff --git a/tests/unit-tests/opcodes-execution-hooks.robot b/tests/unit-tests/opcodes-execution-hooks.robot
+index a8d178fa..c06d9f44 100644
+--- a/tests/unit-tests/opcodes-execution-hooks.robot
++++ b/tests/unit-tests/opcodes-execution-hooks.robot
+@@ -32,6 +32,23 @@ Create Opcode Execution Hooks
+     # something in the high word) must not fire.
+     Execute Python                  self.Machine["sysbus.cpu"].AddPostOpcodeExecutionHook(0xFFFFFFFF, ${opcode} + (1 << 16), hook("unexpected"))
+ 
++Create Recording Pre Opcode Execution Hook
++    # Three `nop`s at 0x0, and a hook on `nop` that records the PC of each call
++    Execute Command                 cpu AssembleBlock 0x0 "nop; nop; nop"
++    Execute Python                  calls = []
++    Execute Python                  hook = lambda pc, op: calls.append(pc)
++    Execute Python                  self.Machine["sysbus.cpu"].AddPreOpcodeExecutionHook(0xFFFFFFFF, 0xbf00, hook)
++
++Run Nops And Check Hook Calls
++    [Arguments]  ${expected}
++    # Runs the three `nop`s from 0x0 and checks the PCs the hook was called at, e.g. "0x0,0x4"
++    Execute Python                  del calls[:]
++    Execute Command                 cpu PC 0x0
++    Execute Command                 cpu Step 3
++    PC Should Be Equal              0x6
++    ${calls}=                       Execute Python  ",".join("%#x" % pc for pc in calls)
++    Should Be Equal                 ${calls}  ${expected}
++
+ *** Test Cases ***
+ Should Pass 32-Bit Thumb Opcode To Pre And Post Execution Hooks
+     Create Machine
+@@ -64,3 +81,39 @@ Should Pass 16-Bit Thumb Opcode To Pre And Post Execution Hooks
+     Wait For Log Entry              pre: PC 0x00000000 op ${opcode}
+     Wait For Log Entry              post: PC 0x00000000 op ${opcode}
+     Should Not Be In Log            unexpected: PC 0x00000000
++
++Should Not Call Pre Opcode Execution Hook At Excluded Address
++    Create Machine
++    Create Recording Pre Opcode Execution Hook
++
++    ${excluded}=                    Execute Python  self.Machine["sysbus.cpu"].ExcludePreOpcodeExecutionHookAt(hook, 0x2)
++    Should Be Equal                 ${excluded}  ${True}
++    # Already excluded
++    ${excluded}=                    Execute Python  self.Machine["sysbus.cpu"].ExcludePreOpcodeExecutionHookAt(hook, 0x2)
++    Should Be Equal                 ${excluded}  ${False}
++
++    Run Nops And Check Hook Calls   0x0,0x4
++
++Should Stop Calling Pre Opcode Execution Hook In Translated Code After Exclusion
++    Create Machine
++    Create Recording Pre Opcode Execution Hook
++    Run Nops And Check Hook Calls   0x0,0x2,0x4
++
++    # The blocks already translated are invalidated before the next run
++    Execute Python                  self.Machine["sysbus.cpu"].ExcludePreOpcodeExecutionHookAt(hook, 0x2)
++    Run Nops And Check Hook Calls   0x0,0x4
++
++Should Call Pre Opcode Execution Hook Again After Clearing Exclusions
++    Create Machine
++    Create Recording Pre Opcode Execution Hook
++    Execute Python                  self.Machine["sysbus.cpu"].ExcludePreOpcodeExecutionHookAt(hook, 0x2)
++    Run Nops And Check Hook Calls   0x0,0x4
++
++    Execute Command                 cpu ClearPreOpcodeExecutionHookExclusions
++    Run Nops And Check Hook Calls   0x0,0x2,0x4
++
++Should Fail To Exclude An Unknown Pre Opcode Execution Hook
++    Create Machine
++    Execute Python                  hook = lambda pc, op: None
++    Run Keyword And Expect Error    *No such pre-opcode execution hook*
++    ...                             Execute Python  self.Machine["sysbus.cpu"].ExcludePreOpcodeExecutionHookAt(hook, 0x0)

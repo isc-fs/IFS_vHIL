@@ -46,26 +46,33 @@ renode/renode#ISSUE_B (.NET's allocation counter, deterministic to 1 %):
 Most of it is `IsAddressRangeLocked`'s `ContainsOverlappingRange`
 (`ranges.Any` with a closure: a closure and an enumerator per collection).
 
-With the whole series (renode/renode#ISSUE_B; master vs master + the seven
-PRs, median of 5, interleaved): the bus-performance loop runs 2.38x as fast,
-a register read 1.69x, a register write 2.23x; our STM32H733 systems (one and
-two machines, FreeRTOS firmware with HAL timers, CAN, SPI) 13-53 % faster in
-steady state.
+Host time, this PR alone against master (median of 5, interleaved, 4
+cores; this host's bus loops vary by up to ±20 % run to run): bus read
+1.45x as fast (5.00 → 3.45 s for 0.25 s of virtual time; fastest runs 4.20
+→ 2.78 s), register read 1.40x, register write 1.14x.
+
+With the whole series (renode/renode#ISSUE_B, plus renode/renode#ISSUE_C's
+hook exclusion; master vs master + every PR, median of 5, interleaved): the
+bus-performance loop runs 2.76x as fast, a register read 2.24x, a register
+write 1.91x, an STM32 timer's update path 2.64x; our STM32H733 systems (one
+and two machines, FreeRTOS firmware with HAL timers, CAN, SPI) 15-62 %
+faster in steady state.
 
 ### Additional information
 
 Validated in Docker (`mcr.microsoft.com/dotnet/sdk:8.0-bookworm-slim`, Linux
-arm64), renode master 59f8f5d0 with renode-infrastructure master 5474222a:
+arm64), renode master 9b5195e6 with renode-infrastructure master 3e4301cf:
 
 - headless portable build (`./build.sh -t --no-gui`): succeeded with this PR
   alone and with the whole series
 - the whole series together: the NUnit projects of `tests/tests.yaml`
-  (`UnitTests`, `PeripheralsTests`, `MonitorTests`, `RenodeTests`) 1,099
+  (`UnitTests`, `PeripheralsTests`, `MonitorTests`, `RenodeTests`) 1,119
   passed, 18 skipped, 0 failed (master: 1,095 / 18 / 0; the difference is
-  the four tests the series adds), and 38 Robot suites (among them `sysbus`,
+  the 24 tests the series adds), and 47 Robot files (among them `sysbus`,
   `sysbus-tag`, `bus-isolation`, `per-core-registration`,
-  `arm-cortex-m-trustzone` and `memory-access`): 330 passed, 1 skipped, 0
-  failed, as on master
+  `arm-cortex-m-trustzone` and `memory-access`): 427 passed, 5 skipped, 2
+  failed (master: 422 / 5 / 3; every failure is in `ramn.robot` and fails
+  on master too)
 - `dotnet format whitespace --verify-no-changes` on the changed files: passed
 - byte-identical results: on our STM32H733 systems (one board, and two in
   lock-step, CAN between them, 3.5 s of virtual time), every CAN frame's

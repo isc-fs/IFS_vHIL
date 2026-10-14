@@ -4,7 +4,7 @@ Renode's CONTRIBUTING.md asks for an issue even when you send the fix
 yourself ("Please create an issue even if you plan to fix it"), and its
 commit subjects carry the issue number (`[#1234] Tag: Description`; GitHub
 issues land as `[GH#941]`, e.g. renode-infrastructure@[GH#941] NVIC). Open
-these two in https://github.com/renode/renode/issues/new/choose, then put
+these three in https://github.com/renode/renode/issues/new/choose, then put
 the numbers in the PRs (README.md, step 3).
 
 ---
@@ -52,7 +52,7 @@ ShouldKeepOtherEntriesWhenAHandlerRunByGetClockEntryRemovesAnEntry
 ### Environment
 
 - Linux (Docker, .NET 8 SDK), arm64
-- Renode master 59f8f5d0 (renode-infrastructure 5474222a)
+- Renode master 9b5195e6 (renode-infrastructure 3e4301cf)
 
 ### Additional information
 
@@ -79,7 +79,8 @@ every timer event, none of which changes what the emulation computes:
 
 | Where | Cost, per event |
 |---|---|
-| `BaseClockSource` (every timer reload/read, every `Machine.ScheduleAction`) | linear search comparing delegates, with a closure; two `ThreadLocal<bool>` read several times; a `List` per update |
+| `BaseClockSource` (every timer reload/read, every `Machine.ScheduleAction`, every update) | linear search comparing delegates, with a closure; two `ThreadLocal<bool>` read several times; a `List` per update; each enabled entry's tick arithmetic in `Fraction`, a GCD or LCM per operation |
+| `STM32_Timer` (every update event) | the four compare channels' timers re-applied, unused ones included: eight clock entry exchanges per period |
 | `SystemBus` (every access) | a `Tuple`, a closure and a `DisposableWrapper` to set the access context; a locked-range check (two locks, up to three dictionary look-ups, `Any` with a closure) although nothing is locked; a lock and dictionary look-ups for the initiator's peripheral collection; a closure for the tag search |
 | `PeripheralRegister` (every register read/write) | a `List` per access, `Distinct()` (a `HashSet`), LINQ over the tags; unhandled-write messages formatted before the logger drops them |
 | `TranslationCPU` | a `new object()` per bus access (pause guard); a LINQ iterator per execution chunk (hooks); noisy log strings formatted before being dropped (opcode hooks, scheduled actions) |
@@ -128,10 +129,11 @@ quit
 Replacing the peripheral with `GPIOPort.STM32_GPIOPort @ sysbus <0x40020000, +0x400>`
 and the loop's load with a read of `0x40020010` (IDR) or a store toggling
 `0x40020008` (OSPEEDR) measures the register framework. On master
-59f8f5d0 (arm64 Linux, 4 cores) that loop allocates 656 bytes per bus read,
+9b5195e6 (arm64 Linux, 4 cores) that loop allocates 656 bytes per bus read,
 a register read 786 bytes and a register write 1.36 kB; with the PRs below,
-92, 127 and 280 bytes, and the three loops run 2.38x, 1.69x and 2.23x as
-fast.
+92, 127 and 280 bytes, and the three loops run 2.76x, 2.24x and 1.91x as
+fast. An STM32 timer with a 1 MHz update event and no channel in use
+(STM32F4's TIM2) runs 2.64x as fast.
 
 ### Additional information
 
@@ -142,5 +144,68 @@ instruction counts, CPU state and RAM).
 
 ### Do you plan to address this issue and file a PR?
 
-Yes: six small renode-infrastructure PRs, independent of one another except
-that the clock source one builds on issue A's fix.
+Yes: eight small renode-infrastructure PRs, independent of one another except
+that the clock entry index builds on issue A's fix.
+
+---
+
+## Issue C (template: Feature/support request)
+
+**Title:** `Opcode execution hooks: let a hook stop being called at an address`
+
+### Description
+
+A pre-opcode execution hook (`TranslationCPU.AddPreOpcodeExecutionHook(mask,
+value, action)`) is called before every executed instruction its mask
+matches, wherever it is, each time it executes: a call from the translated
+code into C#. Many hooks only have work to do at some of those addresses,
+and learn which after their first call there:
+
+- coverage or inventory hooks, which need only the first execution at each
+  address (which `wfi`/`svc`/`bkpt`/`dmb` sites run, where an instruction
+  class occurs);
+- idiom detectors, which look for a code pattern at the instructions their
+  mask matches (a busy-wait or delay loop around a compare, a magic
+  instruction sequence for semihosting-like services) and find it at a few.
+
+Today such a hook can only stay installed everywhere (hooks cannot be
+removed, and removing one would remove it everywhere): every other execution
+of a matching instruction still pays the call, which dominates when the
+instruction is common (a compare, a load).
+
+### Usage example
+
+```python
+cpu = self.Machine["sysbus.cpu"]
+def on_nop(pc, opcode):
+    self.Machine.InfoLog("first nop at 0x%x" % pc)
+    cpu.ExcludePreOpcodeExecutionHookAt(on_nop, pc)   # proposed
+cpu.AddPreOpcodeExecutionHook(0xFFFFFFFF, 0xBF00, on_nop)
+```
+
+Proposed API: `bool ExcludePreOpcodeExecutionHookAt(action, pc)` (blocks
+translated afterwards don't call that hook at that address; the blocks
+holding it are queued for invalidation) and
+`ClearPreOpcodeExecutionHookExclusions()`, over two tlib exports consulted
+at translation time, so translated code and hooks without exclusions are
+unchanged. A hook on a loop of 15 `nop`s at 100 MIPS: 0.68 s of host time
+for 0.25 s of virtual time with the hook called every time, 0.022 s with it
+excluded after its first call at each address (0.023 s without a hook).
+
+### Additional information
+
+We use it in a virtual hardware-in-the-loop bench (STM32H733 firmware):
+a hook on `CMP.W` recognises delay loops to skip them in virtual time, and
+has nothing to do at the other `CMP.W`s. Excluding those after their first
+call took its calls from 258,777 to 472 in 8 s of virtual time on a board
+without delay loops.
+
+### Do you plan to address this issue and file a PR?
+
+Yes: antmicro/tlib "Allow excluding a pre-opcode execution hook at an
+address", renode/renode-infrastructure "TranslationCPU: Allow excluding a
+pre-opcode execution hook at an address" (which needs the tlib change in the
+submodule) and renode/renode "tests: Test excluding a pre-opcode execution
+hook at an address". If you would rather have a different shape (e.g. a
+return value from the hook meaning "not here again", or post-opcode hooks
+too), we are happy to adapt.

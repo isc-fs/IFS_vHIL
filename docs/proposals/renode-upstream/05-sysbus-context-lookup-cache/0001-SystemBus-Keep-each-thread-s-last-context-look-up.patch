@@ -1,4 +1,4 @@
-From 68be19edd523fa115a9473ff057bfd7283876e5e Mon Sep 17 00:00:00 2001
+From e1d54ec6095430e9bac0c5feb8f674ce59170297 Mon Sep 17 00:00:00 2001
 From: Raul Moran <rmg@raulmoranguerra.com>
 Date: Wed, 14 Oct 2026 02:34:27 +0200
 Subject: [PATCH] SystemBus: Keep each thread's last context look-up
@@ -10,13 +10,15 @@ time, so keep each thread's last successful look-up and return it
 while the dictionary's version is unchanged. The version changes,
 under the lock, whenever a value the method returned could change:
 when the caches are dropped, which every mutation does, and when a
-context key is added.
+context key is added. The entries belong to the dictionary, one per
+thread, and each thread refers to its last one weakly, so a thread
+that outlives a machine doesn't keep the machine's bus alive.
 ---
- .../Main/Peripherals/Bus/SystemBus.cs         | 53 +++++++++++++++++++
- 1 file changed, 53 insertions(+)
+ .../Main/Peripherals/Bus/SystemBus.cs         | 75 +++++++++++++++++++
+ 1 file changed, 75 insertions(+)
 
 diff --git a/src/Emulator/Main/Peripherals/Bus/SystemBus.cs b/src/Emulator/Main/Peripherals/Bus/SystemBus.cs
-index b7291845f..191b35ccd 100644
+index b7291845f..76faa7667 100644
 --- a/src/Emulator/Main/Peripherals/Bus/SystemBus.cs
 +++ b/src/Emulator/Main/Peripherals/Bus/SystemBus.cs
 @@ -2836,6 +2836,8 @@ public void AddContextKey(IPeripheral key)
@@ -28,16 +30,18 @@ index b7291845f..191b35ccd 100644
                  }
              }
  
-@@ -2907,6 +2909,33 @@ public IEnumerable<StateMask> GetAllStateKeys(IPeripheral context)
+@@ -2907,6 +2909,52 @@ public IEnumerable<StateMask> GetAllStateKeys(IPeripheral context)
              }
  
              public bool TryGetValue(IPeripheral key, ulong? initiatorState, out TValue value)
 +            {
 +                // Every bus access looks up its initiator's collection: each thread keeps its last
-+                // successful look-up until the values change (InvalidateLastLookups).
-+                var last = lastLookup;
-+                if(last != null && last.Owner == this && last.Version == Volatile.Read(ref version)
-+                   && ReferenceEquals(last.Key, key) && last.InitiatorState == initiatorState)
++                // successful look-up until the values change (InvalidateLastLookups). The entry belongs
++                // to this dictionary and the thread refers to it weakly, so a thread that outlives the
++                // dictionary (and its machine) doesn't keep them alive.
++                var lastReference = lastLookup;
++                if(lastReference != null && lastReference.TryGetTarget(out var last) && last.Owner == this
++                   && last.Version == Volatile.Read(ref version) && ReferenceEquals(last.Key, key) && last.InitiatorState == initiatorState)
 +                {
 +                    value = last.Value;
 +                    return true;
@@ -48,12 +52,29 @@ index b7291845f..191b35ccd 100644
 +                    {
 +                        return false;
 +                    }
-+                    last = lastLookup ?? (lastLookup = new LastLookup());
-+                    last.Owner = this;
++                    // Only this thread reads and writes its entry
++                    var threadId = Environment.CurrentManagedThreadId;
++                    if(lastLookups == null)
++                    {
++                        lastLookups = new Dictionary<int, LastLookup>();
++                    }
++                    if(!lastLookups.TryGetValue(threadId, out last))
++                    {
++                        last = new LastLookup { Owner = this };
++                        lastLookups[threadId] = last;
++                    }
 +                    last.Key = key;
 +                    last.InitiatorState = initiatorState;
 +                    last.Value = value;
 +                    last.Version = version;
++                    if(lastReference == null)
++                    {
++                        lastLookup = new WeakReference<LastLookup>(last);
++                    }
++                    else
++                    {
++                        lastReference.SetTarget(last);
++                    }
 +                    return true;
 +                }
 +            }
@@ -62,7 +83,7 @@ index b7291845f..191b35ccd 100644
              {
                  lock(locker)
                  {
-@@ -2980,9 +3009,22 @@ private void DropCaches()
+@@ -2980,9 +3028,22 @@ private void DropCaches()
                  {
                      cpuInStateCache.Clear();
                      globalCache.Clear();
@@ -78,19 +99,22 @@ index b7291845f..191b35ccd 100644
 +                }
 +            }
 +
-+            // Each thread's last successful look-up (in any ContextKeyDictionary of this type: see Owner)
++            // Each thread's last successful look-up, in any ContextKeyDictionary of this type (see Owner)
 +            [ThreadStatic]
-+            private static LastLookup lastLookup;
++            private static WeakReference<LastLookup> lastLookup;
 +
              private readonly Dictionary<IPeripheral, Dictionary<StateMask, TValue>> cpuLocalValues = new Dictionary<IPeripheral, Dictionary<StateMask, TValue>>();
              private readonly Dictionary<IPeripheral, Dictionary<ulong, TValue>> cpuInStateCache = new Dictionary<IPeripheral, Dictionary<ulong, TValue>>();
              private readonly Func<TValue> defaultFactory;
-@@ -2993,6 +3035,17 @@ private void DropCaches()
+@@ -2993,6 +3054,20 @@ private void DropCaches()
              // in a Dictionary<StateMask, TValue> was very slow)
              private readonly Dictionary<IPeripheral, TValue> cpuAllAccess = new Dictionary<IPeripheral, TValue>();
              private readonly TValue globalAllAccess;
 +            // Changed (under the lock) whenever a value TryGetValue returned could change
 +            private long version;
++            // The last look-up of each thread that looked up a value here, by managed thread id
++            [Transient]
++            private Dictionary<int, LastLookup> lastLookups;
 +
 +            private class LastLookup
 +            {
@@ -103,6 +127,3 @@ index b7291845f..191b35ccd 100644
          }
  
          private readonly struct FoundRegistrationInfo
--- 
-2.51.0
-

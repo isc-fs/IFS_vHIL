@@ -57,11 +57,19 @@ factor, steady state), the same change measured on 1.17.0: +6 % to +42 %
 (median of 3, interleaved), and in a host profile (`perf`, two machines in
 lock-step) the look-up went from 5.5 % of all samples to 0.1 %.
 
-With the whole series (renode/renode#ISSUE_B; master vs master + the seven
-PRs, median of 5, interleaved): the bus-performance loop runs 2.38x as fast,
-a register read 1.69x, a register write 2.23x; our STM32H733 systems (one and
-two machines, FreeRTOS firmware with HAL timers, CAN, SPI) 13-53 % faster in
-steady state.
+Host time, this PR alone against master (median of 5, interleaved, 4
+cores): an STM32 timer with a 1 MHz update event (`stm32-timer` in our
+measurements: STM32F4's TIM2, its update event looking up its own and its
+channels' clock entries) runs 1.78x as fast (3.26 → 1.83 s for 0.25 s of
+virtual time), allocating 63 % less; the bus loops, which use no timers,
+are unchanged within this host's noise.
+
+With the whole series (renode/renode#ISSUE_B, plus renode/renode#ISSUE_C's
+hook exclusion; master vs master + every PR, median of 5, interleaved): the
+bus-performance loop runs 2.76x as fast, a register read 2.24x, a register
+write 1.91x, an STM32 timer's update path 2.64x; our STM32H733 systems (one
+and two machines, FreeRTOS firmware with HAL timers, CAN, SPI) 15-62 %
+faster in steady state.
 
 ### Additional information
 
@@ -71,17 +79,18 @@ look-up, the duplicate check and the list order). It passes on master too:
 it pins the behaviour the index must keep.
 
 Validated in Docker (`mcr.microsoft.com/dotnet/sdk:8.0-bookworm-slim`, Linux
-arm64), renode master 59f8f5d0 with renode-infrastructure master 5474222a:
+arm64), renode master 9b5195e6 with renode-infrastructure master 3e4301cf:
 
 - headless portable build (`./build.sh -t --no-gui`): succeeded with this PR
   alone and with the whole series
 - the whole series together: the NUnit projects of `tests/tests.yaml`
-  (`UnitTests`, `PeripheralsTests`, `MonitorTests`, `RenodeTests`) 1,099
+  (`UnitTests`, `PeripheralsTests`, `MonitorTests`, `RenodeTests`) 1,119
   passed, 18 skipped, 0 failed (master: 1,095 / 18 / 0; the difference is
-  the four tests the series adds), and 38 Robot suites (among them
+  the 24 tests the series adds), and 47 Robot files (among them
   `timer-reconfiguration`, `virtual-time`, `precise-pause`, `cpu-step`, the
-  snapshot suites, the Cortex-M platforms and the demos): 330 passed, 1
-  skipped, 0 failed, as on master
+  snapshot suites, the Cortex-M platforms and the demos): 427 passed, 5 skipped, 2
+  failed (master: 422 / 5 / 3; every failure is in `ramn.robot` and fails
+  on master too)
 - `dotnet format whitespace --verify-no-changes` on the changed files: passed
 - byte-identical results: on our STM32H733 systems (one board, and two in
   lock-step, CAN between them, 3.5 s of virtual time), every CAN frame's

@@ -38,26 +38,35 @@ messages cost most where they are used: our firmware's fast-forward hooks a
 compare instruction in polling loops, and our CAN model wakes through
 `ScheduleAction`.
 
-With the whole series (renode/renode#ISSUE_B; master vs master + the seven
-PRs, median of 5, interleaved): the bus-performance loop runs 2.38x as fast,
-a register read 1.69x, a register write 2.23x; our STM32H733 systems (one and
-two machines, FreeRTOS firmware with HAL timers, CAN, SPI) 13-53 % faster in
-steady state.
+Host time: alone, within this host's noise on the bus loops (±20 % run
+to run there). On a loop with a pre-opcode execution hook on every `nop` (a
+Cortex-M4 at 100 MIPS, 0.25 s of virtual time) the hook handler's noisy
+message was 13.7 GB of allocation per virtual second; with the series (of
+which only this PR touches that path) 0.05 GB, and the loop runs 3.7x as
+fast (2.49 → 0.68 s).
+
+With the whole series (renode/renode#ISSUE_B, plus renode/renode#ISSUE_C's
+hook exclusion; master vs master + every PR, median of 5, interleaved): the
+bus-performance loop runs 2.76x as fast, a register read 2.24x, a register
+write 1.91x, an STM32 timer's update path 2.64x; our STM32H733 systems (one
+and two machines, FreeRTOS firmware with HAL timers, CAN, SPI) 15-62 %
+faster in steady state.
 
 ### Additional information
 
 Validated in Docker (`mcr.microsoft.com/dotnet/sdk:8.0-bookworm-slim`, Linux
-arm64), renode master 59f8f5d0 with renode-infrastructure master 5474222a:
+arm64), renode master 9b5195e6 with renode-infrastructure master 3e4301cf:
 
 - headless portable build (`./build.sh -t --no-gui`): succeeded with this PR
   alone and with the whole series
 - the whole series together: the NUnit projects of `tests/tests.yaml`
-  (`UnitTests`, `PeripheralsTests`, `MonitorTests`, `RenodeTests`) 1,099
+  (`UnitTests`, `PeripheralsTests`, `MonitorTests`, `RenodeTests`) 1,119
   passed, 18 skipped, 0 failed (master: 1,095 / 18 / 0; the difference is
-  the four tests the series adds), and 38 Robot suites (among them `hooks`,
+  the 24 tests the series adds), and 47 Robot files (among them `hooks`,
   `opcodes-execution-hooks`, `opcodes-counting`, `cpu-pause-halt`,
-  `pause-without-sleep` and `log-tests`): 330 passed, 1 skipped, 0 failed,
-  as on master
+  `pause-without-sleep` and `log-tests`): 427 passed, 5 skipped, 2
+  failed (master: 422 / 5 / 3; every failure is in `ramn.robot` and fails
+  on master too)
 - `dotnet format whitespace --verify-no-changes` on the changed files: passed
 - byte-identical results: on our STM32H733 systems (one board, and two in
   lock-step, CAN between them, 3.5 s of virtual time), every CAN frame's
