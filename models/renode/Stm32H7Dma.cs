@@ -267,6 +267,61 @@ namespace Antmicro.Renode.Peripherals.DMA
                 }
             }
 
+            public bool ReadsFrom(ulong source, out int size)
+            {
+                size = 1 << (int)((cr >> 11) & 0x3);   // PSIZE
+                return TakesRequests && size <= 4 && (cr & CR_PINC) == 0 && par == source
+                    && (cr & CR_PFCTRL) == 0;
+            }
+
+            // MoveOne for each value, with the peripheral read already done
+            // by the requester and the memory written in one go.
+            public void TakeMany(IReadOnlyList<uint> values)
+            {
+                var n = (uint)values.Count;
+                var size = 1 << (int)((cr >> 11) & 0x3);
+                var mStep = (cr & CR_MINC) != 0 ? (uint)size : 0;
+                var memory = (ulong)(((cr & CR_DBM) != 0 && (cr & CR_CT) != 0) ? m1ar : m0ar);
+                var start = memory + mOffset;
+                var length = mStep * (n - 1) + (uint)size;
+                if(n == 0 || n > ndtr || n > RequestsToNextFlag || !parent.Reachable(start, (int)length)
+                   || !parent.Reachable(start + length - (ulong)size, size))
+                {
+                    foreach(var v in values)
+                    {
+                        parent.lazy.LastRequest = this;
+                        MoveOneValue(v);
+                    }
+                    return;
+                }
+                var bytes = new byte[length];
+                for(var i = 0; i < n; i++)
+                {
+                    var v = values[i];
+                    var at = i * (int)mStep;
+                    for(var b = 0; b < size; b++)
+                    {
+                        bytes[at + b] = (byte)(v >> (8 * b));
+                    }
+                }
+                parent.sysbus.WriteBytes(bytes, start, true);
+                mOffset += mStep * n;
+                ndtr -= n;
+                var halfBefore = done < reload / 2;
+                done += n;
+                Moved += n;
+                if(reload >= 2 && halfBefore && done >= reload / 2)
+                {
+                    flags |= F_HTIF;
+                }
+                if(ndtr == 0)
+                {
+                    EndOfPass();
+                }
+                UpdateIrq();
+                parent.lazy.LastRequest = this;
+            }
+
             // Only when every one of them reaches its source and destination
             // (an unreachable one fails the stream: TEIF, an interrupt).
             public bool TryNextWrites(uint requests, out ulong start, out ulong length)
@@ -501,24 +556,65 @@ namespace Antmicro.Renode.Peripherals.DMA
                 }
                 if(ndtr == 0)
                 {
-                    flags |= F_TCIF;
-                    if((cr & (CR_CIRC | CR_DBM)) != 0)
-                    {
-                        ndtr = reload;
-                        done = 0;
-                        pOffset = 0;
-                        mOffset = 0;
-                        if((cr & CR_DBM) != 0)
-                        {
-                            cr ^= CR_CT;
-                        }
-                    }
-                    else
-                    {
-                        cr &= ~CR_EN;   // normal mode: the stream stops itself
-                    }
+                    EndOfPass();
                 }
                 UpdateIrq();
+            }
+
+            // A P2M request whose peripheral read the requester did (TakeMany's
+            // fallback): MoveOne with `value` for the read.
+            private void MoveOneValue(uint value)
+            {
+                if((cr & CR_EN) == 0 || ndtr == 0)
+                {
+                    return;
+                }
+                var size = 1 << (int)((cr >> 11) & 0x3);
+                var memory = (ulong)(((cr & CR_DBM) != 0 && (cr & CR_CT) != 0) ? m1ar : m0ar);
+                var dst = memory + mOffset;
+                if(!parent.Reachable(dst, size))
+                {
+                    Fail();
+                    return;
+                }
+                if((cr & CR_MINC) != 0)
+                {
+                    mOffset += (uint)size;
+                }
+                ndtr--;
+                done++;
+                parent.Write(dst, value, size);
+                Moved++;
+                if(reload >= 2 && done == reload / 2)
+                {
+                    flags |= F_HTIF;
+                }
+                if(ndtr == 0)
+                {
+                    EndOfPass();
+                }
+                UpdateIrq();
+            }
+
+            // NDTR reached 0: TCIF, then reload (circular, double-buffer) or stop.
+            private void EndOfPass()
+            {
+                flags |= F_TCIF;
+                if((cr & (CR_CIRC | CR_DBM)) != 0)
+                {
+                    ndtr = reload;
+                    done = 0;
+                    pOffset = 0;
+                    mOffset = 0;
+                    if((cr & CR_DBM) != 0)
+                    {
+                        cr ^= CR_CT;
+                    }
+                }
+                else
+                {
+                    cr &= ~CR_EN;   // normal mode: the stream stops itself
+                }
             }
 
             private void Fail()
