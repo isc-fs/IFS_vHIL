@@ -138,7 +138,14 @@ charges their instructions instead of executing them:
   pre-opcode hook on CMP.W (immediate) decodes the code around it once per
   PC, exactly that shape or nothing, and checks its bytes again on every use.
   m iterations later the counter (register and memory) is i + m and the flags
-  are those of the last ADDS; nothing else changed.
+  are those of the last ADDS; nothing else changed. A CMP.W that is not a
+  delay loop's stays so until a reset, so tlib stops calling the hook there
+  (docker/renode's patch 0005 and tlib/0001: `ExcludePreOpcodeExecutionHookAt`,
+  the blocks holding it invalidated at the next sync point; every exclusion
+  dropped at a reset): the hook reaches C# from the delay loops only. Over a
+  3 s boot and 5 s of steady state, the AMS (no delay loops) called it
+  259,000 times before and 472 after; the ECU 278,000 and 186,000 (its
+  157,000 skips and the delay loops' last iterations).
 - **Fixed-point polling loops**: the bootloader's main loop. Armed once a
   quantum, Renode's memory-access hook records the MMIO accesses (Thread mode)
   between two passes through the same access. Two consecutive iterations with
@@ -459,8 +466,10 @@ could still buy, most first:
    helper; and while the fast-forward's detector is armed, a C# call with an
    address translation per RAM access (~16 % of the ECU's boot there; x86
    never calls it for RAM).
-5. **Hooks dispatched in C#**: the CMP.W pre-opcode hook reaches managed code
-   for every CMP.W executed (~4 % of the ECU's CPU thread); a native filter
-   by PC would leave only the delay loops'.
+5. **Hooks dispatched in C#**: done for the CMP.W hook (patch 0005 and
+   tlib/0001, above): only the delay loops' reach C#. What is left of it on
+   the ECU is the skips' own work (writing the counter back to RAM and
+   invalidating the blocks there as a bus write would, ~2 % of its CPU
+   thread).
 6. **Start-up**: done (the models' assembly and ReadyToRun, above): a start
    is 1.9-2.1 s, of which a bare Renode (its runtime, the monitor) is 0.8 s.

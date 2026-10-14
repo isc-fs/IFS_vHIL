@@ -1,0 +1,74 @@
+From b11e44d3e99c38b3d7291bbad6e4d3e64ae4e0a5 Mon Sep 17 00:00:00 2001
+From: Raul Moran <moranguerra18@gmail.com>
+Date: Wed, 14 Oct 2026 09:55:13 +0200
+Subject: [PATCH] TranslationCPU: exclude a pre-opcode execution hook at an address
+
+A pre-opcode execution hook reaches managed code for every executed
+instruction its mask matches, which a hook interested in a few addresses
+pays for everywhere else. ExcludePreOpcodeExecutionHookAt(action, pc)
+tells tlib to stop generating that hook's call at pc and queues the
+blocks holding pc for invalidation (InvalidateTranslationBlocks);
+ClearPreOpcodeExecutionHookExclusions gives every address its hooks back
+in blocks translated afterwards. Needs the tlib side
+(tlib_exclude_pre_opcode_execution_hook).
+---
+ .../TranslationCPU_OpcodesExecutionHooks.cs   | 36 +++++++++++++++++++
+ 1 file changed, 36 insertions(+)
+
+diff --git a/src/Emulator/Peripherals/Peripherals/CPU/TranslationCPU_OpcodesExecutionHooks.cs b/src/Emulator/Peripherals/Peripherals/CPU/TranslationCPU_OpcodesExecutionHooks.cs
+index 4493f72..e16d5ea 100644
+--- a/src/Emulator/Peripherals/Peripherals/CPU/TranslationCPU_OpcodesExecutionHooks.cs
++++ b/src/Emulator/Peripherals/Peripherals/CPU/TranslationCPU_OpcodesExecutionHooks.cs
+@@ -63,6 +63,36 @@ public void AddPostOpcodeExecutionHook(UInt64 mask, UInt64 value, Action<ulong,
+             postOpcodeExecutionHooks.Add(action);
+         }
+ 
++        // The pre-opcode execution hook `action` (added with AddPreOpcodeExecutionHook)
++        // stops being called at `pc`, for a hook that knows it has nothing to do
++        // there: tlib no longer generates the call at that address in blocks it
++        // translates, and the blocks holding it are queued for invalidation
++        // (InvalidateTranslationBlocks; until then they still call it). Returns
++        // false when tlib did not take the address (already excluded, or its
++        // table is full): the hook is then still called there.
++        public bool ExcludePreOpcodeExecutionHookAt(Action<ulong, ulong> action, ulong pc)
++        {
++            var id = preOpcodeExecutionHooks.IndexOf(action);
++            if(id < 0)
++            {
++                throw new RecoverableException("No such pre-opcode execution hook");
++            }
++            if(TlibExcludePreOpcodeExecutionHook(pc, (uint)id) == 0)
++            {
++                return false;
++            }
++            OrderTranslationBlocksInvalidation(new IntPtr(unchecked((long)pc)), new IntPtr(unchecked((long)pc + 4)), delayInvalidation: true);
++            return true;
++        }
++
++        // Every address excluded with ExcludePreOpcodeExecutionHookAt gets its
++        // hooks back in blocks translated from now on (ClearTranslationCache for
++        // every block).
++        public void ClearPreOpcodeExecutionHookExclusions()
++        {
++            TlibClearPreOpcodeExecutionHookExclusions();
++        }
++
+         private void CheckArchitectureForOpcodeExecutionHooks()
+         {
+             if((!Architecture.Contains("riscv") && !Architecture.Contains("arm")) || Architecture.Contains("arm64"))
+@@ -118,6 +148,12 @@ private void HandlePostOpcodeExecutionHook(UInt32 id, UInt64 pc, UInt64 opcode)
+         [Import]
+         private readonly Func<ulong, ulong, uint> TlibInstallPreOpcodeExecutionHook;
+ 
++        [Import]
++        private readonly Func<ulong, uint, uint> TlibExcludePreOpcodeExecutionHook;
++
++        [Import]
++        private readonly Action TlibClearPreOpcodeExecutionHookExclusions;
++
+         [Import]
+         private readonly Action<uint> TlibEnablePostOpcodeExecutionHooks;
+ 
+-- 
+2.51.0
+
