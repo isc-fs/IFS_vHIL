@@ -43,8 +43,9 @@ PR). `tests/sim/test_fast_forward.py` and
 
 ## Upstreaming
 
-The three patches are prepared as seven pull requests to
-renode/renode-infrastructure, rebased on upstream master, tested with
+The five patches and the tlib one are prepared as twelve pull requests to
+three repositories (renode/renode-infrastructure, antmicro/tlib and
+renode/renode for the tests), rebased on upstream master, tested with
 Renode's own suites and measured there:
 [`docs/proposals/renode-upstream/`](../../docs/proposals/renode-upstream/README.md)
 (submission order, commands, the CLA). Plan for the queue:
@@ -54,6 +55,8 @@ Renode's own suites and measured there:
 | 0001 | 01 (bug fix) + 02 | the Renode release the vHIL moves to contains both |
 | 0002 | 03 + 04 + 05 | the release contains all three |
 | 0003 | 06 + 07 | the release contains both |
+| 0004 | 08 (STM32_Timer) + 09 (clock source arithmetic) | the release contains both |
+| 0005 + tlib/0001 | 10 (antmicro/tlib) + 11 (TranslationCPU) + 12 (renode's tests) | the release's tlib has 10 and its renode-infrastructure 11; this is a new API, proposed through an issue first, and may come back in another shape (then `VhilFastForward` follows it) or be declined (then the two patches stay here) |
 
 Upstream lands a PR through Antmicro's tree (the PR shows "Closed" when its
 commit is on master), possibly rewritten, and a release follows. Until the
@@ -66,10 +69,15 @@ rebased down to what is still missing. If upstream rejects a PR, its part of
 the patch stays in the queue.
 
 The PRs differ from the local patches in details reviewed for upstream (a
-separate bug fix and its tests, an exact first-match index, per-thread
-look-up cache, no reused scratch list; table in the upstream README), not in
-what a run computes: the vHIL's fingerprint is byte-identical between
-upstream master and master with the seven PRs.
+separate bug fix and its tests, an exact first-match index, a look-up cache
+owned by the bus and held weakly by threads, no reused scratch list, a
+2^31 instead of 2^21 bound for the clock source's integer path, (pc, hook)
+keys that don't collide for hook ids of 8 or more; table in the upstream
+README), not in what a run computes: the vHIL's fingerprint is
+byte-identical between upstream master and master with every PR. The tlib
+key collision is harmless here (`VhilFastForward` installs one pre-opcode
+hook, id 0); align `patches/tlib/0001` with PR 10 when the queue next
+changes anyway.
 
 ## Which build ran
 
@@ -139,7 +147,13 @@ run computes is unchanged ([`docs/performance.md`](../../docs/performance.md)).
    renode-resources commit the release's build uses, a new `VHIL_PATCH_SET`
    (`<new>-vhil.1`), `RENODE_INFRA_PATCHED_TREE`, `RENODE_TLIB_PATCHED_TREE`.
 4. Build the package; check `VhilFastForward` still calibrates (it finds
-   tlib's counters at run time) and that a run is byte-identical to the new
+   tlib's counters at run time) and that its `CMP.W` hook still fires
+   (`scripts/speed.py`'s `fast_forward` reports CMP.W hooks > 0 on the ECU):
+   upstream master (tlib `ff1bb507`, renode-infrastructure `c47c11a6`,
+   after 1.17.0) passes a 32-bit Thumb-2 instruction to opcode hooks as the
+   whole word, first halfword in the upper 16 bits, so the hook's mask
+   (`0xFBF0` / `0xF1B0`) must become `0xFBF00000` / `0xF1B00000` on the
+   first release with that change, or the counter-loop skips silently stop and that a run is byte-identical to the new
    release package's (the study's `fingerprint.py`); run the full CI
    (`full-ci`) and the `emulation speed` job.
 5. Bump `1.17.0` everywhere else in the same PR (CLAUDE.md, `.github/`,
