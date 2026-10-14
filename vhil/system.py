@@ -977,12 +977,14 @@ class System:
 
     def render_renode(self, firmware: dict[str, Path] | None = None,
                       socketcan: bool = False, lockstep: bool = False,
-                      sources: tuple[Path, ...] = ()) -> str:
+                      sources: tuple[Path, ...] = (), preloaded: bool = False) -> str:
         """The Renode script for this system. Without a path for a board, the
         script expects `$elf_<board>` to be set before it is included.
         lockstep: for vhil.sim, which only runs it in RunFor steps (see
         own_time_sources). sources: more C# models the caller uses (vhil.sim's
-        probes), compiled with the system's."""
+        probes), compiled with the system's. preloaded: for a Renode started
+        by vhil.renode.launch, which loaded every model already
+        (vhil/models.py): the script includes none."""
         own_time = self.own_time_sources(lockstep)
         firmware = firmware or {}
         extra = tuple(sources)
@@ -1020,7 +1022,7 @@ class System:
         compiled += [Path(src).as_posix() for src in extra if Path(src).as_posix() not in compiled]
         if arbitrated:
             compiled.append(CAN_BUS_SOURCE.as_posix())
-        if compiled:
+        if compiled and not preloaded:
             out += ["include " + " ".join(rn.file_arg(src) for src in compiled), ""]
         if arbitrated:
             out += [f"emulation CreateVhilCanBus {rn.quote(rn.ident(bus))}" for bus in arbitrated]

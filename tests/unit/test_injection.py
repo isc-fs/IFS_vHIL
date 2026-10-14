@@ -274,8 +274,9 @@ def test_renode_starts_with_its_own_monitor_port_off():
     assert cmd[cmd.index("-P") + 1] == "-1"
     assert cmd.count("-P") == 1 and "--port" not in cmd
     execute = cmd[cmd.index("-e") + 1]
-    assert execute == (f"include @{rn.MONITOR_SOURCE.as_posix()}; "
-                       f"emulation StartVhilMonitor 40123")
+    from vhil import models
+    assert execute == f"{models.include_command()}; emulation StartVhilMonitor 40123"
+    assert f"@{rn.MONITOR_SOURCE.as_posix()}" in execute
     source = rn.MONITOR_SOURCE.read_text()
     assert "new TcpListener(IPAddress.Loopback, port)" in source
 
