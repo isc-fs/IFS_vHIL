@@ -157,7 +157,19 @@ namespace Antmicro.Renode.Testing
             cpu.AddHookAtWfiStateChange(_ => interrupts++);
             // CMP.W Rn, #const (T2): 11110 i 0 1101 1 Rn; tlib matches a Thumb
             // opcode's first halfword (SUBS.W Rd, Rn, #const shares it).
-            cpu.AddPreOpcodeExecutionHook(0xFBF0, 0xF1B0, OnCompare);
+            compareHook = OnCompare;
+            cpu.AddPreOpcodeExecutionHook(0xFBF0, 0xF1B0, compareHook);
+            // A CMP.W that is not a delay loop's is left alone for good (its
+            // decode is remembered as none until a reset): a Renode that can
+            // stop calling the hook there (docker/renode's tlib patch) is told
+            // so, and the hook then reaches C# from the delay loops only.
+            var exclude = typeof(TranslationCPU).GetMethod("ExcludePreOpcodeExecutionHookAt", new[] { typeof(Action<ulong, ulong>), typeof(ulong) });
+            var clear = typeof(TranslationCPU).GetMethod("ClearPreOpcodeExecutionHookExclusions", Type.EmptyTypes);
+            if(exclude != null && clear != null)
+            {
+                excludeCompare = (Func<Action<ulong, ulong>, ulong, bool>)exclude.CreateDelegate(typeof(Func<Action<ulong, ulong>, ulong, bool>), cpu);
+                clearExclusions = (Action)clear.CreateDelegate(typeof(Action), cpu);
+            }
             machine.MachineReset += _ => OnReset();
             // Peripherals whose register reads are stable up to a time they
             // know (VhilStableUntil, ADC3's lazily computed conversions): a
@@ -217,7 +229,7 @@ namespace Antmicro.Renode.Testing
             return $"enabled={Enabled && disabledWhy == null}"
                 + (disabledWhy != null ? $" ({disabledWhy})" : "")
                 + $"; counter loops: {counterSkips} skips, {counterInstructions} instructions"
-                + $" ({compareCalls} CMP.W hooks, {Ms(compareTicks)} ms)"
+                + $" ({compareCalls} CMP.W hooks, {Ms(compareTicks)} ms, {excludedCompares} CMP.W excluded)"
                 + $"; polling loops: {pollSkips} skips, {pollInstructions} instructions"
                 + $" ({pollAttempts} armed, {pollRefusals} refused, {accessCalls} accesses, {Ms(accessTicks)} ms)"
                 + $"; time-bounded polls: {boundedSkips} skips, {boundedInstructions} instructions ({cues} cues)"
@@ -227,6 +239,11 @@ namespace Antmicro.Renode.Testing
         public void OnSync(TimeInterval _)
         {
             cueRefused.Clear();
+            if(pendingInvalidation)
+            {
+                pendingInvalidation = false;
+                tlib.InvokeOnCpuThread(() => cpu.InvalidateTranslationBlocks());
+            }
             // Master thread, between quanta: arm the polling detector for the
             // next quantum, on the CPU's thread (tlib is not thread-safe). A
             // detector armed for a whole quantum without finding an iteration
@@ -279,6 +296,12 @@ namespace Antmicro.Renode.Testing
             {
                 loop = CounterLoop.Decode(machine.SystemBus, cpu, pc);
                 loops[pc] = loop;
+                if(loop == null && excludeCompare != null && excludeCompare(compareHook, pc))
+                {
+                    // The blocks holding it are invalidated at the next sync.
+                    excludedCompares++;
+                    pendingInvalidation = true;
+                }
             }
             if(loop == null || !loop.StillThere())
             {
@@ -870,6 +893,17 @@ namespace Antmicro.Renode.Testing
         private void OnReset()
         {
             loops.Clear();
+            if(clearExclusions != null && excludedCompares > 0)
+            {
+                // Every CMP.W is looked at again after a reset, as the
+                // remembered decodes are gone: the hook back everywhere.
+                excludedCompares = 0;
+                tlib.InvokeOnCpuThread(() =>
+                {
+                    clearExclusions();
+                    cpu.ClearTranslationCache();
+                });
+            }
             kinds.Clear();
             timeBounded.Clear();
             Disarm();
@@ -896,6 +930,11 @@ namespace Antmicro.Renode.Testing
         private readonly TlibCounters tlib;
         private readonly MemoryAccessHook accessHook;
         private readonly Dictionary<ulong, CounterLoop> loops = new Dictionary<ulong, CounterLoop>();
+        private readonly Action<ulong, ulong> compareHook;
+        private readonly Func<Action<ulong, ulong>, ulong, bool> excludeCompare;
+        private readonly Action clearExclusions;
+        private long excludedCompares;
+        private bool pendingInvalidation;
         private readonly Dictionary<ulong, RegisterKind> kinds = new Dictionary<ulong, RegisterKind>();
         private readonly Dictionary<ulong, TimeBoundedRegister> timeBounded = new Dictionary<ulong, TimeBoundedRegister>();
         private ulong? cuePc;                         // the read that armed this attempt, if one did
