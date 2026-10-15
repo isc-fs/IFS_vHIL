@@ -77,6 +77,13 @@ namespace Antmicro.Renode.Peripherals
             }
         }
 
+        // The pages (PageBytes each, by start address) a lazy producer has
+        // tlib send through the bus (SetPageAccessViaIo), so that a CPU's
+        // access there catches it up: the busy-wait fast-forward never skips
+        // a load from one (VhilFastForward.cs, tick waits).
+        public readonly HashSet<ulong> IoPages = new HashSet<ulong>();
+        public const ulong PageBytes = 0x400;
+
         // The stream that took the last DMA request (read and cleared by the
         // requester right after it raised one).
         public IVhilDmaStream LastRequest { get; set; }
