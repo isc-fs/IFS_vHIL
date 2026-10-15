@@ -22,13 +22,22 @@
 // CAN bus model decides (VhilCanBus.cs). Between sync points each board runs
 // alone, as it does in a single-board system, which is deterministic.
 //
+// The slave runs on the master's thread (SlaveTimeSource.RunsOnMasterThread,
+// docker/renode's patch 0007), where the patch set has it: the master begins
+// the slave's quantum when it grants it time and ends it when it waits for
+// it, instead of a dispatcher thread per board between the master and the
+// board's CPU thread (two hand-offs a quantum, 2N + 1 spinning threads for
+// N boards, #260). The board keeps a time source of its own all the same.
+// VHIL_INLINE_SLAVES=0 in Renode's environment keeps the threads.
+//
 // The slave takes the master's quantum, advance-immediately and serial
 // settings at creation (`emulation SetGlobal*` set them on every slave
 // afterwards).
 //
 // A machine's reset (watchdog, SYSRESETREQ: Machine.RequestReset) now runs in
-// that machine's own synced state, on its own thread, so two boards can reset
-// at once. Renode's Monitor runs each board's reset macro by swapping its one
+// that machine's own synced state: on the master's thread with the slave
+// running there, on the slave's own thread without (VHIL_INLINE_SLAVES=0),
+// where two boards can reset at once. Renode's Monitor runs each board's reset macro by swapping its one
 // current-machine field (Monitor.ResetMachine, ObtainMachineContext) with no
 // lock: two at once could run one board's macro on the other. The reset
 // handlers are serialised here.
@@ -50,6 +59,12 @@ namespace Antmicro.Renode.Testing
             slave.Quantum = master.Quantum;
             slave.AdvanceImmediately = master.AdvanceImmediately;
             slave.ExecuteInSerial = master.ExecuteInSerial;
+            // Before AddMachine, which attaches the slave to the master.
+            var inline = slave.GetType().GetProperty("RunsOnMasterThread");
+            if(inline != null && Environment.GetEnvironmentVariable("VHIL_INLINE_SLAVES") != "0")
+            {
+                inline.SetValue(slave, true);
+            }
             emulation.AddMachine(machine, name);
             SerialiseResets(machine);
         }
