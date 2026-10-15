@@ -167,6 +167,29 @@ def _lock(renode: str):
             fcntl.flock(f, fcntl.LOCK_UN)
 
 
+def build_command(paths: list[Path] | None = None, renode: str = "renode") -> list[str]:
+    """Renode compiling the models and quitting. The monitor is on the console
+    (`--console`), its stdin /dev/null: Renode prints what a failed `include`
+    says there (the compiler's errors), and a failed command ends the -e line
+    before `quit`, so the monitor reads stdin next and exits at its end. With
+    `-P -1` the monitor's output went nowhere and Renode waited for ever."""
+    return [renode, "--disable-gui", "--plain", "--console", "-e",
+            f"{include_command(paths)}; quit"]
+
+
+def _text(data) -> str:
+    return data.decode(errors="replace") if isinstance(data, bytes) else (data or "")
+
+
+def _report(output: str) -> str:
+    """Renode's output for an error: the compiler's errors (Roslyn's
+    `file(line,col): error CSnnnn: ...` lines) first, then its last lines."""
+    lines = [line.rstrip("\r") for line in output.replace("\r\n", "\n").splitlines()]
+    errors = [line for line in lines if ": error " in line]
+    tail = "\n".join(lines[-30:]) or "(no output)"
+    return ("\n".join(errors) + "\n--- Renode's output:\n" + tail) if errors else tail
+
+
 def build(renode: str) -> str:
     """Compile every model into Renode's cache for `renode`, as the vHIL's
     starts include them, unless it is there. Returns the hash. Renode itself
@@ -181,16 +204,21 @@ def build(renode: str) -> str:
             return sha
         cache = _cache(renode)
         before = set(os.listdir(cache)) if cache.is_dir() else set()
-        cmd = [renode, "--disable-gui", "--plain", "-P", "-1", "-e",
-               f"{include_command(paths)}; quit"]
-        proc = subprocess.run(cmd, env={**rn.RENODE_ENV, **os.environ, **env(renode)},
-                              capture_output=True, text=True, timeout=BUILD_TIMEOUT_S)
+        cmd = build_command(paths, renode)
+        try:
+            proc = subprocess.run(cmd, env={**rn.RENODE_ENV, **os.environ, **env(renode)},
+                                  stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                                  timeout=BUILD_TIMEOUT_S)
+            output = proc.stdout + proc.stderr
+        except subprocess.TimeoutExpired as e:
+            output = _text(e.stdout) + _text(e.stderr)
+            raise ModelsError(f"Renode did not finish compiling the models' assembly {sha} "
+                              f"in {BUILD_TIMEOUT_S} s:\n{_report(output)}") from None
         after = set(os.listdir(cache)) if cache.is_dir() else set()
         new = sorted(after - before - {".lock"})
         if not built(renode, sha):
-            tail = "\n".join((proc.stdout + proc.stderr).splitlines()[-30:])
             raise ModelsError(f"Renode did not store the models' assembly {sha} "
-                              f"(stored: {new or 'nothing'}):\n{tail}")
+                              f"(stored: {new or 'nothing'}):\n{_report(output)}")
         manifest = _manifest(renode)
         manifest[sha] = {"sources": [p.name for p in paths], "commit": _commit(),
                          "renode": rn.build_id(renode),
