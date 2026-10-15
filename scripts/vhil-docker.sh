@@ -6,7 +6,7 @@
 #
 #   scripts/vhil-docker.sh vm                    create/start the VM, with vcan
 #   scripts/vhil-docker.sh image                 (re)build the images (docker/)
-#   scripts/vhil-docker.sh fw [ecu ams ...]      build firmware from systems/<s>.yaml
+#   scripts/vhil-docker.sh fw [ecu ams udv ...]  build firmware from systems/<s>.yaml
 #   scripts/vhil-docker.sh unit                  tests/unit + validate every system
 #   scripts/vhil-docker.sh smoke <ecu|ams>       tests/<s>_smoke.robot
 #   scripts/vhil-docker.sh sim [pytest args]     tests/sim in virtual time (or just the
@@ -150,6 +150,8 @@ sim)
     in_container "$prelude"'
         need_elf ecu; need_elf ams
         export VHIL_ECU_ELF=$(elf ecu) VHIL_AMS_ELF=$(elf ams) VHIL_CAN_BOOTLOADER_ELF=$(elf ecu.bootloader)
+        # The uDV only if built (`fw udv`): its tests skip without it.
+        export VHIL_UDV_ELF=$(elf udv)
             # tests/sim unless the arguments name tests themselves
             # (sim tests/sim/test_x.py[::name] runs just those).
             paths=tests/sim
@@ -173,7 +175,8 @@ speed)
     in_container "$prelude"'
         need_elf ecu; need_elf ams; need_elf ecu.bootloader; nproc
         mkdir -p results/speed
-        python scripts/speed.py "ecu=$(elf ecu)" "ams=$(elf ams)" \
+        udv=(); [ -n "$(elf udv)" ] && udv=("udv=$(elf udv)")
+        python scripts/speed.py "ecu=$(elf ecu)" "ams=$(elf ams)" ${udv[@]+"${udv[@]}"} \
             "bootloader=$(elf ecu.bootloader)" --json results/speed/speed.json "$@"' "$@" ;;
 ifs-hil)
     run_args=("${vcan_args[@]}")

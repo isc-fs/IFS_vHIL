@@ -206,7 +206,7 @@ namespace Antmicro.Renode.Testing
             // FMAC 16, CORDIC 17.
             [0x84] = new Register { Name = "AHB2RSTR", Defined = 0x00030271, Bits = new Dictionary<int, string[]>
             {
-                [6] = new[] { "rng" },
+                [6] = new[] { "rng" }, [17] = new[] { "cordic" },
             }},
             // §8.7.30 p. 414-415: GPIOA..H 0-7, GPIOJ 9, GPIOK 10 (no GPIOI on
             // the H733: bit 8 reserved), CRC 19, BDMA 21, ADC3 24, HSEM 25.

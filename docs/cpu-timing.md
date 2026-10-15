@@ -290,4 +290,7 @@ chip's widths, it also holds the train to them.
 - **A firmware that turns the caches on**, or moves code to ITCM, changes its
   rate a lot. Its catalogue entry must then be redone, as the AMS's was for
   IFS08-CE-AMS#637.
-- **The uDV** has no catalogue firmware yet, so it gets the platform's 528.
+- **The uDV** has the ECU's memory and clock configuration (caches off,
+  code in flash, FLASH_LATENCY_3), so its catalogue entry takes the ECU's
+  bound, 231 (`catalog/firmware/udv.yaml`). It times nothing by
+  busy-waiting, so no firmware window checks it.

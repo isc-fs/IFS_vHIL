@@ -603,10 +603,13 @@ def test_a_system_names_no_firmware_for_a_board_in_a_role(tmp_path, firmware):
 
 
 def test_a_role_without_catalogue_firmware_is_refused_by_name(tmp_path):
+    catalog = tmp_path / "catalog"
+    shutil.copytree(REPO / "catalog", catalog)
+    (catalog / "firmware" / "udv.yaml").unlink()
     p = tmp_path / "r.yaml"
     p.write_text("kind: system\nid: r\nboards:\n  dv: {board: mainlite, role: udv}\n")
     with pytest.raises(SystemError, match="role udv has no firmware in the catalogue yet"):
-        System(p)
+        System(p, catalog)
 
 
 def test_a_board_without_roles_names_its_firmware(tmp_path):

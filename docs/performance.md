@@ -565,6 +565,34 @@ of #260 before it. Compare within a job only.
   a scenario run 13.2-13.5 → 12.3-12.7 s; the identity fingerprint is
   unchanged.
 
+
+### The uDV, alone and in ecu-ams-udv
+
+Measured once the uDV had a firmware (IFS09-DV-uDV#12), on a MacBook through
+`scripts/vhil-docker.sh speed` (Colima VM, 8 vCPU arm64), median of 3
+(2026-10-15). The ECU and ecu-ams, one run on the same host the same day,
+for scale:
+
+| System | Boot 0-3 s: sim / bench | Boot CPU s/s (sim) | Steady +5 s: sim / bench | Steady CPU s/s (sim) |
+|---|---|---|---|---|
+| ecu | 1.60x / — | 0.91 | 3.86x / — | 0.34 |
+| ecu-ams | 1.06x / 1.17x | 2.17 | 1.50x / 1.43x | 1.28 |
+| udv | 0.24x / 0.58x | 4.52 | 0.07x / 0.18x | 13.9 |
+| ecu-ams-udv | 0.24x / 0.45x | 6.31 | 0.08x / 0.16x | 14.4 |
+
+- **The uDV never sleeps.** Its idle task spins: `configUSE_IDLE_HOOK` is 0,
+  so there is no `WFI` (IFS09-DV-uDV#13). A PC profile of the steady state
+  (`speed.py --profile`) puts 84 % of its core's time in `prvIdleTask` and
+  `prvCheckTasksWaitingTermination`, which the fast-forward doesn't skip (not
+  a polling loop), so the core runs every instruction: its CPU thread takes
+  13-22 s per virtual s. The ECU and the AMS sleep in their idle hooks
+  (IFS08-CE-ECU#261, IFS08-CE-AMS#626).
+- **So a system with a uDV runs at the uDV's pace.** ecu-ams-udv is the uDV's
+  rate, the ECU and the AMS waiting for it at every sync point; the three
+  boards' own cost (ECU 0.7, AMS 0.6 CPU s/s) is what ecu-ams-ecu measured.
+- The bench path is 2-3x the sim path here: one shared time source, and every
+  core at the wall-clock bench's rate instead of the catalogue's 231 MIPS.
+
 ### Several boards: the slaves on the master's thread, the CYCCNT waits (#260)
 
 Two changes after the measurements above, each its own PR, each with the
@@ -621,6 +649,16 @@ Tried, not adopted:
   access, and the check already starts in the iterations left at the end of
   the previous chunk (152,000 hooked accesses and 273 ms against 119,000 and
   138 ms over the window).
+
+### A new identity reference: STM32 timers' ARR + 1 period (#292)
+
+Patch 0007 (vhil.6) is a fidelity fix, not a speed-up: an STM32 timer's
+update event now comes every ARR + 1 counts, as on the chip, so the identity
+fingerprint changes once and the vhil.6 one is the reference for later
+patches. What moved, and by how much (only timing; frames, edges and their
+order are the same):
+[`docker/renode/README.md`](../docker/renode/README.md#the-patches). It
+adds no work per period (the same clock-entry updates).
 
 ### The hand-off's wait: studied, not shipped (#260)
 

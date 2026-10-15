@@ -83,7 +83,7 @@ including the pins the vHIL does not model.
   (owner, 2026-10-05).
 - Both are data on the board, not here: the MainLite's `roles` table
   (`catalog/boards/mainlite.yaml`) maps each role to its node id, flash bus
-  and firmware (ecu, ams; udv has none in the catalogue yet), and a system
+  and firmware (ecu, ams, udv), and a system
   places each MainLite in one (`role: ecu`) and names no firmware. The vHIL
   boots every MainLite through its bootloader, seeded with its role's node id.
 - The MainLite's CAN_1 header pins are L-then-H (J4.3 `CANL1`, J4.4

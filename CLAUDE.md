@@ -29,8 +29,8 @@ specific to that backend, platform or board.
 How fast the emulated core runs firmware code (virtual-time fidelity of
 busy-waits, ISR and task CPU time; not #154's wall-clock speed) is each
 firmware's `cpu.mips` in the catalogue, not the platform's: the H733 runs
-the ECU with its caches off, from flash, the AMS with its I-cache on since
-IFS08-CE-AMS#637
+the ECU and the uDV with their caches off, from flash, the AMS with its
+I-cache on since IFS08-CE-AMS#637
 ([`docs/cpu-timing.md`](docs/cpu-timing.md), #246).
 
 ---
@@ -167,8 +167,10 @@ them, e.g. "invariant 8"), so they are not in order.
 
 - (2) **HSE is 24 MHz** on the MainLite (`rcc.hseFrequency` in the
   platform). With Renode's 8 MHz default every FreeRTOS period runs 3× slow.
-- (3) **TIM23 is the HAL timebase.** Remove it and every HAL timeout spins
-  forever.
+- (3) **Each app's HAL timebase timer must be modelled.** That is TIM23 on the
+  ECU, TIM6 on the AMS and TIM1 on the uDV. The CAN bootloader's HAL tick is
+  SysTick. Remove it and every HAL timeout spins forever. Its period is
+  (ARR+1)·(PSC+1) timer clocks (RM0468 44.3.2, Renode patch 0007, #292).
 - (4) **Every address and IRQ in `stm32h733.repl` comes from ST's
   `stm32h733xx.h`.** Cite it; don't guess.
 - (5) **Every MainLite boots through its CAN bootloader**, as on the car: the
@@ -237,7 +239,8 @@ as CI ([`docs/development/setup.md`](docs/development/setup.md#docker-any-host-n
 Pinned versions: Renode **1.17.0** (the current backend), Arm GNU
 **14.2.Rel1**. Bump deliberately, in their own PR. The image and CI build
 Renode from the release's source with the patches in `docker/renode/`
-(speed only: a run computes the same as on the release package; a log's
+(speed, which computes the same as the release package, plus fidelity
+fixes such as 0007, STM32 timers' ARR + 1 period, #292; a log's
 first line names the build, `vhil: renode 1.17.0 ... + vhil patches ...`);
 a new release means rebasing them ([`docker/renode/README.md`](docker/renode/README.md)).
 
