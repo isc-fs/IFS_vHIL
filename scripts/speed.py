@@ -38,8 +38,9 @@ functions the host spent its time in.
 
 Benchmark-only systems (BENCH_ONLY, not in systems/): ecu-ams-ecu, ecu-ams
 plus a third MainLite running the ECU's application on buses of its own
-(scripts/speed-systems/), to measure how the cost grows from one board to two
-to three before the uDV has a firmware: --systems ecu ecu-ams ecu-ams-ecu.
+(scripts/speed-systems/), which measured how the cost grows from one board to
+two to three before the uDV had a firmware. The car's three-board system is
+ecu-ams-udv: --systems ecu ecu-ams ecu-ams-udv.
 
 --threads records each phase's CPU s per virtual s by thread (Linux): each
 board's CPU thread, the master time source's loop, the slave time sources
@@ -47,8 +48,8 @@ board's CPU thread, the master time source's loop, the slave time sources
 
 Firmware: board=ELF for each board a system names; bootloader=ELF stands for
 every <board>.bootloader; a board with no ELF of its own runs its firmware's
-(ecu=ELF for ecu-ams-ecu's ecu2). Defaults from VHIL_ECU_ELF, VHIL_AMS_ELF and
-VHIL_CAN_BOOTLOADER_ELF.
+(ecu=ELF for ecu-ams-ecu's ecu2). Defaults from VHIL_ECU_ELF, VHIL_AMS_ELF,
+VHIL_UDV_ELF and VHIL_CAN_BOOTLOADER_ELF.
 """
 from __future__ import annotations
 
@@ -290,7 +291,7 @@ class Run:
 
 # Systems measured for scaling only, not car systems (not in systems/, the
 # catalogue's systems): ecu-ams plus a third MainLite, the cost of a
-# three-board system before the uDV has a firmware.
+# three-board system measured before the uDV had a firmware (ecu-ams-udv now).
 BENCH_ONLY = {"ecu-ams-ecu": REPO / "scripts" / "speed-systems" / "ecu-ams-ecu.yaml"}
 
 
@@ -362,7 +363,7 @@ def main() -> int:
                          "for experiments")
     args = ap.parse_args()
     given = {k: v for k, v in (f.split("=", 1) for f in args.firmware)}
-    for key, env in (("ecu", "VHIL_ECU_ELF"), ("ams", "VHIL_AMS_ELF"),
+    for key, env in (("ecu", "VHIL_ECU_ELF"), ("ams", "VHIL_AMS_ELF"), ("udv", "VHIL_UDV_ELF"),
                      ("bootloader", "VHIL_CAN_BOOTLOADER_ELF")):
         if key not in given and os.environ.get(env):
             given[key] = os.environ[env]
