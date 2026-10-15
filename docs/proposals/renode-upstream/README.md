@@ -1,6 +1,6 @@
 # Upstreaming the Renode patch queue
 
-The vHIL builds Renode 1.17.0 with five local patches to renode-infrastructure
+The vHIL builds Renode 1.17.0 with six local patches to renode-infrastructure
 and one to tlib ([`docker/renode/patches/`](../../../docker/renode/patches/),
 study: [`../renode-fork-study.md`](../renode-fork-study.md)). This directory
 holds them rewritten as pull requests to the three upstream repositories,
@@ -11,13 +11,13 @@ has been posted**: Raul submits them after signing the CLA.
 Which repository each change belongs in:
 
 - [renode/renode-infrastructure](https://github.com/renode/renode-infrastructure),
-  the emulator's C# core: PRs 01-08 and 11;
+  the emulator's C# core: PRs 01-08, 11 and 13;
 - [antmicro/tlib](https://github.com/antmicro/tlib), the translation library
   (C, a submodule of renode-infrastructure at `src/Emulator/Cores/tlib`):
   PR 10, which PR 11 needs;
 - [renode/renode](https://github.com/renode/renode), which carries the
   submodule pointer (Antmicro bumps it when a change lands), the Robot
-  tests and the issues: PR 12 (tests for 10 + 11) and issues A, B and C.
+  tests and the issues: PR 12 (tests for 10 + 11) and issues A, B, C and D.
 
 ## The pull requests
 
@@ -26,6 +26,8 @@ Base: renode master `9b5195e6`, renode-infrastructure master `3e4301cf`
 renode-infrastructure points at), the heads on 2026-10-14. PRs 01-07 were
 first prepared on `59f8f5d0` / `5474222a`; their patches apply unchanged to
 the new base (`git am`, same trees), so only 05's (reworked, below) is new.
+PR 13 (local patch 0006, added 2026-10-15) is on the same base: the heads
+had not moved.
 
 | # | Repository | Directory | Title | Commits | Size | Depends on |
 |---|---|---|---|---|---|---|
@@ -40,6 +42,7 @@ the new base (`git am`, same trees), so only 05's (reworked, below) is new.
 | 10 | **antmicro/tlib** | [`10-tlib-pre-opcode-hook-exclusions/`](10-tlib-pre-opcode-hook-exclusions/) | Allow excluding a pre-opcode execution hook at an address | 1 | +89/-1, 4 files | - |
 | 11 | renode-infrastructure | [`11-cpu-pre-opcode-hook-exclusions/`](11-cpu-pre-opcode-hook-exclusions/) | TranslationCPU: Allow excluding a pre-opcode execution hook at an address | 1 (+ the tlib bump) | +50/-0, 1 file | 10 (in the tlib submodule) |
 | 12 | **renode/renode** | [`12-tests-pre-opcode-hook-exclusions/`](12-tests-pre-opcode-hook-exclusions/) | tests: Test excluding a pre-opcode execution hook at an address | 1 | +53/-0, 1 file (tests) | 11 (in `src/Infrastructure`) |
+| 13 | renode-infrastructure | [`13-slave-time-source-on-master-thread/`](13-slave-time-source-on-master-thread/) | SlaveTimeSource: Optionally run on the master's thread | 3 | +371/-89, 5 files (+44/-33 in the tests) | - |
 
 Each directory has the `git format-patch` output against its repository's
 master (`*.patch`, author and committer `Raul Moran <rmg@raulmoranguerra.com>`,
@@ -79,6 +82,12 @@ What the series does, in one line each:
   an address (`ExcludePreOpcodeExecutionHookAt`), so a hook that only has
   work at some of the addresses its mask matches stops costing a managed
   call at the others; tlib side, C# side, Robot tests.
+- **13** (opt-in time-framework mode): a `SlaveTimeSource` can run on its
+  master's thread (`RunsOnMasterThread`), so a machine with a time source
+  of its own costs one thread hand-off a quantum instead of two, and N such
+  machines N + 1 threads instead of 2N + 1. Three commits: `InnerExecute`
+  split into a begin and an end half (refactor), `RequestTimeInterval`'s
+  `noWait`, the mode itself; the slave time-source tests run both ways.
 
 How they map to the local queue:
 
@@ -89,6 +98,7 @@ How they map to the local queue:
 | 0003 (P5, allocations) | 06 + 07 | No reused scratch list for writes (it needed a re-entrancy flag): the changed-fields list is allocated when the first field changes; no enumerator boxing; log checks use `Logger.MinimumLogLevel <= level`, as `PL330_DMA` already does |
 | 0004 (timers) | 08 | Only the timer half is submitted. The clock source's integer arithmetic (prepared as PR 09) was dropped: exact, but no measurable host-time gain |
 | 0005 + tlib/0001 (hook exclusion) | 10 + 11 + 12 | tlib keys the set by (pc, hook id) pairs; the local patch packs them as `(pc << 3) \| id`, which collides for hook ids of 8 or more (`CPU_HOOKS_MASKS_LIMIT` is 256; harmless for the vHIL, whose only pre-opcode hook is id 0). Same API names and semantics, so `VhilFastForward` uses the upstream version as is; tests added |
+| 0006 (slave time source on the master's thread) | 13 | Rebased onto upstream's simplified `InnerExecute` (#100387, July 2026: unblock the not-ready handles, else grant the ready ones), split into three commits (the `InnerExecute`/`PhaseExecutor` split alone first, then `noWait`, then the mode); `PhaseExecutor`'s now unused `Execute`/`ExecuteInParallel` give way to the two halves; the `noWait` branch simplified to the same outcomes; the per-iteration fields `[Transient]`. Same property and semantics, so `VhilMachine` turns it on as is |
 
 The differences are review-driven, not behavioural: the vHIL's fingerprint
 is byte-identical between master and master with every PR, as it was
@@ -120,6 +130,34 @@ they decide, the vHIL keeps the local patch until a release carries an
 equivalent; if they decline, it stays local for good, which costs a rebase
 of two small patches per Renode release.
 
+## Will upstream want the slave time source on the master's thread (13)?
+
+Less certain than the rest. Since 2022 (renode-infrastructure 63702bc7,
+"[#32007] Machine: Use MasterTimeSource by default") every `mach create` machine runs on the
+emulation's master time source; a machine gets a `SlaveTimeSource` of its
+own only through `new Machine(createLocalTimeSource: true)`, which nothing in
+renode, renode-infrastructure or the tests calls. So 13 speeds up a path
+upstream itself moved away from: it helps whoever builds machines with a
+time source of their own (an integration creating machines from C# or
+Python, as the vHIL does for invariant 11: each board's timers on its own
+time, so lock-step runs are deterministic), and nothing else. Issue D says
+so, and asks whether they would rather have it on by default for such
+machines, behind a `Machine` argument, or not at all.
+
+What speaks for it: it is opt-in, off by default with no change, and the
+time framework's own tests run both ways; with slaves it takes a
+two-machine emulation from 8.01 s to 3.83 s of host time on Renode's own
+BLE demo with its machines on slave time sources (2.87 s on the master time
+source: from 2.8x that to 1.3x), the minimal two-machine loop from 1.31 s
+to 1.00 s, and the vHIL's three-board lock-step system 27 % faster
+(results.md). What may make Antmicro
+hesitate: it touches the time framework's core loop (`InnerExecute`), which
+they reworked in July (#100387), and it changes where a slave's sync phase
+runs (the master's thread, one slave after another, instead of each
+slave's thread); a precise pause hangs on a slave time source on master
+already (results.md), so slaves are a path they test little. If they decline
+it, the vHIL keeps patch 0006 (one patch to rebase per release).
+
 ## Results in short
 
 Details and every number: [`results.md`](results.md). Measured on a quiet
@@ -146,6 +184,20 @@ host (no other emulation running; every run checked).
   the series costs 7-12 %).
 - **Renode's demos**: no measurable change (they allocate 600-3,800 times
   less than the loops: idle or in translated code most of the time).
+- **13** (measured alone against master, 2026-10-15): the slave time source
+  tests pass both ways (NUnit 1,106 passed vs master's 1,095, the eleven
+  second cases), Robot as master (422 / 5 / 3); with every machine on a
+  slave time source (a test-only switch), ten time-framework and
+  multi-node Robot files fail the same 28 cases on master's threads and
+  with the mode on (slaves are a path upstream's suites don't take, and
+  they fail on master already; a precise pause even hangs there). With
+  the mode on, Renode's two-node BLE demo on slave time sources runs 2.09x
+  as fast (8.01 → 3.83 s, CPU -54 %), two spinning machines 1.31x; the
+  vHIL's three-board lock-step system 26-27 % faster (two boards: -7 to
+  -11 % CPU at the same speed); mode off, single machines and `mach create`
+  machines unchanged; the vHIL's fingerprint (ecu, ams, ecu-ams,
+  ecu-ams-ecu, 10 s) byte-identical across master, 13 and 13 with the mode
+  off.
 - **Found on the way**: the local tlib patch's (pc, hook) key collides for
   hook ids of 8 or more (fixed in 10; harmless for the vHIL); 11's first
   revision left the invalidation of already translated blocks to the caller
@@ -170,7 +222,11 @@ in any order (03, 04 and 05 touch different parts of `SystemBus.cs`). 10-12 are 
 repositories: 10 (tlib) must be merged and the tlib submodule moved before
 11 can land (11 adds `[Import]`s of 10's exports, and a missing import fails
 every CPU's creation), and 12's tests need 11 in renode's
-`src/Infrastructure`. Suggested order, smallest risk first:
+`src/Infrastructure`. 13 is independent of all of them: it changes
+`TimeSourceBase`, `TimeHandle`, `SlaveTimeSource` and `TimeDomainsManager`,
+none of which 01-12 touch (01/02 change `BaseClockSource`), applies to master
+alone and on top of 01-08 + 11 (checked with `git am`). Suggested order,
+smallest risk first:
 
 1. 01 (bug fix, with failing-on-master tests)
 2. 03, 07 and 08 (a few lines each)
@@ -178,6 +234,8 @@ every CPU's creation), and 12's tests need 11 in renode's
 4. 02 (once 01 is in, or at least reviewed)
 5. issue C; once Antmicro agrees on the shape: 10, then 11 (after tlib's
    master has 10 and renode-infrastructure's submodule points there), then 12
+6. issue D; once Antmicro answers (opt-in as is, on by default for
+   machines with a time source of their own, or not at all): 13
 
 Opening 03-08 at once is fine too; each says it is one of a series from
 issue B. Upstream merges through its own tree (often rewriting: they
@@ -213,15 +271,17 @@ is needed.
 
 Upstream's CONTRIBUTING.md asks for an issue even when you send the fix
 yourself. Open [`ISSUES.md`](ISSUES.md)'s issue A (bug report template),
-issue B (feature request template, the performance series) and issue C
-(feature request template, the hook exclusion) at
+issue B (feature request template, the performance series), issue C
+(feature request template, the hook exclusion) and issue D (feature request
+template, the slave time source on the master's thread) at
 <https://github.com/renode/renode/issues/new/choose>. Note their numbers:
-`A`, `B` and `C` below. For C, wait for a maintainer's answer before opening
-10-12 if you prefer not to spend review time on a shape they would change.
+`A`, `B`, `C` and `D` below. For C and D, wait for a maintainer's answer
+before opening 10-12 / 13 if you prefer not to spend review time on a shape
+they would change.
 
 ### 3. Fork, apply, push, open
 
-renode-infrastructure, PRs 01-08:
+renode-infrastructure, PRs 01-08 and 13:
 
 ```sh
 gh repo fork renode/renode-infrastructure --clone=false     # once, under your account
@@ -229,11 +289,11 @@ git clone https://github.com/renode/renode-infrastructure && cd renode-infrastru
 git remote add fork https://github.com/<you>/renode-infrastructure
 git fetch origin master
 P=<path to IFS_vHIL>/docs/proposals/renode-upstream
-A=<issue A number>; B=<issue B number>; C=<issue C number>
+A=<issue A number>; B=<issue B number>; C=<issue C number>; D=<issue D number>
 
 # Fill the placeholders in the PR bodies (PR_01 once 01 is open, for 02;
 # PR_10, PR_11, PR_12 once those are open)
-sed -i '' "s/ISSUE_A/$A/g; s/ISSUE_B/$B/g; s/ISSUE_C/$C/g" $P/*/PR.md
+sed -i '' "s/ISSUE_A/$A/g; s/ISSUE_B/$B/g; s/ISSUE_C/$C/g; s/ISSUE_D/$D/g" $P/*/PR.md
 
 # One PR: a branch named <issue>-<short_name> (CONTRIBUTING.md) off master
 pr() {  # pr <dir> <branch>
@@ -250,6 +310,7 @@ pr 08-stm32-timer-unused-channels    $B-stm32_timer_unused_channels
 pr 06-register-framework-allocations $B-register_framework_allocations
 pr 04-sysbus-access-context          $B-sysbus_access_context
 pr 05-sysbus-context-lookup-cache    $B-sysbus_context_lookup_cache
+pr 13-slave-time-source-on-master-thread $D-slave_time_source_on_master_thread   # after issue D's answer
 ```
 
 02 goes on 01's branch until 01 lands, and is opened against master with
@@ -320,7 +381,7 @@ git rebase origin/master --exec \
   'git commit --amend --no-edit -m "$(git log -1 --format=%B | sed "1s/^\(\[FIX\] \)\{0,1\}/[#'$B'] /")"'
 ```
 
-(01 with `$A`, 10-12 with `$C`; on 02's branch rebase onto
+(01 with `$A`, 10-12 with `$C`, 13 with `$D`; on 02's branch rebase onto
 `$A-clock_entry_stale_index` instead, so only 02's two commits change.)
 Recent external PRs have landed both with and without it
 (renode-infrastructure#217 `[#941] NVIC: ...`, #224 `[#953] ...`; #220 and
@@ -386,6 +447,9 @@ git -C $RENODE_UPSTREAM submodule update --init --recursive
 #     tlib's up/10-..., then 11's patch; up/all = 01-08 + 11
 #   src/Infrastructure/src/Emulator/Cores/tlib: up/master, up/10-...
 #   renode itself: master, up/12-... (12's patch), up/all = up/12-...
+#   PR 13 (src/Infrastructure): up/13-slave-on-master-thread (13's patches),
+#     up/13-first-two (its first two commits), up/13-forced (+ tooling/test-slaves.patch),
+#     up/master-forced (master + tooling/test-slaves-master.patch)
 docker build -t renode-up-builder -f $T/builder.Dockerfile $T
 docker build -t renode-up-runtime -f $T/runtime.Dockerfile $T          # ifs-vhil + perf
 $T/build.sh master up/master $(grep -v '^#' $T/tests.txt)              # build + Renode's suites
@@ -402,6 +466,28 @@ $T/vhil-ab.sh speed perpr 3 "master pr02 pr03 pr04 pr05 pr06 pr07 pr08 pr11 all"
 python3 $T/summarize_vhil.py $WORK/results/ab master
 $T/vhil-ab.sh fingerprint master; $T/vhil-ab.sh fingerprint all        # then compare the two files
 $T/profile.sh master stock-ecu-ams ecu-ams sim                         # perf; ../renode-patches/tooling/stacks.py
+# PR 13
+$T/build.sh pr13 up/13-slave-on-master-thread $(grep -v '^#' $T/tests.txt)
+$T/build.sh master13 up/master src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj \
+    $(grep -v '^#' $T/tests-time.txt)
+$T/build.sh pr13-c2 up/13-first-two src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj
+for m in "masterx-threads up/master-forced threads" "pr13x-threads up/13-forced threads" "pr13x-inline up/13-forced inline"; do
+    set -- $m; RENODE_TEST_SLAVES=$3 $T/build.sh $1 $2 --test-timeout 120 $(grep -v '^#' $T/tests-slaves.txt)
+done
+# ./renode-test also runs from a package (renode-up-pkgs:/<name>, no rebuild): pr13 on
+#   $(grep -v '^#' tests-time.txt) against master13; -n 3 tests/unit-tests/cpu-pause-halt.robot
+#   in masterx-threads / pr13x-threads / pr13x-inline with RENODE_TEST_SLAVES (the flaky cases)
+# multi-*-inline fail on master (no RunsOnMasterThread): bench.sh prints FAILED for them
+$T/bench.sh $WORK/results/multi.jsonl 7 "master pr13" \
+    "multi-spin-shared multi-spin-slaves multi-spin-inline multi-ble-shared multi-ble-slaves multi-ble-inline bus-trivial"
+python3 $T/summarize_bench.py $WORK/results/multi.jsonl master
+# The vHIL's models no longer compile on upstream master (#104075 moved Monitor.SanitizePathSeparator):
+# for these runs, edit models/renode/VhilMonitor.cs to Antmicro.Renode.Utilities.PathHelpers.SanitizePathSeparator
+# (locally; revert after, the vHIL's 1.17.0 build has no PathHelpers)
+FP_SYSTEMS="ecu ams ecu-ams ecu-ams-ecu" $T/vhil-ab.sh fingerprint master 10000 r13-master   # and pr13;
+FP_SYSTEMS="ecu ams ecu-ams ecu-ams-ecu" VHIL_INLINE_SLAVES=0 $T/vhil-ab.sh fingerprint pr13 10000 r13-pr13-threads
+$T/vhil-ab.sh speed r13-ab 5 "master pr13" --systems ecu ams ecu-ams ecu-ams-ecu --paths sim bench
+python3 $T/summarize_vhil.py $WORK/results/r13-ab master
 ```
 
 The whole round (builds, both test runs, every benchmark) took about five

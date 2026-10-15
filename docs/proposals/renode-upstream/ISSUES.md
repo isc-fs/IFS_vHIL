@@ -4,7 +4,7 @@ Renode's CONTRIBUTING.md asks for an issue even when you send the fix
 yourself ("Please create an issue even if you plan to fix it"), and its
 commit subjects carry the issue number (`[#1234] Tag: Description`; GitHub
 issues land as `[GH#941]`, e.g. renode-infrastructure@[GH#941] NVIC). Open
-these three in https://github.com/renode/renode/issues/new/choose, then put
+these four in https://github.com/renode/renode/issues/new/choose, then put
 the numbers in the PRs (README.md, step 3).
 
 ---
@@ -209,3 +209,88 @@ submodule) and renode/renode "tests: Test excluding a pre-opcode execution
 hook at an address". If you would rather have a different shape (e.g. a
 return value from the hook meaning "not here again", or post-opcode hooks
 too), we are happy to adapt.
+
+---
+
+## Issue D (template: Feature/support request)
+
+**Title:** `Time framework: a slave time source costs an extra thread hand-off per quantum`
+
+### Description
+
+A machine created with a time source of its own
+(`new Machine(createLocalTimeSource: true)`) runs on a `SlaveTimeSource`
+attached to the emulation's master time source. The slave hands every grant
+on to its sinks (the machine's CPU threads) from a dispatcher thread of its
+own, so each quantum goes master thread → slave's thread → CPU threads and
+the reports come back the same way: two thread hand-offs per quantum per
+machine where a machine on the master time source has one, and 2N + 1
+threads for N machines, which spin while they wait for each other.
+
+Machines from `mach create` are not affected (they share the master time
+source since renode-infrastructure 63702bc7, "[#32007] Machine: Use
+MasterTimeSource by default"). It matters to whoever gives machines a time source of
+their own, typically so that each machine's timers, sync points and
+delayed actions (`ExecuteInSyncedState`) follow that machine's own time
+rather than the slowest CPU's, which keeps multi-machine runs repeatable.
+
+The cost is the time framework's, not the machines' work:
+
+- Renode's two-node BLE demo (`scripts/multi-node/nrf52840-ble-zephyr.resc`:
+  Zephyr's heart-rate central and peripheral, 10 us quanta, both nodes
+  idle most of the time), 5 s of virtual time, with its `mach create`s
+  replaced by machines with time sources of their own: 8.01 s of host time
+  and 6.1 CPU seconds per virtual second, against 2.87 s and 2.1 on the
+  master time source;
+- two Cortex-M4s spinning, 10 us quanta, 0.5 s: 1.31 s and 9.8 CPU s/s,
+  against 0.68 s and 5.1;
+- in a three-machine STM32H7 emulation of ours (host `perf` by thread,
+  x86), the slaves' dispatcher threads were a quarter of all samples.
+
+(Master 9b5195e6, Linux arm64 in Docker, 4 cores, median of 7. The scripts
+create each machine with
+`EmulationManager.Instance.CurrentEmulation.AddMachine(Machine(True), name)`
+from the monitor's Python, then `mach set` it.)
+
+### Usage example
+
+```python
+from Antmicro.Renode.Core import EmulationManager, Machine
+m = Machine(True)                             # a time source of its own
+m.LocalTimeSource.RunsOnMasterThread = True   # proposed
+EmulationManager.Instance.CurrentEmulation.AddMachine(m, "m0")
+```
+
+Proposed: `SlaveTimeSource.RunsOnMasterThread`, off by default. When set
+(before the slave is attached), the master begins the slave's iteration on
+its own thread when it grants the slave time and ends it when it waits for
+it, so the slave's sinks run beside the master's other sinks with no
+dispatcher thread in between: one hand-off per quantum per machine and
+N + 1 threads. Each machine keeps its own time source (quantum, sync
+points, sync hooks, delayed actions, pause); the difference is that the
+slaves' sync phases run on the master's thread one after another instead
+of concurrently on their own threads.
+
+### Additional information
+
+We use machines with time sources of their own in a virtual
+hardware-in-the-loop bench (two and three STM32H733 boards in lock-step,
+CAN between them) and carry this change as a patch on 1.17.0: steady state
+20-23 % faster with two and three boards and 29-36 % less CPU (x86, 4
+vCPUs), and byte-identical results (bus timelines, GPIO edges with
+instruction counts, CPU state and RAM). With the change, the BLE demo above takes 3.83 s and
+2.8 CPU s/s, the spinning pair 1.00 s and 7.6.
+
+While testing it we found that a precise pause (`Wait For Line On Uart ...
+pauseEmulation=true`, `tests/unit-tests/precise-pause.robot`) never returns
+when the machine has a time source of its own, on master already; a
+separate problem, reported here in case it is not known.
+
+### Do you plan to address this issue and file a PR?
+
+Yes: renode/renode-infrastructure "SlaveTimeSource: Optionally run on the
+master's thread" (three commits: `InnerExecute` split into a begin and an
+end half, `RequestTimeInterval(noWait)`, the mode). We made it opt-in to
+keep the default untouched; if you would rather have it on by default for
+machines with a time source of their own, or set through `Machine`, we are
+happy to change it.
