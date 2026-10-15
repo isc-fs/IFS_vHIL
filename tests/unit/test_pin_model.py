@@ -122,9 +122,6 @@ def test_every_backplane_pin_is_emulated(tmp_path, role):
     assert "unwired" not in _board()
     catalog = tmp_path / "catalog"
     shutil.copytree(REPO / "catalog", catalog)
-    if role == "udv":       # no udv firmware in the catalogue yet: lend it one
-        (catalog / "firmware" / "udv.yaml").write_text(
-            (catalog / "firmware" / "ecu.yaml").read_text().replace("id: ecu", "id: udv"))
     board = System(_system(tmp_path, "", role), catalog).boards[role]
     for pin, want in WIRED_PINS.items():
         kind, target = board.endpoint(pin)

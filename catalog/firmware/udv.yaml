@@ -1,0 +1,51 @@
+kind: firmware
+id: udv
+description: >-
+  Driverless controller (uDV) application, run behind the CAN bootloader: the
+  AS state machine, EBS, RES, the ECU torque seam on the ACU bus, and
+  micro-ROS over USB CDC to the DVPC.
+repo: isc-fs/IFS09-DV-uDV
+ref: dev
+# micro_ros_stm32cubemx_utils (isc-fs, humble-isc) carries the prebuilt
+# libmicroros.a and its headers: no micro-ROS build is needed, but the
+# submodule must be there to link.
+submodules: true
+build:
+  toolchain: Arm GNU 14.2.Rel1
+  # The repo's production build is its Makefile (IFS09-DV-uDV CLAUDE.md "Make
+  # (primary)"; .github/workflows/build.yml job `build`: `make -j`), which
+  # also bakes in GIT_HASH for the firmware-info record and pit-diag 0x7A4.
+  # It has no configure step: `make clean` starts from an empty build/.
+  # IFS_HIL has no uDV recipe yet (configs/firmware/ has ams and ecu only);
+  # this mirrors the repo's CI until it does.
+  configure: make clean
+  build: make -j
+  elf: build/binaries/uDV.elf
+  recipe_source: IFS09-DV-uDV .github/workflows/build.yml (job build); IFS_HIL configs/firmware/udv.yaml pending
+load:
+  # Linked at 0x08020000 behind the bootloader since IFS09-DV-uDV#12
+  # (STM32H733XG_FLASH.ld, scripts/check_flash_layout.py), and never sets VTOR
+  # itself (USER_VECT_TAB_ADDRESS undefined in system_stm32h7xx.c, main.c USER
+  # CODE 1): the bootloader does that before jumping, so the loader must too.
+  vector_table: 0x08020000
+cpu:
+  # docs/cpu-timing.md, #246. The uDV runs from flash with the I- and D-caches
+  # off (no SCB_EnableICache/DCache in Core/Src, none in uDV.ioc), SYSCLK
+  # 528 MHz, AXI 264 MHz (AHBCLKDivider RCC_HCLK_DIV2), FLASH_LATENCY_3
+  # (main.c SystemClock_Config): the ECU's memory and clock configuration, so
+  # the ECU's caches-off bound from flash applies (catalog/firmware/ecu.yaml).
+  # The uDV times nothing by busy-waiting (dwt_time.c reads CYCCNT), so no
+  # firmware window measures it; the chip's number replaces it (#246).
+  mips: 231
+state_view:
+  # What the state panel shows of a uDV (docs/state-view.md). Citations are
+  # IFS09-DV-uDV at the catalogue ref (dev).
+  #
+  # The AS state, AppTask's snapshot every state-machine tick
+  # (ros_globals.cpp:21, app_task.cpp:240): ASState (state_manager.hpp:12-18).
+  - {label: AS state, kind: state, source: "symbol:g_telemetry_as_state", values: {"0": "OFF", "1": "READY", "2": "DRIVING", "3": "EMERGENCY", "4": "FINISHED"}}
+  # The EBS valves, low = fire (hardware_io.c, main.h D1_Pin PB4 / D2_Pin
+  # PB5), and the SDC relay, high = closed (main.h D4_Pin PB7).
+  - {label: EBS valve 1, kind: relay, source: "pin:PB4"}
+  - {label: EBS valve 2, kind: relay, source: "pin:PB5"}
+  - {label: SDC, kind: relay, source: "pin:PB7"}

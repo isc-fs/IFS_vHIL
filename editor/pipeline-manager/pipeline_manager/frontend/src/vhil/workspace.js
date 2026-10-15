@@ -381,8 +381,9 @@ export const clearRefs = () => refsCache.clear();
 
 /**
  * A board's app and bootloader: the firmware each runs (the role sets which:
- * a node property shown read-only) and the ref picked for it. "udv (not in
- * the catalogue yet)" names firmware udv all the same.
+ * a node property shown read-only) and the ref picked for it. "<id> (not in
+ * the catalogue yet)", a role whose firmware the catalogue lacks, names
+ * firmware <id> all the same.
  */
 export function boardFirmware(node) {
     return [

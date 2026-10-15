@@ -2,8 +2,9 @@ kind: system
 id: ecu-ams-ecu
 description: >-
   BENCHMARK ONLY, not a car system (scripts/speed.py --systems ecu-ams-ecu):
-  ecu-ams plus a third MainLite, so the cost of a three-board system is
-  measured before the uDV (role udv) has a firmware. The third board runs the
+  ecu-ams plus a third MainLite, so the cost of a three-board system was
+  measured before the uDV (role udv) had a firmware (systems/ecu-ams-udv.yaml
+  is the car's three-board system now). The third board runs the
   ECU application in role ecu on buses of its own (two ECUs on one bus would
   share node and frame IDs), with its own nRF24, as ecu.yaml's ECU does.
 time:

@@ -14,19 +14,23 @@
 #   machine: <board instance>  (optional; omit = any board)
 
 - peripheral: usb1
-  why: "USB OTG HS: CubeMX initialises it (MX_USB_OTG_HS_PCD_Init), but neither app ever uses USB"
+  why: "USB OTG HS (Renode's STM_USB). The ECU and the AMS initialise it (MX_USB_OTG_HS_PCD_Init) and never use it. The uDV runs micro-ROS over USB CDC to the DVPC (IFS09-DV-uDV usb_cdc_transport.c), and no system attaches a USB host: the core initialises and never sees a bus reset or enumeration, so the uDV's agent ping fails and it retries (ros_task.c), as on the car with the DVPC off. The dropped bits (PHY select, device speed, FIFO sizes, endpoint interrupt masks) only matter once a host enumerates the device"
 
 - peripheral: fdcan1*
   offsets: [0x108]
   why: "TT-CAN TTOCF. HAL_FDCAN_Init clears its OM bits on FDCAN1 (stm32h7xx_hal_fdcan.c:583) and HAL reads it to test for TT mode; reading 0 means event-driven, which is the firmware's real configuration"
 
 - peripheral: rcc
-  offsets: [0x2C, 0x54, 0xEC, 0xF0]
-  why: "PLLCFGR fractional/range bits (0x2C), D2CCIP2R USBSEL (0x54), and the H72x/H73x-only enable bits the H743 RCC model treats as reserved: APB1HENR.TIM23EN bit 24 (0xEC) and APB2ENR.USART10EN bit 7 (0xF0), per stm32h733xx.h. Renode does not gate clocks, so those peripherals run regardless; frequencies come from the PLL dividers, which are modelled"
+  offsets: [0x2C, 0x54, 0xDC, 0xEC, 0xF0]
+  why: "PLLCFGR fractional/range bits (0x2C), D2CCIP2R USBSEL (0x54), and the H72x/H73x-only enable bits the H743 RCC model treats as reserved: AHB2ENR.CORDICEN bit 17 (0xDC, the uDV), APB1HENR.TIM23EN bit 24 (0xEC) and APB2ENR.USART10EN bit 7 (0xF0), per stm32h733xx.h. Renode does not gate clocks, so those peripherals run regardless; frequencies come from the PLL dividers, which are modelled"
 
 - peripheral: rcc
   offsets: [0xD0, 0x130]
   why: "RCC_RSR and its RCC_C1_RSR mirror are owned by models/renode/VhilResetFlags.cs through bus hooks: reads return its flags and an RMVF write clears them there. The RCC model's own field underneath is shadowed, so its unhandled-bit warning is moot"
+
+- peripheral: syscfg
+  offsets: [0x4]
+  why: "SYSCFG_PMCR.PC2SO (bit 26, stm32h733xx.h): the uDV's HAL_ADC_MspInit opens the analog switch between PC2 and PC2_C (IFS09-DV-uDV adc.c:141). It decides whether the digital PC2 pad joins ADC3 INP0's PC2_C; the model reads PC2_C's voltage on channel 0 either way (catalog/boards/mainlite.yaml), and the uDV samples channels 2, 3, 6, 7, 10 and 11, never 0 (hardware_io.c:100-147), so the switch cannot change a reading"
 
 - peripheral: usart10
   offsets: [0x08, 0x2C]
