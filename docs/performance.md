@@ -17,6 +17,20 @@ python scripts/speed.py ecu=ECU08.elf ams=AMS.elf bootloader=CAN_BL.elf \
     [--baseline] [--repeat N] [--threads] [--profile DIR] [--setup "vhil_ff_{board} Enabled false"]
 ```
 
+A speed change must not change what a run computes: the identity
+fingerprint ([`fingerprint.py`](proposals/renode-patches/tooling/fingerprint.py),
+in the image with the firmware from `VHIL_ECU_ELF`, `VHIL_AMS_ELF`,
+`VHIL_UDV_ELF` and `VHIL_CAN_BOOTLOADER_ELF`: `python
+docs/proposals/renode-patches/tooling/fingerprint.py OUT.json 10000`)
+records what a lock-step run of ecu, ams, ecu-ams, udv, ecu-ams-udv and
+ecu-ams-ecu observes over 10 s from power-on (every bus's timeline, GPIO
+edges with instruction counts, radio payloads, each CPU's executed
+instructions, PC, state and RAM digests, the HAL tick) and a SHA-256 of it
+per system; a pure speed change leaves the file byte-identical. On dev
+0b7449a (patch set vhil.6, firmware at the catalogue's refs, 2026-10-15):
+ecu `f66bae9a`, ams `e34419b8`, ecu-ams `8afef3de`, udv `f61019b8`,
+ecu-ams-udv `a329f2fb`, ecu-ams-ecu `4718c51b`.
+
 `ecu-ams-ecu` is a benchmark, not a car system
 ([`scripts/speed-systems/`](../scripts/speed-systems/ecu-ams-ecu.yaml), named
 in `speed.py`'s `BENCH_ONLY`, so the catalogue, the editor and the scenarios
