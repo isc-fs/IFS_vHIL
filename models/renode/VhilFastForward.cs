@@ -50,6 +50,13 @@
 //       before them found them,
 //   the machine is at a fixed point: each further iteration repeats the last
 //   until an event changes a peripheral.
+//   The RAM comparison copies and compares every RAM byte the board has
+//   touched (330 KB on the uDV), for every proof. An iteration whose code
+//   writes no memory on any path it may have taken (StoreFreeLoop: every
+//   path of exactly its instruction count from the boundary access back to
+//   it, decoded from the code) leaves RAM as it was by construction, so only
+//   the CPU's registers are compared: the uDV's ADC3 polls, six a
+//   millisecond.
 //   Self-yielding polls: an iteration may pend a PendSV itself (a FreeRTOS
 //   taskYIELD: SCB ICSR = PENDSVSET, then the PendSV handler switches back to
 //   the same task), as the uDV's micro-ROS transport read does on every pass
@@ -286,6 +293,7 @@ namespace Antmicro.Renode.Testing
                 + $" ({pollAttempts} armed, {pollRefusals} refused, {accessCalls} accesses, {Ms(accessTicks)} ms)"
                 + $"; time-bounded polls: {boundedSkips} skips, {boundedInstructions} instructions ({cues} cues)"
                 + $"; self-yielding polls: {yieldSkips} skips, {yieldInstructions} instructions"
+                + $" ({storeFreeProofs} proven store-free)"
                 + $"; tick waits: {tickSkips} skips, {tickInstructions} instructions"
                 + $"; CYCCNT waits: {cycleSkips} skips, {cycleInstructions} instructions"
                 + $" ({branchCalls} BCC hooks, {Ms(branchTicks)} ms, {excludedBranches.Count} BCC excluded)"
@@ -695,20 +703,29 @@ namespace Antmicro.Renode.Testing
                 firstTrace.Clear();
                 firstTrace.AddRange(trace);
                 firstK = k;
-                snapshot.Take(tlib, memories);
+                // An iteration whose every possible path writes no memory
+                // (StoreFreeLoop) leaves RAM as it found it by construction:
+                // only the CPU's registers need comparing. Otherwise, every
+                // RAM byte as well.
+                storeFree = yields == 0 && storeFreeLoops.IsStoreFree(access.Pc, k);
+                snapshot.Take(tlib, storeFree ? null : memories);
                 Begin(PollState.Second, access, position);
                 return;
             }
-            if(!snapshot.Matches(tlib, memories, out var where))
+            if(!snapshot.Matches(tlib, storeFree ? null : memories, out var where))
             {
                 if(++retries > MaxRetries)
                 {
                     Refuse($"an iteration of {k} instructions at 0x{access.Pc:X8} changes {where}");
                     return;
                 }
-                snapshot.Take(tlib, memories);
+                snapshot.Take(tlib, storeFree ? null : memories);
                 Begin(PollState.Second, access, position);
                 return;
+            }
+            if(storeFree)
+            {
+                storeFreeProofs++;
             }
             // A fixed point. Leave one real iteration, and the rest of the
             // current block (at most one iteration: every iteration has a
@@ -1191,6 +1208,7 @@ namespace Antmicro.Renode.Testing
             waits.Clear();
             tickWaits.Clear();
             lastTick = null;
+            storeFreeLoopsCache?.Clear();
             if(clearExclusions != null && excludedCompares.Count + excludedBranches.Count > 0)
             {
                 // Every CMP.W and BCC is looked at again after a reset, as the
@@ -1259,10 +1277,14 @@ namespace Antmicro.Renode.Testing
         private ulong boundedSkips;
         private ulong boundedInstructions;
         private ulong yieldSkips;
+        private ulong storeFreeProofs;
+        private bool storeFree;
         private ulong yieldInstructions;
         private readonly List<Access> trace = new List<Access>();
         private readonly List<Access> firstTrace = new List<Access>();
         private readonly Snapshot snapshot = new Snapshot();
+        private StoreFreeLoop storeFreeLoopsCache;
+        private StoreFreeLoop storeFreeLoops => storeFreeLoopsCache ?? (storeFreeLoopsCache = new StoreFreeLoop(machine.SystemBus, cpu));
         private List<MappedMemory> memories => memoriesCache ?? (memoriesCache = Snapshot.Ram(machine));
         private List<MappedMemory> memoriesCache;
 
@@ -1438,6 +1460,339 @@ namespace Antmicro.Renode.Testing
         public int Rn { get; private set; }
 
         private ushort[] code;
+    }
+
+    // Whether every path one polling iteration may have taken writes no
+    // memory, from its code: the iteration starts at the instruction making
+    // its boundary access (pc) and runs k instructions, with no exception
+    // (the detector refuses any other), until that instruction again. Every
+    // path of exactly k instructions from pc back to pc through the code,
+    // following BL into the callee and BX LR back, is enumerated (pruned at
+    // k, and wherever it reaches pc early: that would have been a boundary
+    // access); the iteration took one of them. If none of them has a store
+    // (STR*, STM, PUSH, STREX, STRD, a coprocessor store) and none reaches an
+    // instruction whose successor is not known from the code (an indirect
+    // branch other than BX LR back from a followed BL, a load into PC, TBB,
+    // an IT block, SVC, BKPT, UDF, BLX), the iteration wrote no memory: its
+    // loads read RAM or, through the bus, peripherals (which the detector
+    // sees as accesses and checks), and RAM changes within a chunk only by
+    // the CPU. Thumb-2 encodings from the ARMv7-M ARM, A5.2-A5.3.
+    // Small iterations only (MaxSteps); a larger one is compared by
+    // snapshot. Results are kept per (pc, k) with the code halfwords they
+    // read, which are checked again on every use.
+    public class StoreFreeLoop
+    {
+        public StoreFreeLoop(IBusController bus, ICPU cpu)
+        {
+            this.bus = bus;
+            this.cpu = cpu;
+        }
+
+        public void Clear() => known.Clear();
+
+        public bool IsStoreFree(ulong pc, ulong k)
+        {
+            if(k == 0 || k > MaxSteps)
+            {
+                return false;
+            }
+            var key = (pc, k);
+            if(known.TryGetValue(key, out var verdict))
+            {
+                if(StillThere(verdict.Code))
+                {
+                    return verdict.StoreFree;
+                }
+                known.Remove(key);
+            }
+            var code = new Dictionary<ulong, ushort>();
+            var free = Analyse(pc, (int)k, code);
+            known[key] = new Verdict { StoreFree = free, Code = code };
+            return free;
+        }
+
+        private bool Analyse(ulong boundary, int k, Dictionary<ulong, ushort> code)
+        {
+            var paths = 0;
+            var stack = new Stack<(ulong pc, int steps, bool store, ImmutableReturns returns)>();
+            stack.Push((boundary, 0, false, null));
+            while(stack.Count > 0)
+            {
+                var (pc, steps, store, returns) = stack.Pop();
+                if(steps == k)
+                {
+                    if(pc == boundary)
+                    {
+                        if(store)
+                        {
+                            return false;
+                        }
+                        paths++;
+                    }
+                    continue;
+                }
+                if(steps > 0 && pc == boundary)
+                {
+                    continue;   // a boundary access before k: not this iteration's path
+                }
+                if(++visited > MaxVisits)
+                {
+                    visited = 0;
+                    return false;
+                }
+                if(!Read(pc, code, out var h1))
+                {
+                    return false;
+                }
+                var wide = (h1 >> 11) >= 0x1D;
+                ushort h2 = 0;
+                if(wide && !Read(pc + 2, code, out h2))
+                {
+                    return false;
+                }
+                var next = pc + (wide ? 4UL : 2UL);
+                var kind = wide ? Classify32(h1, h2, pc, out var target) : Classify16(h1, pc, out target);
+                switch(kind)
+                {
+                case Kind.Unknown:
+                    return false;
+                case Kind.Plain:
+                    stack.Push((next, steps + 1, store, returns));
+                    break;
+                case Kind.Store:
+                    stack.Push((next, steps + 1, true, returns));
+                    break;
+                case Kind.Jump:
+                    stack.Push((target, steps + 1, store, returns));
+                    break;
+                case Kind.Conditional:
+                    stack.Push((next, steps + 1, store, returns));
+                    stack.Push((target, steps + 1, store, returns));
+                    break;
+                case Kind.Call:
+                    stack.Push((target, steps + 1, store, new ImmutableReturns(next, returns)));
+                    break;
+                case Kind.Return:
+                    if(returns == null)
+                    {
+                        return false;   // a return out of the code we started in
+                    }
+                    stack.Push((returns.Address, steps + 1, store, returns.Rest));
+                    break;
+                }
+            }
+            visited = 0;
+            return paths > 0;
+        }
+
+        private enum Kind { Plain, Store, Jump, Conditional, Call, Return, Unknown }
+
+        private static Kind Classify16(ushort h, ulong pc, out ulong target)
+        {
+            target = 0;
+            if((h & 0xF000) == 0x5000)
+            {
+                return ((h >> 9) & 7) <= 2 ? Kind.Store : Kind.Plain;          // STR, STRH, STRB (register); loads
+            }
+            if((h & 0xF800) == 0x6000 || (h & 0xF800) == 0x7000 || (h & 0xF800) == 0x8000 || (h & 0xF800) == 0x9000
+               || (h & 0xFE00) == 0xB400 || (h & 0xF800) == 0xC000)
+            {
+                return Kind.Store;                                             // STR/STRB/STRH imm, STR SP, PUSH, STM
+            }
+            if((h & 0xF000) == 0xD000)
+            {
+                var cond = (h >> 8) & 0xF;
+                if(cond >= 0xE)
+                {
+                    return Kind.Unknown;                                       // UDF, SVC
+                }
+                target = (ulong)((long)pc + 4 + (sbyte)(h & 0xFF) * 2);
+                return Kind.Conditional;                                       // B<c> T1
+            }
+            if((h & 0xF800) == 0xE000)
+            {
+                target = (ulong)((long)pc + 4 + (((h & 0x7FF) << 21) >> 20));  // B T2
+                return Kind.Jump;
+            }
+            if((h & 0xF500) == 0xB100)
+            {
+                target = pc + 4 + (ulong)((((h >> 9) & 1) << 6) | (((h >> 3) & 0x1F) << 1));   // CBZ, CBNZ
+                return Kind.Conditional;
+            }
+            if((h & 0xFF87) == 0x4700)
+            {
+                return ((h >> 3) & 0xF) == 14 ? Kind.Return : Kind.Unknown;   // BX LR; BX other
+            }
+            if((h & 0xFF80) == 0x4780)
+            {
+                return Kind.Unknown;                                           // BLX register
+            }
+            if(((h & 0xFF00) == 0x4400 || (h & 0xFF00) == 0x4600) && ((h & 7) | ((h >> 4) & 8)) == 15)
+            {
+                return Kind.Unknown;                                           // ADD/MOV to PC
+            }
+            if((h & 0xFF00) == 0xBD00)
+            {
+                return Kind.Unknown;                                           // POP {..., PC}
+            }
+            if((h & 0xFF00) == 0xBF00 && (h & 0xF) != 0)
+            {
+                return Kind.Unknown;                                           // IT
+            }
+            if((h & 0xFF00) == 0xBE00)
+            {
+                return Kind.Unknown;                                           // BKPT
+            }
+            return Kind.Plain;
+        }
+
+        private static Kind Classify32(ushort h1, ushort h2, ulong pc, out ulong target)
+        {
+            target = 0;
+            if((h1 & 0xFE40) == 0xE800)
+            {
+                if((h1 & 0x10) == 0)
+                {
+                    return Kind.Store;                                         // STM, STMDB
+                }
+                return (h2 & 0x8000) != 0 ? Kind.Unknown : Kind.Plain;        // LDM with PC; LDM
+            }
+            if((h1 & 0xFE40) == 0xE840)
+            {
+                if((h1 & 0x10) == 0)
+                {
+                    return Kind.Store;                                         // STREX*, STRD
+                }
+                if((h1 & 0xFFF0) == 0xE8D0 && (h2 & 0xFFE0) == 0xF000)
+                {
+                    return Kind.Unknown;                                       // TBB, TBH
+                }
+                return ((h2 >> 12) & 0xF) == 15 || ((h2 >> 8) & 0xF) == 15 ? Kind.Unknown : Kind.Plain;   // LDRD, LDREX* (PC as a target, or LDREX's 1111: refused)
+            }
+            if((h1 & 0xFE00) == 0xF800)
+            {
+                if((h1 & 0xFF10) == 0xF800)
+                {
+                    return Kind.Store;                                         // STR, STRB, STRH (single)
+                }
+                return ((h2 >> 12) & 0xF) == 15 ? Kind.Unknown : Kind.Plain;  // a load into PC or a preload hint; loads
+            }
+            if((h1 & 0xEE00) == 0xEC00)
+            {
+                return Kind.Unknown;                                           // coprocessor loads, stores, transfers
+            }
+            if((h1 & 0xF800) == 0xF000 && (h2 & 0x8000) != 0)
+            {
+                var s = (h1 >> 10) & 1;
+                var j1 = (h2 >> 13) & 1;
+                var j2 = (h2 >> 11) & 1;
+                if((h2 & 0xD000) == 0xD000 || (h2 & 0xD000) == 0x9000)
+                {
+                    var i1 = 1 ^ (j1 ^ s);
+                    var i2 = 1 ^ (j2 ^ s);
+                    var offset = (s << 24) | (i1 << 23) | (i2 << 22) | ((h1 & 0x3FF) << 12) | ((h2 & 0x7FF) << 1);
+                    target = (ulong)((long)pc + 4 + ((offset << 7) >> 7));
+                    return (h2 & 0xD000) == 0xD000 ? Kind.Call : Kind.Jump;   // BL; B.W T4
+                }
+                if((h2 & 0xD000) == 0xC000)
+                {
+                    return Kind.Unknown;                                       // BLX immediate
+                }
+                if(((h1 >> 7) & 7) == 7)
+                {
+                    // Misc control (MSR, MRS, hints, barriers); UDF.W.
+                    return (h1 & 0xFFF0) == 0xF7F0 && (h2 & 0xF000) == 0xA000 ? Kind.Unknown : Kind.Plain;
+                }
+                var offset3 = (s << 20) | (j2 << 19) | (j1 << 18) | ((h1 & 0x3F) << 12) | ((h2 & 0x7FF) << 1);
+                target = (ulong)((long)pc + 4 + ((offset3 << 11) >> 11));
+                return Kind.Conditional;                                       // B<c>.W T3
+            }
+            return Kind.Plain;                                                 // data processing
+        }
+
+        private bool Read(ulong address, Dictionary<ulong, ushort> code, out ushort value)
+        {
+            if(code.TryGetValue(address, out value))
+            {
+                return true;
+            }
+            if(!TryReadCode(address, out value))
+            {
+                return false;   // code outside memory: nothing to decode
+            }
+            code[address] = value;
+            return true;
+        }
+
+        // Checked on every use, so read straight from the memory's segment
+        // (as MappedMemory.ReadWord does, without the bus's look-up).
+        private bool StillThere(Dictionary<ulong, ushort> code)
+        {
+            foreach(var pair in code)
+            {
+                if(!TryReadCode(pair.Key, out var value) || value != pair.Value)
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        private unsafe bool TryReadCode(ulong address, out ushort value)
+        {
+            value = 0;
+            if(codeMemory == null || address < codeStart || address + 2 > codeEnd)
+            {
+                var at = bus.WhatIsAt(address, cpu);
+                if(!(at?.Peripheral is MappedMemory memory))
+                {
+                    return false;
+                }
+                codeMemory = memory;
+                codeStart = at.RegistrationPoint.Range.StartAddress;
+                codeEnd = at.RegistrationPoint.Range.EndAddress + 1;
+            }
+            var offset = (long)(address - codeStart);
+            var segment = codeMemory.GetSegment((int)(offset / codeMemory.SegmentSize));
+            var local = offset % codeMemory.SegmentSize;
+            if(segment == IntPtr.Zero || local > codeMemory.SegmentSize - 2)
+            {
+                value = codeMemory.ReadWord(offset);
+                return true;
+            }
+            value = *(ushort*)((byte*)segment + local);
+            return true;
+        }
+
+        private MappedMemory codeMemory;
+        private ulong codeStart;
+        private ulong codeEnd;
+
+        private class ImmutableReturns
+        {
+            public ImmutableReturns(ulong address, ImmutableReturns rest)
+            {
+                Address = address;
+                Rest = rest;
+            }
+
+            public readonly ulong Address;
+            public readonly ImmutableReturns Rest;
+        }
+
+        private struct Verdict
+        {
+            public bool StoreFree;
+            public Dictionary<ulong, ushort> Code;
+        }
+
+        private const ulong MaxSteps = 64;
+        private const int MaxVisits = 20000;
+
+        private readonly IBusController bus;
+        private readonly ICPU cpu;
+        private readonly Dictionary<(ulong, ulong), Verdict> known = new Dictionary<(ulong, ulong), Verdict>();
+        private int visited;
     }
 
     // HAL_Delay's wait for the HAL tick, as GCC emits it at -Og/-O2 (uDV,
@@ -1785,6 +2140,10 @@ namespace Antmicro.Renode.Testing
                 registers = new byte[arch.Length];
             }
             arch.CopyTo(registers);
+            if(memories == null)
+            {
+                return;   // the CPU's registers only (a store-free iteration)
+            }
             if(saved == null)
             {
                 saved = memories.Select(m => new byte[Segments(m)][]).ToArray();
@@ -1816,6 +2175,11 @@ namespace Antmicro.Renode.Testing
             {
                 where = "the CPU's registers";
                 return false;
+            }
+            if(memories == null)
+            {
+                where = null;
+                return true;
             }
             for(var n = 0; n < memories.Count; n++)
             {
