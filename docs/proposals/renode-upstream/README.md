@@ -11,13 +11,14 @@ has been posted**: Raul submits them after signing the CLA.
 Which repository each change belongs in:
 
 - [renode/renode-infrastructure](https://github.com/renode/renode-infrastructure),
-  the emulator's C# core: PRs 01-08, 11 and 13;
+  the emulator's C# core: PRs 01-08, 11, 13 and 14;
 - [antmicro/tlib](https://github.com/antmicro/tlib), the translation library
   (C, a submodule of renode-infrastructure at `src/Emulator/Cores/tlib`):
   PR 10, which PR 11 needs;
 - [renode/renode](https://github.com/renode/renode), which carries the
   submodule pointer (Antmicro bumps it when a change lands), the Robot
-  tests and the issues: PR 12 (tests for 10 + 11) and issues A, B, C and D.
+  tests and the issues: PR 12 (tests for 10 + 11), 14's change to one
+  Robot expectation, and issues A, B, C and D.
 
 ## The pull requests
 
@@ -43,6 +44,7 @@ had not moved.
 | 11 | renode-infrastructure | [`11-cpu-pre-opcode-hook-exclusions/`](11-cpu-pre-opcode-hook-exclusions/) | TranslationCPU: Allow excluding a pre-opcode execution hook at an address | 1 (+ the tlib bump) | +50/-0, 1 file | 10 (in the tlib submodule) |
 | 12 | **renode/renode** | [`12-tests-pre-opcode-hook-exclusions/`](12-tests-pre-opcode-hook-exclusions/) | tests: Test excluding a pre-opcode execution hook at an address | 1 | +53/-0, 1 file (tests) | 11 (in `src/Infrastructure`) |
 | 13 | renode-infrastructure | [`13-slave-time-source-on-master-thread/`](13-slave-time-source-on-master-thread/) | SlaveTimeSource: Optionally run on the master's thread | 3 | +371/-89, 5 files (+44/-33 in the tests) | - |
+| 14 | renode-infrastructure (+ one renode/renode test) | [`14-stm32-timer-period/`](14-stm32-timer-period/) | [FIX] STM32_Timer: Count ARR + 1 values per update period | 1 (+ 1 in renode) | +199/-8, 2 files (159 lines are tests); renode: +2/-2 | - |
 
 Each directory has the `git format-patch` output against its repository's
 master (`*.patch`, author and committer `Raul Moran <rmg@raulmoranguerra.com>`,
@@ -88,6 +90,12 @@ What the series does, in one line each:
   machines N + 1 threads instead of 2N + 1. Three commits: `InnerExecute`
   split into a begin and an end half (refactor), `RequestTimeInterval`'s
   `noWait`, the mode itself; the slave time-source tests run both ways.
+- **14** (bug fix): `STM32_Timer` raised its update event every ARR counts
+  instead of ARR + 1 (the clock entry's limit was ARR), so every period a
+  firmware derives from a timer ran fast by 1 / (ARR + 1): a 1 kHz HAL
+  timebase 0.1 %. With NUnit tests that fail on master; one Robot test
+  (`nucleo_wba52cg`'s input capture) encoded the old period and gets the
+  chip's values, a renode/renode commit to land with the submodule bump.
 
 How they map to the local queue:
 
@@ -99,10 +107,13 @@ How they map to the local queue:
 | 0004 (timers) | 08 | Only the timer half is submitted. The clock source's integer arithmetic (prepared as PR 09) was dropped: exact, but no measurable host-time gain |
 | 0005 + tlib/0001 (hook exclusion) | 10 + 11 + 12 | tlib keys the set by (pc, hook id) pairs; the local patch packs them as `(pc << 3) \| id`, which collides for hook ids of 8 or more (`CPU_HOOKS_MASKS_LIMIT` is 256; harmless for the vHIL, whose only pre-opcode hook is id 0). Same API names and semantics, so `VhilFastForward` uses the upstream version as is; tests added |
 | 0006 (slave time source on the master's thread) | 13 | Rebased onto upstream's simplified `InnerExecute` (#100387, July 2026: unblock the not-ready handles, else grant the ready ones), split into three commits (the `InnerExecute`/`PhaseExecutor` split alone first, then `noWait`, then the mode); `PhaseExecutor`'s now unused `Execute`/`ExecuteInParallel` give way to the two halves; the `noWait` branch simplified to the same outcomes; the per-iteration fields `[Transient]`. Same property and semantics, so `VhilMachine` turns it on as is |
+| 0007 (STM32 timer period, a fidelity fix) | 14 | The same change; 14 adds `STM32_TimerTests` (four NUnit tests that fail on master) and the `nucleo_wba52cg` expectation. Unlike 0001-0006 it changes what a run computes, on purpose (isc-fs/IFS_vHIL#292) |
 
 The differences are review-driven, not behavioural: the vHIL's fingerprint
-is byte-identical between master and master with every PR, as it was
-between 1.17.0 and 1.17.0 with the local queue.
+is byte-identical between master and master with every PR up to 13, as it
+was between 1.17.0 and 1.17.0 with the local queue. 14 is a fidelity fix
+and changes it on purpose: only timing, by one timer count per period
+(the vHIL's `docker/renode/README.md`).
 
 ## Will upstream want the hook exclusion (10-12)?
 
@@ -198,6 +209,17 @@ host (no other emulation running; every run checked).
   machines unchanged; the vHIL's fingerprint (ecu, ams, ecu-ams,
   ecu-ams-ecu, 10 s) byte-identical across master, 13 and 13 with the mode
   off.
+- **14** (measured alone against master, 2026-10-15; renode master
+  8c5a2440, renode-infrastructure master 3e4301cf): `PeripheralsTests` 117
+  passed, 5 skipped (master: 113, the 4 new tests failing); `UnitTests`
+  621 / 6 skipped as master; every STM32 platform Robot suite plus
+  `timer-reconfiguration` and `virtual-time` pass as on master, with
+  `nucleo_wba52cg`'s input capture at the chip's values (IC2 50000 and
+  33333 instead of 49999 and 33332, the second duty 49 % instead of 50 %);
+  `dotnet format` clean. On the vHIL (the same change as local 0007): the
+  HAL tick is 1000 us instead of 999 us and the uDV's IMU frame on a 20 ms
+  grid within 1 us (722 us of drift over 91 frames before); frames and
+  edges otherwise the same, in the same order.
 - **Found on the way**: the local tlib patch's (pc, hook) key collides for
   hook ids of 8 or more (fixed in 10; harmless for the vHIL); 11's first
   revision left the invalidation of already translated blocks to the caller
@@ -225,11 +247,14 @@ every CPU's creation), and 12's tests need 11 in renode's
 `src/Infrastructure`. 13 is independent of all of them: it changes
 `TimeSourceBase`, `TimeHandle`, `SlaveTimeSource` and `TimeDomainsManager`,
 none of which 01-12 touch (01/02 change `BaseClockSource`), applies to master
-alone and on top of 01-08 + 11 (checked with `git am`). Suggested order,
+alone and on top of 01-08 + 11 (checked with `git am`). 14 touches
+`STM32_Timer` like 08, in other lines, and applies to master alone (its
+renode/renode commit needs 14 in `src/Infrastructure`). Suggested order,
 smallest risk first:
 
 1. 01 (bug fix, with failing-on-master tests)
-2. 03, 07 and 08 (a few lines each)
+2. 03, 07 and 08 (a few lines each), and 14 (a bug fix with failing-on-master
+   tests; its renode test commit once the submodule has it)
 3. 06, 04, 05
 4. 02 (once 01 is in, or at least reviewed)
 5. issue C; once Antmicro agrees on the shape: 10, then 11 (after tlib's
@@ -311,6 +336,17 @@ pr 06-register-framework-allocations $B-register_framework_allocations
 pr 04-sysbus-access-context          $B-sysbus_access_context
 pr 05-sysbus-context-lookup-cache    $B-sysbus_context_lookup_cache
 pr 13-slave-time-source-on-master-thread $D-slave_time_source_on_master_thread   # after issue D's answer
+pr 14-stm32-timer-period             stm32_timer_period   # no issue
+```
+
+14's `renode/` patch goes to renode/renode, like 12, once Antmicro
+has moved `src/Infrastructure` to a commit with 14 (it changes one
+expectation that only holds with the fix):
+
+```sh
+git switch -c stm32_timer_period_tests origin/master      # in the renode clone
+git am $P/14-stm32-timer-period/renode/*.patch
+git push fork HEAD   # then a PR, or mention it on 14 for Antmicro to fold into the bump
 ```
 
 02 goes on 01's branch until 01 lands, and is opened against master with

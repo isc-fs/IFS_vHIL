@@ -461,6 +461,26 @@ no run contended; real-time factor and CPU s per virtual s):
   the same afternoon: ecu sim steady 3.88x, ecu-ams 1.50x, ecu-ams-ecu
   1.91x.
 
+## PR 14: the STM32 timer's ARR + 1 period
+
+Measured 2026-10-15 on renode master 8c5a2440 with renode-infrastructure
+master 3e4301cf, alone (Docker, Linux arm64; built with `./build.sh
+--no-gui`, tests with `./renode-test -j 2`):
+
+| Suite | master | master + 14 |
+|---|---|---|
+| `PeripheralsTests` (NUnit) | 113 passed, 4 failed, 5 skipped (the 4 failures: 14's `STM32_TimerTests`) | 117 passed, 5 skipped |
+| `UnitTests` (NUnit) | 621 passed, 6 skipped | 621 passed, 6 skipped |
+| Robot: `STM32F4_Discovery`, `STM32F4_Tock`, `STM32F7`, `STM32F072b`, `STM32F103`, `STM32L072`, `STM32W108`, `nucleo_f429zi`, `nucleo_f767zi`, `nucleo_h753zi`, `nucleo_wba52cg`, `timer-reconfiguration`, `virtual-time` | all pass | all pass, with `nucleo_wba52cg`'s input capture expecting IC2 = 50000 / 33333 and 24 % / 49 % (master's 49999 / 33332 and 24 % / 50 % fail with the fix) |
+
+`STM32_TimerTests` on master: the update event at 99 us instead of 100
+(CNT 0 and UIF set where 99 and clear are expected), the down-counting
+underflow at 99 us, the PWM output low at 124 us (high on the chip). The
+vHIL's view of the same change (local patch 0007): HAL tick 999 → 1000 us,
+the uDV's 20 ms IMU frame no longer drifting (722 us over 91 frames), the
+other frames and edges the same and in the same order
+(isc-fs/IFS_vHIL#292, `docker/renode/README.md`).
+
 ## Raw data
 
 Kept outside the repository (Docker volumes and

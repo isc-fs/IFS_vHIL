@@ -1,0 +1,312 @@
+From 250cdccf79d48fe2bf09216424b6feea26876d0f Mon Sep 17 00:00:00 2001
+From: Raul Moran <rmg@raulmoranguerra.com>
+Date: Thu, 15 Oct 2026 11:20:49 +0200
+Subject: [PATCH] [FIX] STM32_Timer: Count ARR + 1 values per update period
+
+The counter's clock entry had ARR as its limit, so the update event came
+every ARR counts: a timer with ARR = 999 at 1 MHz raised it every 999 us
+instead of 1 ms (an STM32Cube HAL timebase ran 0.1 % fast), and TIMx_CNT
+never read ARR. On the chip the counter counts from 0 to ARR and then
+overflows to 0 (up), or from ARR to 0 and then underflows to ARR (down):
+ARR + 1 values, so the update period is (ARR + 1) * (PSC + 1) timer
+clocks (e.g. RM0468 44.3.2 "Counter modes", RM0090 18.3.2).
+
+The entry's limit is now ARR + 1, wherever it is set (construction,
+reset, an ARR write without preload, the update event's preload
+transfer). Counting up, the entry's value is still the counter. Counting
+down, a descending entry fires when it reaches 0 and reloads its limit,
+so its value is the counter + 1: CNT reads and writes, UG's reload to ARR
+and a DIR change go through a Counter property that maps the two. PWM
+mode 1 now has a period of ARR + 1 counts, high for CCRx of them.
+Centre-aligned counting is not modelled and is unchanged.
+
+Tests: STM32_TimerTests (update period, prescaler, down-counting
+underflow, PWM period); all four fail without this change.
+---
+ .../Peripherals/Timers/STM32_Timer.cs         |  48 +++++-
+ .../Test/PeripheralsTests/STM32_TimerTests.cs | 159 ++++++++++++++++++
+ 2 files changed, 199 insertions(+), 8 deletions(-)
+ create mode 100644 src/Emulator/Peripherals/Test/PeripheralsTests/STM32_TimerTests.cs
+
+diff --git a/src/Emulator/Peripherals/Peripherals/Timers/STM32_Timer.cs b/src/Emulator/Peripherals/Peripherals/Timers/STM32_Timer.cs
+index 47a492f..1897d36 100644
+--- a/src/Emulator/Peripherals/Peripherals/Timers/STM32_Timer.cs
++++ b/src/Emulator/Peripherals/Peripherals/Timers/STM32_Timer.cs
+@@ -23,7 +23,8 @@ namespace Antmicro.Renode.Peripherals.Timers
+     [AllowedTranslations(AllowedTranslation.ByteToDoubleWord | AllowedTranslation.WordToDoubleWord)]
+     public class STM32_Timer : LimitTimer, IDoubleWordPeripheral, IKnownSize, INumberedGPIOOutput, IRegisterablePeripheral<IGPIOReceiver, NumberRegistrationPoint<int>>, IRegisterablePeripheral<IGPIOReceiver, NullRegistrationPoint>, IGPIOReceiver
+     {
+-        public STM32_Timer(IMachine machine, ulong frequency, uint initialLimit) : base(machine.ClockSource, frequency, limit: initialLimit, direction: Direction.Ascending, enabled: false, eventEnabled: true, autoUpdate: false)
++        // The counter counts ARR + 1 values, 0 to ARR, so the clock entry's limit is ARR + 1 (see Counter).
++        public STM32_Timer(IMachine machine, ulong frequency, uint initialLimit) : base(machine.ClockSource, frequency, limit: (ulong)initialLimit + 1, direction: Direction.Ascending, enabled: false, eventEnabled: true, autoUpdate: false)
+         {
+             this.machine = machine;
+             sysbus = machine.GetSystemBus(this);
+@@ -59,7 +60,7 @@ public STM32_Timer(IMachine machine, ulong frequency, uint initialLimit) : base(
+                     enableRequested = false;
+                 }
+ 
+-                Limit = autoReloadValue;
++                Limit = (ulong)autoReloadValue + 1;
+                 this.Log(LogLevel.Noisy, "IRQ pending");
+                 updateInterruptFlag = true;
+ 
+@@ -158,7 +159,15 @@ public STM32_Timer(IMachine machine, ulong frequency, uint initialLimit) : base(
+                         {
+                             return;
+                         }
+-                        Direction = val ? Direction.Descending : Direction.Ascending;
++                        // The counter keeps its value (see Counter)
++                        var direction = val ? Direction.Descending : Direction.Ascending;
++                        var counter = Counter;
++                        var changed = direction != Direction;
++                        Direction = direction;
++                        if(changed)
++                        {
++                            Counter = counter;
++                        }
+                     }, valueProviderCallback: _ => Direction == Direction.Descending, name: "Direction (DIR)")
+                     .WithEnumField(5, 2, out centerAlignedMode, name: "Center-aligned mode selection (CMS)")
+                     .WithFlag(7, out autoReloadPreloadEnable, name: "Auto-reload preload enable (APRE)")
+@@ -275,7 +284,7 @@ public STM32_Timer(IMachine machine, ulong frequency, uint initialLimit) : base(
+                         }
+                         else if(Direction == Direction.Descending)
+                         {
+-                            Value = autoReloadValue;
++                            Counter = autoReloadValue;
+                         }
+ 
+                         repetitionsLeft = (uint)repetitionCounter.Value;
+@@ -323,14 +332,14 @@ public STM32_Timer(IMachine machine, ulong frequency, uint initialLimit) : base(
+                 },
+                 {(long)Registers.Counter, new DoubleWordRegister(this)
+                     .WithValueField(0, timerCounterLengthInBits,
+-                        writeCallback: (_, val) => Value = val,
++                        writeCallback: (_, val) => Counter = val,
+                         valueProviderCallback: _ =>
+                         {
+                             if(sysbus.TryGetCurrentCPU(out var cpu))
+                             {
+                                 cpu.SyncTime();
+                             }
+-                            return (uint)Value;
++                            return (uint)Counter;
+                         }, name: "Counter value (CNT)")
+                     .WithReservedBits(timerCounterLengthInBits, 32 - timerCounterLengthInBits)
+                     .WithWriteCallback((_, val) =>
+@@ -364,7 +373,7 @@ public STM32_Timer(IMachine machine, ulong frequency, uint initialLimit) : base(
+                         Enabled = enableRequested && autoReloadValue > 0;
+                         if(!autoReloadPreloadEnable.Value)
+                         {
+-                            Limit = autoReloadValue;
++                            Limit = (ulong)autoReloadValue + 1;
+                         }
+                     }, valueProviderCallback: _ => autoReloadValue, name: "Auto-reload value (ARR)")
+                     .WithReservedBits(timerCounterLengthInBits, 32 - timerCounterLengthInBits)
+@@ -558,7 +567,7 @@ public override void Reset()
+             registers.Reset();
+             autoReloadValue = initialLimit;
+             enableRequested = false;
+-            Limit = initialLimit;
++            Limit = (ulong)initialLimit + 1;
+             repetitionsLeft = 0;
+             updateInterruptFlag = false;
+             for(var i = 0; i < NumberOfCCChannels; ++i)
+@@ -774,6 +783,29 @@ private void UpdateInterrupts()
+ 
+         private bool IsTriggerMode => slaveModeSelection.Value == SlaveModeSelection.TriggerMode;
+ 
++        // The counter (TIMx_CNT). It counts ARR + 1 values per period, so an update event comes every
++        // (ARR + 1) * (PSC + 1) timer clocks: up, from 0 to ARR, overflowing to 0; down, from ARR to 0,
++        // underflowing to ARR. The clock entry's limit is ARR + 1 and reaching it is the overflow or
++        // underflow: counting up, the entry's value is the counter (0 to ARR); counting down, it is
++        // the counter + 1 (ARR + 1 to 1), since a descending entry fires when its value reaches 0.
++        private ulong Counter
++        {
++            get
++            {
++                if(Direction == Direction.Descending)
++                {
++                    var value = Value;
++                    return value > 0 ? value - 1 : 0;
++                }
++                return Value;
++            }
++
++            set
++            {
++                Value = Direction == Direction.Descending ? value + 1 : value;
++            }
++        }
++
+         private uint autoReloadValue;
+         private uint repetitionsLeft;
+         private bool updateInterruptFlag;
+diff --git a/src/Emulator/Peripherals/Test/PeripheralsTests/STM32_TimerTests.cs b/src/Emulator/Peripherals/Test/PeripheralsTests/STM32_TimerTests.cs
+new file mode 100644
+index 0000000..52774ce
+--- /dev/null
++++ b/src/Emulator/Peripherals/Test/PeripheralsTests/STM32_TimerTests.cs
+@@ -0,0 +1,159 @@
++//
++// Copyright (c) 2010-2026 Antmicro
++//
++// This file is licensed under the MIT License.
++// Full license text is available in 'licenses/MIT.txt'.
++//
++using Antmicro.Renode.Core;
++using Antmicro.Renode.Peripherals.Timers;
++using Antmicro.Renode.Time;
++
++using NUnit.Framework;
++
++namespace Antmicro.Renode.UnitTests
++{
++    // RM0468 (STM32H72x/73x) 44.3.2 "Counter modes": counting up, the counter counts from 0 to the
++    // auto-reload value (TIMx_ARR), then restarts from 0 and generates an overflow event; counting
++    // down, from ARR to 0, then restarts from ARR and generates an underflow event. The counter clock
++    // is the timer clock / (PSC + 1) (44.4.14), so the update period is (ARR + 1) * (PSC + 1) clocks.
++    [TestFixture]
++    public class STM32_TimerTests
++    {
++        [OneTimeSetUp]
++        public void CreatePeripheral()
++        {
++            machine = new Machine();
++            // One count per microsecond with PSC = 0
++            timer = new STM32_Timer(machine, 1000000, 0xFFFF);
++        }
++
++        [SetUp]
++        public void PreparePeripheral()
++        {
++            timer.Reset();
++        }
++
++        [Test]
++        public void ShouldRaiseUpdateEventEveryArrPlusOneCounts()
++        {
++            Start(prescaler: 0, autoReload: 99);
++
++            AdvanceByMicroseconds(99);
++            Assert.AreEqual(99, Read(Registers.Counter));
++            Assert.AreEqual(0, Read(Registers.Status) & UpdateInterruptFlag);
++
++            AdvanceByMicroseconds(1);
++            Assert.AreEqual(0, Read(Registers.Counter));
++            Assert.AreEqual(UpdateInterruptFlag, Read(Registers.Status) & UpdateInterruptFlag);
++
++            for(var i = 0; i < 3; i++)
++            {
++                Write(Registers.Status, 0);
++                AdvanceByMicroseconds(99);
++                Assert.AreEqual(0, Read(Registers.Status) & UpdateInterruptFlag);
++                AdvanceByMicroseconds(1);
++                Assert.AreEqual(UpdateInterruptFlag, Read(Registers.Status) & UpdateInterruptFlag);
++            }
++        }
++
++        [Test]
++        public void ShouldDivideTheCounterClockByPrescalerPlusOne()
++        {
++            // Two microseconds per count, 50 counts: 100 us
++            Start(prescaler: 1, autoReload: 49);
++
++            AdvanceByMicroseconds(99);
++            Assert.AreEqual(49, Read(Registers.Counter));
++            Assert.AreEqual(0, Read(Registers.Status) & UpdateInterruptFlag);
++
++            AdvanceByMicroseconds(1);
++            Assert.AreEqual(0, Read(Registers.Counter));
++            Assert.AreEqual(UpdateInterruptFlag, Read(Registers.Status) & UpdateInterruptFlag);
++        }
++
++        [Test]
++        public void ShouldUnderflowAfterZeroWhenCountingDown()
++        {
++            Start(prescaler: 0, autoReload: 99, down: true);
++            Assert.AreEqual(99, Read(Registers.Counter));
++
++            AdvanceByMicroseconds(99);
++            Assert.AreEqual(0, Read(Registers.Counter));
++            Assert.AreEqual(0, Read(Registers.Status) & UpdateInterruptFlag);
++
++            AdvanceByMicroseconds(1);
++            Assert.AreEqual(99, Read(Registers.Counter));
++            Assert.AreEqual(UpdateInterruptFlag, Read(Registers.Status) & UpdateInterruptFlag);
++        }
++
++        [Test]
++        public void ShouldKeepAPwmPeriodOfArrPlusOneCounts()
++        {
++            // PWM mode 1 on channel 1 (44.3.9): high while CNT < CCR1, so high for CCR1 counts of ARR + 1
++            Write(Registers.CaptureOrCompareMode1, PwmMode1 << 4);
++            Write(Registers.CaptureOrCompareEnable, 1);
++            Write(Registers.CaptureOrCompare1, 25);
++            Start(prescaler: 0, autoReload: 99);
++
++            // The first update event, at 100 us, starts a period
++            AdvanceByMicroseconds(100);
++            Assert.True(timer.Connections[0].IsSet);
++            AdvanceByMicroseconds(24);
++            Assert.True(timer.Connections[0].IsSet);
++            AdvanceByMicroseconds(1);
++            Assert.False(timer.Connections[0].IsSet);
++            AdvanceByMicroseconds(74);
++            Assert.False(timer.Connections[0].IsSet);
++            AdvanceByMicroseconds(1);
++            Assert.True(timer.Connections[0].IsSet);
++        }
++
++        private void Start(uint prescaler, uint autoReload, bool down = false)
++        {
++            var direction = down ? CountDown : 0u;
++            Write(Registers.Prescaler, prescaler);
++            Write(Registers.AutoReload, autoReload);
++            Write(Registers.Control1, direction);
++            Write(Registers.EventGeneration, UpdateGeneration);
++            Write(Registers.Status, 0);
++            Write(Registers.Control1, direction | CounterEnable);
++        }
++
++        private void AdvanceByMicroseconds(ulong microseconds)
++        {
++            ((BaseClockSource)machine.ClockSource).Advance(TimeInterval.FromMicroseconds(microseconds));
++        }
++
++        private void Write(Registers register, uint value)
++        {
++            timer.WriteDoubleWord((long)register, value);
++        }
++
++        private uint Read(Registers register)
++        {
++            return timer.ReadDoubleWord((long)register);
++        }
++
++        private IMachine machine;
++        private STM32_Timer timer;
++
++        private const uint CounterEnable = 1 << 0;
++        private const uint CountDown = 1 << 4;
++        private const uint UpdateInterruptFlag = 1 << 0;
++        private const uint UpdateGeneration = 1 << 0;
++        private const uint PwmMode1 = 6;
++
++        private enum Registers : long
++        {
++            Control1 = 0x0,
++            Status = 0x10,
++            EventGeneration = 0x14,
++            CaptureOrCompareMode1 = 0x18,
++            CaptureOrCompareEnable = 0x20,
++            Counter = 0x24,
++            Prescaler = 0x28,
++            AutoReload = 0x2C,
++            CaptureOrCompare1 = 0x34,
++        }
++    }
++}
+-- 
+2.51.0
+
