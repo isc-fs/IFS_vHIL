@@ -538,7 +538,7 @@ of #260 before it. Compare within a job only.
   (clamped from 512) with no flush. What a boot spends is per board: the
   bootloader's window still runs a few real iterations of its loop per chunk
   for the detector, and the AMS's isoSPI wake (`ltc6820.cpp` `delay_us`, a
-  poll on DWT CYCCNT, fast-forwarded since #290) was a fifth to a
+  poll on DWT CYCCNT, fast-forwarded since #289) was a fifth to a
   quarter of the AMS's boot; the JIT adds 0.5 CPU s per virtual s over the
   first seconds.
 - **Without the slaves' hop**, estimated by running the lock-step path on the
@@ -693,7 +693,7 @@ What could still buy something, most first:
    test's 10 ms `run_until` steps pay every step; and a scenario slice sends
    three monitor commands per bus and two per board, one round trip each
    (they could go in one).
-6. Done this round: the AMS's CYCCNT waits fast-forwarded (#290); start-up (the models' assembly, ReadyToRun), the timer
+6. Done this round: the AMS's CYCCNT waits fast-forwarded (#289); start-up (the models' assembly, ReadyToRun), the timer
    update events (patch 0004; its clock-source integer arithmetic, exact but
    with no measurable gain, was dropped in patch set vhil.4), the CMP.W hook
    only at delay loops (patch 0005 and tlib/0001).
