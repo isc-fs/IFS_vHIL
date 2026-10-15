@@ -33,7 +33,7 @@ import pytest
 
 from vhil import can_bootloader as cb
 from vhil.can_bootloader import CanBootloader, FwInfo
-from vhil.sim import Sim
+from vhil.sim import Sim, assert_cadence
 from vhil.system import REPO
 
 NODE = 0x3
@@ -46,6 +46,9 @@ BOOT_REQ_MAGIC = 0xB00710AD
 AS_OFF = 0
 GYRO_CAL_MS = 300 * 20                   # imu_task.c:45-58
 STEADY_MS = 8000
+# 0x512's wake-to-bus jitter: 1 us measured (udv, ecu-ams-udv); the bound leaves
+# room for the task's I2C read and a frame ahead of it on the ACU bus.
+IMU_JITTER_US = 500
 
 
 def _word(sim, address):
@@ -117,11 +120,11 @@ def test_the_imu_on_the_acu_bus_after_the_gyro_calibration(booted):
     assert imu, "no 0x512 on the ACU bus"
     start_ms = (imu[0].t_us - t_app) / 1000
     assert GYRO_CAL_MS <= start_ms <= GYRO_CAL_MS + 500, start_ms
-    gaps = _gaps_ms(imu)
-    # The mean period, not assert_cadence: the timer model's update event
-    # comes every ARR counts instead of ARR + 1, so 0x512 runs 0.04 % fast and
-    # drifts off a 20 ms grid (#292).
-    assert len(imu) >= 50 and 19.9 <= sum(gaps) / len(gaps) <= 20.1, (len(imu), gaps[:5])
+    # Every 8th TIM2 update, (2499 + 1) x (263 + 1) / 264 MHz = 2.5 ms apart
+    # (tim.c:43-46; RM0468 44.3.2, test_stm32_timer.py): a 20 ms grid with no
+    # drift (#292). The jitter is the IMU task's wake after the ISR's
+    # semaphore, its I2C read and the wait for the bus.
+    assert_cadence(imu, period_us=20_000, jitter_us=IMU_JITTER_US, min_count=50)
     assert all(struct.unpack("<4h", f.data) == (0, 0, 1000, 0) for f in imu)
     assert int(sim.monitor("sysbus.cordic Calculations", board="udv").strip(), 0) > 0
 

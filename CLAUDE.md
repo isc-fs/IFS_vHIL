@@ -237,7 +237,8 @@ as CI ([`docs/development/setup.md`](docs/development/setup.md#docker-any-host-n
 Pinned versions: Renode **1.17.0** (the current backend), Arm GNU
 **14.2.Rel1**. Bump deliberately, in their own PR. The image and CI build
 Renode from the release's source with the patches in `docker/renode/`
-(speed only: a run computes the same as on the release package; a log's
+(speed, which computes the same as the release package, plus fidelity
+fixes such as 0007, STM32 timers' ARR + 1 period, #292; a log's
 first line names the build, `vhil: renode 1.17.0 ... + vhil patches ...`);
 a new release means rebasing them ([`docker/renode/README.md`](docker/renode/README.md)).
 

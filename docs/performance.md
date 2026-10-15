@@ -650,6 +650,16 @@ Tried, not adopted:
   the previous chunk (152,000 hooked accesses and 273 ms against 119,000 and
   138 ms over the window).
 
+### A new identity reference: STM32 timers' ARR + 1 period (#292)
+
+Patch 0007 (vhil.6) is a fidelity fix, not a speed-up: an STM32 timer's
+update event now comes every ARR + 1 counts, as on the chip, so the identity
+fingerprint changes once and the vhil.6 one is the reference for later
+patches. What moved, and by how much (only timing; frames, edges and their
+order are the same):
+[`docker/renode/README.md`](../docker/renode/README.md#the-patches). It
+adds no work per period (the same clock-entry updates).
+
 ### The hand-off's wait: studied, not shipped (#260)
 
 Profiled with wait-time histograms in the time framework (every
