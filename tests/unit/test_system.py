@@ -12,9 +12,12 @@ from vhil.system import REPO, System, SystemError
 
 # Catalogue entries and systems; catalog/pin-models/ holds vendored pin
 # models, not catalogue documents (tests/unit/test_pin_model.py).
+# scripts/speed-systems/: systems scripts/speed.py measures scaling with,
+# not car systems, held to the same checks.
+BENCH_ONLY = sorted((REPO / "scripts" / "speed-systems").glob("*.yaml"))
 DOCS = (sorted(p for p in (REPO / "catalog").glob("*/*.yaml") if p.parent.name != "pin-models")
-        + sorted((REPO / "systems").glob("*.yaml")))
-SYSTEMS = sorted((REPO / "systems").glob("*.yaml"))
+        + sorted((REPO / "systems").glob("*.yaml")) + BENCH_ONLY)
+SYSTEMS = sorted((REPO / "systems").glob("*.yaml")) + BENCH_ONLY
 
 
 @pytest.mark.parametrize("path", DOCS, ids=lambda p: str(p.relative_to(REPO)))
@@ -538,7 +541,10 @@ def test_every_mainlite_boots_through_the_can_bootloader(path):
         assert b.bootloader["id"] == "can-bootloader"
         assert f"{b.name}.bootloader" in system.images()
         assert (b.node_id, b.flash_bus) == roles[b.role]
-        assert system.flash_bus(b.name) == "can_acu"
+        # The car's flash bus is the ACU bus; the three-board benchmark's
+        # third board has buses of its own (scripts/speed-systems/).
+        assert system.flash_bus(b.name) == ("can_acu" if path not in BENCH_ONLY or b.name != "ecu2"
+                                            else "can2_acu")
     script = system.render_renode()
     assert "LoadELF" not in script and "0x08020000" not in script
 
