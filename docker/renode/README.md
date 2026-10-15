@@ -1,7 +1,7 @@
 # Renode 1.17.0 with the vHIL's patch queue
 
-The vHIL runs Renode **1.17.0** built from source with eight patches to
-renode-infrastructure and two to tlib. Seven of them and tlib's make every
+The vHIL runs Renode **1.17.0** built from source with nine patches to
+renode-infrastructure and two to tlib. Eight of them and tlib's make every
 system faster (the first three 13-58 %) and change nothing a run computes;
 0007 is a fidelity fix, which does (#292, below). They are a patch queue on the
 release tag, not a fork: `build.sh` fetches the tag, checks every input
@@ -33,13 +33,14 @@ were measured:
 | 0006 | — | A `SlaveTimeSource` can run on its master's thread (`RunsOnMasterThread`, set before it is attached): `TimeSourceBase.InnerExecute` split into `InnerExecuteBegin` (grant or unblock every handle) and `InnerExecuteEnd` (wait for them, the sync phase); the master begins a slave's iteration when it grants it time and ends it when it waits for it, so the slave's sinks run beside the master's others without the slave's dispatcher thread between them. `TimeHandle.RequestTimeInterval(noWait)` for a sink that cannot wait for its own source; `TimeDomainsManager.SwapCurrentThread` gives the slave's sync phase the slave's time stamp. Off by default; Renode's slave time-source unit tests run both ways. `VhilMachine` turns it on for every board of a lock-step run (invariant 11 holds: each board keeps a time source of its own), one hand-off a quantum per board and N + 1 threads instead of 2N + 1 (#260) | Not submitted |
 | 0007 | — | **Fidelity fix.** `STM32_Timer` counts ARR + 1 values per update period, as the chip does (RM0468 44.3.2: up from 0 to ARR, then an overflow to 0; down from ARR to 0, then an underflow to ARR), so its update event comes every (ARR + 1) x (PSC + 1) timer clocks; stock Renode's clock entry had ARR as its limit, one count short. Every HAL timebase (ARR = 999 at 1 MHz: TIM23 on the ECU, TIM6 on the AMS, TIM1 on the uDV) ticked every 999 us, 0.1 % fast, and the uDV's TIM2 (ARR = 2499) every 2.499 ms. The entry's limit is ARR + 1; counting down its value is CNT + 1 (a descending entry fires on reaching 0). `TIMx_CNT` now reads 0..ARR (it never read ARR); PWM mode 1 has a period of ARR + 1 counts and CCRx high (#292, `tests/sim/test_stm32_timer.py`) | PR 14 (prepared, not submitted) |
 | 0008 | — | `Packet`'s field wrappers (`FieldPropertyInfoWrapper`, already cached per type) keep each kind of attribute they looked up and the declaring type's byte order, instead of calling `GetCustomAttributes` for every attribute read of every field of every value decoded or encoded. MCAN decodes each filter element from the message RAM for every frame it receives (`FilterMessage`, `DecodeFilterElement`) and encodes every frame it stores (`StoreInRxFIFO`): on ecu-ams-udv (x86) the reflection was 6 % of the host's samples and the RX path 8-12 % | Not submitted |
+| 0009 | — | `NVIC`'s ICSR.RETTOBASE value provider built the `SystemException` numbers by reflection (`Enum.GetValues`) and intersected them with the active exceptions through LINQ on every ICSR read; FreeRTOS's Cortex-M ports read ICSR in every outermost critical section (`vPortEnterCritical`'s `configASSERT` on VECTACTIVE). The numbers are built once, and with no exception active (Thread mode) the answer is immediate: the same value | Not submitted |
 
 The study's P1 (blocking instead of spinning at the lock-step barrier) is
 slower on 4 cores and P4 (aarch64 inline TLB) not worth it; neither is here.
 When upstream takes a patch, the next release carries it: drop it from the
 queue on that bump.
 
-**What a run computes is unchanged by 0001-0006, 0008, tlib/0001 and tlib/0002**: bus
+**What a run computes is unchanged by 0001-0006, 0008, 0009, tlib/0001 and tlib/0002**: bus
 timelines, GPIO edges with the instruction count at each write, radio
 payloads, each CPU's executed instructions, PC, state and RAM are
 byte-identical against the release package (the study's fingerprint, and the
@@ -72,7 +73,7 @@ other (with and without fast-forward, lazy DMA; run against run) in CI.
 `build.sh` writes `VHIL_RENODE_BUILD` beside the launcher, one line:
 
 ```
-renode 1.17.0 (ab721d88e135) + vhil patches 1.17.0-vhil.8 [0001,0002,0003,0004,0005,0006,0007,0008,tlib/0001,tlib/0002] queue <sha256 of the patches, 12 hex>
+renode 1.17.0 (ab721d88e135) + vhil patches 1.17.0-vhil.9 [0001,0002,0003,0004,0005,0006,0007,0008,0009,tlib/0001,tlib/0002] queue <sha256 of the patches, 12 hex>
 ```
 
 `vhil.renode.build_id()` reads it: `launch()` writes it as the first line
