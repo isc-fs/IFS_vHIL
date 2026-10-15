@@ -1,0 +1,59 @@
+From 54c6e7f0eb9fc54ba64a1ad886aef458b9707e54 Mon Sep 17 00:00:00 2001
+From: Raul Moran <rmg@raulmoranguerra.com>
+Date: Thu, 15 Oct 2026 18:37:26 +0200
+Subject: [PATCH] Report only IO accesses when the memory-access flag is 2
+
+The memory-access hook (tlib_on_memory_access) is called from the
+softmmu helpers for every load and store while the flag is set. On a
+host whose TCG backend has no inline TLB fast path (aarch64), every RAM
+access then reaches the hook, even for a user that only watches
+peripherals. With the flag set to 2 (bit 0 clear), loads and stores that
+hit RAM in the same page are not reported; IO accesses and slow
+(unaligned, page-spanning) accesses still are. 1 keeps reporting every
+access, as before, and tlib_on_memory_access_event_enabled still sets 0
+or 1.
+---
+ include/cpu-defs.h         | 2 ++
+ include/softmmu_template.h | 6 ++++--
+ 2 files changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/include/cpu-defs.h b/include/cpu-defs.h
+index f0d2e51..aaead4c 100644
+--- a/include/cpu-defs.h
++++ b/include/cpu-defs.h
+@@ -276,6 +276,8 @@ enum block_interrupt_cause {
+     uint32_t millicycles_per_instruction;                                      \
+     int interrupt_begin_callback_enabled;                                      \
+     int interrupt_end_callback_enabled;                                        \
++    /* 0: off; 1: every access; 2: IO accesses only (RAM hits in the softmmu  \
++       helpers are not reported, for a hook that only watches peripherals) */ \
+     int32_t tlib_is_on_memory_access_enabled;                                  \
+     int allow_unaligned_accesses;                                              \
+                                                                                \
+diff --git a/include/softmmu_template.h b/include/softmmu_template.h
+index 214c44a..eeb7c48 100644
+--- a/include/softmmu_template.h
++++ b/include/softmmu_template.h
+@@ -268,7 +268,8 @@ redo:
+ #endif
+             addend = cpu->tlb_table[mmu_idx][index].addend;
+             res = glue(glue(ld, USUFFIX), _raw)((uint8_t *)(uintptr_t)(addr + addend));
+-            if(unlikely(cpu->tlib_is_on_memory_access_enabled != 0)) {
++            /* Bit 0 clear (TLIB_MEMORY_ACCESS_IO_ONLY): only IO accesses are reported. */
++            if(unlikely((cpu->tlib_is_on_memory_access_enabled & 1) != 0)) {
+                 tlib_assert(sizeof(res) <= sizeof(uint64_t));
+                 tlib_on_memory_access(CPU_PC(cpu), is_insn_fetch ? INSN_FETCH : MEMORY_READ, addr, DATA_SIZE, (uint64_t)res);
+             }
+@@ -487,7 +488,8 @@ redo:
+ 
+             addend = cpu->tlb_table[mmu_idx][index].addend;
+             glue(glue(st, SUFFIX), _raw)((uint8_t *)(uintptr_t)(addr + addend), val);
+-            if(unlikely(cpu->tlib_is_on_memory_access_enabled != 0)) {
++            /* Bit 0 clear (TLIB_MEMORY_ACCESS_IO_ONLY): only IO accesses are reported. */
++            if(unlikely((cpu->tlib_is_on_memory_access_enabled & 1) != 0)) {
+                 tlib_assert(sizeof(val) <= sizeof(uint64_t));
+                 tlib_on_memory_access(CPU_PC(cpu), MEMORY_WRITE, addr, DATA_SIZE, (uint64_t)val);
+             }
+-- 
+2.51.0
+

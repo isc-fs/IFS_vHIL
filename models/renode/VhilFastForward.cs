@@ -1990,10 +1990,18 @@ namespace Antmicro.Renode.Testing
             return true;
         }
 
+        // On: 2, peripheral (IO) accesses only. docker/renode's tlib/0002
+        // then reports no load or store that hits RAM, which the detector
+        // ignores anyway (OnAccess) but which, on a host whose TCG backend
+        // calls its softmmu helpers for every access (aarch64), reached C#
+        // one by one while armed. A tlib without the patch reports every
+        // access for any value but 0, as for 1.
         public void SetMemoryAccessFlag(bool on)
         {
-            Marshal.WriteInt32(State, flagOffset, on ? 1 : 0);
+            Marshal.WriteInt32(State, flagOffset, on ? IoAccessesOnly : 0);
         }
+
+        private const int IoAccessesOnly = 2;
 
         // The counters, found on the CPU thread inside a block (where the
         // declaration holds the block's length): the 8-byte total equal to
