@@ -1,0 +1,45 @@
+From 409945618a67566992a77ba5a78bf27a634ea426 Mon Sep 17 00:00:00 2001
+From: Raul Moran <rmg@raulmoranguerra.com>
+Date: Thu, 15 Oct 2026 21:18:48 +0200
+Subject: [PATCH] NVIC: read ICSR's RETTOBASE without reflection
+
+RETTOBASE's value provider called Enum.GetValues on the SystemException
+type and intersected it with the active exceptions through LINQ on every
+ICSR read. FreeRTOS's Cortex-M ports read ICSR in every outermost
+critical section (vPortEnterCritical's configASSERT on VECTACTIVE), so a
+FreeRTOS firmware reads it thousands of times a second.
+
+Build the exception numbers once, and answer at once when no exception is
+active (Thread mode, where those reads happen): the same value either
+way.
+---
+ src/Emulator/Cores/Arm-M/NVIC.cs | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/src/Emulator/Cores/Arm-M/NVIC.cs b/src/Emulator/Cores/Arm-M/NVIC.cs
+index bff4e58..f93c13a 100644
+--- a/src/Emulator/Cores/Arm-M/NVIC.cs
++++ b/src/Emulator/Cores/Arm-M/NVIC.cs
+@@ -1076,7 +1076,7 @@ private void DefineRegisters()
+             Registers.InterruptControlState.Define(RegisterCollection)
+                 .WithValueField(0, 9, FieldMode.Read, valueProviderCallback: _ => (uint)(activeIRQs.Count == 0 ? 0 : activeIRQs.Peek()), name: "VECTACTIVE")
+                 .WithReservedBits(9, 2)
+-                .WithFlag(11, FieldMode.Read, valueProviderCallback: _ => activeIRQs.Intersect(Enum.GetValues(typeof(SystemException)).Cast<int>()).Count() <= 1, name: "RETTOBASE")
++                .WithFlag(11, FieldMode.Read, valueProviderCallback: _ => activeIRQs.Count == 0 || activeIRQs.Intersect(SystemExceptionNumbers).Count() <= 1, name: "RETTOBASE")
+                 .WithValueField(12, 9, FieldMode.Read, valueProviderCallback: _ => (ulong)(FindPendingInterrupt() ?? 0), name: "VECTPENDING")
+                 .WithReservedBits(21, 1)
+                 .WithTaggedFlag("ISRPENDING", 22)
+@@ -3218,6 +3218,10 @@ private enum SystemException
+             SysTick_S = SysTick | BankedExcpSecureBit,
+         }
+ 
++        // Every SystemException's number, for RETTOBASE: built once, not on
++        // every ICSR read (FreeRTOS reads ICSR in each critical section).
++        private static readonly int[] SystemExceptionNumbers = Enum.GetValues(typeof(SystemException)).Cast<int>().ToArray();
++
+         private static readonly int[] bankedInterrupts = new int []
+         {
+             (int)SystemException.MemManageFault,
+-- 
+2.51.0
+
