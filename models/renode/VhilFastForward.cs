@@ -1005,16 +1005,28 @@ namespace Antmicro.Renode.Testing
             {
                 return;
             }
+            // The model's answer first, which needs no call into tlib: most
+            // reads come while nothing is under way (the uDV configures,
+            // starts and stops ADC3 around each conversion, ~25 reads of a
+            // stable register each), and those return here.
+            if(!stable(offset, out var until) || until == ulong.MaxValue)
+            {
+                return;
+            }
+            var now = machine.ElapsedVirtualTime.TimeElapsed.Ticks;
+            if(until < now + MinCueTicks)
+            {
+                return;   // no wait worth skipping ahead
+            }
             if(!machine.SystemBus.TryGetCurrentCPU(out var current) || current != cpu
                || ((uint)cpu.GetRegister(XpsrIndex).RawValue & 0x1FF) != 0)
             {
                 return;
             }
             var pc = cpu.PC.RawValue;
-            if(cueRefused.Contains(pc) || !stable(offset, out var until) || until == ulong.MaxValue
-               || until < machine.ElapsedVirtualTime.TimeElapsed.Ticks + MinCueTicks)
+            if(cueRefused.Contains(pc))
             {
-                return;   // refused here this quantum, or no wait worth skipping ahead
+                return;   // refused here this quantum
             }
             cues++;
             Arm();
