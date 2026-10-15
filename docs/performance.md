@@ -175,6 +175,18 @@ charges their instructions instead of executing them:
   Renode's instruction-to-time rounding (time advances in steps of
   `mips / gcd(mips, ticks per us)` instructions: 231 on the ECU, 66 on the
   AMS). The model's `VhilOnRead` cue arms the detector when the poll starts.
+- **Cycle-counter waits**: a wait on DWT CYCCNT
+  (`while ((DWT->CYCCNT - start) < cycles) {}`, the AMS's isoSPI wake,
+  `ltc6820.cpp` `delay_us`: `ldr; subs; cmp; bcc`). CYCCNT is Renode's DWT
+  timer on the machine's clock, so each read returns a non-decreasing
+  function of the time, and every read before the count reaches
+  `start + cycles` sees the loop go on. A pre-opcode hook on BCC (excluded at
+  every BCC that is not such a loop's, as the CMP.W one) charges, at the BCC,
+  the iterations whose reads all come before that time, from the count at the
+  time synced there (at least what the last read saw) and with the
+  time-bounded polls' margin. The registers the skipped iterations would
+  have written last (the read value, the difference, the flags) are
+  overwritten by the next iteration before anything reads them.
 
 Exact by construction:
 
@@ -194,8 +206,8 @@ Exact by construction:
   instruction.
 - Not accelerated: anything else, including a poll on a register whose value
   is computed from the time when read and whose model cannot say until when
-  it stands (DWT CYCCNT, SysTick, a timer's CNT) or on a GPIO a device model
-  drives.
+  it stands (SysTick, a timer's CNT, CYCCNT outside the wait above) or on a
+  GPIO a device model drives.
 
 ## ADC3's DMA results, handed over lazily
 
@@ -526,7 +538,7 @@ of #260 before it. Compare within a job only.
   (clamped from 512) with no flush. What a boot spends is per board: the
   bootloader's window still runs a few real iterations of its loop per chunk
   for the detector, and the AMS's isoSPI wake (`ltc6820.cpp` `delay_us`, a
-  poll on DWT CYCCNT, which the fast-forward does not skip) is a fifth to a
+  poll on DWT CYCCNT, fast-forwarded since #289) was a fifth to a
   quarter of the AMS's boot; the JIT adds 0.5 CPU s per virtual s over the
   first seconds.
 - **Without the slaves' hop**, estimated by running the lock-step path on the
@@ -681,13 +693,7 @@ What could still buy something, most first:
    test's 10 ms `run_until` steps pay every step; and a scenario slice sends
    three monitor commands per bus and two per board, one round trip each
    (they could go in one).
-6. **The AMS's isoSPI wake at boot** (vHIL side): `delay_us` polls DWT
-   CYCCNT, a fifth to a quarter of the AMS's boot. CYCCNT is a timer on the
-   machine's clock (Renode's `DWT`, a `LimitTimer`), whose time within a chunk
-   is the instructions executed at the core's rate, so the iterations until
-   the wait ends are known in advance: the poll could be skipped exactly, with
-   the time-bounded polls' instruction-to-time arithmetic.
-7. Done this round: start-up (the models' assembly, ReadyToRun), the timer
+6. Done this round: the AMS's CYCCNT waits fast-forwarded (#289); start-up (the models' assembly, ReadyToRun), the timer
    update events (patch 0004; its clock-source integer arithmetic, exact but
    with no measurable gain, was dropped in patch set vhil.4), the CMP.W hook
    only at delay loops (patch 0005 and tlib/0001).
