@@ -1,0 +1,279 @@
+From 30e6c96fb1f2721f78b3ee9b49092d699e8fc483 Mon Sep 17 00:00:00 2001
+From: Raul Moran <moranguerra18@gmail.com>
+Date: Thu, 15 Oct 2026 00:26:42 +0200
+Subject: [PATCH] MonitorCondition: cheaper waiter; optionally spin longer
+ while a core is spare
+
+The time framework's hand-off between a time source and its sinks (a
+grant, a report back) waits in MonitorCondition. Its waiter was a
+SemaphoreSlim from a shared pool: Release takes the semaphore's lock,
+Wait spins about 100 us (SpinWait, with sched_yield) and then sleeps on
+it. In lock-step runs that is several hand-offs at every sync point.
+
+The waiter is now one per thread (a thread waits on one condition at a
+time, so no signal is left for another thread to consume) and signalling
+it is one interlocked exchange, plus a pulse only if it went to sleep.
+It spins (yielding) up to 100 us, as before, then sleeps.
+
+A sink running its quantum outlasts that spin, so each sync point can end
+in a wake-up, which in a VM also wakes a halted vCPU (about 50 us on
+Apple's hypervisor, profiled: a CPU waited 20-40 us for each grant after
+reporting, against 3-9 us of work at the source). RENODE_HANDOFF_SPIN_US
+sets a longer spin, taken only while the host has a core that no other
+runnable thread needs (/proc/loadavg, sampled at most every
+RENODE_HANDOFF_SAMPLE_US, 500, and re-checked while spinning); otherwise
+the waiter spins RENODE_HANDOFF_BUSY_SPIN_US (100), so the other work of
+a busy host keeps its cores. Where /proc/loadavg can't be read it always
+takes the short spin.
+
+Only when a waiting thread wakes changes; what it does once awake does
+not, so what an emulation computes is unchanged.
+---
+ .../Main/Utilities/MonitorCondition.cs        | 195 ++++++++++++++++--
+ 1 file changed, 176 insertions(+), 19 deletions(-)
+
+diff --git a/src/Emulator/Main/Utilities/MonitorCondition.cs b/src/Emulator/Main/Utilities/MonitorCondition.cs
+index b2e048e..40386d5 100644
+--- a/src/Emulator/Main/Utilities/MonitorCondition.cs
++++ b/src/Emulator/Main/Utilities/MonitorCondition.cs
+@@ -6,8 +6,13 @@
+ //
+ using System;
+ using System.Collections.Generic;
++using System.Diagnostics;
++using System.Globalization;
++using System.IO;
+ using System.Threading;
+ 
++using Microsoft.Win32.SafeHandles;
++
+ using Antmicro.Renode.Logging;
+ 
+ namespace Antmicro.Renode.Utilities
+@@ -26,7 +31,6 @@ public MonitorCondition(object gate, Func<bool> condition)
+             this.condition = condition;
+ 
+             waiters = new();
+-            waitersPool = new();
+         }
+ 
+         /// <summary>
+@@ -145,44 +149,197 @@ private void ValidateGate()
+ 
+         private Waiter AcquireWaiter()
+         {
+-            if(waitersPool.TryDequeue(out var waiter))
+-            {
+-                return waiter;
+-            }
+-
+-            return new Waiter();
++            return Waiter.ForCurrentThread;
+         }
+ 
+         private void ReleaseWaiter()
+         {
+-            var waiter = waiters.Dequeue();
+-            waiter.Signal();
+-            waitersPool.Enqueue(waiter);
++            waiters.Dequeue().Signal();
+         }
+ 
+         private readonly object gate;
+         private readonly Func<bool> condition;
+         private readonly Queue<Waiter> waiters;
+-        private readonly Queue<Waiter> waitersPool;
+ 
+-        private class Waiter
++        // One per thread (a thread waits on one condition at a time), so a signal is never left behind for
++        // another thread to consume. Signal is one interlocked exchange, plus a pulse only if the waiter has
++        // gone to sleep. Wait spins (yielding) before it sleeps, up to 100 us by default, about as long as
++        // SemaphoreSlim.Wait spun. The time framework's hand-off at every sync point (a source's grant, a sink's
++        // report back) is a wait of tens to hundreds of microseconds, and waking a sleeping thread can cost as
++        // much again (in a VM it also wakes a halted vCPU: on Apple's hypervisor about 50 us), so a longer spin
++        // can pay: RENODE_HANDOFF_SPIN_US sets it, and the waiter spins that long only while the host has a
++        // core no other runnable thread needs (/proc/loadavg), and the default otherwise, so the other work of
++        // a busy host (other emulations included) keeps its cores.
++        private sealed class Waiter
+         {
+-            public Waiter()
+-            {
+-                semaphore = new(0, 1);
+-            }
++            public static Waiter ForCurrentThread => current ??= new Waiter();
+ 
+             public void Wait()
+             {
+-                semaphore.Wait();
++                var start = Stopwatch.GetTimestamp();
++                var spare = TakeSpareCore(start);
++                try
++                {
++                    var budget = spare ? SpinTicks : BusySpinTicks;
++                    var checkAt = start + SampleTicks;
++                    long now;
++                    while((now = Stopwatch.GetTimestamp()) - start < budget)
++                    {
++                        if(state == Signaled)
++                        {
++                            state = Idle;
++                            return;
++                        }
++                        if(spare && now >= checkAt)
++                        {
++                            // keep the long spin only while the host still has a core to spare
++                            checkAt = now + SampleTicks;
++                            Sample(now);
++                            if(Volatile.Read(ref spinners) > spareCores)
++                            {
++                                spare = false;
++                                Interlocked.Decrement(ref spinners);
++                                budget = BusySpinTicks;
++                            }
++                        }
++                        Thread.Yield();
++                    }
++                }
++                finally
++                {
++                    if(spare)
++                    {
++                        Interlocked.Decrement(ref spinners);
++                    }
++                }
++                lock(sleepLock)
++                {
++                    if(Interlocked.CompareExchange(ref state, Sleeping, Idle) == Idle)
++                    {
++                        while(state == Sleeping)
++                        {
++                            Monitor.Wait(sleepLock);
++                        }
++                    }
++                    state = Idle;
++                }
+             }
+ 
+             public void Signal()
+             {
+-                semaphore.Release();
++                if(Interlocked.Exchange(ref state, Signaled) == Sleeping)
++                {
++                    lock(sleepLock)
++                    {
++                        Monitor.Pulse(sleepLock);
++                    }
++                }
+             }
+ 
+-            private readonly SemaphoreSlim semaphore;
++            private static bool TakeSpareCore(long now)
++            {
++                if(SpinTicks <= BusySpinTicks)
++                {
++                    return false;
++                }
++                Sample(now);
++                if(Interlocked.Increment(ref spinners) <= spareCores)
++                {
++                    return true;
++                }
++                Interlocked.Decrement(ref spinners);
++                return false;
++            }
++
++            // At most every SampleTicks, by whichever waiter comes first: the cores the host has to spare,
++            // i.e. its cores less the threads running now that are not spinning here.
++            private static void Sample(long now)
++            {
++                if(now - lastSample <= SampleTicks || Interlocked.CompareExchange(ref sampling, 1, 0) != 0)
++                {
++                    return;
++                }
++                try
++                {
++                    lastSample = now;
++                    var running = RunningThreads();
++                    spareCores = running < 0 ? 0 : Cores - Math.Max(0, running - Volatile.Read(ref spinners) - 1);
++                }
++                finally
++                {
++                    Volatile.Write(ref sampling, 0);
++                }
++            }
++
++            // The runnable scheduling entities of the host now (/proc/loadavg's fourth field, "running/total");
++            // -1 where it can't be read: such a host always gets the short spin.
++            private static int RunningThreads()
++            {
++                if(loadavgUnavailable)
++                {
++                    return -1;
++                }
++                try
++                {
++                    loadavg ??= File.OpenHandle("/proc/loadavg");
++                    var read = RandomAccess.Read(loadavg, loadavgBuffer, 0);
++                    var field = 0;
++                    var value = 0;
++                    for(var i = 0; i < read; i++)
++                    {
++                        var c = loadavgBuffer[i];
++                        if(c == ' ')
++                        {
++                            field++;
++                        }
++                        else if(field == 3)
++                        {
++                            if(c == '/')
++                            {
++                                return value;
++                            }
++                            value = value * 10 + (c - '0');
++                        }
++                    }
++                }
++                catch(Exception)
++                {
++                    loadavgUnavailable = true;
++                }
++                return -1;
++            }
++
++            private static long MicrosecondsToTicks(string variable, double fallback)
++            {
++                var value = Environment.GetEnvironmentVariable(variable);
++                var us = value != null && double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed) && parsed >= 0 ? parsed : fallback;
++                return (long)(us * Stopwatch.Frequency / 1e6);
++            }
++
++            private volatile int state;
++            private readonly object sleepLock = new object();
++
++            [ThreadStatic]
++            private static Waiter current;
++
++            private static int spinners;
++            private static int spareCores;
++            private static int sampling;
++            private static long lastSample = long.MinValue / 2;
++            private static bool loadavgUnavailable;
++            private static SafeFileHandle loadavg;
++            private static readonly byte[] loadavgBuffer = new byte[128];
++
++            private const int Idle = 0;
++            private const int Signaled = 1;
++            private const int Sleeping = 2;
++
++            private static readonly int Cores = Environment.ProcessorCount;
++            // RENODE_HANDOFF_SPIN_US / RENODE_HANDOFF_BUSY_SPIN_US: microseconds a waiter spins before it
++            // sleeps, with a core to spare and without (the host's load is not sampled while they are equal).
++            private static readonly long SpinTicks = MicrosecondsToTicks("RENODE_HANDOFF_SPIN_US", 100);
++            private static readonly long BusySpinTicks = MicrosecondsToTicks("RENODE_HANDOFF_BUSY_SPIN_US", 100);
++            private static readonly long SampleTicks = MicrosecondsToTicks("RENODE_HANDOFF_SAMPLE_US", 500);
+         }
+     }
+ }
+-- 
+2.51.0
+

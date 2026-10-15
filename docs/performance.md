@@ -553,6 +553,79 @@ of #260 before it. Compare within a job only.
   a scenario run 13.2-13.5 → 12.3-12.7 s; the identity fingerprint is
   unchanged.
 
+### The hand-off's wait: studied, not shipped (#260)
+
+Profiled with wait-time histograms in the time framework (every
+`MonitorCondition.Wait`, per thread and condition; `InnerExecute`'s grant,
+wait and sync phases; each CPU's execution of its grant), steady state, 5 s
+after a 3 s boot, the M-series host through Colima, 4 cores. Per 500 us
+quantum, means:
+
+| | ecu sim | ams sim | ecu bench | ecu-ams sim |
+|---|---|---|---|---|
+| quantum, wall | 117 us | 104 us | 107 us | 373 us |
+| a CPU executing its grant | 91 us | 82 us | 79 us | 145 / 136 us |
+| the master's sync phase (SyncHook, delayed actions) | 3.3 us | 3.2 us | 4.2 us | 9.2 us |
+| a CPU waiting for its next grant | 25 us | 21 us | 28 us | 228 / 237 us |
+
+A single board's CPU waits 20-40 us for each grant after it reports, against
+3-9 us of work at the source: the rest is two wake-ups. The waits are
+bimodal: a third end within 8 us (the other side was still spinning), most
+of the rest at 16-32 us (it had gone to sleep). `SemaphoreSlim.Wait` spins
+about 100 us (`SpinWait`, alternating pause loops and `sched_yield`) and then
+sleeps, and the master's wait (the CPU's whole quantum, 80-150 us) outlasts
+it, so each sync point ends in a futex wake-up, which in Colima's VM also
+wakes a halted vCPU: blocking at once (no spin at all) cost about 55 us per
+wake-up on this host (ecu sim 3.80x → 2.59x). Several boards add the slave
+time sources' relay: four wake-ups per board per quantum, five threads for
+two boards.
+
+Tried, as a patch to `MonitorCondition`
+([`renode-patches/02-handoff-waiter.patch`](proposals/renode-patches/02-handoff-waiter.patch),
+not in the queue): one waiter per thread, signalled by one interlocked
+exchange (a pulse only if it sleeps), that spins (yielding) up to
+`RENODE_HANDOFF_SPIN_US` while the host has a core no other runnable thread
+needs (`/proc/loadavg`, sampled every 500 us and re-checked while spinning)
+and up to 100 us otherwise, then sleeps. What a run computes is unchanged
+(the identity fingerprint is byte-identical; Renode's time-framework tests,
+`test_fast_forward.py`, `test_lazy_dma.py` and the two-board determinism test
+pass). Steady state, the M-series host, interleaved, median of 3, spin 1000
+us against dev (patch set vhil.3):
+
+| System | Path | 4 cores: factor | CPU s/s | 8 cores: factor | CPU s/s |
+|---|---|---|---|---|---|
+| ams | bench | 3.18x → 4.76x | 0.395 → 0.406 | 3.17x → 5.31x | 0.401 → 0.373 |
+| ams | sim | 4.96x → 7.00x | 0.257 → 0.277 | 3.68x → 6.46x | 0.335 → 0.301 |
+| ecu | bench | 4.25x → 7.70x | 0.302 → 0.254 | 4.30x → 8.07x | 0.297 → 0.245 |
+| ecu | sim | 3.81x → 4.64x | 0.335 → 0.420 | 3.77x → 6.14x | 0.339 → 0.323 |
+| ecu-ams | bench | 1.50x → 2.15x | 0.948 → 1.297 | 1.69x → 2.49x | 0.846 → 1.154 |
+| ecu-ams | sim | 1.77x → 2.50x | 1.095 → 1.367 | 1.50x → 2.90x | 1.336 → 1.620 |
+
+Runs an hour there (`ecu-ams/car-arms-through-the-ecu`, one 300 s window
+each, ±8 % between windows): 8 cores 180 → 180 (K=1), 528 → 576 (K=4), 864 →
+1044 (K=8); 4 cores within -8 to +4 % at K=2, 4 and 8.
+
+On x86 it is not a win. One GitHub runner (4 vCPU) building both packages
+and interleaving them, median of 3 (2026-10-15, a temporary branch since
+deleted): spin 1000 us, steady state ams +10-11 %, ecu +8-9 %, ecu-ams -3 to
+-1 %, at 9-55 % more CPU s/s (ecu-ams +37-55 %); runs an hour 168 → 168
+(K=1), 288 → 240 (K=2), 384 → 336 (K=4), 384 → 372 (K=8). Spin 300 us did
+no better. Another agent's interleaved run of the same patch found ecu-ams
+sim 3.31x → 3.19x at 0.86 → 1.10 CPU s/s, bench 3.35x → 3.20x at 0.65 → 0.92.
+KVM wakes a sleeping thread far more cheaply than Apple's hypervisor, so the
+spin buys little there and costs the cores a K=2 CI shard or a worker's
+other runs need. The cheaper waiter alone (spin 100 us, as `SemaphoreSlim`
+did) was within ±3 % in speed and CPU on every system and path, and runs an
+hour 192/168 → 192/192 (K=1), 312/240 → 312/288 (K=2), 432/336 → 480/384
+(K=4), 480/468 → 540/480 (K=8), two windows each: possibly a few percent of
+throughput, not clear enough to carry a patch for. Blocking at once was
+slower everywhere (also P1, above), and spinning without yielding starved
+the CPU threads of two boards on 4 cores (ecu-ams 1.72x → 0.96x).
+
+So the hand-off stays as it is. On an M-series Mac, a long spin would make a
+single run 1.4-1.9x faster; what would help on x86 too is fewer hand-offs
+(the slave on the master's thread, below), not a different wait.
+
 ## What is left
 
 Host `perf` of Renode in lock-step steady state on the final build of this
@@ -580,10 +653,9 @@ What could still buy something, most first:
    thread and the master wait for each other spinning (`SemaphoreSlim.Wait` →
    `SpinWait`, `sched_yield`), and on a host running several runs the spin
    takes cores from the others. P1 (a blocking barrier) was slower on 4
-   cores, and granting several quanta at once is exact almost never (above);
-   what is left is a cheaper hand-off in Renode's time framework (a short
-   spin then a futex, the master's loop doing less per quantum). Upstream
-   Renode work. With several boards, most of it is the slave time sources'
+   cores, granting several quanta at once is exact almost never, and a
+   cheaper wait (a per-thread waiter, a longer spin while a core is spare)
+   pays on Apple's hypervisor but not on x86 (above). Upstream Renode work. With several boards, most of it is the slave time sources'
    hop (above): 24-29 % of the host's samples on x86, 2N + 1 spinning threads
    for N boards, so three boards on 4 vCPUs oversubscribe. A slave that runs
    on the master's thread (the master begins its quantum when it grants it
@@ -616,5 +688,6 @@ What could still buy something, most first:
    the wait ends are known in advance: the poll could be skipped exactly, with
    the time-bounded polls' instruction-to-time arithmetic.
 7. Done this round: start-up (the models' assembly, ReadyToRun), the timer
-   update events and the clock source's arithmetic (patch 0004), the CMP.W
-   hook only at delay loops (patch 0005 and tlib/0001).
+   update events (patch 0004; its clock-source integer arithmetic, exact but
+   with no measurable gain, was dropped in patch set vhil.4), the CMP.W hook
+   only at delay loops (patch 0005 and tlib/0001).
