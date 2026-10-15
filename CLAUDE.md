@@ -167,8 +167,10 @@ them, e.g. "invariant 8"), so they are not in order.
 
 - (2) **HSE is 24 MHz** on the MainLite (`rcc.hseFrequency` in the
   platform). With Renode's 8 MHz default every FreeRTOS period runs 3× slow.
-- (3) **TIM23 is the HAL timebase.** Remove it and every HAL timeout spins
-  forever.
+- (3) **Each app's HAL timebase timer must be modelled.** That is TIM23 on the
+  ECU, TIM6 on the AMS and TIM1 on the uDV. The CAN bootloader's HAL tick is
+  SysTick. Remove it and every HAL timeout spins forever. Its period is
+  (ARR+1)·(PSC+1) timer clocks (RM0468 44.3.2, Renode patch 0007, #292).
 - (4) **Every address and IRQ in `stm32h733.repl` comes from ST's
   `stm32h733xx.h`.** Cite it; don't guess.
 - (5) **Every MainLite boots through its CAN bootloader**, as on the car: the
