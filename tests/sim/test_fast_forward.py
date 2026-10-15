@@ -107,6 +107,9 @@ def test_fast_forward_changes_nothing_observable(images, system, monkeypatch):
         # pass, for the ping's 100 ms (micro_ros_stm32cubemx_utils
         # usb_cdc_transport.c cubemx_transport_read, ros_task.c).
         assert "self-yielding polls: 0 skips" not in fast["skipped"]["udv"], fast["skipped"]["udv"]
+        # Its ADC3 polls (hardware_io.c, HAL_ADC_PollForConversion) proven
+        # store-free from their code, without a RAM snapshot.
+        assert "(0 proven store-free)" not in fast["skipped"]["udv"], fast["skipped"]["udv"]
     if "ecu" in fast["skipped"]:
         assert "counter loops: 0 skips" not in fast["skipped"]["ecu"], fast["skipped"]["ecu"]
         assert any(e for e in plain["edges"]["ecu"]), "the ECU's nRF24 pins never moved"
