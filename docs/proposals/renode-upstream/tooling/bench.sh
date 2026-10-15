@@ -3,22 +3,25 @@
 # (bench/*.resc: upstream's bus-performance loop, the register framework's
 # read and write, an STM32 timer's update path, a pre-opcode execution hook
 # on a loop (none / every call / excluding itself: hook-exclude needs PR 11),
-# three of Renode's own demos). For each repeat, each
+# three of Renode's own demos, two machines on the master time source, on
+# slave time sources, or on slave time sources on the master's thread
+# (multi-*-inline needs PR 13)). For each repeat, each
 # benchmark runs once on each package, in turn, in its own container limited
 # to 4 cores (--cpuset-cpus 4-7, as the vHIL study measured).
 #
 #   tooling/bench.sh <out.jsonl> <repeats> "<packages>" ["<benchmarks>"]
 #
 # Each run appends one JSON line: package, benchmark, repeat, the host wall
-# seconds for the measured virtual time, and the bytes allocated and gen-0
-# collections during it, and whether another container was running when it
-# ended (idle.sh: each run first waits until none is).
+# seconds for the measured virtual time, the bytes allocated, gen-0
+# collections and process CPU seconds during it, and whether another
+# container was running when it ended (idle.sh: each run first waits until
+# none is).
 # tooling/summarize_bench.py makes the table.
 set -uo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 . "$here/idle.sh"
 out=${1:?out.jsonl}; reps=${2:?repeats}; pkgs=${3:?packages}
-benches=${4:-"bus-trivial register-read register-write stm32-timer hook-none hook-always hook-exclude demo-stm32f4_discovery demo-nucleo_h753zi_hubris demo-nrf52840"}
+benches=${4:-"bus-trivial register-read register-write stm32-timer hook-none hook-always hook-exclude demo-stm32f4_discovery demo-nucleo_h753zi_hubris demo-nrf52840 multi-spin-shared multi-spin-slaves multi-spin-inline multi-ble-shared multi-ble-slaves multi-ble-inline"}
 for r in $(seq 1 "$reps"); do
   for b in $benches; do
     for p in $pkgs; do
@@ -30,7 +33,8 @@ for r in $(seq 1 "$reps"); do
       wall=$(sed -E 's/.*wall=([0-9.]+).*/\1/' <<<"$line")
       alloc=$(sed -E 's/.*alloc=([0-9]+).*/\1/' <<<"$line")
       gen0=$(sed -E 's/.*gen0=([0-9]+).*/\1/' <<<"$line")
-      printf '{"package":"%s","bench":"%s","rep":%d,"wall":%s,"alloc":%s,"gen0":%s,"contended":%s}\n' "$p" "$b" "$r" "$wall" "$alloc" "$gen0" "$(contended)" | tee -a "$out"
+      cpu=$(sed -nE 's/.*cpu=([0-9.]+).*/\1/p' <<<"$line")
+      printf '{"package":"%s","bench":"%s","rep":%d,"wall":%s,"alloc":%s,"gen0":%s,"cpu":%s,"contended":%s}\n' "$p" "$b" "$r" "$wall" "$alloc" "$gen0" "${cpu:-null}" "$(contended)" | tee -a "$out"
     done
   done
 done

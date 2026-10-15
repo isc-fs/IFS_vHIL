@@ -6,7 +6,11 @@
 # mounted read-only, 4 cores (--cpuset-cpus 4-7) as the study measured.
 #
 #   tooling/vhil-ab.sh speed <label> <repeats> "<packages>" [speed.py args]
-#   tooling/vhil-ab.sh fingerprint <package> [ms]
+#   tooling/vhil-ab.sh fingerprint <package> [ms] [out-name]
+#
+# FP_SYSTEMS (fingerprint.py: default "ecu ams ecu-ams", add ecu-ams-ecu) and
+# VHIL_INLINE_SLAVES (VhilMachine: 0 keeps every board's slave time source on
+# its own thread on a build with PR 13) pass through.
 #
 # Firmware: $WORK/fw/{ECU08,AMS,CAN_BL}.elf; results in $WORK/results
 # (WORK defaults to .claude/worktrees/renode-bench, a path Docker can mount).
@@ -35,7 +39,8 @@ speed)
         done
     done ;;
 fingerprint)
-    p=${2:?package}; ms=${3:-3500}
+    p=${2:?package}; ms=${3:-3500}; out=${4:-$p}
     mkdir -p "$work/results/fp"
-    run -e RENODE="/opt/up/$p/renode" ifs-vhil:latest bash -c "cd /work && python /scripts/fingerprint.py /results/fp/$p.json $ms" ;;
+    run -e RENODE="/opt/up/$p/renode" -e FP_SYSTEMS -e VHIL_INLINE_SLAVES ifs-vhil:latest \
+        bash -c "cd /work && python /scripts/fingerprint.py /results/fp/$out.json $ms" ;;
 esac

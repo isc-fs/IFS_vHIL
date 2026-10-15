@@ -1,0 +1,44 @@
+# Two machines, each a Cortex-M4 at 100 MIPS spinning on a two-instruction
+# loop, in lock-step quanta of 10 us (the quantum of Renode's BLE demos): 1,000
+# instructions per machine and quantum, so mostly the time framework's own
+# cost per quantum and machine, 50,000 quanta in the measured 0.5 s.
+# TIMESOURCE: see _machines.resc.
+$warmup?="0.05"
+$measure?="0.5"
+include $ORIGIN/_machines.resc
+python "add_machine('m0')"
+mach set "m0"
+machine LoadPlatformDescriptionFromString """
+cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m4"
+    nvic: nvic
+nvic: IRQControllers.NVIC @ sysbus 0xE000E000
+rom: Memory.MappedMemory @ sysbus 0x0
+    size: 0x40000
+"""
+cpu PerformanceInMips 100
+cpu AssembleBlock 0 """
+loop:
+add r1, r1, #1
+b loop
+"""
+cpu PC 0
+python "add_machine('m1')"
+mach set "m1"
+machine LoadPlatformDescriptionFromString """
+cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m4"
+    nvic: nvic
+nvic: IRQControllers.NVIC @ sysbus 0xE000E000
+rom: Memory.MappedMemory @ sysbus 0x0
+    size: 0x40000
+"""
+cpu PerformanceInMips 100
+cpu AssembleBlock 0 """
+loop:
+add r1, r1, #1
+b loop
+"""
+cpu PC 0
+emulation SetGlobalQuantum "0.00001"
+include $ORIGIN/_measure.resc

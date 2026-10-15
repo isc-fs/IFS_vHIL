@@ -1,0 +1,22 @@
+# PR 13 over Renode's own Robot suites: a test-only commit (test-slaves.patch on
+# PR 13, test-slaves-master.patch on master; not submitted) puts every machine on a
+# slave time source of its own when RENODE_TEST_SLAVES is set: "threads" (its
+# dispatcher thread, what master does for
+# `new Machine(createLocalTimeSource: true)`) or "inline" (on the master's
+# thread), with the master's quantum, advance-immediately and serial settings.
+# Upstream's machines all share the master time source, so these suites
+# otherwise never reach a slave. Run with --test-timeout 120: on master, a
+# precise pause (precise-pause.robot's Wait For Line On Uart
+# pauseEmulation=true) never returns on a slave time source, so that suite and
+# pause-without-sleep are left out. Time framework first, then multi-node
+# suites (BLE, UART hub, CAN).
+tests/unit-tests/virtual-time.robot
+tests/unit-tests/cpu-pause-halt.robot
+tests/unit-tests/real-time-clock-mode.robot
+tests/unit-tests/timer-reconfiguration.robot
+tests/unit-tests/instructions-counting.robot
+tests/unit-tests/sync_pc.robot
+tests/unit-tests/snapshot-tracking.robot
+tests/platforms/NRF52840.robot
+tests/platforms/nucleo_h753zi.robot
+tests/peripherals/MCAN.robot

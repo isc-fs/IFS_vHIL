@@ -1,0 +1,3 @@
+# _multi-ble.resc (Renode's two-node BLE demo) with the machines on slave time sources on the master's thread (PR 13).
+python "TIMESOURCE = 'inline'"
+include $ORIGIN/_multi-ble.resc

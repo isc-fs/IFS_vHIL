@@ -15,7 +15,8 @@
 # host's tlib plus a commit on <infra-ref> moving the submodule to it. The
 # portable headless package goes to the volume renode-up-pkgs:/<name> (what
 # docker/renode/build.sh builds, on master). Extra arguments go to ./renode-test, run from the build tree after
-# the build; its results land in renode-up-pkgs:/<name>.tests/.
+# the build; its results land in renode-up-pkgs:/<name>.tests/. RENODE_TEST_SLAVES, if set, reaches the
+# tests' Renode (tests-slaves.txt: a test-only commit on PR 13 reads it).
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 vhil=$(cd "$here/../../../.." && pwd)
@@ -24,7 +25,8 @@ name=${1:?usage: build.sh <name> <infra-ref> [renode-test args]}
 ref=${2:?infra-ref}
 shift 2
 docker run --rm --cpus "${BUILD_CPUS:-6}" -v "$host:/host:ro" -v renode-up-src:/src -v renode-up-pkgs:/pkgs \
-    -v renode-up-nuget:/root/.nuget -v renode-up-cache:/root/.cache -e RENODE_REF="${RENODE_REF:-master}" renode-up-builder bash -c '
+    -v renode-up-nuget:/root/.nuget -v renode-up-cache:/root/.cache -e RENODE_REF="${RENODE_REF:-master}" \
+    -e RENODE_TEST_SLAVES renode-up-builder bash -c '
 set -euo pipefail
 name=$1; ref=$2; shift 2
 git config --global --add safe.directory "*"
