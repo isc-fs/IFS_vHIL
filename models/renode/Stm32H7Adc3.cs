@@ -732,6 +732,8 @@ namespace Antmicro.Renode.Peripherals.Analog
                 }
             }
             ioPages = want;
+            lazy.IoPages.Clear();
+            lazy.IoPages.UnionWith(want);
         }
 
         private void OnResultDue(ulong g)
@@ -986,7 +988,7 @@ namespace Antmicro.Renode.Peripherals.Analog
 
         // tlib's smallest page on ARM (TARGET_PAGE_BITS 10); a larger one
         // covers several of these.
-        private const ulong PageBytes = 0x400;
+        private const ulong PageBytes = VhilLazy.PageBytes;
 
         private readonly VhilLazy lazy;
         private IVhilDmaStream dmaStream;

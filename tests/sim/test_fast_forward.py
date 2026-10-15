@@ -5,7 +5,9 @@ executing them one by one: the ECU's volatile counter delay (nrf24.c
 NRF24_BitBangDelay), the CAN bootloader's polling main loop (main.c
 Bootloader_MainLoop) at a fixed point, the AMS's poll for an ADC3
 conversion up to the time the result lands, and the AMS's isoSPI wake delays
-on the DWT cycle counter (ltc6820.cpp delay_us) up to the time they end. These run each system from power-on,
+on the DWT cycle counter (ltc6820.cpp delay_us) up to the time they end, and
+HAL_Delay's wait for the HAL tick (the uDV's BMI088 and I2C bring-up). These
+run each system from power-on,
 through the bootloader's 2 s window and the apps' boot into steady state,
 once with it and once without (VHIL_FAST_FORWARD=0: Renode as it is), and
 compare everything the run produced:
@@ -35,7 +37,14 @@ WATCHED = {
     "ecu": [("ecu", "PA5"), ("ecu", "PA7"), ("ecu", "PB0"), ("ecu", "PC5")],    # nRF24 SCK, MOSI, CSN, CE
     "ams": [("ams", "PB9")],                                                    # LTC6820 CS
     "ecu-ams": [("ecu", "PA5"), ("ecu", "PB0"), ("ams", "PB9")],
+    "udv": [("udv", "PB4"), ("udv", "PB5"), ("udv", "PB7")],                    # EBS valves 1, 2; SDC relay
+    "ecu-ams-udv": [("ecu", "PA5"), ("ecu", "PB0"), ("ams", "PB9"), ("udv", "PB4"), ("udv", "PB7")],
 }
+
+# Buses with nothing on them in RUN_MS: the uDV alone sends on the ACU bus
+# only its 0x512 IMU frames, from after its 6 s gyro calibration
+# (imu_task.c), and nothing else is on that bus in udv.yaml.
+QUIET = {("udv", "can_acu")}
 
 
 def observe(images, system: str, fast_forward: bool, monkeypatch) -> dict:
@@ -67,14 +76,14 @@ def first_difference(a: list, b: list) -> str:
     return f"item {at} of {len(a)}/{len(b)}: {a[at:at + 1]} vs {b[at:at + 1]}"
 
 
-@pytest.mark.parametrize("system", ["ecu", "ams", "ecu-ams"])
+@pytest.mark.parametrize("system", ["ecu", "ams", "ecu-ams", "udv", "ecu-ams-udv"])
 def test_fast_forward_changes_nothing_observable(images, system, monkeypatch):
     plain = observe(images, system, False, monkeypatch)
     fast = observe(images, system, True, monkeypatch)
     print(f"{system}: {fast['skipped']}")
     assert fast["now_us"] == plain["now_us"]
     for bus, timeline in plain["buses"].items():
-        assert timeline, f"nothing on {bus}"
+        assert timeline or (system, bus) in QUIET, f"nothing on {bus}"
         assert fast["buses"][bus] == timeline, f"{bus}: {first_difference(timeline, fast['buses'][bus])}"
     for board, edges in plain["edges"].items():
         assert fast["edges"][board] == edges, f"{board} GPIO: {first_difference(edges, fast['edges'][board])}"
@@ -91,6 +100,10 @@ def test_fast_forward_changes_nothing_observable(images, system, monkeypatch):
         assert "time-bounded polls: 0 skips" not in fast["skipped"]["ams"], fast["skipped"]["ams"]
         # Its isoSPI wake pulses, timed on CYCCNT (ltc6820.cpp delay_us).
         assert "CYCCNT waits: 0 skips" not in fast["skipped"]["ams"], fast["skipped"]["ams"]
+    if "udv" in fast["skipped"]:
+        # HAL_Delay's tick waits in its BMI088 and I2C bring-up (bmi088.c
+        # bmi088_init, i2c_utils.c i2c_utils_bus_recovery).
+        assert "tick waits: 0 skips" not in fast["skipped"]["udv"], fast["skipped"]["udv"]
     if "ecu" in fast["skipped"]:
         assert "counter loops: 0 skips" not in fast["skipped"]["ecu"], fast["skipped"]["ecu"]
         assert any(e for e in plain["edges"]["ecu"]), "the ECU's nRF24 pins never moved"

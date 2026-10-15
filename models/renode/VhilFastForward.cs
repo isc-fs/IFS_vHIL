@@ -83,6 +83,17 @@
 //   iteration's read and SUBS write them before anything reads them, and no
 //   exception can come between (one comes only at a chunk's end).
 //
+//   Tick waits. HAL_Delay's `while ((HAL_GetTick() - tickstart) < wait) {}`
+//   as GCC emits it at -Og/-O2 (the uDV's BMI088 and I2C bring-up, 140 ms of
+//   its boot at full speed), decoded at its BCC (TickWait): BL to a
+//   HAL_GetTick that loads the tick from RAM, SUBS, CMP, BCC. The loop writes
+//   no memory and only registers it recomputes from ones it never writes
+//   and the tick, which only an interrupt changes. A pre-opcode hook on the
+//   BCC (the CYCCNT waits' hook) sees two arrivals one iteration apart with
+//   those registers equal and the branch taken, and charges the iterations
+//   up to the chunk's end less two. Never on a page a lazily delivering
+//   peripheral owns (VhilLazy.IoPages).
+//
 // Exactness. Renode runs a CPU in chunks that end at the nearest clock entry
 // (a timer's limit) or the end of the quantum (BaseCPU.CpuThreadBodyInner):
 // events fire, interrupts are raised and sync-point actions (CAN frames from
@@ -257,6 +268,7 @@ namespace Antmicro.Renode.Testing
                 + $"; polling loops: {pollSkips} skips, {pollInstructions} instructions"
                 + $" ({pollAttempts} armed, {pollRefusals} refused, {accessCalls} accesses, {Ms(accessTicks)} ms)"
                 + $"; time-bounded polls: {boundedSkips} skips, {boundedInstructions} instructions ({cues} cues)"
+                + $"; tick waits: {tickSkips} skips, {tickInstructions} instructions"
                 + $"; CYCCNT waits: {cycleSkips} skips, {cycleInstructions} instructions"
                 + $" ({branchCalls} BCC hooks, {Ms(branchTicks)} ms, {excludedBranches.Count} BCC excluded)"
                 + $"; core registers via {tlib.RegisterAccess}";
@@ -676,13 +688,25 @@ namespace Antmicro.Renode.Testing
             {
                 wait = CycleCounterWait.Decode(machine.SystemBus, cpu, bcc - 6);
                 waits[bcc] = wait;
-                if(wait == null && excludeCompare != null && excludeCompare(branchHook, bcc))
+                if(wait == null && !tickWaits.ContainsKey(bcc))
+                {
+                    tickWaits[bcc] = TickWait.Decode(machine.SystemBus, cpu, bcc);
+                }
+                if(wait == null && tickWaits[bcc] == null && excludeCompare != null && excludeCompare(branchHook, bcc))
                 {
                     excludedBranches.Add(bcc);
                     pendingInvalidation = true;
                 }
             }
-            if(wait == null || !wait.StillThere(machine.SystemBus, cpu) || !Calibrated())
+            if(wait == null)
+            {
+                if(tickWaits.TryGetValue(bcc, out var tick) && tick != null)
+                {
+                    SkipTickWait(tick);
+                }
+                return;
+            }
+            if(!wait.StillThere(machine.SystemBus, cpu) || !Calibrated())
             {
                 return;
             }
@@ -726,6 +750,65 @@ namespace Antmicro.Renode.Testing
             {
                 cpu.Log(LogLevel.Info, "fast-forward: {0} iterations of a CYCCNT wait at 0x{1:X8}", n, bcc - 6);
             }
+        }
+
+        // At the BCC of a tick wait (TickWait), before it executes. The loop
+        // writes no memory and only LR, the literal's register, R0, Rd and the
+        // flags, each a function of registers it never writes and of the tick
+        // word in RAM, which nothing but an interrupt (or a DMA's event) can
+        // change within a chunk. Two arrivals here one iteration apart (seven
+        // instructions, no exception, the same chunk) with those registers
+        // equal, the branch taken, are a fixed point: every iteration up to
+        // the chunk's end repeats it. Charge them, leaving two.
+        private void SkipTickWait(TickWait tick)
+        {
+            if(!tick.StillThere(machine.SystemBus, cpu) || !Calibrated())
+            {
+                lastTick = null;
+                return;
+            }
+            var xpsr = (uint)cpu.GetRegister(XpsrIndex).RawValue;
+            if((xpsr & CarryFlag) != 0)
+            {
+                lastTick = null;   // BCC not taken: the wait ends here
+                return;
+            }
+            var budget = tlib.Budget();
+            var regs = new TickRegisters(tlib.CoreRegister(0), tlib.CoreRegister(tick.Ra), tlib.CoreRegister(tick.Rd),
+                                         tlib.CoreRegister(14), xpsr & 0xF8000000u);
+            var k = TickWait.Instructions;
+            var proven = lastTick == tick && lastTickInterrupts == interrupts
+                && lastTickBudget == budget + k && lastTickRegisters.Equals(regs);
+            lastTick = tick;
+            lastTickInterrupts = interrupts;
+            lastTickBudget = budget;
+            lastTickRegisters = regs;
+            if(!proven || OnLazyIoPage(tick.TickAddress))
+            {
+                return;
+            }
+            var n = budget > 2 * k ? (budget - 2 * k) / k : 0;
+            if(n < 2)
+            {
+                return;
+            }
+            tlib.Charge(n * k);
+            lastTickBudget = budget - n * k;   // the next arrival is one iteration on
+            tickSkips++;
+            tickInstructions += n * k;
+            if(Trace)
+            {
+                cpu.Log(LogLevel.Info, "fast-forward: {0} iterations of a tick wait at 0x{1:X8}", n, tick.Bcc);
+            }
+        }
+
+        // A word a lazily delivering peripheral may still write (VhilLazy
+        // IoPages: tlib sends those pages through the bus, so a load there is
+        // an MMIO access that catches it up first).
+        private bool OnLazyIoPage(ulong address)
+        {
+            var lazy = lazyState ?? (lazyState = VhilLazy.For(machine));
+            return lazy.IoPages.Count > 0 && lazy.IoPages.Contains(address & ~(VhilLazy.PageBytes - 1));
         }
 
         // DWT's cycle counter (Renode Cores/Arm-M/DWT.cs: a private LimitTimer).
@@ -1006,6 +1089,8 @@ namespace Antmicro.Renode.Testing
         {
             loops.Clear();
             waits.Clear();
+            tickWaits.Clear();
+            lastTick = null;
             if(clearExclusions != null && excludedCompares.Count + excludedBranches.Count > 0)
             {
                 // Every CMP.W and BCC is looked at again after a reset, as the
@@ -1099,6 +1184,15 @@ namespace Antmicro.Renode.Testing
         private volatile bool pendingRefusal;
 
         private readonly Dictionary<ulong, CycleCounterWait> waits = new Dictionary<ulong, CycleCounterWait>();
+        private readonly Dictionary<ulong, TickWait> tickWaits = new Dictionary<ulong, TickWait>();
+        private TickWait lastTick;
+        private VhilLazy lazyState;
+        private ulong lastTickInterrupts;
+        private ulong lastTickBudget;
+        private TickRegisters lastTickRegisters;
+        private ulong tickSkips;
+        private ulong tickInstructions;
+        private const uint CarryFlag = 1u << 29;     // xPSR.C
         private LimitTimer cycleCounter;
         private ulong cycleSkips;
         private ulong cycleInstructions;
@@ -1234,6 +1328,136 @@ namespace Antmicro.Renode.Testing
         public int Rn { get; private set; }
 
         private ushort[] code;
+    }
+
+    // HAL_Delay's wait for the HAL tick, as GCC emits it at -Og/-O2 (uDV,
+    // AMS stm32h7xx_hal.c HAL_Delay: `while ((HAL_GetTick() - tickstart) <
+    // wait) {}`), decoded at its BCC:
+    //     L:  BL   G                (A7.7.18 T1)
+    //         SUBS rD, r0, rS       (A7.7.174 T1)
+    //         CMP  rD, rN           (A7.7.28 T2)
+    //         BCC  L                (A7.7.12 T1, cond 0011)
+    //     G:  LDR  rA, [PC, #imm8]  (A7.7.44 T1: the tick's address)
+    //         LDR  r0, [rA, #imm5]  (A7.7.42 T1: the tick, in RAM)
+    //         BX   LR
+    // with rS and rN none of r0, rD, rA: the loop never writes them.
+    public class TickWait
+    {
+        public const ulong Instructions = 7;
+
+        public static TickWait Decode(IBusController bus, ICPU cpu, ulong bcc)
+        {
+            var l = bcc - 8;
+            var code = Read(bus, cpu, l, 5);
+            var h1 = code[0];
+            var h2 = code[1];
+            var subs = code[2];
+            var cmp = code[3];
+            var b = code[4];
+            if((b & 0xFF00) != 0xD300 || (ulong)((long)bcc + 4 + (sbyte)(b & 0xFF) * 2) != l)
+            {
+                return null;
+            }
+            if((h1 & 0xF800) != 0xF000 || (h2 & 0xD000) != 0xD000)
+            {
+                return null;
+            }
+            var sign = (h1 >> 10) & 1;
+            var i1 = 1 ^ (((h2 >> 13) & 1) ^ sign);
+            var i2 = 1 ^ (((h2 >> 11) & 1) ^ sign);
+            var offset = (sign << 24) | (i1 << 23) | (i2 << 22) | ((h1 & 0x3FF) << 12) | ((h2 & 0x7FF) << 1);
+            var g = (ulong)((long)l + 4 + ((offset << 7) >> 7));   // sign-extend 25 bits
+            if((subs & 0xFE00) != 0x1A00 || ((subs >> 3) & 7) != 0)
+            {
+                return null;
+            }
+            var rd = subs & 7;
+            var rs = (subs >> 6) & 7;
+            if((cmp & 0xFFC0) != 0x4280 || (cmp & 7) != rd)
+            {
+                return null;
+            }
+            var rn = (cmp >> 3) & 7;
+            var callee = Read(bus, cpu, g, 3);
+            if((callee[0] & 0xF800) != 0x4800 || (callee[1] & 0xF800) != 0x6800 || callee[2] != 0x4770)
+            {
+                return null;
+            }
+            var ra = (callee[0] >> 8) & 7;
+            var literal = ((g + 4) & ~3UL) + (ulong)(callee[0] & 0xFF) * 4;
+            if((callee[1] & 7) != 0 || ((callee[1] >> 3) & 7) != ra)
+            {
+                return null;
+            }
+            foreach(var r in new[] { rs, rn })
+            {
+                if(r == 0 || r == rd || r == ra)
+                {
+                    return null;
+                }
+            }
+            var tick = (ulong)bus.ReadDoubleWord(literal, cpu) + (ulong)((callee[1] >> 6) & 0x1F) * 4;
+            // The tick a plain RAM word (not a peripheral, not the flash).
+            if(!(bus.WhatIsAt(tick, cpu)?.Peripheral is MappedMemory) || (tick >= 0x08000000 && tick < 0x20000000))
+            {
+                return null;
+            }
+            return new TickWait { Bcc = bcc, Rd = rd, Ra = ra, TickAddress = tick, g = g, literal = literal,
+                                  code = code, calleeCode = callee, literalValue = bus.ReadDoubleWord(literal, cpu) };
+        }
+
+        // The code and the literal are as decoded.
+        public bool StillThere(IBusController bus, ICPU cpu)
+        {
+            return Same(Read(bus, cpu, Bcc - 8, 5), code) && Same(Read(bus, cpu, g, 3), calleeCode)
+                && bus.ReadDoubleWord(literal, cpu) == literalValue;
+        }
+
+        private static bool Same(ushort[] a, ushort[] b)
+        {
+            for(var i = 0; i < a.Length; i++)
+            {
+                if(a[i] != b[i])
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        private static ushort[] Read(IBusController bus, ICPU cpu, ulong pc, int n)
+        {
+            var code = new ushort[n];
+            for(var i = 0; i < n; i++)
+            {
+                code[i] = (ushort)bus.ReadWord(pc + (ulong)(2 * i), cpu);
+            }
+            return code;
+        }
+
+        public ulong Bcc { get; private set; }
+        public int Rd { get; private set; }
+        public int Ra { get; private set; }
+        public ulong TickAddress { get; private set; }
+
+        private ulong g;
+        private ulong literal;
+        private uint literalValue;
+        private ushort[] code;
+        private ushort[] calleeCode;
+    }
+
+    // The registers a tick wait's iteration writes, at its BCC.
+    public struct TickRegisters : IEquatable<TickRegisters>
+    {
+        public TickRegisters(uint r0, uint ra, uint rd, uint lr, uint flags)
+        {
+            R0 = r0; Ra = ra; Rd = rd; Lr = lr; Flags = flags;
+        }
+
+        public bool Equals(TickRegisters o) => R0 == o.R0 && Ra == o.Ra && Rd == o.Rd && Lr == o.Lr && Flags == o.Flags;
+
+        public readonly uint R0, Ra, Rd, Lr, Flags;
     }
 
     public class CounterLoop
