@@ -1716,26 +1716,57 @@ namespace Antmicro.Renode.Testing
             {
                 return true;
             }
-            if(!(bus.WhatIsAt(address, cpu)?.Peripheral is MappedMemory))
+            if(!TryReadCode(address, out value))
             {
                 return false;   // code outside memory: nothing to decode
             }
-            value = (ushort)bus.ReadWord(address, cpu);
             code[address] = value;
             return true;
         }
 
+        // Checked on every use, so read straight from the memory's segment
+        // (as MappedMemory.ReadWord does, without the bus's look-up).
         private bool StillThere(Dictionary<ulong, ushort> code)
         {
             foreach(var pair in code)
             {
-                if((ushort)bus.ReadWord(pair.Key, cpu) != pair.Value)
+                if(!TryReadCode(pair.Key, out var value) || value != pair.Value)
                 {
                     return false;
                 }
             }
             return true;
         }
+
+        private unsafe bool TryReadCode(ulong address, out ushort value)
+        {
+            value = 0;
+            if(codeMemory == null || address < codeStart || address + 2 > codeEnd)
+            {
+                var at = bus.WhatIsAt(address, cpu);
+                if(!(at?.Peripheral is MappedMemory memory))
+                {
+                    return false;
+                }
+                codeMemory = memory;
+                codeStart = at.RegistrationPoint.Range.StartAddress;
+                codeEnd = at.RegistrationPoint.Range.EndAddress + 1;
+            }
+            var offset = (long)(address - codeStart);
+            var segment = codeMemory.GetSegment((int)(offset / codeMemory.SegmentSize));
+            var local = offset % codeMemory.SegmentSize;
+            if(segment == IntPtr.Zero || local > codeMemory.SegmentSize - 2)
+            {
+                value = codeMemory.ReadWord(offset);
+                return true;
+            }
+            value = *(ushort*)((byte*)segment + local);
+            return true;
+        }
+
+        private MappedMemory codeMemory;
+        private ulong codeStart;
+        private ulong codeEnd;
 
         private class ImmutableReturns
         {
