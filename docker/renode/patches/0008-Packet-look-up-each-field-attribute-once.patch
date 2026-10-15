@@ -1,0 +1,56 @@
+From 66f6eb0df3f19a826a1210adae646f2290428c2b Mon Sep 17 00:00:00 2001
+From: Raul Moran <rmg@raulmoranguerra.com>
+Date: Thu, 15 Oct 2026 20:32:08 +0200
+Subject: [PATCH] Packet: look up each field attribute once
+
+Packet's decoders and encoders read a field's attributes (offset, bit
+offset, alignment, padding, width, byte order) through
+FieldPropertyInfoWrapper, which called GetCustomAttributes on every
+read: for every field of every value decoded or encoded. The wrappers
+are already cached per type, and a member's attributes never change, so
+keep each kind of attribute the wrapper looked up, and the declaring
+type's byte order, in the wrapper.
+
+MCAN decodes every filter element from the message RAM for every frame
+it receives (FilterMessage, DecodeFilterElement) and encodes every frame
+it stores (StoreInRxFIFO): on a three-board CAN system this lookup was
+6-10 % of the host's time.
+---
+ src/Emulator/Main/Utilities/Packets/Packet.cs | 10 +++++++---
+ 1 file changed, 7 insertions(+), 3 deletions(-)
+
+diff --git a/src/Emulator/Main/Utilities/Packets/Packet.cs b/src/Emulator/Main/Utilities/Packets/Packet.cs
+index 796c35b..043ae8c 100644
+--- a/src/Emulator/Main/Utilities/Packets/Packet.cs
++++ b/src/Emulator/Main/Utilities/Packets/Packet.cs
+@@ -786,13 +786,15 @@ public bool SetValue(object o, object v)
+                 return true;
+             }
+ 
++            // A member's attributes never change: look each kind up once (the
++            // decoders and encoders read several per field, per value).
+             public T GetAttribute<T>()
+             {
+-                return (T)((MemberInfo)fieldInfo ?? propertyInfo).GetCustomAttributes(typeof(T), false).FirstOrDefault();
++                return (T)attributes.GetOrAdd(typeof(T), type => ((MemberInfo)fieldInfo ?? propertyInfo).GetCustomAttributes(type, false).FirstOrDefault());
+             }
+ 
+-            public bool IsLSBFirst => ((MemberInfo)fieldInfo ?? propertyInfo).DeclaringType.GetCustomAttribute<LeastSignificantByteFirst>(true) != null
+-                    || GetAttribute<LeastSignificantByteFirst>() != null;
++            public bool IsLSBFirst => isLSBFirst ?? (bool)(isLSBFirst = ((MemberInfo)fieldInfo ?? propertyInfo).DeclaringType.GetCustomAttribute<LeastSignificantByteFirst>(true) != null
++                    || GetAttribute<LeastSignificantByteFirst>() != null);
+ 
+             public bool IsOptional => presentMethod != null;
+ 
+@@ -951,6 +953,8 @@ private bool GetPresentMethod(MemberInfo info, out MethodInfo foundMethod, out o
+             private readonly PropertyInfo propertyInfo;
+             private readonly MethodInfo presentMethod;
+             private readonly object[] presentArgs;
++            private readonly System.Collections.Concurrent.ConcurrentDictionary<Type, object> attributes = new System.Collections.Concurrent.ConcurrentDictionary<Type, object>();
++            private bool? isLSBFirst;
+         }
+     }
+ }
+-- 
+2.51.0
+
