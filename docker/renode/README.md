@@ -28,7 +28,7 @@ were measured:
 | 0003 | P5 | Register framework (`PeripheralRegister`): lists only when a field changes, a reused scratch list, `Distinct` only with two or more fields, a plain loop for tag checks, unhandled-write messages built only when logged; `CpuThreadPauseGuard`'s per-access `new object()` becomes a static marker; `HookDescriptorBase.ActivateNewHooks` a plain loop; noisy `$"..."` logs (opcode hooks, scheduled actions) built only when the level lets them through | Prepared as PRs 06 + 07, not submitted |
 | 0004 | — | `STM32_Timer`'s update event leaves a compare channel with neither its interrupt nor its output enabled, whose timer is disabled and counts the parent's way, as it is (it re-applied all four every period: two clock-entry exchanges and CPU return requests each) (#260). The file is upstream PR 08's patch. (Until 1.17.0-vhil.4 it also did `BaseClockSource`'s tick arithmetic in integers, upstream PR 09: exact, but no measurable gain, so dropped there and here) | Prepared as PR 08, not submitted |
 | 0005 + tlib/0001 | — | A pre-opcode execution hook can be excluded at an address: `TranslationCPU.ExcludePreOpcodeExecutionHookAt(action, pc)` and `ClearPreOpcodeExecutionHookExclusions()`, over tlib's `tlib_exclude_pre_opcode_execution_hook` / `tlib_clear_pre_opcode_execution_hook_exclusions` (an open-addressed set of (pc, hook id) pairs, 4,096 slots at most three quarters full, that `generate_pre_opcode_execution_hook` consults at translation; tlib/0001 is upstream PR 10's patch, whose pairs keep pc and hook id apart: the earlier key `(pc << 3) | hook id` collided for hook ids of 8 or more); the blocks holding the address are queued for invalidation. `VhilFastForward` excludes its CMP.W hook at every CMP.W that is not a delay loop's, so the hook reaches C# from the delay loops only (#260) | Prepared as PRs 10 (tlib) + 11 + 12 (tests), not submitted |
-| 0006 | — | A `SlaveTimeSource` can run on its master's thread (`RunsOnMasterThread`, set before it is attached): `TimeSourceBase.InnerExecute` split into `InnerExecuteBegin` (grant or unblock every handle) and `InnerExecuteEnd` (wait for them, the sync phase); the master begins a slave's iteration when it grants it time and ends it when it waits for it, so the slave's sinks run beside the master's others without the slave's dispatcher thread between them. `TimeHandle.RequestTimeInterval(noWait)` for a sink that cannot wait for its own source; `TimeDomainsManager.SwapCurrentThread` gives the slave's sync phase the slave's time stamp. Off by default; Renode's slave time-source unit tests run both ways. `VhilMachine` turns it on for every board of a lock-step run (invariant 11 holds: each board keeps a time source of its own), one hand-off a quantum per board and N + 1 threads instead of 2N + 1 (#260) | Not submitted |
+| 0006 | — | A `SlaveTimeSource` can run on its master's thread (`RunsOnMasterThread`, set before it is attached): `TimeSourceBase.InnerExecute` split into `InnerExecuteBegin` (grant or unblock every handle) and `InnerExecuteEnd` (wait for them, the sync phase); the master begins a slave's iteration when it grants it time and ends it when it waits for it, so the slave's sinks run beside the master's others without the slave's dispatcher thread between them. `TimeHandle.RequestTimeInterval(noWait)` for a sink that cannot wait for its own source; `TimeDomainsManager.SwapCurrentThread` gives the slave's sync phase the slave's time stamp. Off by default; Renode's slave time-source unit tests run both ways. `VhilMachine` turns it on for every board of a lock-step run (invariant 11 holds: each board keeps a time source of its own), one hand-off a quantum per board and N + 1 threads instead of 2N + 1 (#260) | Prepared as PR 13, not submitted |
 
 The study's P1 (blocking instead of spinning at the lock-step barrier) is
 slower on 4 cores and P4 (aarch64 inline TLB) not worth it; neither is here.
@@ -44,10 +44,11 @@ PR). `tests/sim/test_fast_forward.py` and
 
 ## Upstreaming
 
-The five patches and the tlib one are prepared as twelve pull requests to
+The six patches and the tlib one are prepared as twelve pull requests to
 three repositories (renode/renode-infrastructure, antmicro/tlib and
-renode/renode for the tests), rebased on upstream master, tested with
-Renode's own suites and measured there:
+renode/renode for the tests; numbered 01-08 and 10-13, 09 was dropped),
+rebased on upstream master, tested with Renode's own suites and measured
+there:
 [`docs/proposals/renode-upstream/`](../../docs/proposals/renode-upstream/README.md)
 (submission order, commands, the CLA). Plan for the queue:
 
@@ -56,8 +57,9 @@ Renode's own suites and measured there:
 | 0001 | 01 (bug fix) + 02 | the Renode release the vHIL moves to contains both |
 | 0002 | 03 + 04 + 05 | the release contains all three |
 | 0003 | 06 + 07 | the release contains both |
-| 0004 | 08 (STM32_Timer) + 09 (clock source arithmetic) | the release contains both |
+| 0004 | 08 (STM32_Timer; the clock source arithmetic, prepared as 09, was dropped here and there) | the release contains it |
 | 0005 + tlib/0001 | 10 (antmicro/tlib) + 11 (TranslationCPU) + 12 (renode's tests) | the release's tlib has 10 and its renode-infrastructure 11; this is a new API, proposed through an issue first, and may come back in another shape (then `VhilFastForward` follows it) or be declined (then the two patches stay here) |
+| 0006 | 13 (three commits: the `InnerExecute` split, `RequestTimeInterval(noWait)`, `SlaveTimeSource.RunsOnMasterThread`) | the release contains it; an opt-in mode of a path upstream's own machines no longer take (`mach create` shares the master time source), proposed through issue D first: upstream may make it a default or a `Machine` argument (then `VhilMachine` follows) or decline it (then 0006 stays here) |
 
 Upstream lands a PR through Antmicro's tree (the PR shows "Closed" when its
 commit is on master), possibly rewritten, and a release follows. Until the
@@ -71,14 +73,12 @@ the patch stays in the queue.
 
 The PRs differ from the local patches in details reviewed for upstream (a
 separate bug fix and its tests, an exact first-match index, a look-up cache
-owned by the bus and held weakly by threads, no reused scratch list, a
-2^31 instead of 2^21 bound for the clock source's integer path, (pc, hook)
-keys that don't collide for hook ids of 8 or more; table in the upstream
-README), not in what a run computes: the vHIL's fingerprint is
-byte-identical between upstream master and master with every PR. The tlib
-key collision is harmless here (`VhilFastForward` installs one pre-opcode
-hook, id 0); align `patches/tlib/0001` with PR 10 when the queue next
-changes anyway.
+owned by the bus and held weakly by threads, no reused scratch list,
+(pc, hook) keys that don't collide for hook ids of 8 or more, 0006 rebased
+onto upstream's reworked `InnerExecute` and split in three; table in the
+upstream README), not in what a run computes: the vHIL's fingerprint is
+byte-identical between upstream master and master with every PR (with 13:
+ecu, ams, ecu-ams and ecu-ams-ecu, 10 s from power-on).
 
 ## Which build ran
 
@@ -156,7 +156,10 @@ run computes is unchanged ([`docs/performance.md`](../../docs/performance.md)).
    (`0xFBF0` / `0xF1B0`) must become `0xFBF00000` / `0xF1B00000` on the
    first release with that change, or the counter-loop skips silently stop and that a run is byte-identical to the new
    release package's (the study's `fingerprint.py`); run the full CI
-   (`full-ci`) and the `emulation speed` job.
+   (`full-ci`) and the `emulation speed` job. Upstream master also moved
+   `Monitor.SanitizePathSeparator` to `Antmicro.Renode.Utilities.PathHelpers`
+   (renode-infrastructure `24b3a005`, #104075): `VhilMonitor.cs` (#284)
+   uses it, and the models don't compile until it follows.
 5. Bump `1.17.0` everywhere else in the same PR (CLAUDE.md, `.github/`,
    `docs/`): a Renode bump is its own PR.
 
