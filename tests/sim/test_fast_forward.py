@@ -6,8 +6,9 @@ NRF24_BitBangDelay), the CAN bootloader's polling main loop (main.c
 Bootloader_MainLoop) at a fixed point, the AMS's poll for an ADC3
 conversion up to the time the result lands, and the AMS's isoSPI wake delays
 on the DWT cycle counter (ltc6820.cpp delay_us) up to the time they end, and
-HAL_Delay's wait for the HAL tick (the uDV's BMI088 and I2C bring-up). These
-run each system from power-on,
+the uDV's micro-ROS transport read, which yields (a PendSV) on every pass of
+its poll while no agent answers, and HAL_Delay's wait for the HAL tick (the
+uDV's BMI088 and I2C bring-up). These run each system from power-on,
 through the bootloader's 2 s window and the apps' boot into steady state,
 once with it and once without (VHIL_FAST_FORWARD=0: Renode as it is), and
 compare everything the run produced:
@@ -40,6 +41,12 @@ WATCHED = {
     "udv": [("udv", "PB4"), ("udv", "PB5"), ("udv", "PB7")],                    # EBS valves 1, 2; SDC relay
     "ecu-ams-udv": [("ecu", "PA5"), ("ecu", "PB0"), ("ams", "PB9"), ("udv", "PB4"), ("udv", "PB7")],
 }
+
+# Buses with nothing on them in RUN_MS: the uDV alone sends on the ACU bus
+# only its 0x512 IMU frames, from after its 6 s gyro calibration
+# (imu_task.c), and nothing else is on that bus in udv.yaml.
+QUIET = {("udv", "can_acu")}
+
 
 # Buses with nothing on them in RUN_MS: the uDV alone sends on the ACU bus
 # only its 0x512 IMU frames, from after its 6 s gyro calibration
@@ -101,6 +108,11 @@ def test_fast_forward_changes_nothing_observable(images, system, monkeypatch):
         # Its isoSPI wake pulses, timed on CYCCNT (ltc6820.cpp delay_us).
         assert "CYCCNT waits: 0 skips" not in fast["skipped"]["ams"], fast["skipped"]["ams"]
     if "udv" in fast["skipped"]:
+        # The uDV's micro-ROS agent ping with no agent on USB: its transport
+        # read polls the CDC RX ring, yielding (taskYIELD, a PendSV) on every
+        # pass, for the ping's 100 ms (micro_ros_stm32cubemx_utils
+        # usb_cdc_transport.c cubemx_transport_read, ros_task.c).
+        assert "self-yielding polls: 0 skips" not in fast["skipped"]["udv"], fast["skipped"]["udv"]
         # HAL_Delay's tick waits in its BMI088 and I2C bring-up (bmi088.c
         # bmi088_init, i2c_utils.c i2c_utils_bus_recovery).
         assert "tick waits: 0 skips" not in fast["skipped"]["udv"], fast["skipped"]["udv"]
