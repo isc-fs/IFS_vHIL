@@ -565,6 +565,63 @@ of #260 before it. Compare within a job only.
   a scenario run 13.2-13.5 → 12.3-12.7 s; the identity fingerprint is
   unchanged.
 
+### Several boards: the slaves on the master's thread, the CYCCNT waits (#260)
+
+Two changes after the measurements above, each its own PR, each with the
+identity fingerprint (ecu, ams, ecu-ams and ecu-ams-ecu, 10 s from power-on)
+byte-identical to dev's and A/B on one GitHub runner (4 vCPU x86):
+
+- **#288, patch 0006 (vhil.5): every board's slave time source runs on the
+  master's thread** (`SlaveTimeSource.RunsOnMasterThread`, turned on by
+  `VhilMachine`; `VHIL_INLINE_SLAVES=0` keeps the threads). Renode's
+  `TimeSourceBase.InnerExecute` is split into a begin (grant or unblock every
+  handle) and an end (wait for them, the sync phase), and the master begins a
+  slave's iteration when it grants it time and ends it when it waits for it:
+  one hand-off a quantum per board and N + 1 threads, each board still on a
+  time source of its own (invariant 11). Renode's slave time-source unit
+  tests run both ways. Lock-step: ecu-ams steady 1.63x → 2.01x (CPU 1.60 →
+  1.02 s per virtual s), boot 0.87x → 0.95x; ecu-ams-ecu steady 1.36x → 1.63x
+  (CPU 2.29 → 1.63), boot 0.76x → 0.84x; single boards and the bench path
+  (no slaves) unchanged. A `RunFor`'s fixed cost on ecu-ams 0.97 → 0.68 ms.
+  Scenario runs an hour 210 → 225 (K=1), 480 → 480 (K=4 and 8; mean run -4 to
+  -6 %).
+- **#289: the AMS's CYCCNT waits fast-forwarded** (above): AMS boot 2.75x →
+  3.72x, ecu-ams boot 1.77x → 2.20x, ecu-ams-ecu boot 1.60x → 1.91x (a fast
+  runner); scenario runs an hour 225 → 240 (K=1), 480 → 540 (K=4), 480 → 600
+  (K=8).
+
+After both, 1 → 2 → 3 boards (two runs on two slower runners, median of 3
+each; before: the same class of runner, #285's numbers):
+
+| Boards | System | Boot 0-3 s: sim / bench | Boot CPU s/s (sim) | Steady +8 s: sim / bench | Steady CPU s/s (sim) |
+|---|---|---|---|---|---|
+| 1 | ecu | 1.94-1.99x / 2.05-2.08x | 1.08-1.12 | 4.79x / 5.74-6.18x | 0.33 |
+| 1 | ams | 1.98-2.03x / 1.85-1.89x | 1.09-1.12 | 5.36-5.66x / 3.18-3.28x | 0.27-0.29 |
+| 2 | ecu-ams | 1.12-1.14x / 1.05-1.10x | 2.47-2.52 | 1.94-2.01x / 1.46-1.51x | 1.01-1.04 |
+| 3 | ecu-ams-ecu | **0.98-0.99x** / 0.88-0.90x | 3.23-3.26 | **1.58-1.64x** / 1.18-1.21x | 1.62-1.67 |
+
+On those runners three boards boot at real time in lock-step (0.76x before)
+and run 1.6x in steady state (1.40x). The step from one board to two is now
+the CPU threads waiting for each other alone; two to three adds one CPU thread
+(+0.6 CPU s per virtual s steady, +0.75 at boot).
+
+Tried, not adopted:
+
+- **A CPU thread kept across `RunFor`s.** Renode starts a board's CPU thread
+  at every `RunFor` and joins it at the pause. After #288 a `RunFor`'s fixed
+  cost is 0.54 ms on ecu and 0.68 ms on ecu-ams: 0.14 ms per extra board, of
+  which the thread is a part, about 1-3 % of a native test's 10 ms step.
+  Parking the thread instead touches BaseCPU's pause, step and abort paths
+  for that; not done.
+- **Re-proving the bootloader loop's fixed point from the last one.** The
+  detector proves the fixed point again in every chunk (two iterations and a
+  RAM snapshot). Starting each chunk's check from the fixed point found in
+  the last (one iteration), with the detector left armed between chunks,
+  skipped as much but cost more: the detector armed is a C# call per MMIO
+  access, and the check already starts in the iterations left at the end of
+  the previous chunk (152,000 hooked accesses and 273 ms against 119,000 and
+  138 ms over the window).
+
 ### The hand-off's wait: studied, not shipped (#260)
 
 Profiled with wait-time histograms in the time framework (every
@@ -669,11 +726,9 @@ What could still buy something, most first:
    cheaper wait (a per-thread waiter, a longer spin while a core is spare)
    pays on Apple's hypervisor but not on x86 (above). Upstream Renode work. With several boards, most of it is the slave time sources'
    hop (above): 24-29 % of the host's samples on x86, 2N + 1 spinning threads
-   for N boards, so three boards on 4 vCPUs oversubscribe. A slave that runs
-   on the master's thread (the master begins its quantum when it grants it
-   and ends it when it waits for it; Renode's `TimeSourceBase.InnerExecute`
-   split in two) keeps every board on a time source of its own with N + 1
-   threads and one hand-off: estimated -31 % CPU on ecu-ams.
+   for N boards, so three boards on 4 vCPUs oversubscribed. Since #288 each
+   slave runs on the master's thread (patch 0006): N + 1 threads and one
+   hand-off a quantum per board.
 2. **CoreCLR outside the spin**, 17-27 %: mostly the transitions between tlib
    and C# (every MMIO access is a reverse P/Invoke into the bus, every CPU
    register read a P/Invoke the other way) and their stubs. Profiling it
@@ -687,13 +742,15 @@ What could still buy something, most first:
 4. **The fast-forward's skips on the ECU** (~4 %, vHIL side): a skip writes
    the counter back and orders the block invalidation a bus write would for
    that RAM; a page known to hold no translated code could skip it.
-5. **Per `RunFor` and per monitor command** (several boards): Renode starts
-   every board's CPU thread (and slave thread) anew at each `RunFor` and
-   joins it at the pause, 0.6-1.1 ms a `RunFor` after #284, which a native
-   test's 10 ms `run_until` steps pay every step; and a scenario slice sends
-   three monitor commands per bus and two per board, one round trip each
-   (they could go in one).
-6. Done this round: the AMS's CYCCNT waits fast-forwarded (#289); start-up (the models' assembly, ReadyToRun), the timer
+5. **Per `RunFor` and per monitor command** (several boards): a `RunFor`
+   costs 0.54 ms on ecu and 0.68 ms on ecu-ams on top of its quanta (#284,
+   #288), which a native test's 10 ms `run_until` steps pay every step; and a
+   scenario slice sends three monitor commands per bus and two per board, one
+   round trip each (they could go in one).
+6. **The JIT at boot**: 0.4-0.8 CPU s per virtual s over a boot's first
+   seconds, a quarter of a three-board boot's CPU; every run starts a fresh
+   Renode (no warm starts), so only less code to compile would cut it.
+7. Done this round: the slave time sources on the master's thread (#288), the AMS's CYCCNT waits fast-forwarded (#289); start-up (the models' assembly, ReadyToRun), the timer
    update events (patch 0004; its clock-source integer arithmetic, exact but
    with no measurable gain, was dropped in patch set vhil.4), the CMP.W hook
    only at delay loops (patch 0005 and tlib/0001).
