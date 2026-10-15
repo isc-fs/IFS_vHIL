@@ -194,7 +194,15 @@ namespace Antmicro.Renode.Peripherals.Analog
             {
                 return 0;
             }
-            CatchUp(Now());
+            // Idle (no conversion under way), nothing is due: CatchUp does
+            // nothing, and the time it would sync (cpu.SyncTime, a call into
+            // tlib and the time framework) is not needed. The uDV reads and
+            // writes ADC3 ~50 times per single conversion, 6 a millisecond
+            // (IFS09-DV-uDV hardware_io.c hardware_io_read_adc_raw).
+            if(running)
+            {
+                CatchUp(Now());
+            }
             if(offset != DR)
             {
                 VhilOnRead?.Invoke(offset);
@@ -250,8 +258,12 @@ namespace Antmicro.Renode.Peripherals.Analog
             {
                 return;
             }
-            // Results due before this write land under the old settings.
-            CatchUp(Now());
+            // Results due before this write land under the old settings
+            // (none while idle, as in ReadDoubleWord).
+            if(running)
+            {
+                CatchUp(Now());
+            }
             switch(offset)
             {
             case ISR:
