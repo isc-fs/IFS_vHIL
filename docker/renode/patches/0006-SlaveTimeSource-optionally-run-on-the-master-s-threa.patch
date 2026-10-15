@@ -1,0 +1,732 @@
+From de6dde9ab1d83b0f529c88f7ebf89785a2b72742 Mon Sep 17 00:00:00 2001
+From: Raul Moran <moranguerra18@gmail.com>
+Date: Thu, 15 Oct 2026 04:56:23 +0200
+Subject: [PATCH] SlaveTimeSource: optionally run on the master's thread
+
+A slave time source hands every grant from its master to its sinks on a
+dispatcher thread of its own: per quantum, the master wakes the slave's
+thread, the slave wakes its sinks' threads, and the reports come back the
+same way. With N slaves (a machine each, for machines whose clocks must
+follow their own CPUs) that is two hand-offs a quantum per machine and
+2N + 1 threads that spin while they wait; on a 4-core host, three
+machines' seven threads oversubscribe it, and the slaves' threads were a
+quarter of the samples of a three-machine emulation.
+
+RunsOnMasterThread, set before the slave is attached, removes the thread:
+TimeSourceBase.InnerExecute is split into InnerExecuteBegin (up to granting
+time to, or unblocking, every handle) and InnerExecuteEnd (waiting for
+them, the sync phase), and the master, when it grants a slave time (or
+unblocks it), begins the slave's iteration on its own thread, and ends it
+when it waits for that slave's handle. The slave's sinks run beside the
+master's other sinks as before; the slave's sync phase runs on the master's
+thread, with the slave's thread time stamp (TimeDomainsManager
+SwapCurrentThread). TimeHandle.RequestTimeInterval gains noWait for a sink
+that cannot wait for its own source: it does not wait for a grant and,
+when blocking, unblocks in place.
+
+Off by default; when off, nothing changes. The slave time source tests run
+both ways.
+---
+ .../Main/Tests/UnitTests/TimeSourceTests.cs   |  77 +++++-----
+ src/Emulator/Main/Time/SlaveTimeSource.cs     | 137 ++++++++++++++++-
+ src/Emulator/Main/Time/TimeDomainsManager.cs  |  19 +++
+ src/Emulator/Main/Time/TimeHandle.cs          |  28 +++-
+ src/Emulator/Main/Time/TimeSourceBase.cs      | 140 ++++++++++++++----
+ 5 files changed, 335 insertions(+), 66 deletions(-)
+
+diff --git a/src/Emulator/Main/Tests/UnitTests/TimeSourceTests.cs b/src/Emulator/Main/Tests/UnitTests/TimeSourceTests.cs
+index 63f74d1..9d9c9ce 100644
+--- a/src/Emulator/Main/Tests/UnitTests/TimeSourceTests.cs
++++ b/src/Emulator/Main/Tests/UnitTests/TimeSourceTests.cs
+@@ -135,13 +135,14 @@ public void ShouldCalculateCumulativeLoadForLowPerformance()
+             }
+         }
+ 
+-        [Test]
+-        public void ShouldHandleSlaveTimeSourceWithSameQuantum()
++        [TestCase(false)]
++        [TestCase(true)]
++        public void ShouldHandleSlaveTimeSourceWithSameQuantum(bool runsOnMasterThread)
+         {
+             const int roundsCount = 3;
+ 
+             using(var timeSource = new MasterTimeSource { Quantum = TimeInterval.FromTicks(100), AdvanceImmediately = true })
+-            using(var timeSlave = new SlaveTimeSource() { Quantum = TimeInterval.FromTicks(100), AdvanceImmediately = true })
++            using(var timeSlave = new SlaveTimeSource() { RunsOnMasterThread = runsOnMasterThread, Quantum = TimeInterval.FromTicks(100), AdvanceImmediately = true })
+             {
+                 var timeSink = new SimpleTimeSink(1.0);
+ 
+@@ -161,13 +162,14 @@ public void ShouldHandleSlaveTimeSourceWithSameQuantum()
+             }
+         }
+ 
+-        [Test]
+-        public void ShouldHandleSlaveTimeSourceWithDifferentQuantum()
++        [TestCase(false)]
++        [TestCase(true)]
++        public void ShouldHandleSlaveTimeSourceWithDifferentQuantum(bool runsOnMasterThread)
+         {
+             const int roundsCount = 3;
+ 
+             using(var timeSource = new MasterTimeSource { Quantum = TimeInterval.FromTicks(100), AdvanceImmediately = true })
+-            using(var timeSlave = new SlaveTimeSource() { Quantum = TimeInterval.FromTicks(10), AdvanceImmediately = true })
++            using(var timeSlave = new SlaveTimeSource() { RunsOnMasterThread = runsOnMasterThread, Quantum = TimeInterval.FromTicks(10), AdvanceImmediately = true })
+             {
+                 var timeSink = new SimpleTimeSink(1.0);
+ 
+@@ -187,11 +189,12 @@ public void ShouldHandleSlaveTimeSourceWithDifferentQuantum()
+             }
+         }
+ 
+-        [Test]
+-        public void ShouldHandleSlaveTimeSourceWithNotAlignedQuantum()
++        [TestCase(false)]
++        [TestCase(true)]
++        public void ShouldHandleSlaveTimeSourceWithNotAlignedQuantum(bool runsOnMasterThread)
+         {
+             using(var timeSource = new MasterTimeSource { Quantum = TimeInterval.FromTicks(10), AdvanceImmediately = true })
+-            using(var timeSlave = new SlaveTimeSource() { Quantum = TimeInterval.FromTicks(3), AdvanceImmediately = true })
++            using(var timeSlave = new SlaveTimeSource() { RunsOnMasterThread = runsOnMasterThread, Quantum = TimeInterval.FromTicks(3), AdvanceImmediately = true })
+             {
+                 var timeSink = new SimpleTimeSink(1.0);
+ 
+@@ -271,11 +274,12 @@ public void ShouldHandleSlaveTimeSourceWithNotAlignedQuantum()
+             }
+         }
+ 
+-        [Test]
+-        public void ShouldNotTickDisconnectedSlaveTimeSource()
++        [TestCase(false)]
++        [TestCase(true)]
++        public void ShouldNotTickDisconnectedSlaveTimeSource(bool runsOnMasterThread)
+         {
+             using(var master = new MasterTimeSource { Quantum = TimeInterval.FromTicks(10), AdvanceImmediately = true })
+-            using(var timeSlave = new SlaveTimeSource() { Quantum = TimeInterval.FromTicks(10), AdvanceImmediately = true })
++            using(var timeSlave = new SlaveTimeSource() { RunsOnMasterThread = runsOnMasterThread, Quantum = TimeInterval.FromTicks(10), AdvanceImmediately = true })
+             {
+                 var timeSink = new SimpleTimeSink(1.0);
+ 
+@@ -307,14 +311,15 @@ public void ShouldNotTickDisconnectedSlaveTimeSource()
+             }
+         }
+ 
+-        [Test]
+-        public void ShouldExecuteDelayedActionInNearestSyncedStateExactlyOnce()
++        [TestCase(false)]
++        [TestCase(true)]
++        public void ShouldExecuteDelayedActionInNearestSyncedStateExactlyOnce(bool runsOnMasterThread)
+         {
+             var time = TimeInterval.Empty;
+ 
+             var alreadyDone = false;
+             using(var master = new MasterTimeSource { Quantum = TimeInterval.FromTicks(10), AdvanceImmediately = true })
+-            using(var timeSlave = new SlaveTimeSource() { Quantum = TimeInterval.FromTicks(10), AdvanceImmediately = true })
++            using(var timeSlave = new SlaveTimeSource() { RunsOnMasterThread = runsOnMasterThread, Quantum = TimeInterval.FromTicks(10), AdvanceImmediately = true })
+             {
+                 var timeSink = new SimpleTimeSink(1.0, (sts, th, ti) =>
+                 {
+@@ -345,13 +350,14 @@ public void ShouldExecuteDelayedActionInNearestSyncedStateExactlyOnce()
+             }
+         }
+ 
+-        [Test]
+-        public void ShouldExecuteDelayedActionAddedLaterInNearestSyncedState()
++        [TestCase(false)]
++        [TestCase(true)]
++        public void ShouldExecuteDelayedActionAddedLaterInNearestSyncedState(bool runsOnMasterThread)
+         {
+             var time = TimeInterval.Empty;
+ 
+             using(var master = new MasterTimeSource { Quantum = TimeInterval.FromTicks(10), AdvanceImmediately = true })
+-            using(var timeSlave = new SlaveTimeSource() { Quantum = TimeInterval.FromTicks(10), AdvanceImmediately = true })
++            using(var timeSlave = new SlaveTimeSource() { RunsOnMasterThread = runsOnMasterThread, Quantum = TimeInterval.FromTicks(10), AdvanceImmediately = true })
+             {
+                 var timeSink = new SimpleTimeSink(1.0, (sts, th, ti) =>
+                 {
+@@ -375,13 +381,14 @@ public void ShouldExecuteDelayedActionAddedLaterInNearestSyncedState()
+             }
+         }
+ 
+-        [Test]
+-        public void ShouldExecuteDelayedActionInSyncedStateExactlyOnce()
++        [TestCase(false)]
++        [TestCase(true)]
++        public void ShouldExecuteDelayedActionInSyncedStateExactlyOnce(bool runsOnMasterThread)
+         {
+             var time = TimeInterval.Empty;
+ 
+             using(var master = new MasterTimeSource { Quantum = TimeInterval.FromTicks(10), AdvanceImmediately = true })
+-            using(var timeSlave = new SlaveTimeSource() { Quantum = TimeInterval.FromTicks(10), AdvanceImmediately = true })
++            using(var timeSlave = new SlaveTimeSource() { RunsOnMasterThread = runsOnMasterThread, Quantum = TimeInterval.FromTicks(10), AdvanceImmediately = true })
+             {
+                 var timeSink = new SimpleTimeSink(1.0, (sts, th, ti) =>
+                 {
+@@ -408,13 +415,14 @@ public void ShouldExecuteDelayedActionInSyncedStateExactlyOnce()
+             }
+         }
+ 
+-        [Test]
+-        public void ShouldExecuteNonAlignedDelayedActionInSyncedStateExactlyOnce()
++        [TestCase(false)]
++        [TestCase(true)]
++        public void ShouldExecuteNonAlignedDelayedActionInSyncedStateExactlyOnce(bool runsOnMasterThread)
+         {
+             var time = TimeInterval.Empty;
+ 
+             using(var master = new MasterTimeSource { Quantum = TimeInterval.FromTicks(10), AdvanceImmediately = true })
+-            using(var timeSlave = new SlaveTimeSource() { Quantum = TimeInterval.FromTicks(10), AdvanceImmediately = true })
++            using(var timeSlave = new SlaveTimeSource() { RunsOnMasterThread = runsOnMasterThread, Quantum = TimeInterval.FromTicks(10), AdvanceImmediately = true })
+             {
+                 var timeSink = new SimpleTimeSink(1.0, (sts, th, ti) =>
+                 {
+@@ -441,8 +449,9 @@ public void ShouldExecuteNonAlignedDelayedActionInSyncedStateExactlyOnce()
+             }
+         }
+ 
+-        [Test]
+-        public void ShouldUpdateExecutedTimeAfterBlocking()
++        [TestCase(false)]
++        [TestCase(true)]
++        public void ShouldUpdateExecutedTimeAfterBlocking(bool runsOnMasterThread)
+         {
+             var indicator = false;
+             var firstTime = true;
+@@ -450,7 +459,7 @@ public void ShouldUpdateExecutedTimeAfterBlocking()
+             var sinkToThreadSync = new ManualResetEvent(false);
+ 
+             using(var master = new MasterTimeSource { Quantum = TimeInterval.FromTicks(10), AdvanceImmediately = true })
+-            using(var timeSlave = new SlaveTimeSource() { Quantum = TimeInterval.FromTicks(10), AdvanceImmediately = true })
++            using(var timeSlave = new SlaveTimeSource() { RunsOnMasterThread = runsOnMasterThread, Quantum = TimeInterval.FromTicks(10), AdvanceImmediately = true })
+             {
+                 var timeSink = new SimpleTimeSink(1.0, (sts, th, ti) =>
+                 {
+@@ -510,13 +519,14 @@ public void ShouldUpdateExecutedTimeAfterBlocking()
+             }
+         }
+ 
+-        [Test]
+-        public void ShouldHandleTwoBlockingSinks()
++        [TestCase(false)]
++        [TestCase(true)]
++        public void ShouldHandleTwoBlockingSinks(bool runsOnMasterThread)
+         {
+             var indicator = false;
+ 
+             using(var master = new MasterTimeSource { Quantum = TimeInterval.FromTicks(10), AdvanceImmediately = true })
+-            using(var timeSlave = new SlaveTimeSource() { Quantum = TimeInterval.FromTicks(10), AdvanceImmediately = true })
++            using(var timeSlave = new SlaveTimeSource() { RunsOnMasterThread = runsOnMasterThread, Quantum = TimeInterval.FromTicks(10), AdvanceImmediately = true })
+             using(var timeSinkA2 = new MoreComplicatedTimeSink("A"))
+             using(var timeSinkB2 = new MoreComplicatedTimeSink("B"))
+             {
+@@ -662,13 +672,14 @@ public void ShouldHandleTwoBlockingSinks()
+             }
+         }
+ 
+-        [Test]
+-        public void ShouldHandleBlockingAtTheEndOfGrantedInterval()
++        [TestCase(false)]
++        [TestCase(true)]
++        public void ShouldHandleBlockingAtTheEndOfGrantedInterval(bool runsOnMasterThread)
+         {
+             var indicator = false;
+ 
+             using(var master = new MasterTimeSource { Quantum = TimeInterval.FromTicks(10), AdvanceImmediately = true })
+-            using(var timeSlave = new SlaveTimeSource() { Quantum = TimeInterval.FromTicks(10), AdvanceImmediately = true })
++            using(var timeSlave = new SlaveTimeSource() { RunsOnMasterThread = runsOnMasterThread, Quantum = TimeInterval.FromTicks(10), AdvanceImmediately = true })
+             using(var timeSink = new MoreComplicatedTimeSink("A"))
+             {
+                 var testerThread = new TestThread(() =>
+diff --git a/src/Emulator/Main/Time/SlaveTimeSource.cs b/src/Emulator/Main/Time/SlaveTimeSource.cs
+index baf2b6f..c3831ad 100644
+--- a/src/Emulator/Main/Time/SlaveTimeSource.cs
++++ b/src/Emulator/Main/Time/SlaveTimeSource.cs
+@@ -89,6 +89,17 @@ public void Resume()
+             this.Trace("Resumed");
+         }
+ 
++        /// <summary>
++        /// Whether this slave runs on its master's thread instead of a dispatcher thread of its own.
++        /// </summary>
++        /// <remarks>
++        /// The master begins the slave's iteration when it grants the slave time (granting it to the slave's sinks in turn) and ends it
++        /// when it waits for the slave (waiting for them, then the slave's sync phase), so the slave's sinks run beside the master's other
++        /// sinks as they would with a thread, without a thread hand-off between the master and the slave every quantum.
++        /// Set it before the slave is attached to a master (<see cref="TimeHandle">).
++        /// </remarks>
++        public bool RunsOnMasterThread { get; set; }
++
+         /// <see cref="ITimeSource.Domain">
+         /// <remarks>
+         /// If this slave is not attached to any master time source, the domain is null.
+@@ -128,7 +139,11 @@ private void HandleStartRequest()
+             lock(locker)
+             {
+                 this.Trace();
+-                if(dispatcherThread == null)
++                if(RunsOnMasterThread)
++                {
++                    StartDispatcher();
++                }
++                else if(dispatcherThread == null)
+                 {
+                     this.Trace();
+                     // if the dispatcher is not started yet - start it
+@@ -249,10 +264,110 @@ private bool DispatchInner()
+             return true;
+         }
+ 
++        /// <summary>
++        /// The first half of an iteration of <see cref="DispatchInner"> on the master's thread: the master has just granted time to
++        /// (or wants to unblock) this slave's handle. Requests it and grants it to this slave's sinks, without waiting for them.
++        /// </summary>
++        internal void BeginOnMasterThread()
++        {
++            onMasterThreadExecuting = false;
++            if(!onMasterThreadActive)
++            {
++                return;
++            }
++            var previousTimeStamp = TimeDomainsManager.Instance.SwapCurrentThread(timeStampOnMasterThread);
++            try
++            {
++                if(!TimeHandle.RequestTimeInterval(out var intervalGranted, noWait: true))
++                {
++                    this.Trace("Time interval request interrupted");
++                    return;
++                }
++
++                if(isPaused)
++                {
++                    this.Trace("Handle paused");
++                    TimeHandle.ReportBackAndBreak(intervalGranted);
++                    return;
++                }
++
++                onMasterThreadTimeLeft = intervalGranted;
++                if(waitingForSlave || (onMasterThreadTimeLeft >= Quantum && isStarted))
++                {
++                    waitingForSlave = false;
++                    InnerExecuteBegin();
++                    onMasterThreadExecuting = true;
++                }
++                else
++                {
++                    TimeHandle.ReportBackAndContinue(onMasterThreadTimeLeft);
++                }
++            }
++            finally
++            {
++                TimeDomainsManager.Instance.SwapCurrentThread(previousTimeStamp);
++            }
++        }
++
++        /// <summary>
++        /// The second half, when the master waits for this slave's handle: waits for this slave's sinks, runs its sync phase and reports
++        /// back to the master, as <see cref="DispatchInner"> does.
++        /// </summary>
++        internal void EndOnMasterThread()
++        {
++            if(!onMasterThreadExecuting)
++            {
++                return;
++            }
++            onMasterThreadExecuting = false;
++            var previousTimeStamp = TimeDomainsManager.Instance.SwapCurrentThread(timeStampOnMasterThread);
++            try
++            {
++                var syncPointReached = InnerExecuteEnd(out var elapsed);
++                onMasterThreadTimeLeft -= elapsed;
++                // A grant longer than a quantum (a residuum carried over): the rest as DispatchInner runs it, one quantum after another.
++                while(syncPointReached && onMasterThreadTimeLeft >= Quantum && isStarted)
++                {
++                    syncPointReached = InnerExecute(out elapsed);
++                    onMasterThreadTimeLeft -= elapsed;
++                }
++                if(!syncPointReached)
++                {
++                    // we should not ask for time grant since the current one is not finished yet
++                    waitingForSlave = true;
++                    TimeHandle.ReportBackAndBreak(onMasterThreadTimeLeft);
++                    return;
++                }
++                TimeHandle.ReportBackAndContinue(onMasterThreadTimeLeft);
++            }
++            finally
++            {
++                TimeDomainsManager.Instance.SwapCurrentThread(previousTimeStamp);
++            }
++        }
++
+         private void StartDispatcher()
+         {
+             lock(locker)
+             {
++                if(RunsOnMasterThread && TimeHandle != null)
++                {
++                    // What Dispatch's usings do for its thread's life, for as long as the slave is attached and started.
++                    isStarted = true;
++                    if(!onMasterThreadActive)
++                    {
++                        onMasterThreadActive = true;
++                        timeStampOnMasterThread = () => new TimeStamp(TimeHandle.TimeSource.NearestSyncPoint, TimeHandle.TimeSource.Domain);
++                        sourceActiveOnMasterThread = ObtainSourceActiveState();
++                        sinkActiveOnMasterThread = this.ObtainSinkActiveState();
++                    }
++                    else
++                    {
++                        // a start request: what a new dispatcher thread's ObtainSourceActiveState would do
++                        ActivateSlavesSourceSide();
++                    }
++                    return;
++                }
+                 if(dispatcherThread != null || TimeHandle == null)
+                 {
+                     return;
+@@ -270,6 +385,14 @@ private void StopDispatcher()
+             lock(locker)
+             {
+                 isStarted = false;
++                if(onMasterThreadActive)
++                {
++                    onMasterThreadActive = false;
++                    onMasterThreadExecuting = false;
++                    sinkActiveOnMasterThread?.Dispose();
++                    sourceActiveOnMasterThread?.Dispose();
++                    sinkActiveOnMasterThread = sourceActiveOnMasterThread = null;
++                }
+                 if(dispatcherThread != null && Thread.CurrentThread.ManagedThreadId != dispatcherThread.ManagedThreadId)
+                 {
+                     threadToJoin = dispatcherThread;
+@@ -287,6 +410,18 @@ private void HandleTimePassed(TimeInterval diff)
+         private Thread dispatcherThread;
+         private TimeHandle timeHandle;
+         private bool waitingForSlave;
++        // RunsOnMasterThread: the master's thread's iteration of this slave
++        [Transient]
++        private bool onMasterThreadActive;
++        [Transient]
++        private bool onMasterThreadExecuting;
++        private TimeInterval onMasterThreadTimeLeft;
++        [Transient]
++        private Func<TimeStamp> timeStampOnMasterThread;
++        [Transient]
++        private IDisposable sourceActiveOnMasterThread;
++        [Transient]
++        private IDisposable sinkActiveOnMasterThread;
+         private bool dispatcherStartRequested;
+         private readonly object locker;
+     }
+diff --git a/src/Emulator/Main/Time/TimeDomainsManager.cs b/src/Emulator/Main/Time/TimeDomainsManager.cs
+index fa086eb..f937537 100644
+--- a/src/Emulator/Main/Time/TimeDomainsManager.cs
++++ b/src/Emulator/Main/Time/TimeDomainsManager.cs
+@@ -44,6 +44,25 @@ public IDisposable RegisterCurrentThread(Func<TimeStamp> f)
+             return new DisposableWrapper().RegisterDisposeAction(() => Instance.UnregisterCurrentThread());
+         }
+ 
++        /// <summary>
++        /// Replaces the current thread's time stamp provider with <paramref name="f"/> (none if null) and returns the one it had (null if none),
++        /// for code that runs another time source's work on this thread for a while; swap the returned one back afterwards.
++        /// </summary>
++        public Func<TimeStamp> SwapCurrentThread(Func<TimeStamp> f)
++        {
++            var id = Thread.CurrentThread.ManagedThreadId;
++            timeGetters.TryGetValue(id, out var previous);
++            if(f == null)
++            {
++                timeGetters.TryRemove(id, out var unused);
++            }
++            else
++            {
++                timeGetters[id] = f;
++            }
++            return previous;
++        }
++
+         /// <summary>
+         /// Unregisters a time stamp provider for the current thread.
+         /// </summary>
+diff --git a/src/Emulator/Main/Time/TimeHandle.cs b/src/Emulator/Main/Time/TimeHandle.cs
+index 54ce6ec..0beaba0 100644
+--- a/src/Emulator/Main/Time/TimeHandle.cs
++++ b/src/Emulator/Main/Time/TimeHandle.cs
+@@ -214,7 +214,9 @@ public bool UnblockHandle()
+         /// If it returned true, <paramref name="interval"> contains the amount of virtual time to be used by the sink. It is the sum of time interval granted by the source (using <see cref="GrantInterval">) and a time left reported previously by <see cref="ReportBackAndContinue"> or <see cref="ReportBackAndBreak">.
+         /// If it returned false, the time interval is not granted and it is illegal to report anything back using <see cref="ReportBackAndContinue"> or <see cref="ReportBackAndBreak">.
+         /// </returns>
+-        public bool RequestTimeInterval(out TimeInterval interval, bool blockWhileDisabled = false)
++        /// <param name="noWait">For a sink that runs on its source's thread (<see cref="SlaveTimeSource.RunsOnMasterThread">), which cannot wait for its own source:
++        /// return false instead of waiting for a grant, and when blocking, unblock at once (the source called this in place of <see cref="UnblockHandle">).</param>
++        public bool RequestTimeInterval(out TimeInterval interval, bool blockWhileDisabled = false, bool noWait = false)
+         {
+             this.Trace();
+             using(MonitorSmartLock.Lock(innerLock))
+@@ -250,11 +252,27 @@ public bool RequestTimeInterval(out TimeInterval interval, bool blockWhileDisabl
+                         DebugHelper.Assert(!waitsToBeUnblocked, "Should not wait to be unblocked");
+ 
+                         // we cannot latch again when deferredUnlatch is still on as we could overwrite it and never unlatch again
+-                        previousUnlatchCondition.Wait("Waiting for previous unlatch");
+-                        if(!SourceSideActive || interrupt)
++                        if(noWait && deferredUnlatch && SourceSideActive && !interrupt)
+                         {
+                             result = false;
+                         }
++                        else if(!noWait)
++                        {
++                            previousUnlatchCondition.Wait("Waiting for previous unlatch");
++                        }
++                        if(!result || !SourceSideActive || interrupt)
++                        {
++                            result = false;
++                        }
++                        else if(noWait)
++                        {
++                            // as below once unblocked, the source having unblocked this handle by calling this
++                            Latch();
++                            deferredUnlatch = true;
++                            recentlyUnblocked = true;
++                            isBlocking = false;
++                            this.Trace("Handle unblocked in place");
++                        }
+                         else
+                         {
+                             this.Trace("Asking time source to unblock the time handle");
+@@ -287,6 +305,10 @@ public bool RequestTimeInterval(out TimeInterval interval, bool blockWhileDisabl
+                         }
+                     }
+                 }
++                else if(!grantPending && noWait)
++                {
++                    result = false;
++                }
+                 else if(!grantPending)
+                 {
+                     // wait until a new time interval is granted or this handle is disabled/deactivated
+diff --git a/src/Emulator/Main/Time/TimeSourceBase.cs b/src/Emulator/Main/Time/TimeSourceBase.cs
+index 1937ace..c5c367e 100644
+--- a/src/Emulator/Main/Time/TimeSourceBase.cs
++++ b/src/Emulator/Main/Time/TimeSourceBase.cs
+@@ -370,6 +370,20 @@ public TimeInterval Quantum
+         /// True if sync point has just been reached or False if the execution has been blocked.
+         /// </returns>
+         protected bool InnerExecute(out TimeInterval virtualTimeElapsed, TimeInterval? timeLimit = null)
++        {
++            InnerExecuteBegin(timeLimit);
++            return InnerExecuteEnd(out virtualTimeElapsed);
++        }
++
++        /// <summary>
++        /// The first half of <see cref="InnerExecute">: up to granting the time interval to (or unblocking) every sink, without waiting for any.
++        /// It must be followed by <see cref="InnerExecuteEnd"> on the same thread.
++        /// </summary>
++        /// <remarks>
++        /// Lets a source run another source's sinks alongside its own: a <see cref="SlaveTimeSource"> that runs on its master's thread
++        /// (<see cref="SlaveTimeSource.RunsOnMasterThread">) begins when the master grants it time and ends when the master waits for it.
++        /// </remarks>
++        protected void InnerExecuteBegin(TimeInterval? timeLimit = null)
+         {
+             if(updateNearestSyncPoint)
+             {
+@@ -384,46 +398,72 @@ protected bool InnerExecute(out TimeInterval virtualTimeElapsed, TimeInterval? t
+             this.Trace($"Starting a loop with #{quantum.Ticks} ticks");
+ 
+             SynchronizeVirtualTime();
+-            var elapsedVirtualTimeAtStart = ElapsedVirtualTime;
++            pendingElapsedVirtualTimeAtStart = ElapsedVirtualTime;
++            pendingQuantum = quantum;
+ 
+-            using(sync.LowPriority)
+-            {
+-                handles.LatchAllAndCollectGarbage();
+-                var shouldGrantTime = handles.AreAllReadyForNewGrant;
++            pendingLock = sync.LowPriority;
++            handles.LatchAllAndCollectGarbage();
++            var shouldGrantTime = handles.AreAllReadyForNewGrant;
+ 
+-                this.Trace($"Iteration start: slaves left {handles.ActiveCount}; will we try to grant time? {shouldGrantTime}");
++            this.Trace($"Iteration start: slaves left {handles.ActiveCount}; will we try to grant time? {shouldGrantTime}");
+ 
+-                if(handles.ActiveCount > 0)
+-                {
+-                    var executor = new PhaseExecutor<LinkedListNode<TimeHandle>>();
++            pendingHasHandles = handles.ActiveCount > 0;
++            pendingExecutor = null;
++            if(pendingHasHandles)
++            {
++                var executor = new PhaseExecutor<LinkedListNode<TimeHandle>>();
+ 
+-                    if(!shouldGrantTime)
+-                    {
+-                        if(ExecuteInSerial)
+-                        {
+-                            // We only test in serial execution to ensure determinism
+-                            executor.RegisterTestPhase(ExecuteReadyForUnblockTestPhase);
+-                        }
+-                        executor.RegisterPhase(ExecuteUnblockPhase);
+-                        executor.RegisterPhase(ExecuteWaitPhase);
+-                    }
+-                    else if(quantum != TimeInterval.Empty)
++                if(!shouldGrantTime)
++                {
++                    if(ExecuteInSerial)
+                     {
+-                        executor.RegisterPhase(s => ExecuteGrantPhase(s, quantum));
+-                        executor.RegisterPhase(ExecuteWaitPhase);
++                        // We only test in serial execution to ensure determinism
++                        executor.RegisterTestPhase(ExecuteReadyForUnblockTestPhase);
+                     }
++                    executor.RegisterPhase(ExecuteUnblockPhase);
++                    executor.RegisterPhase(ExecuteWaitPhase);
++                }
++                else if(quantum != TimeInterval.Empty)
++                {
++                    executor.RegisterPhase(s => ExecuteGrantPhase(s, quantum));
++                    executor.RegisterPhase(ExecuteWaitPhase);
++                }
+ 
++                if(!ExecuteInSerial)
++                {
++                    // Every phase but the last (the wait) now, the wait in InnerExecuteEnd.
++                    executor.ExecuteInParallelUpToLastPhase(handles.WithLinkedListNode);
++                }
++                pendingExecutor = executor;
++            }
++        }
++
++        /// <summary>
++        /// The second half of <see cref="InnerExecute">, after <see cref="InnerExecuteBegin">: waits for every sink, then the sync phase.
++        /// </summary>
++        /// <returns>
++        /// True if sync point has just been reached or False if the execution has been blocked.
++        /// </returns>
++        protected bool InnerExecuteEnd(out TimeInterval virtualTimeElapsed)
++        {
++            var quantum = pendingQuantum;
++            using(pendingLock)
++            {
++                pendingLock = null;
++                if(pendingHasHandles)
++                {
+                     if(ExecuteInSerial)
+                     {
+-                        executor.ExecuteInSerial(handles.WithLinkedListNode);
++                        pendingExecutor.ExecuteInSerial(handles.WithLinkedListNode);
+                     }
+                     else
+                     {
+-                        executor.ExecuteInParallel(handles.WithLinkedListNode);
++                        pendingExecutor.ExecuteLastPhaseInParallel(handles.WithLinkedListNode);
+                     }
++                    pendingExecutor = null;
+ 
+                     SynchronizeVirtualTime();
+-                    virtualTimeElapsed = ElapsedVirtualTime - elapsedVirtualTimeAtStart;
++                    virtualTimeElapsed = ElapsedVirtualTime - pendingElapsedVirtualTimeAtStart;
+                 }
+                 else
+                 {
+@@ -699,6 +739,10 @@ private void ExecuteGrantPhase(LinkedListNode<TimeHandle> handle, TimeInterval q
+         {
+             State = TimeSourceState.ReportingElapsedTime;
+             handle.Value.GrantTimeInterval(quantum);
++            if(handle.Value.TimeSink is SlaveTimeSource slave && slave.RunsOnMasterThread)
++            {
++                slave.BeginOnMasterThread();
++            }
+         }
+ 
+         /// <summary>
+@@ -707,6 +751,12 @@ private void ExecuteGrantPhase(LinkedListNode<TimeHandle> handle, TimeInterval q
+         /// </summary>
+         private void ExecuteUnblockPhase(LinkedListNode<TimeHandle> handle)
+         {
++            if(handle.Value.TimeSink is SlaveTimeSource slave && slave.RunsOnMasterThread)
++            {
++                // The slave requests what is left of its interval and unblocks in one step: it has no thread of its own waiting to be unblocked.
++                slave.BeginOnMasterThread();
++                return;
++            }
+             handle.Value.UnblockHandle();
+         }
+ 
+@@ -716,7 +766,8 @@ private void ExecuteUnblockPhase(LinkedListNode<TimeHandle> handle)
+         /// </summary>
+         private bool ExecuteReadyForUnblockTestPhase(LinkedListNode<TimeHandle> handle)
+         {
+-            var isReady = handle.Value.IsReadyToBeUnblocked;
++            var isReady = handle.Value.IsReadyToBeUnblocked
++                || (handle.Value.TimeSink is SlaveTimeSource slave && slave.RunsOnMasterThread);
+             isBlocked |= !isReady;
+             return isReady;
+         }
+@@ -730,6 +781,10 @@ private bool ExecuteReadyForUnblockTestPhase(LinkedListNode<TimeHandle> handle)
+         private void ExecuteWaitPhase(LinkedListNode<TimeHandle> handle)
+         {
+             State = TimeSourceState.WaitingForReportBack;
++            if(handle.Value.TimeSink is SlaveTimeSource slave && slave.RunsOnMasterThread)
++            {
++                slave.EndOnMasterThread();
++            }
+             var result = handle.Value.WaitUntilDone(out var usedInterval);
+             if(!result.IsDone)
+             {
+@@ -795,6 +850,12 @@ private void ExecuteSyncPhase()
+         }
+ 
+         private TimeInterval elapsedAtLastUpdate;
++        // InnerExecuteBegin's state for InnerExecuteEnd
++        private TimeInterval pendingElapsedVirtualTimeAtStart;
++        private TimeInterval pendingQuantum;
++        private bool pendingHasHandles;
++        private PhaseExecutor<LinkedListNode<TimeHandle>> pendingExecutor;
++        private PrioritySynchronizer pendingLock;
+         private bool isBlocked;
+         private bool updateNearestSyncPoint;
+         private int? executeThreadId;
+@@ -924,19 +985,40 @@ public void ExecuteInSerial(IEnumerable<T> targets)
+ 
+             public void ExecuteInParallel(IEnumerable<T> targets)
+             {
+-                if(!ExecuteTestPhase(targets))
++                ExecuteInParallelUpToLastPhase(targets);
++                ExecuteLastPhaseInParallel(targets);
++            }
++
++            public void ExecuteInParallelUpToLastPhase(IEnumerable<T> targets)
++            {
++                testPassed = ExecuteTestPhase(targets);
++                if(!testPassed)
+                 {
+                     return;
+                 }
+-                foreach(var phase in phases)
++                for(var i = 0; i < phases.Count - 1; i++)
+                 {
+                     foreach(var target in targets)
+                     {
+-                        phase(target);
++                        phases[i](target);
+                     }
+                 }
+             }
+ 
++            public void ExecuteLastPhaseInParallel(IEnumerable<T> targets)
++            {
++                if(!testPassed || phases.Count == 0)
++                {
++                    return;
++                }
++                foreach(var target in targets)
++                {
++                    phases[phases.Count - 1](target);
++                }
++            }
++
++            private bool testPassed;
++
+             private bool ExecuteTestPhase(IEnumerable<T> targets)
+             {
+                 foreach(var test in testPhases)
+-- 
+2.51.0
+
