@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 # Firmware ids (catalog/firmware) a native test may need an image of.
-BOARDS = ("ecu", "ams", "can-bootloader")
+BOARDS = ("ecu", "ams", "udv", "can-bootloader")
 
 _COVERAGE = pytest.StashKey[str]()
 

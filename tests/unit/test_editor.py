@@ -11,7 +11,8 @@ import yaml
 
 from vhil.editor import (BOARD_WIDTH, BUS_NODE, ERROR, OK, WARNING, EditorMethods,
                          check_system, dump_system, from_dataflow, pin_of, relabel,
-                         role_choice, role_interfaces, specification, switch_role,
+                         role_choice, role_firmware, role_interfaces, specification,
+                         switch_role,
                          to_dataflow, validate, write_system)
 from vhil.editor import main as editor_main
 from vhil.system import REPO
@@ -192,10 +193,14 @@ def test_the_role_sets_firmware_and_bootloader(spec):
         assert values["firmware"] == fw and values["role"].startswith(f"{fw} (node ")
 
 
-def test_a_role_without_catalogue_firmware_carries_a_note(spec):
-    assert "udv" not in FIRMWARE
-    assert "| udv | 0x3 | FDCAN2 | udv (not in the catalogue yet) |" in \
-        _types(spec)["mainlite"]["description"]
+def test_every_role_names_its_catalogue_firmware(spec):
+    assert {"ecu", "ams", "udv"} <= FIRMWARE
+    assert "| udv | 0x3 | FDCAN2 | udv |" in _types(spec)["mainlite"]["description"]
+
+
+def test_a_role_without_catalogue_firmware_carries_a_note():
+    assert role_firmware({"firmware": "udv"}, {"udv": {}}) == "udv"
+    assert role_firmware({"firmware": "new"}, {"udv": {}}) == "new (not in the catalogue yet)"
 
 
 def test_write_protect_is_not_on_the_node(spec):

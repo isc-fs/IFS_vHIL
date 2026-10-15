@@ -367,7 +367,7 @@ def test_the_github_app_token_is_used_when_configured(env):
 
 def test_firmware_lists_the_catalogue_sources(env):
     fw = {f["id"]: f for f in env.client.get("/api/firmware").json()}
-    assert set(fw) == {"ams", "ecu", "can-bootloader"}
+    assert set(fw) == {"ams", "ecu", "udv", "can-bootloader"}
     assert fw["ecu"]["repo"] == "isc-fs/IFS08-CE-ECU" and fw["ecu"]["ref"] == "dev"
     assert fw["ecu"]["build"]["elf"] == "build/ECU08.elf"
 
