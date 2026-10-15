@@ -3,8 +3,9 @@
 models/renode/VhilFastForward.cs charges a busy-wait's instructions instead of
 executing them one by one: the ECU's volatile counter delay (nrf24.c
 NRF24_BitBangDelay), the CAN bootloader's polling main loop (main.c
-Bootloader_MainLoop) at a fixed point, and the AMS's poll for an ADC3
-conversion up to the time the result lands. These run each system from power-on,
+Bootloader_MainLoop) at a fixed point, the AMS's poll for an ADC3
+conversion up to the time the result lands, and the AMS's isoSPI wake delays
+on the DWT cycle counter (ltc6820.cpp delay_us) up to the time they end. These run each system from power-on,
 through the bootloader's 2 s window and the apps' boot into steady state,
 once with it and once without (VHIL_FAST_FORWARD=0: Renode as it is), and
 compare everything the run produced:
@@ -88,6 +89,8 @@ def test_fast_forward_changes_nothing_observable(images, system, monkeypatch):
         # The AMS's HAL_ADC_PollForConversion on ADC3 (current_task.cpp
         # read_leg_q4), whose result lands at a time the model knows.
         assert "time-bounded polls: 0 skips" not in fast["skipped"]["ams"], fast["skipped"]["ams"]
+        # Its isoSPI wake pulses, timed on CYCCNT (ltc6820.cpp delay_us).
+        assert "CYCCNT waits: 0 skips" not in fast["skipped"]["ams"], fast["skipped"]["ams"]
     if "ecu" in fast["skipped"]:
         assert "counter loops: 0 skips" not in fast["skipped"]["ecu"], fast["skipped"]["ecu"]
         assert any(e for e in plain["edges"]["ecu"]), "the ECU's nRF24 pins never moved"

@@ -36,8 +36,18 @@ fast-forward (VHIL_FAST_FORWARD=0, models/renode/VhilFastForward.cs) and with
 (models/renode/VhilPcSampler.cs) and writes, per run and phase, the guest
 functions the host spent its time in.
 
+Benchmark-only systems (BENCH_ONLY, not in systems/): ecu-ams-ecu, ecu-ams
+plus a third MainLite running the ECU's application on buses of its own
+(scripts/speed-systems/), to measure how the cost grows from one board to two
+to three before the uDV has a firmware: --systems ecu ecu-ams ecu-ams-ecu.
+
+--threads records each phase's CPU s per virtual s by thread (Linux): each
+board's CPU thread, the master time source's loop, the slave time sources
+(one per board in a lock-step multi-board run, invariant 11) and the JIT.
+
 Firmware: board=ELF for each board a system names; bootloader=ELF stands for
-every <board>.bootloader. Defaults from VHIL_ECU_ELF, VHIL_AMS_ELF and
+every <board>.bootloader; a board with no ELF of its own runs its firmware's
+(ecu=ELF for ecu-ams-ecu's ecu2). Defaults from VHIL_ECU_ELF, VHIL_AMS_ELF and
 VHIL_CAN_BOOTLOADER_ELF.
 """
 from __future__ import annotations
@@ -68,11 +78,72 @@ def firmware_for(system: System, given: dict[str, str]) -> dict[str, Path]:
     out = {}
     for image in system.images():
         key = "bootloader" if image.endswith(".bootloader") else image
-        path = given.get(image) or given.get(key)
+        # A board without an ELF of its own runs its firmware's (the
+        # three-board benchmark's second ECU runs ecu=).
+        fw_id = None if image.endswith(".bootloader") else system.boards[image].firmware["id"]
+        path = given.get(image) or given.get(key) or (given.get(fw_id) if fw_id else None)
         if not path:
             raise SystemExit(f"{system.id}: no firmware for '{image}' (give {key}=ELF)")
         out[image] = Path(path).resolve()
     return out
+
+
+class ThreadSampler:
+    """CPU seconds of Renode's threads over a RunFor, by what they do (Linux):
+    each board's CPU thread (`<board>.cpu`), the master time source's loop
+    (it runs on the monitor's thread, `vhil-monitor`), the boards' slave time
+    sources (`slave`), .NET's tiered JIT (`jit`), the rest (`other`). Renode
+    starts a CPU's thread anew at every RunFor and ends it at the pause, so
+    the threads are read every 50 ms and a thread's last reading counts."""
+
+    def __init__(self, pid: int, boards):
+        import threading
+        self.pid, self.boards = pid, sorted(boards, key=len, reverse=True)
+        self.start = self._read()
+        self.last = dict(self.start)
+        self.done = threading.Event()
+        self.thread = threading.Thread(target=self._poll, daemon=True)
+        self.thread.start()
+
+    def _read(self) -> dict:
+        out = {}
+        try:
+            tasks = list(Path(f"/proc/{self.pid}/task").iterdir())
+        except OSError:
+            return out
+        for t in tasks:
+            try:
+                comm = (t / "comm").read_text().strip()
+                f = (t / "stat").read_text().rsplit(")", 1)[1].split()
+                out[int(t.name)] = (comm, (int(f[11]) + int(f[12])) / os.sysconf("SC_CLK_TCK"))
+            except (OSError, IndexError, ValueError):
+                pass
+        return out
+
+    def _poll(self):
+        while not self.done.wait(0.05):
+            self.last.update(self._read())
+
+    def role(self, comm: str) -> str:
+        for b in self.boards:
+            if comm.startswith(f"{b}.cpu"):
+                return f"{b}.cpu"
+        if comm.startswith("SlaveTimeSour"):
+            return "slave"
+        if comm.startswith("vhil-monitor"):
+            return "master"
+        if comm.startswith(".NET Tiered"):
+            return "jit"
+        return "other"
+
+    def stop(self) -> dict:
+        self.done.set()
+        self.thread.join()
+        self.last.update(self._read())
+        out: Counter = Counter()
+        for tid, (comm, cpu) in self.last.items():
+            out[self.role(comm)] += cpu - self.start.get(tid, (comm, 0.0))[1]
+        return {k: round(v, 3) for k, v in sorted(out.items())}
 
 
 class Run:
@@ -80,8 +151,9 @@ class Run:
 
     def __init__(self, system_path: Path, firmware: dict[str, str], path: str,
                  renode: str, mips: int | None, profile: Path | None, log: Path | None,
-                 setup: list[str] = ()):
+                 setup: list[str] = (), threads: bool = False):
         self.system = System(system_path)
+        self.threads, self.last_threads = threads, None
         self.firmware = firmware_for(self.system, firmware)
         self.path, self.renode, self.mips, self.profile = path, renode, mips, profile
         self.log = log
@@ -152,10 +224,12 @@ class Run:
         us = round(seconds * 1e6)
         us -= us % q
         c0 = self.cpu_seconds()
+        sampler = ThreadSampler(self.proc.pid, self.system.boards) if self.threads else None
         t0 = time.monotonic()
         self.m.execute(f'emulation RunFor "{us / 1e6:.6f}"')
         wall = time.monotonic() - t0
         self.last_cpu = None if c0 is None else self.cpu_seconds() - c0
+        self.last_threads = sampler.stop() if sampler else None
         return wall
 
     def cpu_seconds(self) -> float | None:
@@ -214,12 +288,19 @@ class Run:
             self.proc.kill()
 
 
+# Systems measured for scaling only, not car systems (not in systems/, the
+# catalogue's systems): ecu-ams plus a third MainLite, the cost of a
+# three-board system before the uDV has a firmware.
+BENCH_ONLY = {"ecu-ams-ecu": REPO / "scripts" / "speed-systems" / "ecu-ams-ecu.yaml"}
+
+
 # The bench before #154's speed-ups, for --baseline.
 BASELINE_ENV = {"VHIL_FAST_FORWARD": "0", "DOTNET_TC_CallCountingDelayMs": "100"}
 
 
 def measure(system: str, firmware: dict[str, str], path: str, args, variant: str = "current") -> dict:
-    sys_path = Path(system) if system.endswith(".yaml") else REPO / "systems" / f"{system}.yaml"
+    sys_path = (Path(system) if system.endswith(".yaml")
+                else BENCH_ONLY.get(system, REPO / "systems" / f"{system}.yaml"))
     log = (Path(args.log_dir) / f"{Path(sys_path).stem}-{path}-{variant}.log"
            if args.log_dir else None)
     saved = {k: os.environ.get(k) for k in BASELINE_ENV}
@@ -238,7 +319,7 @@ def measure(system: str, firmware: dict[str, str], path: str, args, variant: str
 def _measure(sys_path: Path, firmware: dict[str, str], path: str, args, variant: str,
              log: Path | None) -> dict:
     with Run(sys_path, firmware, path, args.renode, args.mips, args.profile, log,
-             args.setup) as run:
+             args.setup, args.threads) as run:
         result = {"system": run.system.id, "path": path, "variant": variant,
                   "mips": args.mips or ("bench" if path == "bench" else "catalogue")}
         for phase, seconds in (("boot", args.boot), ("steady", args.steady)):
@@ -247,6 +328,10 @@ def _measure(sys_path: Path, firmware: dict[str, str], path: str, args, variant:
             result[phase] = round(seconds / wall, 3)
             result[f"{phase}_wall_s"] = round(wall, 2)
             result[f"{phase}_cpu"] = None if run.last_cpu is None else round(run.last_cpu / seconds, 3)
+            if run.last_threads is not None:
+                result[f"{phase}_threads"] = {k: round(v / seconds, 3) for k, v in run.last_threads.items()}
+                print(f"[speed] {run.system.id} {path} {phase} CPU s per virtual s by thread: "
+                      f"{result[f'{phase}_threads']}", file=sys.stderr, flush=True)
             if args.profile:
                 result[f"{phase}_profile"] = run.dump_profile(phase)
             result[f"{phase}_fast_forward"] = run.fast_forward_stats()
@@ -269,6 +354,9 @@ def main() -> int:
     ap.add_argument("--repeat", type=int, default=1, help="runs per configuration (median)")
     ap.add_argument("--profile", type=Path, help="sample guest PCs into this directory")
     ap.add_argument("--log-dir", help="Renode's output per run")
+    ap.add_argument("--threads", action="store_true",
+                    help="also record each phase's CPU s per virtual s by thread (Linux): each "
+                         "board's CPU, the master's loop, the slave time sources, the JIT")
     ap.add_argument("--setup", action="append", default=[],
                     help="monitor command run on every board after setup ({board}: its name); "
                          "for experiments")

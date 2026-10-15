@@ -63,6 +63,26 @@
 //   (BoundedIterations). Its `VhilOnRead` cue arms the detector as soon as a
 //   poll on it starts (HAL_ADC_PollForConversion), not at the next quantum.
 //
+//   Cycle-counter waits. A wait on DWT CYCCNT (AMS ltc6820.cpp delay_us, the
+//   isoSPI wake: `while ((DWT->CYCCNT - start) < cycles) {}`), as GCC emits it:
+//         L:  ldr  rT, [rB, #4]        (rB + 4 = DWT_CYCCNT, 0xE0001004)
+//             subs rD, rT, rS
+//             cmp  rD, rN
+//             bcc  L
+//   CYCCNT is Renode's DWT timer on the machine's clock (a LimitTimer at the
+//   platform's 528 MHz), so the value each iteration's read returns is a
+//   non-decreasing function of the time, itself the instructions executed:
+//   every read before the time the count reaches start + cycles sees the loop
+//   go on, whatever value it returns. A pre-opcode hook on BCC (excluded, as
+//   the CMP.W one, at every BCC that is not such a loop's) checks the code
+//   around it is exactly this (rS, rN and rB not written by the loop); at the
+//   BCC, the iterations whose reads all come before that time
+//   (BoundedIterations, as for a time-bounded poll, from the count at the time
+//   synced there, at least what the last read saw) are charged, never past
+//   the chunk's end less two iterations. rT, rD and the flags they leave are dead: the next
+//   iteration's read and SUBS write them before anything reads them, and no
+//   exception can come between (one comes only at a chunk's end).
+//
 // Exactness. Renode runs a CPU in chunks that end at the nearest clock entry
 // (a timer's limit) or the end of the quantum (BaseCPU.CpuThreadBodyInner):
 // events fire, interrupts are raised and sync-point actions (CAN frames from
@@ -93,8 +113,8 @@
 // logs why, it never guesses. Renode 1.17.0 (tlib 167decf).
 //
 // Not accelerated: anything else, including a loop reading a time-dependent
-// register that cannot say until when it stands (DWT CYCCNT, SysTick VAL, a
-// timer's CNT: not in the whitelist) or a GPIO input a device model drives on
+// register that cannot say until when it stands (SysTick VAL, a timer's CNT,
+// CYCCNT in any other loop: not in the whitelist) or a GPIO input a device model drives on
 // its own clock.
 //
 using System;
@@ -109,6 +129,7 @@ using Antmicro.Renode.Peripherals;
 using Antmicro.Renode.Peripherals.Bus;
 using Antmicro.Renode.Peripherals.CPU;
 using Antmicro.Renode.Peripherals.Memory;
+using Antmicro.Renode.Peripherals.Timers;
 using Antmicro.Renode.Time;
 
 namespace Antmicro.Renode.Testing
@@ -159,6 +180,9 @@ namespace Antmicro.Renode.Testing
             // opcode's first halfword (SUBS.W Rd, Rn, #const shares it).
             compareHook = OnCompare;
             cpu.AddPreOpcodeExecutionHook(0xFBF0, 0xF1B0, compareHook);
+            // BCC (A7.7.12 T1, cond 0011): the end of a CYCCNT wait.
+            branchHook = OnBranch;
+            cpu.AddPreOpcodeExecutionHook(0xFF00, 0xD300, branchHook);
             // A CMP.W that is not a delay loop's is left alone for good (its
             // decode is remembered as none until a reset): a Renode that can
             // stop calling the hook there (docker/renode's tlib patch) is told
@@ -212,7 +236,7 @@ namespace Antmicro.Renode.Testing
         // candidate was refused.
         public bool Trace { get; set; }
 
-        public ulong SkippedInstructions => counterInstructions + pollInstructions;
+        public ulong SkippedInstructions => counterInstructions + pollInstructions + cycleInstructions;
 
         // SHA-256 of every CPU register Renode lists and every RAM byte: two
         // runs that agree on it ended in the same state
@@ -233,6 +257,8 @@ namespace Antmicro.Renode.Testing
                 + $"; polling loops: {pollSkips} skips, {pollInstructions} instructions"
                 + $" ({pollAttempts} armed, {pollRefusals} refused, {accessCalls} accesses, {Ms(accessTicks)} ms)"
                 + $"; time-bounded polls: {boundedSkips} skips, {boundedInstructions} instructions ({cues} cues)"
+                + $"; CYCCNT waits: {cycleSkips} skips, {cycleInstructions} instructions"
+                + $" ({branchCalls} BCC hooks, {Ms(branchTicks)} ms, {excludedBranches.Count} BCC excluded)"
                 + $"; core registers via {tlib.RegisterAccess}";
         }
 
@@ -628,6 +654,92 @@ namespace Antmicro.Renode.Testing
             RequestArm();
         }
 
+        // -- cycle-counter waits ---------------------------------------------------
+
+        // At a BCC, before it executes (the pre-opcode hook): if it closes a
+        // CYCCNT wait (CycleCounterWait), charge the iterations whose reads
+        // all come before the count reaches the end of the wait.
+        private void OnBranch(ulong pc, ulong opcode)
+        {
+            var t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+            branchCalls++;
+            if(enabled && counters && disabledWhy == null)
+            {
+                SkipCycleCounterWait(pc);
+            }
+            branchTicks += System.Diagnostics.Stopwatch.GetTimestamp() - t0;
+        }
+
+        private void SkipCycleCounterWait(ulong bcc)
+        {
+            if(!waits.TryGetValue(bcc, out var wait))
+            {
+                wait = CycleCounterWait.Decode(machine.SystemBus, cpu, bcc - 6);
+                waits[bcc] = wait;
+                if(wait == null && excludeCompare != null && excludeCompare(branchHook, bcc))
+                {
+                    excludedBranches.Add(bcc);
+                    pendingInvalidation = true;
+                }
+            }
+            if(wait == null || !wait.StillThere(machine.SystemBus, cpu) || !Calibrated())
+            {
+                return;
+            }
+            var timer = CycleCounter();
+            if(timer == null || !timer.Enabled)
+            {
+                return;
+            }
+            // The time synced to the instructions so far (at or after the last
+            // read's, which DWT synced too), and the count at that time: at
+            // least what that read returned.
+            cpu.SyncTime();
+            var now = machine.ElapsedVirtualTime.TimeElapsed.Ticks;
+            var start = tlib.CoreRegister(wait.Rs);
+            var cycles = tlib.CoreRegister(wait.Rn);
+            var counted = unchecked((uint)timer.Value - start);
+            if(counted >= cycles)
+            {
+                return;
+            }
+            // The count goes up by at most ticks * f / ticks-per-second + 1
+            // over `ticks`: every read before `until` sees fewer than
+            // `cycles` counted since `start`, and the loop go on.
+            var remaining = (ulong)(cycles - counted);
+            var frequency = timer.Frequency / timer.Divider;
+            var until = now + (ulong)((UInt128)(remaining - 1) * TimeInterval.TicksPerSecond / frequency);
+            var k = CycleCounterWait.Instructions;
+            var budget = tlib.Budget();
+            var n = budget > 2 * k ? (budget - 2 * k) / k : 0;
+            // The BCC is at most the block's fourth instruction (a block
+            // starts at the loop's LDR, the branch target).
+            n = Math.Min(n, BoundedIterations(until, k, cpu.GetCurrentInstructionsCount() + k));
+            if(n < 2)
+            {
+                return;
+            }
+            tlib.Charge(n * k);
+            cycleSkips++;
+            cycleInstructions += n * k;
+            if(Trace)
+            {
+                cpu.Log(LogLevel.Info, "fast-forward: {0} iterations of a CYCCNT wait at 0x{1:X8}", n, bcc - 6);
+            }
+        }
+
+        // DWT's cycle counter (Renode Cores/Arm-M/DWT.cs: a private LimitTimer).
+        private LimitTimer CycleCounter()
+        {
+            if(cycleCounter == null)
+            {
+                var dwt = machine.SystemBus.WhatIsAt(DwtCyccnt, cpu)?.Peripheral;
+                cycleCounter = dwt?.GetType().GetField("cycleCounter", BindingFlags.Instance | BindingFlags.NonPublic)
+                    ?.GetValue(dwt) as LimitTimer;
+            }
+            return cycleCounter;
+        }
+
         // The earliest time (ticks, exclusive) up to which every time-bounded
         // read of the iteration returns what it returned; false if it has none.
         private bool BoundOfTrace(out ulong until)
@@ -893,16 +1005,18 @@ namespace Antmicro.Renode.Testing
         private void OnReset()
         {
             loops.Clear();
-            if(clearExclusions != null && excludedCompares.Count > 0)
+            waits.Clear();
+            if(clearExclusions != null && excludedCompares.Count + excludedBranches.Count > 0)
             {
-                // Every CMP.W is looked at again after a reset, as the
+                // Every CMP.W and BCC is looked at again after a reset, as the
                 // remembered decodes are gone: the hook back everywhere, in
                 // the blocks holding an excluded one invalidated, on the CPU's
                 // thread before it next executes (not ClearTranslationCache,
                 // which pauses the machine: from the CPU's thread it waits on
                 // itself).
-                var excluded = excludedCompares.ToArray();
+                var excluded = excludedCompares.Concat(excludedBranches).ToArray();
                 excludedCompares.Clear();
+                excludedBranches.Clear();
                 tlib.InvokeOnCpuThread(() =>
                 {
                     clearExclusions();
@@ -925,6 +1039,7 @@ namespace Antmicro.Renode.Testing
         }
 
         private const int XpsrIndex = 25;              // Renode's Cortex-M CPSR: the xPSR
+        private const ulong DwtCyccnt = 0xE0001004;    // DWT_BASE 0xE0001000 + CYCCNT 0x004 (core_cm7.h)
         private const int MaxAccessesPerAttempt = 256;
         private const int MaxTrace = 64;
         private const int MaxRetries = 2;
@@ -940,6 +1055,10 @@ namespace Antmicro.Renode.Testing
         private readonly MemoryAccessHook accessHook;
         private readonly Dictionary<ulong, CounterLoop> loops = new Dictionary<ulong, CounterLoop>();
         private readonly Action<ulong, ulong> compareHook;
+        private readonly Action<ulong, ulong> branchHook;
+        private readonly List<ulong> excludedBranches = new List<ulong>();
+        private ulong branchCalls;
+        private long branchTicks;
         private readonly Func<Action<ulong, ulong>, ulong, bool> excludeCompare;
         private readonly Action clearExclusions;
         private readonly List<ulong> excludedCompares = new List<ulong>();
@@ -979,6 +1098,10 @@ namespace Antmicro.Renode.Testing
         private int armedQuanta;
         private volatile bool pendingRefusal;
 
+        private readonly Dictionary<ulong, CycleCounterWait> waits = new Dictionary<ulong, CycleCounterWait>();
+        private LimitTimer cycleCounter;
+        private ulong cycleSkips;
+        private ulong cycleInstructions;
         private ulong counterSkips;
         private ulong counterInstructions;
         private ulong pollSkips;
@@ -1032,6 +1155,87 @@ namespace Antmicro.Renode.Testing
     }
 
     // A volatile counter loop at its CMP.W (see VhilFastForward).
+    // A wait on DWT CYCCNT, as GCC emits `while ((DWT->CYCCNT - start) <
+    // cycles) {}` (AMS ltc6820.cpp delay_us), decoded at its load:
+    //     L: LDR rT, [rB, #4]   (A7.7.42 T1)
+    //        SUBS rD, rT, rS    (A7.7.174 T1)
+    //        CMP rD, rN         (A7.7.28 T1)
+    //        BCC L              (A7.7.12 T1, cond 0011)
+    // with rB, rS and rN none of rT and rD, so the loop never writes them.
+    public class CycleCounterWait
+    {
+        public const ulong Instructions = 4;
+
+        public static CycleCounterWait Decode(IBusController bus, ICPU cpu, ulong pc)
+        {
+            var code = Read(bus, cpu, pc);
+            var ldr = code[0];
+            var subs = code[1];
+            var cmp = code[2];
+            var bcc = code[3];
+            if((ldr & 0xF800) != 0x6800 || ((ldr >> 6) & 0x1F) != 1)
+            {
+                return null;
+            }
+            var rt = ldr & 7;
+            var rb = (ldr >> 3) & 7;
+            if((subs & 0xFE00) != 0x1A00 || ((subs >> 3) & 7) != rt)
+            {
+                return null;
+            }
+            var rd = subs & 7;
+            var rs = (subs >> 6) & 7;
+            if((cmp & 0xFFC0) != 0x4280 || (cmp & 7) != rd)
+            {
+                return null;
+            }
+            var rn = (cmp >> 3) & 7;
+            if((bcc & 0xFF00) != 0xD300 || (ulong)((long)pc + 6 + 4 + (sbyte)(bcc & 0xFF) * 2) != pc)
+            {
+                return null;
+            }
+            foreach(var r in new[] { rb, rs, rn })
+            {
+                if(r == rt || r == rd)
+                {
+                    return null;
+                }
+            }
+            return new CycleCounterWait { Pc = pc, Rs = rs, Rn = rn, code = code };
+        }
+
+        // The code is the same as when decoded (flash, but checked as RAM
+        // would need).
+        public bool StillThere(IBusController bus, ICPU cpu)
+        {
+            var now = Read(bus, cpu, Pc);
+            for(var i = 0; i < now.Length; i++)
+            {
+                if(now[i] != code[i])
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        private static ushort[] Read(IBusController bus, ICPU cpu, ulong pc)
+        {
+            var code = new ushort[4];
+            for(var i = 0; i < code.Length; i++)
+            {
+                code[i] = (ushort)bus.ReadWord(pc + (ulong)(2 * i), cpu);
+            }
+            return code;
+        }
+
+        public ulong Pc { get; private set; }
+        public int Rs { get; private set; }
+        public int Rn { get; private set; }
+
+        private ushort[] code;
+    }
+
     public class CounterLoop
     {
         public static CounterLoop Decode(IBusController bus, ICPU cpu, ulong cmp)
