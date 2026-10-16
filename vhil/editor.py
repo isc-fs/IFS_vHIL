@@ -139,8 +139,8 @@ _MODEL_HOST_PORTS = (("spi", "spi"), ("cs", "gpio"), ("sdmmc", "sdmmc"), ("i2c",
 # Field order in a written system file.
 _DEVICE_FIELDS = ("model", "spi", "cs", "sdmmc", "i2c", "pins", "outputs", "attach", "count",
                   "params")
-_SYSTEM_FIELDS = ("kind", "id", "description", "time", "boards", "buses", "devices", "port",
-                  "bench")
+_SYSTEM_FIELDS = ("kind", "id", "description", "time", "boards", "buses", "devices", "plants",
+                  "port", "bench")
 
 
 def _catalog(kind: str, catalog: Path = CATALOG) -> dict[str, dict]:
@@ -516,7 +516,7 @@ def to_dataflow(doc: dict, spec: dict | None = None, source: str | None = None) 
             port = models[dev["model"]]["interface"]["attach"]
             connect(f"i:{dev['attach']}:{port}", f"i:{name}:{port}")
 
-    extra = {k: doc[k] for k in ("id", "description", "time", "port", "bench") if k in doc}
+    extra = {k: doc[k] for k in ("id", "description", "time", "plants", "port", "bench") if k in doc}
     if source is not None:
         extra["source"] = source
     return {"version": FORMAT_VERSION, "entryGraph": GRAPH_ID,
@@ -627,6 +627,8 @@ def from_dataflow(dataflow: dict, spec: dict | None = None) -> dict:
     if devices:
         doc["devices"] = {k: {f: v[f] for f in _DEVICE_FIELDS if f in v}
                           for k, v in devices.items()}
+    if "plants" in extra:
+        doc["plants"] = extra.pop("plants")
     if "port" in extra:
         doc["port"] = extra.pop("port")
     if "bench" in extra:

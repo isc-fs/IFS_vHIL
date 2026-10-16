@@ -748,6 +748,7 @@ class System:
             want = "analog" if kind == "analog" else "gpio"
             if got != want:
                 raise SystemError(f"port signal '{name}': '{value}' is {got}, not {want}")
+        self._check_plants()
         for c in self.bench.get("power", []):
             if c["board"] not in self.boards:
                 raise SystemError(f"bench power entry '{c['board']}' is not a board in this system")
@@ -827,6 +828,37 @@ class System:
                 if b.name == board:
                     out[controller] = bus
         return out
+
+    @property
+    def plants(self) -> dict:
+        """name -> {plant, cells?, params?}: the plants every run of this
+        system executes on its port (docs/m8-plan.md); {} for most."""
+        return self.doc.get("plants") or {}
+
+    # The port signals a tractive-system plant reads and writes, by kind
+    # (vhil/plant_ts.py; docs/m8-plan.md's contract).
+    TS_SIGNALS = {"air_pos_cmd": "gpio_out", "air_neg_cmd": "gpio_out", "pre_cmd": "gpio_out",
+                  "v_link": "can_tx"}
+
+    def _check_plants(self) -> None:
+        signals = {n: next(iter(s)) for n, s in self.doc.get("port", {}).get("signals", {}).items()}
+        for name, spec in self.plants.items():
+            path = CATALOG / "plants" / f"{spec['plant']}.yaml"
+            if not path.is_file():
+                raise SystemError(f"plant '{name}': no catalog/plants/{spec['plant']}.yaml")
+            params = yaml.safe_load(path.read_text())["parameters"]
+            for p in spec.get("params", {}):
+                if p not in params:
+                    raise SystemError(f"plant '{name}': {spec['plant']} has no parameter '{p}'")
+            cells = spec.get("cells")
+            if cells is not None:
+                dev = self.devices.get(cells)
+                if dev is None or dev["model_doc"].get("interface", {}).get("provides") != "isospi":
+                    raise SystemError(f"plant '{name}': cells '{cells}' is not an LTC6820 of "
+                                      f"this system")
+            for sig, kind in self.TS_SIGNALS.items():
+                if signals.get(sig) != kind:
+                    raise SystemError(f"plant '{name}': the port needs a {kind} signal '{sig}'")
 
     def arbitrated(self, bus: str) -> bool:
         """Whether a bus is modelled in virtual time (VhilCanBus) rather than

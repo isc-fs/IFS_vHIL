@@ -897,6 +897,37 @@
             }
           }
         },
+        "plants": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/name"
+          },
+          "description": "Plants the system runs on its co-simulation port wherever a run executes it (scenarios, web-app runs; not the wall-clock bench, whose parity stimulus stays IFS_HIL's): the switch for M8's tractive-system plant (docs/m8-plan.md). A system without plants runs exactly as before.",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "plant"
+            ],
+            "properties": {
+              "plant": {
+                "$ref": "#/$defs/id",
+                "description": "Its parameters in catalog/plants/<plant>.yaml; tractive-system is the Python stand-in (vhil/plant_ts.py)."
+              },
+              "cells": {
+                "$ref": "#/$defs/name",
+                "description": "The LTC6820 device whose chain's cells give the pack voltage."
+              },
+              "params": {
+                "type": "object",
+                "propertyNames": {
+                  "pattern": "^[a-z][a-z0-9_]{0,63}$"
+                },
+                "description": "Parameter overrides for this system, reported as such (never a substitute for a citation)."
+              }
+            }
+          }
+        },
         "port": {
           "type": "object",
           "additionalProperties": false,

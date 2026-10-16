@@ -495,6 +495,15 @@ def execute_scenario(sim, scenario: dict, trace: TraceWriter, *,
         elif kind == "analog":
             at(t_us, lambda b=s["board"], pin=s["pin"], v=s["volts"]: sim.io(b).set_voltage(pin, v))
             note(t_us, f"{what} {s['board']}.{s['pin']} = {s['volts']} V")
+        elif kind == "plant":
+            if s["plant"] not in plants:
+                raise ValueError(f"no plant '{s['plant']}' in {system.id}")
+
+            def set_plant(p=plants[s["plant"]], values=dict(s["set"]), t=t_us):
+                p.apply(values, t)
+                plant_due["now"] = True
+            at(t_us, set_plant)
+            note(t_us, f"{what} {s['plant']}: " + ", ".join(f"{k}={v}" for k, v in s["set"].items()))
         elif kind == "watch":
             # Mid-run (a live session's op too): from at_ms to the run's end.
             if s.get("symbol"):
@@ -509,6 +518,31 @@ def execute_scenario(sim, scenario: dict, trace: TraceWriter, *,
                 note(t_us, f"{what} {s['board']}.{s['pin']}")
         else:
             raise ValueError(f"unknown stimulus kind '{kind}'")
+
+    # -- the system's plants (docs/m8-plan.md) ---------------------------------------
+    # Event-driven on the co-simulation port: stepped at the start, when an
+    # armed coil edge ends a run early (Sim.run_until_trigger), when a stimulus
+    # was applied, and at the plant's own next_us; never every slice.
+    plants: dict = {}
+    port = None
+    plant_due = {"now": False}
+    if getattr(system, "plants", None):
+        from vhil.cosim import Port
+        from vhil.plant_ts import make_plants, uncommissioned
+        plants = make_plants(system)
+        port = Port(sim)
+        for sname, sig in port.signals.items():
+            if sig.kind == "gpio_out":
+                board, pin = sig.spec.split(".", 1)
+                _, _, target = system.resolve(sig.spec)
+                pin_names.setdefault((board, f"{target['port']}:{target['pin']}"), pin)
+        for p in plants.values():
+            for sname in p.triggers(port):
+                port.arm(sname)
+        plant_due["now"] = True
+        for pname, p in plants.items():
+            note(sim.now_us(), f"plant {pname}: {system.plants[pname]['plant']}; uncommissioned "
+                               f"(no car log): {', '.join(uncommissioned(p.ts.params))}")
 
     for i, s in enumerate(stimuli):
         schedule(s, _us(s.get("at_ms", 0)), f"stim{i}", f"stimuli[{i}]")
@@ -777,7 +811,7 @@ def execute_scenario(sim, scenario: dict, trace: TraceWriter, *,
         """sim.run_for, or with a debugger attached, RunFor in a thread while
         this one services the debuggers (a stopped board holds it)."""
         if hub["dbg"] is None or not hub["dbg"].active():
-            return sim.run_for(us=us)
+            return sim.run_until_trigger(us) if plants else sim.run_for(us=us)
         box: dict = {}
 
         def body() -> None:
@@ -821,6 +855,12 @@ def execute_scenario(sim, scenario: dict, trace: TraceWriter, *,
     while True:
         while events and events[0][0] <= now:
             heapq.heappop(events)[2]()
+            plant_due["now"] = True
+        if plants and (plant_due["now"] or any(p.next_us is not None and now >= p.next_us
+                                               for p in plants.values())):
+            for p in plants.values():
+                p.step(port, now)
+            plant_due["now"] = False
         start_samplers(now)
         slice_done = now >= slice_end or now >= end_us
         if slice_done:
@@ -860,6 +900,8 @@ def execute_scenario(sim, scenario: dict, trace: TraceWriter, *,
                 for p in sim.radio(device).payloads(since_us=since):
                     batch.append({"kind": "radio", "t_us": p.t_us, "board": board,
                                   "device": device, "payload": p.data.hex()})
+            for pname, p in plants.items():
+                batch += p.records(pname, now)
             while notes and notes[0][0] <= now:
                 batch.append(heapq.heappop(notes)[2])
             if logs is not None:
@@ -884,13 +926,20 @@ def execute_scenario(sim, scenario: dict, trace: TraceWriter, *,
                     # The ops already scheduled take effect: the run ends at
                     # the end of the slice they were scheduled for.
                     end_us = min(end_us, slice_end)
-        target = min([end_us, slice_end] + ([events[0][0]] if events else []))
+        target = min([end_us, slice_end] + ([events[0][0]] if events else [])
+                     + [p.next_us for p in plants.values() if p.next_us is not None and p.next_us > now])
         new = run_slice(now, max(target - now, 1))
         if new <= now:
             raise RuntimeError(f"virtual time stuck at {now} us")
+        if plants and getattr(sim, "triggered", False):
+            plant_due["now"] = True             # an armed coil edge ended the run
         now = new
     summary = {"virtual_ms": scenario["virtual_ms"], "frames": frames, "sent": sent, **counts,
                "bus_load": load_summary(loads)}
+    if plants:
+        summary["plants"] = {n: {"plant": system.plants[n]["plant"], "steps": p.steps,
+                                 "uncommissioned": uncommissioned(p.ts.params)}
+                             for n, p in plants.items()}
     if aligned:
         summary["aligned"] = aligned
     if session is not None:
