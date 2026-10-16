@@ -27,15 +27,21 @@ and the ACU bus.
 | PB9 (GPIO6) | `LTC6820_CS`: U4 chip select | on board (U4) | direct | `main.h:82` `LTC6820_CS_Pin` |
 | PB4 (GPIO1) | `AMS_OK`: K5 AMS latch relay in the shutdown circuit | J1.4 | R21 / Q10 driver | `main.h:74` `AMS_OK_Pin` |
 | PB5 (GPIO2) | `AIR+`: AIR+ coil low side; TSAL | J11.6 (coil), J7.4 (TSAL) | R7 / Q2 low-side driver | `main.h:76` `RELAY_AIR_P_Pin` |
-| PB6 | `AIR-` | J11.5 | not traced | `main.h:78` `RELAY_AIR_N_Pin` |
-| PB7 | `PRECHARGE` | J11.4 | not traced | `main.h:80` `RELAY_PRECHARGE_Pin` |
+| PB6 (GPIO3) | `AIR-`: AIR- coil low side; TSAL | J11.5 (coil), J7.6 (TSAL) | R15 1 kΩ gate / R14 2.2 kΩ pull-down / Q1 DMN6075S low-side driver, flyback D6 to AIR+_VCC ¹ | `main.h:78` `RELAY_AIR_N_Pin` |
+| PB7 (GPIO4) | `PRECHARGE`: precharge relay coil low side; TSAL | J11.4 (coil), J7.5 (TSAL) | R5 1 kΩ gate / R3 2.2 kΩ pull-down / Q3 DMN6075S low-side driver, flyback D2 to AIR+_VCC ¹ | `main.h:80` `RELAY_PRECHARGE_Pin` |
 | PF7 (GPIO7), ADC3 INP3 | `S_CURRENT_P`: pack current sensor OUTP | J4.3 | R10 100 Ω series | `main.h:66` `S_CURRENT_P_Pin` (ADC3 INP3/INN3 differential) |
 | PF8 (GPIO8), ADC3 INN3 | `S_CURRENT_N`: pack current sensor OUTN | J4.2 | R11 100 Ω series | `main.h:68` `S_CURRENT_N_Pin` |
-| PF9 | `TSMS_FIL`: TSMS, a **digital input** | not traced | not traced | `main.h:70` `TSMS_Pin` |
+| PF9 | `TSMS_FIL`: TSMS, a **digital input**. It senses AIR+_VCC, the contactor coils' (shutdown-circuit-switched) supply ¹ | J1.16 (AIR+_VCC), J11.1-3 | R18 62 kΩ from AIR+_VCC, R19 / D4 ¹ | `main.h:70` `TSMS_Pin` |
 | PF10 | `RST_PIL_FIL`: DASH_CHG, a **digital input** | not traced | not traced | `main.h:72` `DASH_CHG_Pin` |
 | PC0 | `S_TEMP_DCDC` | J3.7 | not traced | none |
 | PC1 (GPIO12), ADC3 INP11 | `S_CURRENT_DCDC`: the DC-DC's ACS758 | J3.5 | not traced | **not sampled on `dev`**, by design: no DC-DC is fitted (af07ec8; `ams_config.hpp:607`, `:713-715`) |
 | PB8, PB0, PC2 | spare | J1.20, J1.21, J1.22 | — | — |
+
+¹ Traced for M8 (#147, [`m8-plan.md`](../m8-plan.md)) from the backplane's
+current schematic, isc-fs/IFS08-ES main bcb4511,
+`boards/AMS_IFS08/kicad/AMS IFS08.kicad_sch` (its netlist): AIR+, AIR- and
+PRECHARGE are MainLite pads 7, 8 and 9; the three coils' high side and
+flyback diodes (D5, D6, D2) are on AIR+_VCC.
 
 The MainLite's own microSD (SDMMC1) and BMI088 (I2C2) are not routed by
 the backplane.

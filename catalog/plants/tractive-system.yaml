@@ -1,0 +1,151 @@
+kind: plant-parameters
+id: tractive-system
+description: >-
+  The car's tractive-system plant between the AMS's contactor drivers and the
+  inverter's DC link (M8, #147; docs/m8-plan.md): AIR+, AIR- and the
+  precharge relay with their resistor, the inverter's DC-link capacitance,
+  the discharge bleed and the inverter's report of the link on 0x466. The
+  same parameters feed the Python stand-in (TS-1) and, as FMI parameters of
+  the same names, the IFSSIM electrical FMU (isc-fs/IFSSIM#669).
+
+  Every parameter says where its value comes from (`source`) and what it was
+  checked against (`validated_against`: a car log id, date and firmware
+  commit, or null). `status: cited` means the value comes from a schematic,
+  a datasheet or the firmware's documented design; `uncommissioned` means no
+  citable non-bench source exists yet, and every report that uses it says
+  so. A value is never tuned to make a test pass and never taken from either
+  bench (CLAUDE.md invariant 9). Timing is asserted in tests only against
+  parameters that are cited and validated; otherwise only sequencing.
+# Sources, pinned:
+#   AMS  = isc-fs/IFS08-CE-AMS dev 94b59a9
+#   ECU  = isc-fs/IFS08-CE-ECU dev 44610a5
+#   W90  = EPowerLabs W90 User Manual (inverter), in ECU dev 44610a5, `EPowerLabs W90 UserManual.pdf`
+#   SCH  = isc-fs/IFS08-ES main bcb4511, `boards/AMS_IFS08/kicad/AMS IFS08.kicad_sch`
+parameters:
+  # -- the link -----------------------------------------------------------
+  c_link:
+    value: 400.0e-6
+    unit: F
+    status: cited
+    source: >-
+      W90 §5.1 Electrical General Data (PDF p.6): input DC-link capacitance
+      380-420 uF; the midpoint. No accumulator-side (TSAC) capacitance is in
+      any schematic: none modelled.
+    validated_against: null
+  r_precharge:
+    value: 690.0
+    unit: ohm
+    status: uncommissioned
+    source: >-
+      No schematic, BOM or accumulator document found. 690 ohm appears only
+      in IFS_HIL comments (tests/hil/ams/conftest.py:263, e538dbe), a bench
+      source, which is not citable. Kept as the working value until the
+      accumulator's precharge circuit is traced.
+    validated_against: null
+  r_discharge:
+    value: 6500.0
+    unit: ohm
+    status: uncommissioned
+    source: >-
+      No schematic of the bleed resistor. The value is the ECU's own design
+      estimate, not a measurement: ECU ecu_config.hpp:534-539 (tau ~2.6 s,
+      "the discharge curve has never been measured") over c_link 400 uF.
+    validated_against: null
+  r_inverter_bleed:
+    value: null
+    unit: ohm
+    status: uncommissioned
+    source: >-
+      The W90 manual gives no passive bleeder; none modelled (null = no
+      path). A link with every contactor open and the bleed off holds its
+      voltage.
+    validated_against: null
+  # -- contactors -----------------------------------------------------------
+  # Ideal contacts that follow their coil after a fixed delay (no bounce, no
+  # aux contacts; #147 out of scope). Neither the AIRs' nor the precharge
+  # relay's part number is in any schematic or BOM, so every delay is a
+  # placeholder of the usual order for HV contactors.
+  air_close:
+    value: 0.020
+    unit: s
+    status: uncommissioned
+    source: AIR part number unknown (no TSAC schematic); placeholder.
+    validated_against: null
+  air_open:
+    value: 0.010
+    unit: s
+    status: uncommissioned
+    source: AIR part number unknown (no TSAC schematic); placeholder.
+    validated_against: null
+  pre_close:
+    value: 0.010
+    unit: s
+    status: uncommissioned
+    source: Precharge relay part number unknown; placeholder.
+    validated_against: null
+  pre_open:
+    value: 0.005
+    unit: s
+    status: uncommissioned
+    source: Precharge relay part number unknown; placeholder.
+    validated_against: null
+  # -- the pack, as the plant sees it -----------------------------------------
+  cells_per_chip:
+    value: [9, 10]
+    unit: cells
+    status: cited
+    source: >-
+      Which LTC6811 inputs carry a cell, per module's chip pair (chain slots
+      2m, 2m+1): AMS ams_config.hpp:1130-1131 (CellsPerLtcUpper 9,
+      CellsPerLtcLower 10), 5 modules x 19 cells = 95S (:424, :432). V_pack
+      is the sum of those cells in the LTC6811 chain model, the cell source
+      until the FMU provides v_cell.
+    validated_against: null
+  # -- the inverter's report of the link (0x466) --------------------------------
+  vdc_period:
+    value: 0.010
+    unit: s
+    status: uncommissioned
+    source: >-
+      0x466's cycle time is recorded nowhere: no GenMsgCycleTime in the
+      vendor DBC (ECU NX0001_STS04_A16.dbc:82-87) and not measured (ECU
+      ecu_config.hpp:504-509). The Inverter plant's 10 ms.
+    validated_against: null
+  vdc_resolution:
+    value: 1.0
+    unit: V
+    status: cited
+    source: ECU NX0001_STS04_A16.dbc:87, DCBus_Voltage_V 16|10@1+ (1,0) [0|1023] V.
+    validated_against: null
+  sense_floor:
+    value: 0.0
+    unit: V
+    status: uncommissioned
+    source: >-
+      Whether 0x466 keeps counting below the W90's nominal range (48-400 V,
+      W90 §5.1) is unmeasured (ECU ecu_config.hpp:520-533). 0 = reports
+      down to 0 V. A test may set a floor (and below_floor) to run the ECU's
+      DischargeReleaseV case.
+    validated_against: null
+  below_floor:
+    value: hold
+    unit: null
+    status: uncommissioned
+    source: >-
+      What the inverter reports under sense_floor: `hold` (the floor value)
+      or `silent` (no 0x466: the ECU marks the link invalid after
+      InvDcBusStaleMs, ECU ecu_config.hpp:509). Unmeasured; see sense_floor.
+    validated_against: null
+# Topology (cited facts, not parameters):
+#   - Coil drive: AMS PB5/PB6/PB7 (MainLite pads 7/8/9) switch the low side of
+#     AIR+, AIR- and PRECHARGE through Q2/Q1/Q3 DMN6075S (1k gate, 2k2
+#     pull-down) to J11.6/J11.5/J11.4; the coils' high side and flyback diodes
+#     return to AIR+_VCC (J11.1-3, J1.16) (SCH).
+#   - Coil supply: AIR+_VCC is the shutdown-circuit-switched supply, and the
+#     AMS senses it on PF9 (TSMS_FIL, R18 62k / R19) (SCH). So a coil is
+#     energised when its pin is high AND PF9's supply is present.
+#   - Discharge: the bleed relay is normally closed and its coil follows the
+#     SDC; a normally-closed ECU relay in series with that coil (ECU PB6 high
+#     = secure) can only add a reason to discharge: bleeding = SDC open OR
+#     ECU secures (ECU discharge.hpp:18-27). The ECU's PB6 driver hardware is
+#     in no schematic (isc-fs/IFS08-CE-ECU#253): firmware intent.
