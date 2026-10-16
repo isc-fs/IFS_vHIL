@@ -188,6 +188,13 @@ i2c2_h7: I2C.STM32H7_I2C @ sysbus 0x40005800
     ErrorInterrupt -> nvic@34
     DmaReceive -> dmamux1@35
 
+// CORDIC co-processor, which the H743 lacks (the uDV's attitude filter uses it
+// for atan2 and modulus, IFS09-DV-uDV attitude.c). Our model,
+// models/renode/Stm32H7Cordic.cs. CORDIC_BASE = D2_AHB2PERIPH_BASE + 0x4400 =
+// 0x48024400, CORDIC_IRQn = 154 (stm32h733xx.h:2275, 2196, 192).
+cordic: Miscellaneous.STM32H7_CORDIC @ sysbus 0x48024400
+    IRQ -> nvic@154
+
 // Flash controller with the option bytes (WRP, RDP, boot address, PCROP and
 // secure-area bounds) as non-volatile state and sector write protection
 // enforced on erase and program. Our model, models/renode/Stm32H7Flash.cs;

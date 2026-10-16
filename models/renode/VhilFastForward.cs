@@ -49,7 +49,26 @@
 //     - and left every CPU register and every RAM byte as the iteration
 //       before them found them,
 //   the machine is at a fixed point: each further iteration repeats the last
-//   until an event changes a peripheral. Iterations are then skipped by
+//   until an event changes a peripheral.
+//   The RAM comparison copies and compares every RAM byte the board has
+//   touched (330 KB on the uDV), for every proof. An iteration whose code
+//   writes no memory on any path it may have taken (StoreFreeLoop: every
+//   path of exactly its instruction count from the boundary access back to
+//   it, decoded from the code) leaves RAM as it was by construction, so only
+//   the CPU's registers are compared: the uDV's ADC3 polls, six a
+//   millisecond.
+//   Self-yielding polls: an iteration may pend a PendSV itself (a FreeRTOS
+//   taskYIELD: SCB ICSR = PENDSVSET, then the PendSV handler switches back to
+//   the same task), as the uDV's micro-ROS transport read does on every pass
+//   while no agent answers (usb_cdc_transport.c cubemx_transport_read). ICSR
+//   is whitelisted for that: its reads (the NVIC's pending and active state,
+//   which only an event or the loop's own PENDSVSET changes within a chunk)
+//   and a write of PENDSVSET alone. Such an iteration must take exactly as
+//   many PendSVs as it pends (the exception the NVIC acknowledges at each
+//   entry is PendSV, any other is an interrupt as before), read the same
+//   ICSR at both ends (the NVIC as it found it) and record the PendSV
+//   handler's MMIO accesses in its trace; the CPU's state and RAM, the
+//   handler's stack frames included, are compared as for any iteration. Iterations are then skipped by
 //   charging their instructions alone, never past the next event. The pass
 //   that closes the second iteration must also read what the first two did:
 //   it starts the next iteration, which repeats only if it does.
@@ -82,6 +101,17 @@
 //   the chunk's end less two iterations. rT, rD and the flags they leave are dead: the next
 //   iteration's read and SUBS write them before anything reads them, and no
 //   exception can come between (one comes only at a chunk's end).
+//
+//   Tick waits. HAL_Delay's `while ((HAL_GetTick() - tickstart) < wait) {}`
+//   as GCC emits it at -Og/-O2 (the uDV's BMI088 and I2C bring-up, 140 ms of
+//   its boot at full speed), decoded at its BCC (TickWait): BL to a
+//   HAL_GetTick that loads the tick from RAM, SUBS, CMP, BCC. The loop writes
+//   no memory and only registers it recomputes from ones it never writes
+//   and the tick, which only an interrupt changes. A pre-opcode hook on the
+//   BCC (the CYCCNT waits' hook) sees two arrivals one iteration apart with
+//   those registers equal and the branch taken, and charges the iterations
+//   up to the chunk's end less two. Never on a page a lazily delivering
+//   peripheral owns (VhilLazy.IoPages).
 //
 // Exactness. Renode runs a CPU in chunks that end at the nearest clock entry
 // (a timer's limit) or the end of the quantum (BaseCPU.CpuThreadBodyInner):
@@ -128,6 +158,7 @@ using Antmicro.Renode.Logging.Profiling;
 using Antmicro.Renode.Peripherals;
 using Antmicro.Renode.Peripherals.Bus;
 using Antmicro.Renode.Peripherals.CPU;
+using Antmicro.Renode.Peripherals.IRQControllers;
 using Antmicro.Renode.Peripherals.Memory;
 using Antmicro.Renode.Peripherals.Timers;
 using Antmicro.Renode.Time;
@@ -174,7 +205,11 @@ namespace Antmicro.Renode.Testing
             InstallAccessHook();
             // Exception entries and WFI: a polling iteration that saw one is
             // not a repetition.
-            cpu.AddHookAtInterruptBegin(_ => interrupts++);
+            // A PendSV the loop pends itself (a FreeRTOS taskYIELD in the
+            // loop: SelfYield) is one, as long as the iteration takes exactly
+            // as many as it pends.
+            nvic = machine.GetPeripheralsOfType<NVIC>().FirstOrDefault();
+            cpu.AddHookAtInterruptBegin(_ => OnInterruptBegin());
             cpu.AddHookAtWfiStateChange(_ => interrupts++);
             // CMP.W Rn, #const (T2): 11110 i 0 1101 1 Rn; tlib matches a Thumb
             // opcode's first halfword (SUBS.W Rd, Rn, #const shares it).
@@ -257,6 +292,9 @@ namespace Antmicro.Renode.Testing
                 + $"; polling loops: {pollSkips} skips, {pollInstructions} instructions"
                 + $" ({pollAttempts} armed, {pollRefusals} refused, {accessCalls} accesses, {Ms(accessTicks)} ms)"
                 + $"; time-bounded polls: {boundedSkips} skips, {boundedInstructions} instructions ({cues} cues)"
+                + $"; self-yielding polls: {yieldSkips} skips, {yieldInstructions} instructions"
+                + $" ({storeFreeProofs} proven store-free)"
+                + $"; tick waits: {tickSkips} skips, {tickInstructions} instructions"
                 + $"; CYCCNT waits: {cycleSkips} skips, {cycleInstructions} instructions"
                 + $" ({branchCalls} BCC hooks, {Ms(branchTicks)} ms, {excludedBranches.Count} BCC excluded)"
                 + $"; core registers via {tlib.RegisterAccess}";
@@ -463,6 +501,7 @@ namespace Antmicro.Renode.Testing
                 return;   // another user of the hook (flash programming): later
             }
             armed = true;
+            yieldingAttempt = false;
             cuePc = null;
             armedQuanta = 0;
             pollAttempts++;
@@ -507,18 +546,26 @@ namespace Antmicro.Renode.Testing
             // backend calls its softmmu helpers for RAM too (aarch64); only
             // the MMIO ones count, and only in Thread mode (IPSR 0): a
             // handler's are not the loop's.
-            if(!armed || (operation != MemoryOperation.MemoryIORead && operation != MemoryOperation.MemoryIOWrite)
-               || ((uint)cpu.GetRegister(XpsrIndex).RawValue & 0x1FF) != 0)
+            if(!armed || (operation != MemoryOperation.MemoryIORead && operation != MemoryOperation.MemoryIOWrite))
+            {
+                return;
+            }
+            var ipsr = (uint)cpu.GetRegister(XpsrIndex).RawValue & 0x1FF;
+            // A handler's accesses are not the loop's, except those of a PendSV
+            // the loop pended itself (SelfYield), which are part of its
+            // iteration: they join its trace, never as its boundary.
+            var inSelfYield = ipsr == PendSvException && selfYieldActive;
+            if(ipsr != 0 && !inSelfYield)
             {
                 return;
             }
             var t0 = System.Diagnostics.Stopwatch.GetTimestamp();
             accessCalls++;
-            OnPeripheralAccess(operation == MemoryOperation.MemoryIOWrite, physicalAddress, width, value);
+            OnPeripheralAccess(operation == MemoryOperation.MemoryIOWrite, physicalAddress, width, value, inSelfYield);
             accessTicks += System.Diagnostics.Stopwatch.GetTimestamp() - t0;
         }
 
-        private void OnPeripheralAccess(bool write, ulong address, uint width, ulong value)
+        private void OnPeripheralAccess(bool write, ulong address, uint width, ulong value, bool inSelfYield = false)
         {
             if(!enabled || !Polls)
             {
@@ -554,10 +601,14 @@ namespace Antmicro.Renode.Testing
             var access = new Access(cpu.PC.RawValue, address, width, write, value);
             if(state == PollState.Seek)
             {
+                if(inSelfYield)
+                {
+                    return;
+                }
                 Begin(PollState.First, access, position);
                 return;
             }
-            if(!access.SamePlace(boundary))
+            if(inSelfYield || !access.SamePlace(boundary))
             {
                 trace.Add(access);
                 if(trace.Count > MaxTrace)
@@ -576,14 +627,70 @@ namespace Antmicro.Renode.Testing
             trace.Add(access);
             boundaryPosition = position;
             boundaryInterrupts = interrupts;
+            boundaryPendSvs = pendSvs;
+            // ICSR as the boundary found it, for an iteration that yields
+            // (OnBoundary); read only once one has (reading it computes the
+            // NVIC's pending vector, a cost every other poll would pay).
+            boundaryIcsr = yieldingAttempt ? Icsr() : NoIcsr;
             state = next;
+        }
+
+        // An exception entry: a PendSV that a polling iteration pended itself
+        // (its PENDSVSET write, SelfYield) counts apart; any other is not a
+        // repetition. The NVIC acknowledges the exception it finds pending,
+        // which is the one FindPendingInterrupt names here (the same call,
+        // on the same state: NVIC.AcknowledgeIRQ).
+        private void OnInterruptBegin()
+        {
+            if(armed && (state == PollState.First || state == PollState.Second) && nvic != null
+               && nvic.FindPendingInterrupt() == PendSvException)
+            {
+                pendSvs++;
+                selfYieldActive = true;
+                return;
+            }
+            selfYieldActive = false;
+            interrupts++;
+        }
+
+        // ICSR as the firmware would read it (PendSV pending, the vector
+        // pending, the one active): the same at both ends of an iteration
+        // that takes every PendSV it pends leaves the NVIC as it found it,
+        // since only an event or the loop's own PENDSVSET changes it within
+        // a chunk. Read from here, it has no effect (NVIC ReadDoubleWord:
+        // FindPendingInterrupt recomputes the CPU's IRQ line from the same
+        // state).
+        private uint Icsr()
+        {
+            return nvic == null ? 0xFFFFFFFFu : nvic.ReadDoubleWord((long)IcsrOffset, false);
+        }
+
+        private int SelfYields()
+        {
+            var n = 0;
+            foreach(var access in trace)
+            {
+                if(access.Write && kinds.TryGetValue(access.Address, out var kind) && kind == RegisterKind.SelfYield)
+                {
+                    n++;
+                }
+            }
+            return n;
         }
 
         // The same access again: one iteration done.
         private void OnBoundary(Access access, ulong position)
         {
             var k = position - boundaryPosition;
-            if(interrupts != boundaryInterrupts || k == 0 || !access.Equals(boundary))
+            var yields = SelfYields();
+            if(yields > 0)
+            {
+                yieldingAttempt = true;   // from the next boundary on, ICSR is read there too
+            }
+            selfYieldActive = false;
+            if(interrupts != boundaryInterrupts || pendSvs - boundaryPendSvs != (ulong)yields
+               || (yields > 0 && (nvic == null || boundaryIcsr == NoIcsr || boundaryIcsr != Icsr()))
+               || k == 0 || !access.Equals(boundary))
             {
                 // An interrupt in between, or the boundary read itself
                 // returned something new (a time-bounded register changes
@@ -604,20 +711,29 @@ namespace Antmicro.Renode.Testing
                 firstTrace.Clear();
                 firstTrace.AddRange(trace);
                 firstK = k;
-                snapshot.Take(tlib, memories);
+                // An iteration whose every possible path writes no memory
+                // (StoreFreeLoop) leaves RAM as it found it by construction:
+                // only the CPU's registers need comparing. Otherwise, every
+                // RAM byte as well.
+                storeFree = yields == 0 && storeFreeLoops.IsStoreFree(access.Pc, k);
+                snapshot.Take(tlib, storeFree ? null : memories);
                 Begin(PollState.Second, access, position);
                 return;
             }
-            if(!snapshot.Matches(tlib, memories, out var where))
+            if(!snapshot.Matches(tlib, storeFree ? null : memories, out var where))
             {
                 if(++retries > MaxRetries)
                 {
                     Refuse($"an iteration of {k} instructions at 0x{access.Pc:X8} changes {where}");
                     return;
                 }
-                snapshot.Take(tlib, memories);
+                snapshot.Take(tlib, storeFree ? null : memories);
                 Begin(PollState.Second, access, position);
                 return;
+            }
+            if(storeFree)
+            {
+                storeFreeProofs++;
             }
             // A fixed point. Leave one real iteration, and the rest of the
             // current block (at most one iteration: every iteration has a
@@ -640,6 +756,11 @@ namespace Antmicro.Renode.Testing
                 {
                     boundedSkips++;
                     boundedInstructions += n * k;
+                }
+                if(yields > 0)
+                {
+                    yieldSkips++;
+                    yieldInstructions += n * k;
                 }
                 if(Trace)
                 {
@@ -676,13 +797,25 @@ namespace Antmicro.Renode.Testing
             {
                 wait = CycleCounterWait.Decode(machine.SystemBus, cpu, bcc - 6);
                 waits[bcc] = wait;
-                if(wait == null && excludeCompare != null && excludeCompare(branchHook, bcc))
+                if(wait == null && !tickWaits.ContainsKey(bcc))
+                {
+                    tickWaits[bcc] = TickWait.Decode(machine.SystemBus, cpu, bcc);
+                }
+                if(wait == null && tickWaits[bcc] == null && excludeCompare != null && excludeCompare(branchHook, bcc))
                 {
                     excludedBranches.Add(bcc);
                     pendingInvalidation = true;
                 }
             }
-            if(wait == null || !wait.StillThere(machine.SystemBus, cpu) || !Calibrated())
+            if(wait == null)
+            {
+                if(tickWaits.TryGetValue(bcc, out var tick) && tick != null)
+                {
+                    SkipTickWait(tick);
+                }
+                return;
+            }
+            if(!wait.StillThere(machine.SystemBus, cpu) || !Calibrated())
             {
                 return;
             }
@@ -726,6 +859,65 @@ namespace Antmicro.Renode.Testing
             {
                 cpu.Log(LogLevel.Info, "fast-forward: {0} iterations of a CYCCNT wait at 0x{1:X8}", n, bcc - 6);
             }
+        }
+
+        // At the BCC of a tick wait (TickWait), before it executes. The loop
+        // writes no memory and only LR, the literal's register, R0, Rd and the
+        // flags, each a function of registers it never writes and of the tick
+        // word in RAM, which nothing but an interrupt (or a DMA's event) can
+        // change within a chunk. Two arrivals here one iteration apart (seven
+        // instructions, no exception, the same chunk) with those registers
+        // equal, the branch taken, are a fixed point: every iteration up to
+        // the chunk's end repeats it. Charge them, leaving two.
+        private void SkipTickWait(TickWait tick)
+        {
+            if(!tick.StillThere(machine.SystemBus, cpu) || !Calibrated())
+            {
+                lastTick = null;
+                return;
+            }
+            var xpsr = (uint)cpu.GetRegister(XpsrIndex).RawValue;
+            if((xpsr & CarryFlag) != 0)
+            {
+                lastTick = null;   // BCC not taken: the wait ends here
+                return;
+            }
+            var budget = tlib.Budget();
+            var regs = new TickRegisters(tlib.CoreRegister(0), tlib.CoreRegister(tick.Ra), tlib.CoreRegister(tick.Rd),
+                                         tlib.CoreRegister(14), xpsr & 0xF8000000u);
+            var k = TickWait.Instructions;
+            var proven = lastTick == tick && lastTickInterrupts == interrupts
+                && lastTickBudget == budget + k && lastTickRegisters.Equals(regs);
+            lastTick = tick;
+            lastTickInterrupts = interrupts;
+            lastTickBudget = budget;
+            lastTickRegisters = regs;
+            if(!proven || OnLazyIoPage(tick.TickAddress))
+            {
+                return;
+            }
+            var n = budget > 2 * k ? (budget - 2 * k) / k : 0;
+            if(n < 2)
+            {
+                return;
+            }
+            tlib.Charge(n * k);
+            lastTickBudget = budget - n * k;   // the next arrival is one iteration on
+            tickSkips++;
+            tickInstructions += n * k;
+            if(Trace)
+            {
+                cpu.Log(LogLevel.Info, "fast-forward: {0} iterations of a tick wait at 0x{1:X8}", n, tick.Bcc);
+            }
+        }
+
+        // A word a lazily delivering peripheral may still write (VhilLazy
+        // IoPages: tlib sends those pages through the bus, so a load there is
+        // an MMIO access that catches it up first).
+        private bool OnLazyIoPage(ulong address)
+        {
+            var lazy = lazyState ?? (lazyState = VhilLazy.For(machine));
+            return lazy.IoPages.Count > 0 && lazy.IoPages.Contains(address & ~(VhilLazy.PageBytes - 1));
         }
 
         // DWT's cycle counter (Renode Cores/Arm-M/DWT.cs: a private LimitTimer).
@@ -821,16 +1013,28 @@ namespace Antmicro.Renode.Testing
             {
                 return;
             }
+            // The model's answer first, which needs no call into tlib: most
+            // reads come while nothing is under way (the uDV configures,
+            // starts and stops ADC3 around each conversion, ~25 reads of a
+            // stable register each), and those return here.
+            if(!stable(offset, out var until) || until == ulong.MaxValue)
+            {
+                return;
+            }
+            var now = machine.ElapsedVirtualTime.TimeElapsed.Ticks;
+            if(until < now + MinCueTicks)
+            {
+                return;   // no wait worth skipping ahead
+            }
             if(!machine.SystemBus.TryGetCurrentCPU(out var current) || current != cpu
                || ((uint)cpu.GetRegister(XpsrIndex).RawValue & 0x1FF) != 0)
             {
                 return;
             }
             var pc = cpu.PC.RawValue;
-            if(cueRefused.Contains(pc) || !stable(offset, out var until) || until == ulong.MaxValue
-               || until < machine.ElapsedVirtualTime.TimeElapsed.Ticks + MinCueTicks)
+            if(cueRefused.Contains(pc))
             {
-                return;   // refused here this quantum, or no wait worth skipping ahead
+                return;   // refused here this quantum
             }
             cues++;
             Arm();
@@ -908,6 +1112,18 @@ namespace Antmicro.Renode.Testing
                     }
                 }
                 break;
+            case RegisterKind.SelfYield:
+                // ICSR: a read returns the NVIC's pending and active state,
+                // which changes at an event or by the loop's own PENDSVSET; a
+                // write of PENDSVSET alone pends a PendSV, which the iteration
+                // must take before it ends (OnBoundary: as many PendSV entries
+                // as writes, nothing pending at either end). FreeRTOS's
+                // taskYIELD (portYIELD) and vPortEnterCritical's check.
+                if(!write || (value & 0xFFFFFFFF) == PendSvSet)
+                {
+                    return true;
+                }
+                break;
             case RegisterKind.WatchdogKey:
                 // KR = 0xAAAA reloads the counter (RM0468 IWDG_KR): a restart
                 // at the time of the last write, which a skip keeps (it leaves
@@ -932,6 +1148,10 @@ namespace Antmicro.Renode.Testing
                 return RegisterKind.Other;
             }
             var offset = address - at.RegistrationPoint.Range.StartAddress;
+            if(at.Peripheral == nvic && offset == IcsrOffset)
+            {
+                return RegisterKind.SelfYield;
+            }
             for(var t = at.Peripheral.GetType(); t != null; t = t.BaseType)
             {
                 if(t.FullName == "Antmicro.Renode.Peripherals.CAN.MCAN")
@@ -1006,6 +1226,9 @@ namespace Antmicro.Renode.Testing
         {
             loops.Clear();
             waits.Clear();
+            tickWaits.Clear();
+            lastTick = null;
+            storeFreeLoopsCache?.Clear();
             if(clearExclusions != null && excludedCompares.Count + excludedBranches.Count > 0)
             {
                 // Every CMP.W and BCC is looked at again after a reset, as the
@@ -1039,6 +1262,9 @@ namespace Antmicro.Renode.Testing
         }
 
         private const int XpsrIndex = 25;              // Renode's Cortex-M CPSR: the xPSR
+        private const int PendSvException = 14;        // ARMv7-M B1.5.2 exception number
+        private const ulong IcsrOffset = 0xD04;        // SCB ICSR, 0xE000ED04 (core_cm7.h), at the NVIC's 0xE000E000
+        private const ulong PendSvSet = 1UL << 28;     // ICSR.PENDSVSET (SCB_ICSR_PENDSVSET_Msk)
         private const ulong DwtCyccnt = 0xE0001004;    // DWT_BASE 0xE0001000 + CYCCNT 0x004 (core_cm7.h)
         private const int MaxAccessesPerAttempt = 256;
         private const int MaxTrace = 64;
@@ -1070,9 +1296,15 @@ namespace Antmicro.Renode.Testing
         private ulong cues;
         private ulong boundedSkips;
         private ulong boundedInstructions;
+        private ulong yieldSkips;
+        private ulong storeFreeProofs;
+        private bool storeFree;
+        private ulong yieldInstructions;
         private readonly List<Access> trace = new List<Access>();
         private readonly List<Access> firstTrace = new List<Access>();
         private readonly Snapshot snapshot = new Snapshot();
+        private StoreFreeLoop storeFreeLoopsCache;
+        private StoreFreeLoop storeFreeLoops => storeFreeLoopsCache ?? (storeFreeLoopsCache = new StoreFreeLoop(machine.SystemBus, cpu));
         private List<MappedMemory> memories => memoriesCache ?? (memoriesCache = Snapshot.Ram(machine));
         private List<MappedMemory> memoriesCache;
 
@@ -1092,6 +1324,13 @@ namespace Antmicro.Renode.Testing
         private Access boundary;
         private ulong boundaryPosition;
         private ulong boundaryInterrupts;
+        private ulong boundaryPendSvs;
+        private uint boundaryIcsr;
+        private bool yieldingAttempt;                 // this attempt has seen an iteration that yields
+        private const uint NoIcsr = 0xFFFFFFFFu;      // not read (ICSR's bit 10 is reserved, never 1)
+        private ulong pendSvs;
+        private bool selfYieldActive;
+        private readonly NVIC nvic;
         private ulong firstK;
         private int accessesThisAttempt;
         private ulong interrupts;
@@ -1099,6 +1338,15 @@ namespace Antmicro.Renode.Testing
         private volatile bool pendingRefusal;
 
         private readonly Dictionary<ulong, CycleCounterWait> waits = new Dictionary<ulong, CycleCounterWait>();
+        private readonly Dictionary<ulong, TickWait> tickWaits = new Dictionary<ulong, TickWait>();
+        private TickWait lastTick;
+        private VhilLazy lazyState;
+        private ulong lastTickInterrupts;
+        private ulong lastTickBudget;
+        private TickRegisters lastTickRegisters;
+        private ulong tickSkips;
+        private ulong tickInstructions;
+        private const uint CarryFlag = 1u << 29;     // xPSR.C
         private LimitTimer cycleCounter;
         private ulong cycleSkips;
         private ulong cycleInstructions;
@@ -1115,7 +1363,7 @@ namespace Antmicro.Renode.Testing
 
         private enum PollState { Off, Seek, First, Second }
 
-        private enum RegisterKind { Other, EventDrivenRead, WatchdogKey, TimeBounded }
+        private enum RegisterKind { Other, EventDrivenRead, WatchdogKey, TimeBounded, SelfYield }
 
         private delegate bool StableUntil(long offset, out ulong ticks);
 
@@ -1234,6 +1482,469 @@ namespace Antmicro.Renode.Testing
         public int Rn { get; private set; }
 
         private ushort[] code;
+    }
+
+    // Whether every path one polling iteration may have taken writes no
+    // memory, from its code: the iteration starts at the instruction making
+    // its boundary access (pc) and runs k instructions, with no exception
+    // (the detector refuses any other), until that instruction again. Every
+    // path of exactly k instructions from pc back to pc through the code,
+    // following BL into the callee and BX LR back, is enumerated (pruned at
+    // k, and wherever it reaches pc early: that would have been a boundary
+    // access); the iteration took one of them. If none of them has a store
+    // (STR*, STM, PUSH, STREX, STRD, a coprocessor store) and none reaches an
+    // instruction whose successor is not known from the code (an indirect
+    // branch other than BX LR back from a followed BL, a load into PC, TBB,
+    // an IT block, SVC, BKPT, UDF, BLX), the iteration wrote no memory: its
+    // loads read RAM or, through the bus, peripherals (which the detector
+    // sees as accesses and checks), and RAM changes within a chunk only by
+    // the CPU. Thumb-2 encodings from the ARMv7-M ARM, A5.2-A5.3.
+    // Small iterations only (MaxSteps); a larger one is compared by
+    // snapshot. Results are kept per (pc, k) with the code halfwords they
+    // read, which are checked again on every use.
+    public class StoreFreeLoop
+    {
+        public StoreFreeLoop(IBusController bus, ICPU cpu)
+        {
+            this.bus = bus;
+            this.cpu = cpu;
+        }
+
+        public void Clear() => known.Clear();
+
+        public bool IsStoreFree(ulong pc, ulong k)
+        {
+            if(k == 0 || k > MaxSteps)
+            {
+                return false;
+            }
+            var key = (pc, k);
+            if(known.TryGetValue(key, out var verdict))
+            {
+                if(StillThere(verdict.Code))
+                {
+                    return verdict.StoreFree;
+                }
+                known.Remove(key);
+            }
+            var code = new Dictionary<ulong, ushort>();
+            var free = Analyse(pc, (int)k, code);
+            known[key] = new Verdict { StoreFree = free, Code = code };
+            return free;
+        }
+
+        private bool Analyse(ulong boundary, int k, Dictionary<ulong, ushort> code)
+        {
+            var paths = 0;
+            var stack = new Stack<(ulong pc, int steps, bool store, ImmutableReturns returns)>();
+            stack.Push((boundary, 0, false, null));
+            while(stack.Count > 0)
+            {
+                var (pc, steps, store, returns) = stack.Pop();
+                if(steps == k)
+                {
+                    if(pc == boundary)
+                    {
+                        if(store)
+                        {
+                            return false;
+                        }
+                        paths++;
+                    }
+                    continue;
+                }
+                if(steps > 0 && pc == boundary)
+                {
+                    continue;   // a boundary access before k: not this iteration's path
+                }
+                if(++visited > MaxVisits)
+                {
+                    visited = 0;
+                    return false;
+                }
+                if(!Read(pc, code, out var h1))
+                {
+                    return false;
+                }
+                var wide = (h1 >> 11) >= 0x1D;
+                ushort h2 = 0;
+                if(wide && !Read(pc + 2, code, out h2))
+                {
+                    return false;
+                }
+                var next = pc + (wide ? 4UL : 2UL);
+                var kind = wide ? Classify32(h1, h2, pc, out var target) : Classify16(h1, pc, out target);
+                switch(kind)
+                {
+                case Kind.Unknown:
+                    return false;
+                case Kind.Plain:
+                    stack.Push((next, steps + 1, store, returns));
+                    break;
+                case Kind.Store:
+                    stack.Push((next, steps + 1, true, returns));
+                    break;
+                case Kind.Jump:
+                    stack.Push((target, steps + 1, store, returns));
+                    break;
+                case Kind.Conditional:
+                    stack.Push((next, steps + 1, store, returns));
+                    stack.Push((target, steps + 1, store, returns));
+                    break;
+                case Kind.Call:
+                    stack.Push((target, steps + 1, store, new ImmutableReturns(next, returns)));
+                    break;
+                case Kind.Return:
+                    if(returns == null)
+                    {
+                        return false;   // a return out of the code we started in
+                    }
+                    stack.Push((returns.Address, steps + 1, store, returns.Rest));
+                    break;
+                }
+            }
+            visited = 0;
+            return paths > 0;
+        }
+
+        private enum Kind { Plain, Store, Jump, Conditional, Call, Return, Unknown }
+
+        private static Kind Classify16(ushort h, ulong pc, out ulong target)
+        {
+            target = 0;
+            if((h & 0xF000) == 0x5000)
+            {
+                return ((h >> 9) & 7) <= 2 ? Kind.Store : Kind.Plain;          // STR, STRH, STRB (register); loads
+            }
+            if((h & 0xF800) == 0x6000 || (h & 0xF800) == 0x7000 || (h & 0xF800) == 0x8000 || (h & 0xF800) == 0x9000
+               || (h & 0xFE00) == 0xB400 || (h & 0xF800) == 0xC000)
+            {
+                return Kind.Store;                                             // STR/STRB/STRH imm, STR SP, PUSH, STM
+            }
+            if((h & 0xF000) == 0xD000)
+            {
+                var cond = (h >> 8) & 0xF;
+                if(cond >= 0xE)
+                {
+                    return Kind.Unknown;                                       // UDF, SVC
+                }
+                target = (ulong)((long)pc + 4 + (sbyte)(h & 0xFF) * 2);
+                return Kind.Conditional;                                       // B<c> T1
+            }
+            if((h & 0xF800) == 0xE000)
+            {
+                target = (ulong)((long)pc + 4 + (((h & 0x7FF) << 21) >> 20));  // B T2
+                return Kind.Jump;
+            }
+            if((h & 0xF500) == 0xB100)
+            {
+                target = pc + 4 + (ulong)((((h >> 9) & 1) << 6) | (((h >> 3) & 0x1F) << 1));   // CBZ, CBNZ
+                return Kind.Conditional;
+            }
+            if((h & 0xFF87) == 0x4700)
+            {
+                return ((h >> 3) & 0xF) == 14 ? Kind.Return : Kind.Unknown;   // BX LR; BX other
+            }
+            if((h & 0xFF80) == 0x4780)
+            {
+                return Kind.Unknown;                                           // BLX register
+            }
+            if(((h & 0xFF00) == 0x4400 || (h & 0xFF00) == 0x4600) && ((h & 7) | ((h >> 4) & 8)) == 15)
+            {
+                return Kind.Unknown;                                           // ADD/MOV to PC
+            }
+            if((h & 0xFF00) == 0xBD00)
+            {
+                return Kind.Unknown;                                           // POP {..., PC}
+            }
+            if((h & 0xFF00) == 0xBF00 && (h & 0xF) != 0)
+            {
+                return Kind.Unknown;                                           // IT
+            }
+            if((h & 0xFF00) == 0xBE00)
+            {
+                return Kind.Unknown;                                           // BKPT
+            }
+            return Kind.Plain;
+        }
+
+        private static Kind Classify32(ushort h1, ushort h2, ulong pc, out ulong target)
+        {
+            target = 0;
+            if((h1 & 0xFE40) == 0xE800)
+            {
+                if((h1 & 0x10) == 0)
+                {
+                    return Kind.Store;                                         // STM, STMDB
+                }
+                return (h2 & 0x8000) != 0 ? Kind.Unknown : Kind.Plain;        // LDM with PC; LDM
+            }
+            if((h1 & 0xFE40) == 0xE840)
+            {
+                if((h1 & 0x10) == 0)
+                {
+                    return Kind.Store;                                         // STREX*, STRD
+                }
+                if((h1 & 0xFFF0) == 0xE8D0 && (h2 & 0xFFE0) == 0xF000)
+                {
+                    return Kind.Unknown;                                       // TBB, TBH
+                }
+                return ((h2 >> 12) & 0xF) == 15 || ((h2 >> 8) & 0xF) == 15 ? Kind.Unknown : Kind.Plain;   // LDRD, LDREX* (PC as a target, or LDREX's 1111: refused)
+            }
+            if((h1 & 0xFE00) == 0xF800)
+            {
+                if((h1 & 0xFF10) == 0xF800)
+                {
+                    return Kind.Store;                                         // STR, STRB, STRH (single)
+                }
+                return ((h2 >> 12) & 0xF) == 15 ? Kind.Unknown : Kind.Plain;  // a load into PC or a preload hint; loads
+            }
+            if((h1 & 0xEE00) == 0xEC00)
+            {
+                return Kind.Unknown;                                           // coprocessor loads, stores, transfers
+            }
+            if((h1 & 0xF800) == 0xF000 && (h2 & 0x8000) != 0)
+            {
+                var s = (h1 >> 10) & 1;
+                var j1 = (h2 >> 13) & 1;
+                var j2 = (h2 >> 11) & 1;
+                if((h2 & 0xD000) == 0xD000 || (h2 & 0xD000) == 0x9000)
+                {
+                    var i1 = 1 ^ (j1 ^ s);
+                    var i2 = 1 ^ (j2 ^ s);
+                    var offset = (s << 24) | (i1 << 23) | (i2 << 22) | ((h1 & 0x3FF) << 12) | ((h2 & 0x7FF) << 1);
+                    target = (ulong)((long)pc + 4 + ((offset << 7) >> 7));
+                    return (h2 & 0xD000) == 0xD000 ? Kind.Call : Kind.Jump;   // BL; B.W T4
+                }
+                if((h2 & 0xD000) == 0xC000)
+                {
+                    return Kind.Unknown;                                       // BLX immediate
+                }
+                if(((h1 >> 7) & 7) == 7)
+                {
+                    // Misc control (MSR, MRS, hints, barriers); UDF.W.
+                    return (h1 & 0xFFF0) == 0xF7F0 && (h2 & 0xF000) == 0xA000 ? Kind.Unknown : Kind.Plain;
+                }
+                var offset3 = (s << 20) | (j2 << 19) | (j1 << 18) | ((h1 & 0x3F) << 12) | ((h2 & 0x7FF) << 1);
+                target = (ulong)((long)pc + 4 + ((offset3 << 11) >> 11));
+                return Kind.Conditional;                                       // B<c>.W T3
+            }
+            return Kind.Plain;                                                 // data processing
+        }
+
+        private bool Read(ulong address, Dictionary<ulong, ushort> code, out ushort value)
+        {
+            if(code.TryGetValue(address, out value))
+            {
+                return true;
+            }
+            if(!TryReadCode(address, out value))
+            {
+                return false;   // code outside memory: nothing to decode
+            }
+            code[address] = value;
+            return true;
+        }
+
+        // Checked on every use, so read straight from the memory's segment
+        // (as MappedMemory.ReadWord does, without the bus's look-up).
+        private bool StillThere(Dictionary<ulong, ushort> code)
+        {
+            foreach(var pair in code)
+            {
+                if(!TryReadCode(pair.Key, out var value) || value != pair.Value)
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        private unsafe bool TryReadCode(ulong address, out ushort value)
+        {
+            value = 0;
+            if(codeMemory == null || address < codeStart || address + 2 > codeEnd)
+            {
+                var at = bus.WhatIsAt(address, cpu);
+                if(!(at?.Peripheral is MappedMemory memory))
+                {
+                    return false;
+                }
+                codeMemory = memory;
+                codeStart = at.RegistrationPoint.Range.StartAddress;
+                codeEnd = at.RegistrationPoint.Range.EndAddress + 1;
+            }
+            var offset = (long)(address - codeStart);
+            var segment = codeMemory.GetSegment((int)(offset / codeMemory.SegmentSize));
+            var local = offset % codeMemory.SegmentSize;
+            if(segment == IntPtr.Zero || local > codeMemory.SegmentSize - 2)
+            {
+                value = codeMemory.ReadWord(offset);
+                return true;
+            }
+            value = *(ushort*)((byte*)segment + local);
+            return true;
+        }
+
+        private MappedMemory codeMemory;
+        private ulong codeStart;
+        private ulong codeEnd;
+
+        private class ImmutableReturns
+        {
+            public ImmutableReturns(ulong address, ImmutableReturns rest)
+            {
+                Address = address;
+                Rest = rest;
+            }
+
+            public readonly ulong Address;
+            public readonly ImmutableReturns Rest;
+        }
+
+        private struct Verdict
+        {
+            public bool StoreFree;
+            public Dictionary<ulong, ushort> Code;
+        }
+
+        private const ulong MaxSteps = 64;
+        private const int MaxVisits = 20000;
+
+        private readonly IBusController bus;
+        private readonly ICPU cpu;
+        private readonly Dictionary<(ulong, ulong), Verdict> known = new Dictionary<(ulong, ulong), Verdict>();
+        private int visited;
+    }
+
+    // HAL_Delay's wait for the HAL tick, as GCC emits it at -Og/-O2 (uDV,
+    // AMS stm32h7xx_hal.c HAL_Delay: `while ((HAL_GetTick() - tickstart) <
+    // wait) {}`), decoded at its BCC:
+    //     L:  BL   G                (A7.7.18 T1)
+    //         SUBS rD, r0, rS       (A7.7.174 T1)
+    //         CMP  rD, rN           (A7.7.28 T2)
+    //         BCC  L                (A7.7.12 T1, cond 0011)
+    //     G:  LDR  rA, [PC, #imm8]  (A7.7.44 T1: the tick's address)
+    //         LDR  r0, [rA, #imm5]  (A7.7.42 T1: the tick, in RAM)
+    //         BX   LR
+    // with rS and rN none of r0, rD, rA: the loop never writes them.
+    public class TickWait
+    {
+        public const ulong Instructions = 7;
+
+        public static TickWait Decode(IBusController bus, ICPU cpu, ulong bcc)
+        {
+            var l = bcc - 8;
+            var code = Read(bus, cpu, l, 5);
+            var h1 = code[0];
+            var h2 = code[1];
+            var subs = code[2];
+            var cmp = code[3];
+            var b = code[4];
+            if((b & 0xFF00) != 0xD300 || (ulong)((long)bcc + 4 + (sbyte)(b & 0xFF) * 2) != l)
+            {
+                return null;
+            }
+            if((h1 & 0xF800) != 0xF000 || (h2 & 0xD000) != 0xD000)
+            {
+                return null;
+            }
+            var sign = (h1 >> 10) & 1;
+            var i1 = 1 ^ (((h2 >> 13) & 1) ^ sign);
+            var i2 = 1 ^ (((h2 >> 11) & 1) ^ sign);
+            var offset = (sign << 24) | (i1 << 23) | (i2 << 22) | ((h1 & 0x3FF) << 12) | ((h2 & 0x7FF) << 1);
+            var g = (ulong)((long)l + 4 + ((offset << 7) >> 7));   // sign-extend 25 bits
+            if((subs & 0xFE00) != 0x1A00 || ((subs >> 3) & 7) != 0)
+            {
+                return null;
+            }
+            var rd = subs & 7;
+            var rs = (subs >> 6) & 7;
+            if((cmp & 0xFFC0) != 0x4280 || (cmp & 7) != rd)
+            {
+                return null;
+            }
+            var rn = (cmp >> 3) & 7;
+            var callee = Read(bus, cpu, g, 3);
+            if((callee[0] & 0xF800) != 0x4800 || (callee[1] & 0xF800) != 0x6800 || callee[2] != 0x4770)
+            {
+                return null;
+            }
+            var ra = (callee[0] >> 8) & 7;
+            var literal = ((g + 4) & ~3UL) + (ulong)(callee[0] & 0xFF) * 4;
+            if((callee[1] & 7) != 0 || ((callee[1] >> 3) & 7) != ra)
+            {
+                return null;
+            }
+            foreach(var r in new[] { rs, rn })
+            {
+                if(r == 0 || r == rd || r == ra)
+                {
+                    return null;
+                }
+            }
+            var tick = (ulong)bus.ReadDoubleWord(literal, cpu) + (ulong)((callee[1] >> 6) & 0x1F) * 4;
+            // The tick a plain RAM word (not a peripheral, not the flash).
+            if(!(bus.WhatIsAt(tick, cpu)?.Peripheral is MappedMemory) || (tick >= 0x08000000 && tick < 0x20000000))
+            {
+                return null;
+            }
+            return new TickWait { Bcc = bcc, Rd = rd, Ra = ra, TickAddress = tick, g = g, literal = literal,
+                                  code = code, calleeCode = callee, literalValue = bus.ReadDoubleWord(literal, cpu) };
+        }
+
+        // The code and the literal are as decoded.
+        public bool StillThere(IBusController bus, ICPU cpu)
+        {
+            return Same(Read(bus, cpu, Bcc - 8, 5), code) && Same(Read(bus, cpu, g, 3), calleeCode)
+                && bus.ReadDoubleWord(literal, cpu) == literalValue;
+        }
+
+        private static bool Same(ushort[] a, ushort[] b)
+        {
+            for(var i = 0; i < a.Length; i++)
+            {
+                if(a[i] != b[i])
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        private static ushort[] Read(IBusController bus, ICPU cpu, ulong pc, int n)
+        {
+            var code = new ushort[n];
+            for(var i = 0; i < n; i++)
+            {
+                code[i] = (ushort)bus.ReadWord(pc + (ulong)(2 * i), cpu);
+            }
+            return code;
+        }
+
+        public ulong Bcc { get; private set; }
+        public int Rd { get; private set; }
+        public int Ra { get; private set; }
+        public ulong TickAddress { get; private set; }
+
+        private ulong g;
+        private ulong literal;
+        private uint literalValue;
+        private ushort[] code;
+        private ushort[] calleeCode;
+    }
+
+    // The registers a tick wait's iteration writes, at its BCC.
+    public struct TickRegisters : IEquatable<TickRegisters>
+    {
+        public TickRegisters(uint r0, uint ra, uint rd, uint lr, uint flags)
+        {
+            R0 = r0; Ra = ra; Rd = rd; Lr = lr; Flags = flags;
+        }
+
+        public bool Equals(TickRegisters o) => R0 == o.R0 && Ra == o.Ra && Rd == o.Rd && Lr == o.Lr && Flags == o.Flags;
+
+        public readonly uint R0, Ra, Rd, Lr, Flags;
     }
 
     public class CounterLoop
@@ -1451,6 +2162,10 @@ namespace Antmicro.Renode.Testing
                 registers = new byte[arch.Length];
             }
             arch.CopyTo(registers);
+            if(memories == null)
+            {
+                return;   // the CPU's registers only (a store-free iteration)
+            }
             if(saved == null)
             {
                 saved = memories.Select(m => new byte[Segments(m)][]).ToArray();
@@ -1482,6 +2197,11 @@ namespace Antmicro.Renode.Testing
             {
                 where = "the CPU's registers";
                 return false;
+            }
+            if(memories == null)
+            {
+                where = null;
+                return true;
             }
             for(var n = 0; n < memories.Count; n++)
             {
@@ -1656,10 +2376,18 @@ namespace Antmicro.Renode.Testing
             return true;
         }
 
+        // On: 2, peripheral (IO) accesses only. docker/renode's tlib/0002
+        // then reports no load or store that hits RAM, which the detector
+        // ignores anyway (OnAccess) but which, on a host whose TCG backend
+        // calls its softmmu helpers for every access (aarch64), reached C#
+        // one by one while armed. A tlib without the patch reports every
+        // access for any value but 0, as for 1.
         public void SetMemoryAccessFlag(bool on)
         {
-            Marshal.WriteInt32(State, flagOffset, on ? 1 : 0);
+            Marshal.WriteInt32(State, flagOffset, on ? IoAccessesOnly : 0);
         }
+
+        private const int IoAccessesOnly = 2;
 
         // The counters, found on the CPU thread inside a block (where the
         // declaration holds the block's length): the 8-byte total equal to

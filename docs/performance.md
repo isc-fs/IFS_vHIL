@@ -17,6 +17,20 @@ python scripts/speed.py ecu=ECU08.elf ams=AMS.elf bootloader=CAN_BL.elf \
     [--baseline] [--repeat N] [--threads] [--profile DIR] [--setup "vhil_ff_{board} Enabled false"]
 ```
 
+A speed change must not change what a run computes: the identity
+fingerprint ([`fingerprint.py`](proposals/renode-patches/tooling/fingerprint.py),
+in the image with the firmware from `VHIL_ECU_ELF`, `VHIL_AMS_ELF`,
+`VHIL_UDV_ELF` and `VHIL_CAN_BOOTLOADER_ELF`: `python
+docs/proposals/renode-patches/tooling/fingerprint.py OUT.json 10000`)
+records what a lock-step run of ecu, ams, ecu-ams, udv, ecu-ams-udv and
+ecu-ams-ecu observes over 10 s from power-on (every bus's timeline, GPIO
+edges with instruction counts, radio payloads, each CPU's executed
+instructions, PC, state and RAM digests, the HAL tick) and a SHA-256 of it
+per system; a pure speed change leaves the file byte-identical. On dev
+0b7449a (patch set vhil.6, firmware at the catalogue's refs, 2026-10-15):
+ecu `f66bae9a`, ams `e34419b8`, ecu-ams `8afef3de`, udv `f61019b8`,
+ecu-ams-udv `a329f2fb`, ecu-ams-ecu `4718c51b`.
+
 `ecu-ams-ecu` is a benchmark, not a car system
 ([`scripts/speed-systems/`](../scripts/speed-systems/ecu-ams-ecu.yaml), named
 in `speed.py`'s `BENCH_ONLY`, so the catalogue, the editor and the scenarios
@@ -51,8 +65,8 @@ that is busy with something else.
 
 `--baseline` runs each configuration a second time as the bench ran before
 #154's speed-ups, on the same host (`VHIL_FAST_FORWARD=0`, .NET's default
-tiering delay). `VHIL_DOCKER_CPUS=N` limits the container to N cores, as a CI
-runner (GitHub's have 4). The `emulation speed` job of
+tiering delay and call-count threshold). `VHIL_DOCKER_CPUS=N` limits the
+container to N cores, as a CI runner (GitHub's have 4). The `emulation speed` job of
 [`sim.yml`](../.github/workflows/sim.yml) runs it with `--baseline` on every
 full-ci pull request and every night, into the job summary and an artifact.
 
@@ -140,7 +154,7 @@ once (`BaseCPU`, `ExecutionResult.WaitingForInterrupt`, with
 
 [`models/renode/VhilFastForward.cs`](../models/renode/VhilFastForward.cs),
 one per board (`vhil_ff_<board>`, created by the platform's setup in
-`catalog/platforms/stm32h733.yaml`), recognises three kinds of busy-wait and
+`catalog/platforms/stm32h733.yaml`), recognises these kinds of busy-wait and
 charges their instructions instead of executing them:
 
 - **Counter loops**: the `-O0` volatile counter delay of
@@ -166,7 +180,25 @@ charges their instructions instead of executing them:
   that leave tlib's whole architectural CPU state and every RAM byte as they
   found them, and a third pass through the first access that reads what the
   other two did, are a fixed point: the next iterations repeat them until an
-  event.
+  event. Comparing every RAM byte means copying and comparing all the RAM the
+  board has touched (330 KB on the uDV) for each proof; an iteration whose
+  every possible path writes no memory (`StoreFreeLoop`, #304: each path of
+  exactly its instruction count from the boundary access back to it, decoded
+  from the code, following BL into the callee; no store, no instruction
+  whose successor the code does not give) leaves RAM as it was by
+  construction, so only the CPU's registers are compared. Its verdict is
+  kept per (PC, k) with the code it read, checked again from memory on every
+  use.
+- **Self-yielding polls** (#297): an iteration may pend a PendSV itself, a
+  FreeRTOS `taskYIELD` in the loop, as the uDV's micro-ROS transport read
+  does on every pass while no agent answers (`usb_cdc_transport.c`
+  `cubemx_transport_read`, IFS09-DV-uDV#17). SCB ICSR is whitelisted for it
+  (reads, and a write of PENDSVSET alone); every exception entry in the
+  iteration must be the PendSV the NVIC acknowledges, as many as the
+  iteration pends, ICSR must read the same at both ends (read at a boundary
+  only once an attempt has seen a yielding iteration, #307), and the PendSV
+  handler's MMIO accesses join the iteration's trace. CPU state and RAM, the
+  handler's stack frames included, are compared as for any iteration.
 - **Time-bounded polls** (#260): a poll on a register computed from the time
   when read, whose model knows until when it stands (`VhilStableUntil`): ADC3,
   up to its next result, so `HAL_ADC_PollForConversion` (the AMS's
@@ -174,7 +206,12 @@ charges their instructions instead of executing them:
   ends before that time, every skipped read before it with a margin for
   Renode's instruction-to-time rounding (time advances in steps of
   `mips / gcd(mips, ticks per us)` instructions: 231 on the ECU, 66 on the
-  AMS). The model's `VhilOnRead` cue arms the detector when the poll starts.
+  AMS). The model's `VhilOnRead` cue arms the detector when the poll starts;
+  it asks the model first whether anything is under way, before any call
+  into tlib (#306), since most ADC3 reads come while it is idle (the uDV
+  configures, starts and stops it around each of its six single conversions
+  a millisecond), and ADC3 syncs the CPU's time only while a conversion runs
+  (#299).
 - **Cycle-counter waits**: a wait on DWT CYCCNT
   (`while ((DWT->CYCCNT - start) < cycles) {}`, the AMS's isoSPI wake,
   `ltc6820.cpp` `delay_us`: `ldr; subs; cmp; bcc`). CYCCNT is Renode's DWT
@@ -187,6 +224,17 @@ charges their instructions instead of executing them:
   time-bounded polls' margin. The registers the skipped iterations would
   have written last (the read value, the difference, the flags) are
   overwritten by the next iteration before anything reads them.
+- **Tick waits** (#301): `HAL_Delay`'s `while ((HAL_GetTick() - tickstart) <
+  wait) {}` as GCC emits it at -Og/-O2 (BL to a `HAL_GetTick` that loads the
+  tick from RAM, SUBS, CMP, BCC; the uDV's BMI088 and I2C bring-up, 140 ms of
+  its boot), decoded at its BCC through the CYCCNT waits' hook. The loop makes
+  no peripheral access (the polling detector needs one) and writes no
+  memory, only registers it recomputes from registers it never writes and
+  the tick, which only an interrupt changes. Two arrivals at the BCC one
+  iteration apart (seven instructions, no exception, the same chunk) with
+  those registers equal and the branch taken are a fixed point; the
+  iterations up to the chunk's end less two are charged. Never on a page a
+  lazily delivering peripheral owns (`VhilLazy.IoPages`).
 
 Exact by construction:
 
@@ -242,12 +290,14 @@ identical. Not an edge's `t_us`: the GPIO probe stamps the time the CPU last
 reported, which moves with where Renode ends a chunk (`VhilProbe.cs`).
 
 [`tests/sim/test_fast_forward.py`](../tests/sim/test_fast_forward.py) runs
-ecu, ams and ecu-ams from power-on into steady state with and without it and
-compares every bus's timeline (offer, start, end, outcome, in ns), GPIO edges
+ecu, ams, ecu-ams, udv and ecu-ams-udv from power-on into steady state with
+and without it and compares every bus's timeline (offer, start, end,
+outcome, in ns), GPIO edges
 with the executed-instruction count at each write, the radio's payloads, and
 at the end each CPU's executed instructions, its registers and every RAM byte
 (a SHA-256): identical, and the run with it must have skipped every kind (the
-AMS's ADC3 polls included).
+AMS's ADC3 polls included; the uDV's yielding poll, tick waits and
+store-free ADC3 polls).
 
 `VHIL_FAST_FORWARD=0` in Renode's environment turns it off for a run, hooks
 and all; `vhil_ff_<board> Enabled false` (or `Counters`, `Polls`) at the
@@ -565,6 +615,35 @@ of #260 before it. Compare within a job only.
   a scenario run 13.2-13.5 → 12.3-12.7 s; the identity fingerprint is
   unchanged.
 
+
+### The uDV, alone and in ecu-ams-udv
+
+Measured once the uDV had a firmware (IFS09-DV-uDV#12), on a MacBook through
+`scripts/vhil-docker.sh speed` (Colima VM, 8 vCPU arm64), median of 3
+(2026-10-15). The ECU and ecu-ams, one run on the same host the same day,
+for scale:
+
+| System | Boot 0-3 s: sim / bench | Boot CPU s/s (sim) | Steady +5 s: sim / bench | Steady CPU s/s (sim) |
+|---|---|---|---|---|
+| ecu | 1.60x / — | 0.91 | 3.86x / — | 0.34 |
+| ecu-ams | 1.06x / 1.17x | 2.17 | 1.50x / 1.43x | 1.28 |
+| udv | 0.24x / 0.58x | 4.52 | 0.07x / 0.18x | 13.9 |
+| ecu-ams-udv | 0.24x / 0.45x | 6.31 | 0.08x / 0.16x | 14.4 |
+
+- **The uDV never slept** (then; fixed by IFS09-DV-uDV#15, below). Its idle
+  task spun: `configUSE_IDLE_HOOK` was 0, so there was no `WFI`
+  (IFS09-DV-uDV#13). A PC profile of the steady state (`speed.py
+  --profile`) put 84 % of its core's time in `prvIdleTask` and
+  `prvCheckTasksWaitingTermination`, which the fast-forward doesn't skip (not
+  a polling loop), so the core ran every instruction: its CPU thread took
+  13-22 s per virtual s. The ECU and the AMS sleep in their idle hooks
+  (IFS08-CE-ECU#261, IFS08-CE-AMS#626).
+- **So a system with a uDV runs at the uDV's pace.** ecu-ams-udv is the uDV's
+  rate, the ECU and the AMS waiting for it at every sync point; the three
+  boards' own cost (ECU 0.7, AMS 0.6 CPU s/s) is what ecu-ams-ecu measured.
+- The bench path is 2-3x the sim path here: one shared time source, and every
+  core at the wall-clock bench's rate instead of the catalogue's 231 MIPS.
+
 ### Several boards: the slaves on the master's thread, the CYCCNT waits (#260)
 
 Two changes after the measurements above, each its own PR, each with the
@@ -621,6 +700,16 @@ Tried, not adopted:
   access, and the check already starts in the iterations left at the end of
   the previous chunk (152,000 hooked accesses and 273 ms against 119,000 and
   138 ms over the window).
+
+### A new identity reference: STM32 timers' ARR + 1 period (#292)
+
+Patch 0007 (vhil.6) is a fidelity fix, not a speed-up: an STM32 timer's
+update event now comes every ARR + 1 counts, as on the chip, so the identity
+fingerprint changes once and the vhil.6 one is the reference for later
+patches. What moved, and by how much (only timing; frames, edges and their
+order are the same):
+[`docker/renode/README.md`](../docker/renode/README.md#the-patches). It
+adds no work per period (the same clock-entry updates).
 
 ### The hand-off's wait: studied, not shipped (#260)
 
@@ -695,6 +784,134 @@ So the hand-off stays as it is. On an M-series Mac, a long spin would make a
 single run 1.4-1.9x faster; what would help on x86 too is fewer hand-offs
 (the slave on the master's thread, below), not a different wait.
 
+### The uDV and ecu-ams-udv made fast (#260)
+
+Where it started, after the uDV slept in its idle hook (IFS09-DV-uDV#15):
+on a MacBook through Colima (8 vCPU), steady state udv 0.50x (sim) / 0.84x
+(bench), ecu-ams-udv 0.39x / 0.63x; boot udv 0.88x, ecu-ams-udv 0.63x. The
+benchmark ecu-ams-ecu ran three boards at ~1.6x on CI, so the uDV board was
+the expensive one.
+
+**Profiles** (`speed.py --threads --profile`, host `perf` with .NET's perf map
+on the Mac and on GitHub's x86 runners, and the uDV's executed instructions
+per 10 ms step in lock-step):
+
+- **Its micro-ROS agent ping.** With no agent on USB (every vHIL run, and the
+  car while the DVPC is down) `ros_task.c:361` pings for 100 ms of every
+  600 ms, and the transport read polls the CDC RX ring with a `taskYIELD` on
+  every pass (`usb_cdc_transport.c` `cubemx_transport_read`): 2.1 M
+  instructions per 10 ms in those windows, against 0.05 M outside them, run
+  at 5.6x slower than real time. About 45 % of the uDV's host time; the
+  fixed-point detector refused it as an interrupt (the PendSV).
+- **ADC3, six single conversions a millisecond** (`hardware_io.c`
+  `hardware_io_read_adc_raw`, from AppTask's 1 ms loop): each reconfigures,
+  starts, polls (6.8 us) and stops ADC3, ~50 register accesses. A third of
+  the uDV's host time: the time-bounded fast-forward's proof per conversion
+  (a 330 KB RAM snapshot copied and compared), the model syncing the time on
+  every access, the cue's calls into tlib on every idle read.
+- **`HAL_Delay` at boot**: the BMI088 and I2C bring-up spin 140 ms in it
+  (`bmi088.c`, `i2c_utils.c`); no peripheral access, so no fast-forward;
+  4-7x slower than real time on Apple silicon.
+- **Its CAN reception in a system**: Renode's MCAN decodes every filter
+  element of the message RAM for every frame by reflection (`Packet`, no
+  attribute cache): 6 % of ecu-ams-udv's samples, the receive path 8-12 %.
+- **The bench path alone**: udv.yaml bridged no bus, so the uDV was alone on
+  both and retried every frame with an ACK error; each retry a bus event, the
+  CPU ran in chunks of ~100 us and skips covered a few iterations.
+- **The rest, per board**: FreeRTOS critical sections read ICSR (Renode's
+  RETTOBASE by reflection each time); the detector armed on Apple silicon
+  brought every RAM access to C#; the tiered JIT recompiled thousands of
+  methods during each boot (0.76 CPU s per virtual s beside three boards).
+
+**Changes**, each its own PR with the identity fingerprint (ecu, ams,
+ecu-ams, udv, ecu-ams-udv, ecu-ams-ecu; 10 s from power-on; #298 added the
+three) byte-identical to dev's, `test_fast_forward.py` (now with udv and
+ecu-ams-udv) and `test_lazy_dma.py` green, and an interleaved A/B on one x86
+runner (median of 3; runner classes differ by up to 2x, so each PR's numbers
+are within its own run):
+
+| PR | Change | Before → after (x86 runner) |
+|---|---|---|
+| #297 | Self-yielding polls fast-forwarded (above) | EPYC 7763: udv sim steady 0.61x → 1.13x; ecu-ams-udv sim 0.45x → 0.68x, bench 0.54x → 0.64x |
+| #300 | `udv.yaml` bridges its buses (`host_netdev` as ecu-ams-udv's): acknowledged as on the car | EPYC 9V45: udv bench steady 1.52x → 1.74x (lock-step unchanged) |
+| #301 | Tick waits (`HAL_Delay`) fast-forwarded | EPYC 7763: udv boot 1.19x → 1.25x; Mac: the 140 ms window no longer runs |
+| #302 | tlib/0002 (vhil.7): the detector armed sees MMIO only | Mac: boots +25-45 %; x86 within ±3 % (RAM hits are inline there) |
+| #303 | Patch 0008 (vhil.8): `Packet` caches field attributes | EPYC 9V45: ecu-ams-udv steady 0.85x → 0.91x sim, 1.06x → 1.17x bench; ecu-ams 4.01x → 4.42x |
+| #304 | Store-free polls proven from their code, no RAM snapshot | EPYC 9V74: udv steady 1.67x → 1.82x sim, 1.97x → 2.15x bench; ecu-ams-udv 0.95x → 0.99x |
+| #305 | Patch 0009 (vhil.9): ICSR's RETTOBASE without reflection | Xeon 8573C: udv steady +3-5 %, ecu-ams-udv +3 %, ecu and ams +2-5 % |
+| #306 | The time-bounded cue asks the model before tlib | Xeon 6973P: udv bench steady 2.35x → 2.66x, ecu-ams-udv +1-3 % |
+| #299 | ADC3 syncs the time only while a conversion runs | EPYC 9V74: udv bench steady 0.93x → 1.01x, sim 0.66x → 0.69x |
+| #307 | ICSR read at a boundary only for an iteration that yields | EPYC 7763: udv steady +2-3 % |
+| #308 | `DOTNET_TC_CallCountThreshold=300` | EPYC 9V45: boots +29-63 % (ecu-ams-udv 1.61x → 2.07x), steady -5 % on ecu-ams-udv, ±3 % elsewhere; runs an hour +5-18 % |
+
+#304's StillThere check first went through the system bus (4-6 % of the
+uDV's samples); it reads the code from the memory directly, and the A/B of
+it with #306 on top measured ecu-ams-udv 1.11x → 1.32x steady on one runner.
+
+**End to end.** Dev 0b7449a (before this round, patch set vhil.6) against
+dev 3837a06 (vhil.9, #308 included), interleaved, median of 3. x86: two
+GitHub runners (4 vCPU) in two jobs; the first ran the old dev about as the
+slowest runners do (ecu-ams-udv steady 0.48x):
+
+| System | Path | Boot 0-3 s: EPYC 9V74 / Xeon 8573C | Steady +5 s: EPYC 9V74 / Xeon 8573C | Steady CPU s/s (9V74) |
+|---|---|---|---|---|
+| udv | sim | 1.24x → **2.23x** / 1.29x → **2.25x** | 0.66x → **1.90x** / 0.76x → **2.05x** | 1.722 → 0.706 |
+| udv | bench | 1.52x → **2.64x** / 1.56x → **2.68x** | 0.92x → **2.42x** / 1.00x → **2.56x** | 1.264 → 0.556 |
+| ecu-ams-udv | sim | 0.76x → **1.18x** / 0.83x → **1.27x** | 0.48x → **1.00x** / 0.56x → **1.19x** | 3.524 → 2.348 |
+| ecu-ams-udv | bench | 0.81x → **1.16x** / 0.86x → **1.25x** | 0.57x → **0.97x** / 0.66x → **1.10x** | 3.034 → 2.294 |
+| ecu | sim | 2.12x → 2.90x / 2.05x → 2.72x | 5.38x → 5.51x / 4.78x → 4.66x | 0.314 → 0.318 |
+| ams | sim | 2.15x → 3.06x / 2.14x → 2.88x | 6.00x → 5.86x / 5.47x → 5.29x | 0.286 → 0.282 |
+| ecu-ams | sim | 1.23x → 1.79x / 1.28x → 1.86x | 2.25x → 2.44x / 2.36x → 2.59x | 0.936 → 0.940 |
+| ecu-ams-ecu | sim | 1.10x → 1.45x / 1.13x → 1.53x | 1.79x → 1.96x / 2.07x → 2.20x | 1.502 → 1.450 |
+
+The M-series Mac (Colima, `VHIL_DOCKER_CPUS=4`), the same two devs, interleaved, median of 3:
+
+| System | Path | Boot 0-3 s | Steady +5 s | Steady CPU s/s |
+|---|---|---|---|---|
+| udv | sim | 1.05x → **1.72x** | 0.61x → **1.44x** | 1.740 → 0.792 |
+| udv | bench | 1.16x → **2.55x** | 0.70x → **2.32x** | 1.542 → 0.516 |
+| ecu-ams-udv | sim | 0.67x → **1.54x** | 0.42x → **1.23x** | 3.260 → 1.496 |
+| ecu-ams-udv | bench | 0.84x → **1.41x** | 0.64x → **1.11x** | 2.234 → 1.560 |
+| ecu / ams | sim | 1.73x → 2.59x / 2.00x → 2.80x | 3.98x → 4.00x / 4.95x → 4.71x | |
+| ecu-ams-ecu | sim | 1.29x → 1.82x | 1.96x → 2.01x | 1.078 → 1.092 |
+
+Scenario runs an hour (`ecu-ams/car-arms-through-the-ecu` run on ecu-ams-udv,
+its stimuli and expects naming the ECU and the AMS; K at once on one runner,
+one 300 s window each, all passed): EPYC 9V74 132 → **192** (K=1), 240 →
+**432** (K=4), 276 → **420** (K=8); Xeon 8573C 144 → **204**, 288 → **432**,
+288 → **480**.
+
+**One, two, three boards** (Xeon 8573C, sim, after): ecu 2.72x boot / 4.66x
+steady, ecu-ams 1.86x / 2.59x, ecu-ams-ecu 1.53x / 2.20x, ecu-ams-udv 1.27x /
+1.19x. By thread, steady CPU s per virtual s: udv alone 0.47 (ECU alone
+0.20); in ecu-ams-udv the uDV's thread 0.69, the ECU's 0.40, the AMS's 0.36,
+the master 0.29 (ecu-ams-ecu: 0.33, 0.32 and 0.30 for its ECU, AMS and
+second ECU, master 0.19). The uDV is still the slowest board of a quantum, and the others wait
+for it; the hand-off's spin and `sched_yield` are 27 % of ecu-ams-udv's
+samples.
+
+**Tried, not adopted:**
+
+- ADC3 reading mid-conversion without syncing the time (an upper bound of
+  the time a sync would give, from tlib's unreported instructions and the
+  CPU's residuum): exact, but slower on x86 (udv steady -11 %, CPU +9 %),
+  not investigated further (a suspect: the cue then compares with a stale
+  time and arms for waits too short to skip).
+- Proving a store-free poll in one iteration instead of two: the uDV's
+  `HAL_ADC_PollForConversion` enters its loop from different registers (the
+  first pass is a transient), so it never applied.
+- No time-bounded cue at all: ecu-ams-udv steady 0.96x → 0.73x; the
+  per-conversion proof pays for itself.
+- JIT settings: `DOTNET_TC_CallCountThreshold=1000` (boot +14 %, single
+  boards' steady state -11 to -14 %), `DOTNET_TieredPGO=0` (boot +9-13 %,
+  steady -12 %), .NET's default 100 ms call-counting delay (boot -30 %,
+  steady -15 to -60 %).
+
+**Firmware**: the uDV's transport spin is IFS09-DV-uDV#17 and its ADC3 use
+IFS09-DV-uDV#18 (~5 % of its CPU polling on the car, and still its largest
+peripheral traffic here: ~300,000 ADC3 accesses a second). Both are handled
+exactly on the vHIL side; no firmware was changed.
+
 ## What is left
 
 Host `perf` of Renode in lock-step steady state on the final build of this
@@ -737,8 +954,8 @@ What could still buy something, most first:
    the transitions).
 3. **tlib's aarch64 softmmu** (Apple silicon): every load and store through a
    helper (`__ldl_mmu`, `__stl_mmu`: 2-3 % alone on the ECU); x86 has an
-   inline TLB fast path. While the fast-forward's detector is armed, a C#
-   call per RAM access as well (the boot there).
+   inline TLB fast path. (While the detector is armed it no longer brings
+   every RAM access to C#: tlib/0002, #302.)
 4. **The fast-forward's skips on the ECU** (~4 %, vHIL side): a skip writes
    the counter back and orders the block invalidation a bus write would for
    that RAM; a page known to hold no translated code could skip it.
@@ -749,8 +966,13 @@ What could still buy something, most first:
    round trip each (they could go in one).
 6. **The JIT at boot**: 0.4-0.8 CPU s per virtual s over a boot's first
    seconds, a quarter of a three-board boot's CPU; every run starts a fresh
-   Renode (no warm starts), so only less code to compile would cut it.
-7. Done this round: the slave time sources on the master's thread (#288), the AMS's CYCCNT waits fast-forwarded (#289); start-up (the models' assembly, ReadyToRun), the timer
+   Renode (no warm starts). #308 promotes a method after 300 calls instead
+   of 30 (0.24 CPU s per virtual s left over a three-board boot).
+7. **The uDV's ADC3 traffic** (IFS09-DV-uDV#18): ~50 register accesses per
+   single conversion, six conversions a millisecond, each through Renode's
+   bus (`SystemBus` look-ups, reverse P/Invokes): what keeps the uDV at
+   twice an ECU's cost per quantum, and so the board ecu-ams-udv waits for.
+8. Done: the uDV round (#297-#308, above); the slave time sources on the master's thread (#288), the AMS's CYCCNT waits fast-forwarded (#289); start-up (the models' assembly, ReadyToRun), the timer
    update events (patch 0004; its clock-source integer arithmetic, exact but
    with no measurable gain, was dropped in patch set vhil.4), the CMP.W hook
    only at delay loops (patch 0005 and tlib/0001).

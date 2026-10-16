@@ -122,8 +122,14 @@ def monitor_command(renode: str, port: int) -> list[str]:
 # TC_CallCountingDelayMs, 100 ms each time). Renode's hot paths start that way
 # for every new Renode, which each native test is: with no delay they are
 # optimised within the first boot's bootloader window instead of after it.
+# A method is promoted after TC_CallCountThreshold calls (30 by default):
+# since Renode's own assemblies are ReadyToRun (#278) it starts on native
+# code, and at 30 calls the tiered JIT recompiled thousands of methods a boot
+# barely uses, on a thread of its own beside the boards' (0.76 CPU s per
+# virtual s over a three-board boot, x86). At 300 only the paths that stay hot
+# are promoted: boots 20-30 % faster, steady state within -4 % (#260).
 # Host speed only; nothing the emulation computes depends on it.
-RENODE_ENV = {"DOTNET_TC_CallCountingDelayMs": "0"}
+RENODE_ENV = {"DOTNET_TC_CallCountingDelayMs": "0", "DOTNET_TC_CallCountThreshold": "300"}
 
 
 # Set by a caller that drives Renode in lock-step (vhil.sim): monitor commands

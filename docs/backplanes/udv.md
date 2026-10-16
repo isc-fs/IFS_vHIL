@@ -44,10 +44,13 @@ bus.
 
 ## In the vHIL
 
-No uDV system exists yet, and none can until the catalogue has the uDV's
-firmware: the udv role names `udv`, which `catalog/firmware/` lacks, so a
-system placing it is refused. When one is added, its endpoints will name
-these MainLite pins (`udv.FDCAN2` for the ACU bus, and so on). The MainLite
+`systems/udv.yaml` is one uDV: `can_dv` on `udv.FDCAN1` and `can_acu` on
+`udv.FDCAN2`, FDCAN3 on no bus, and the MainLite's BMI088 on I2C2.
+`systems/ecu-ams-udv.yaml` puts it on the ACU bus with the ECU and the AMS.
+It boots through the CAN bootloader as node 0x3 since IFS09-DV-uDV#12 linked
+the app at `0x08020000` (`tests/sim/test_udv_boot.py`,
+`tests/sim/test_sys_ecu_ams_udv.py`). The uDV's attitude filter runs on the
+CORDIC, which the platform models (`models/renode/Stm32H7Cordic.cs`). The MainLite
 models PC1 and PC2 (`PC2_C`) as analog inputs, but on MicroDV2 they drive
 debug LEDs, so the udv role makes them GPIOs (`gpio: PC1`, `PC2_C`: GPIOC
 pins 1 and 2) and refuses an analog source on them. PB6–PB8 are GPIOs, and

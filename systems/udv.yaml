@@ -1,0 +1,26 @@
+kind: system
+id: udv
+description: >-
+  One uDV (a MainLite on the MicroDV2 backplane) on the DV CAN and the ACU bus.
+time:
+  # 500 us sync quantum, as the other systems (systems/ecu.yaml).
+  quantum_s: 0.0005
+boards:
+  # A MainLite in the uDV role: the uDV firmware, node 0x3, flashed over
+  # FDCAN2 (the role's, catalog/boards/mainlite.yaml). It boots through its
+  # CAN bootloader, then jumps to the app after the 2 s auto-jump window, as
+  # on the car.
+  udv: {board: mainlite, role: udv}
+buses:
+  # host_netdev as in ecu-ams-udv.yaml: on the wall-clock bench each bus is
+  # bridged to SocketCAN, which acknowledges the uDV's frames as the car's
+  # RES, data logger and ECU do. Unbridged, the uDV was alone on both buses
+  # and retried every frame with an ACK error, a load the car never has.
+  can_dv:  {kind: can, nodes: [udv.FDCAN1], host_netdev: can3}  # /CAN 1 L/H DATALOGGER, J6.15-J6.22: RES, datalogger, steering (docs/backplanes/udv.md)
+  can_acu: {kind: can, nodes: [udv.FDCAN2], host_netdev: can2}  # /CAN H 2, /CAN L 2, J6.13/J6.14: the ACU bus to the ECU (docs/backplanes/udv.md)
+  # FDCAN3 is no-connect on MicroDV2 (IFS09-DV-uDV#6): on no bus.
+devices:
+  # The MainLite's own BMI088 on I2C2 (accelerometer 0x18, gyroscope 0x68:
+  # IFS09-DV-uDV bmi088.h). The uDV samples it at 400 Hz (TIM2) and sends
+  # 0x512 to the ECU at 50 Hz (imu_task.c, can_interface.cpp sendIMU).
+  imu: {model: bmi088, i2c: udv.I2C2}

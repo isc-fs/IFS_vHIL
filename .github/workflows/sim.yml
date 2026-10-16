@@ -78,15 +78,16 @@ jobs:
         with:
           release: '14.2.Rel1'
 
-      - name: Build the ECU and AMS firmware their systems declare
+      - name: Build the ECU, AMS and uDV firmware their systems declare
         id: fw
         run: |
           pip install -q pyyaml "jsonschema>=4" pytest "fastapi==0.115.*" "httpx==0.28.*"
-          for s in ecu ams; do
+          for s in ecu ams udv; do
             python -m vhil.system build "systems/$s.yaml" --workdir "$RUNNER_TEMP/fw" | tee -a built.txt
           done
           echo "ecu=$(sed -n 's/^ecu=//p' built.txt | tail -1)" >> "$GITHUB_OUTPUT"
           echo "ams=$(sed -n 's/^ams=//p' built.txt | tail -1)" >> "$GITHUB_OUTPUT"
+          echo "udv=$(sed -n 's/^udv=//p' built.txt | tail -1)" >> "$GITHUB_OUTPUT"
           echo "bootloader=$(sed -n 's/^ecu.bootloader=//p' built.txt | tail -1)" >> "$GITHUB_OUTPUT"
 
       # Renode 1.17.0 + docker/renode's patches, as the image builds it.
@@ -118,6 +119,7 @@ jobs:
           RENODE: ${{ runner.temp }}/renode/renode
           VHIL_ECU_ELF: ${{ steps.fw.outputs.ecu }}
           VHIL_AMS_ELF: ${{ steps.fw.outputs.ams }}
+          VHIL_UDV_ELF: ${{ steps.fw.outputs.udv }}
           VHIL_CAN_BOOTLOADER_ELF: ${{ steps.fw.outputs.bootloader }}
           FILES: ${{ steps.files.outputs.list }}
         run: scripts/sim-shard.sh 2 sim-logs $FILES
@@ -159,15 +161,16 @@ jobs:
         with:
           release: '14.2.Rel1'
 
-      - name: Build the ECU and AMS firmware their systems declare
+      - name: Build the ECU, AMS and uDV firmware their systems declare
         id: fw
         run: |
           pip install -q pyyaml "jsonschema>=4"
-          for s in ecu ams; do
+          for s in ecu ams udv; do
             python -m vhil.system build "systems/$s.yaml" --workdir "$RUNNER_TEMP/fw" | tee -a built.txt
           done
           echo "ecu=$(sed -n 's/^ecu=//p' built.txt | tail -1)" >> "$GITHUB_OUTPUT"
           echo "ams=$(sed -n 's/^ams=//p' built.txt | tail -1)" >> "$GITHUB_OUTPUT"
+          echo "udv=$(sed -n 's/^udv=//p' built.txt | tail -1)" >> "$GITHUB_OUTPUT"
           echo "bootloader=$(sed -n 's/^ecu.bootloader=//p' built.txt | tail -1)" >> "$GITHUB_OUTPUT"
 
       # Renode 1.17.0 + docker/renode's patches, as the image builds it.
@@ -179,11 +182,14 @@ jobs:
           RENODE: ${{ runner.temp }}/renode/renode
           ECU_ELF: ${{ steps.fw.outputs.ecu }}
           AMS_ELF: ${{ steps.fw.outputs.ams }}
+          UDV_ELF: ${{ steps.fw.outputs.udv }}
           BL_ELF: ${{ steps.fw.outputs.bootloader }}
         run: |
           nproc
-          python scripts/speed.py "ecu=$ECU_ELF" "ams=$AMS_ELF" "bootloader=$BL_ELF" \
-            --systems ams ecu ecu-ams ecu-ams-ecu --threads \
+          # Three boards: the car's ecu-ams-udv (it replaced the ecu-ams-ecu
+          # benchmark here once the uDV had a firmware).
+          python scripts/speed.py "ecu=$ECU_ELF" "ams=$AMS_ELF" "udv=$UDV_ELF" "bootloader=$BL_ELF" \
+            --systems ams ecu udv ecu-ams ecu-ams-udv --threads \
             --baseline --json speed/speed.json --log-dir speed/logs \
             | tee -a "$GITHUB_STEP_SUMMARY"
 
