@@ -912,6 +912,55 @@ IFS09-DV-uDV#18 (~5 % of its CPU polling on the car, and still its largest
 peripheral traffic here: ~300,000 ADC3 accesses a second). Both are handled
 exactly on the vHIL side; no firmware was changed.
 
+### A plant on the co-simulation port (M8, #147)
+
+The tractive-system plant ([`m8-plan.md`](m8-plan.md)) must react to the
+AMS's coil drives within a few ms, and must not slow a run measurably
+(budget: under 5 % host CPU per virtual second on ecu-ams). Measured on the
+M-series host through Colima, ecu-ams after both apps are up, 3 s per point
+(2026-10-16):
+
+| How the plant would exchange | CPU s / virtual s | Wall s / virtual s |
+|---|---|---|
+| 100 ms slices, no plant | 0.71-0.82 | 0.43-0.49 |
+| a `RunFor` and an edge query every 10 ms | 0.95-1.05 | 0.61-0.68 |
+| a frame sent from the monitor every 10 ms | 3.75-4.12 | 13.0-13.4 |
+| a frame sent from the monitor every 5 ms | 5.58-5.80 | 25.1-25.3 |
+
+So a lock-step plant at the port's 10 ms step costs +20-30 % from the stops
+alone, and sending each 0x466 from the monitor costs ~130 ms of wall time a
+frame. The plant is event-driven instead (`vhil/cosim.py`, "Event-driven
+plants"):
+- The emulation runs until an armed coil pin changes (`emulation
+  RunForUntilTrigger`, `models/renode/VhilRunner.cs`: RunFor's loop, one flag
+  at each sync point).
+- The closed-form plant hands the CAN probe the coming stretch of 0x466
+  payloads in one call (`SchedulePeriodic`).
+
+An arm-to-Run scenario stops for the plant 6 times in 11 s.
+
+- **Identity**: a run with a trigger armed and none firing gives a bus
+  timeline byte-identical to `RunFor`'s. The fingerprint (ecu, ams, ecu-ams,
+  udv, ecu-ams-udv; 10 s) is unchanged through #311 and #314: `f66bae9a`,
+  `e34419b8`, `8afef3de`, `f61019b8`, `a329f2fb`. A plant-driven scenario's
+  trace is byte-identical run to run (11 of 11), and the same results come on
+  CI's x86 runners.
+- **Cost**: `ecu-ams/car-arms-through-the-ecu` plant-driven, against the same
+  run with the plant off and a scripted 0x466 periodic of the same frame
+  count, interleaved, 6 pairs, `VHIL_DOCKER_CPUS=4`. Median Renode CPU per
+  virtual s: 1.130 plant-driven, 1.128 scripted (+0.1 %; median paired
+  difference +0.5 %). Wall: 1.68 against 1.66. `scripts/speed.py --systems
+  ecu-ams --paths sim`, dev against the branch, interleaved x 3: steady CPU
+  0.78 / 0.89 / 0.73 against 0.82 / 0.74 / 0.74, noise. The speed path runs
+  no plant.
+- **The frames, not the plant**: any CAN probe frame costs ~11 ms of wall
+  time on ecu-ams. A 10 ms periodic of any id, on either bus, takes 100 ms
+  slices from 0.48 to 1.57 wall s per virtual s and CPU +20 %. The suspect is
+  Renode's `TimeSourceBase.WaitIfBlocked` `blockingEvent.WaitOne(10)`.
+  Scripted scenarios pay it the same: the plant's inverter reports from
+  power-on, where the old scripted 0x466 started at 2.5 s. It is to be fixed
+  separately.
+
 ## What is left
 
 Host `perf` of Renode in lock-step steady state on the final build of this
