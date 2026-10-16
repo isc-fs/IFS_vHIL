@@ -242,8 +242,26 @@ class WatchOp(_Model):
         return self
 
 
-Stimulus = Annotated[Union[CanSend, CanPeriodic, StopPeriodic, GpioSet, AnalogSet, WatchOp],
-                     Field(discriminator="kind")]
+# An expect's value: a number, a boolean, or a label (a field's value-table
+# entry; high/low for a pin). vhil/expect.py says how each compares.
+Label = Annotated[str, Field(pattern=f"^{vexpect.LABEL.pattern}$")]
+
+
+class PlantSet(_Model):
+    """Sets fault inputs or parameters of one of the system's plants (its
+    `plants:`, docs/m8-plan.md) at at_ms: e.g. {pre_open_circuit: true} or
+    {sense_floor: 48}. A parameter set here is the run's choice, reported as
+    an override, never a citation."""
+    kind: Literal["plant"]
+    name: Optional[str] = Field(None, pattern=_ROW)
+    at_ms: float = Field(0, ge=0)
+    plant: str = Field(pattern=_NAME)
+    set: dict[Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")],
+              Optional[Union[StrictBool, StrictInt, StrictFloat, Label]]] = Field(min_length=1)
+
+
+Stimulus = Annotated[Union[CanSend, CanPeriodic, StopPeriodic, GpioSet, AnalogSet, WatchOp,
+                           PlantSet], Field(discriminator="kind")]
 
 
 class SymbolWatch(_Model):
@@ -262,9 +280,6 @@ class PinWatch(_Model):
 
 Watch = Annotated[Union[SymbolWatch, PinWatch], Field(discriminator="kind")]
 
-# An expect's value: a number, a boolean, or a label (a field's value-table
-# entry; high/low for a pin). vhil/expect.py says how each compares.
-Label = Annotated[str, Field(pattern=f"^{vexpect.LABEL.pattern}$")]
 
 
 class Expect(_Model):
@@ -340,6 +355,10 @@ class RunScenario(_Model):
     stimuli: list[Stimulus] = []
     watch: list[Watch] = []
     expect: list[Expect] = []
+    # Labels for the suite (docs/scenarios.md): `beyond-bench` marks a
+    # scenario that needs what the physical bench lacks (a plant), so it never
+    # gates a parity run.
+    tags: list[Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]{0,31}$")]] = []
 
     @field_validator("name")
     @classmethod
@@ -478,6 +497,15 @@ def check_scenario(sc: RunScenario, system: System) -> list[str]:
                 pin(s.board, s.pin, "gpio", where)
             elif s.board not in system.boards:
                 errors.append(f"{where}: no board '{s.board}' in {system.id}")
+        elif isinstance(s, PlantSet):
+            if s.plant not in system.plants:
+                errors.append(f"{where}: no plant '{s.plant}' in {system.id}")
+            else:
+                from vhil.plant_ts import settable
+                bad = sorted(set(s.set) - settable(system.plants[s.plant]["plant"]))
+                if bad:
+                    errors.append(f"{where}: plant '{s.plant}' has no fault or parameter "
+                                  f"{', '.join(bad)}")
     for i, w in enumerate(sc.watch):
         where = f"watch[{i}]"
         if isinstance(w, PinWatch):
@@ -492,6 +520,9 @@ def check_scenario(sc: RunScenario, system: System) -> list[str]:
                 errors.append(f"{where}: no bus '{sig.owner}' in {system.id}")
         elif sig.kind == "pin":
             pin(sig.owner, sig.item, "gpio", where)
+        elif sig.kind == "plant":
+            if sig.owner not in system.plants:
+                errors.append(f"{where}: no plant '{sig.owner}' in {system.id}")
         elif sig.owner not in system.boards:
             errors.append(f"{where}: no board '{sig.owner}' in {system.id}")
     return errors

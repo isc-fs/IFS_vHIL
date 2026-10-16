@@ -33,6 +33,15 @@ from vhil.server.scenarios import check_rows, load_text  # noqa: E402
 from vhil.system import REPO, System  # noqa: E402
 from vhil.worker import TraceWriter, execute_run  # noqa: E402
 
+def _param(path: Path):
+    """A scenario, marked beyond_bench when its file is tagged beyond-bench
+    (pytest.ini): one that needs a plant the physical bench lacks."""
+    import yaml
+    tags = (yaml.safe_load(path.read_text()) or {}).get("tags") or []
+    marks = [pytest.mark.beyond_bench] if "beyond-bench" in tags else []
+    return pytest.param(path, marks=marks, id=_id(path))
+
+
 SCENARIOS = sorted(REPO.glob("systems/*.scenarios/*.yaml"))
 
 
@@ -40,7 +49,7 @@ def _id(path: Path) -> str:
     return f"{path.parent.name.removesuffix('.scenarios')}/{path.stem}"
 
 
-@pytest.mark.parametrize("path", SCENARIOS, ids=_id)
+@pytest.mark.parametrize("path", [_param(p) for p in SCENARIOS])
 def test_scenario(path, images, tmp_path, request, record_property):
     system_id = path.parent.name.removesuffix(".scenarios")
     system_path = REPO / "systems" / f"{system_id}.yaml"

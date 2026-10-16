@@ -1,0 +1,22 @@
+kind: scenario
+system: ecu-ams
+description: "TS-1 fault, the AIRs open in Run without the AMS commanding it and without the coil supply dropping (the plant's air_external_open: a contact dropping out, a broken coil wire or return; an SDC opening upstream would drop PF9, the AMS's TSMS input, which senses AIR+_VCC: docs/m8-plan.md), with the inverter's idle draw on the link (the plant's r_leak 1 kohm, an uncommissioned stand-in for it). The link collapses below BusCollapsePercent (50 %) of the cell sum, the AMS confirms it for BusCollapseConfirmTicks (20 x 10 ms) and falls back to Start, not latching Error (a re-arm re-runs precharge); the ECU, seeing the AMS in Start with TSMS on and the link above DischargeReleaseV, secures the discharge (PB6). IFS08-CE-AMS state_machine.hpp:206-215, 413-421, ams_config.hpp:742-743, safety_task.cpp:283-290; IFS08-CE-ECU discharge.cpp:74-83."
+virtual_ms: 13000
+tags: [beyond-bench]
+stimuli:
+  - {kind: gpio, name: tsms-on, at_ms: 5500, board: ams, pin: PF9, level: true}
+  - {kind: gpio, name: dash-press, at_ms: 5600, board: ams, pin: PF10, level: true}
+  - {kind: gpio, name: dash-release, at_ms: 5650, board: ams, pin: PF10, level: false}
+  - {kind: plant, name: airs-drop-out, at_ms: 11000, plant: ts, set: {"air_external_open": true, "r_leak": 1000}}
+watch:
+  - {kind: symbol, board: ams, name: g_state_telemetry, size: 1, period_ms: 10}
+  - {kind: symbol, board: ams, name: g_fault_reason_telemetry, size: 1, period_ms: 10}
+  - {kind: symbol, board: ecu, name: g_last_ctrl_state, size: 1, period_ms: 10}
+expect:
+  - {check: eventually, name: ams-run, at_ms: 5600, until_ms: 10600, signal: "symbol:ams.g_state_telemetry", value: 3}
+  - {check: always, name: run-until-the-drop-out, at_ms: 10700, until_ms: 11000, signal: "symbol:ams.g_state_telemetry", value: 3}
+  - {check: never, name: no-error, at_ms: 0, signal: "symbol:ams.g_state_telemetry", value: 5}
+  - {check: eventually, name: link-collapses, at_ms: 11000, until_ms: 12500, signal: "frame:can_acu.VCU_heartbeat.dc_bus_voltage", op: "<", value: 175}
+  - {check: eventually, name: back-to-start, at_ms: 11200, until_ms: 12800, signal: "symbol:ams.g_state_telemetry", value: 0}
+  - {check: always, name: not-latched, at_ms: 11000, signal: "symbol:ams.g_fault_reason_telemetry", value: 0}
+  - {check: eventually, name: ecu-secures-the-discharge, at_ms: 11200, until_ms: 13000, signal: "pin:ecu.PB6", value: high}

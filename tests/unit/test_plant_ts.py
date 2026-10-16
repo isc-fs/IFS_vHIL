@@ -238,3 +238,21 @@ def test_on_the_port_it_applies_edges_at_their_times_and_schedules_the_reports()
     for t, data in first:
         ref.advance(t)
         assert data == vdc_frame(ref.report())
+
+
+def test_a_system_declares_its_plants_and_they_are_checked(tmp_path):
+    import yaml
+    from vhil.plant_ts import make_plants
+    from vhil.system import REPO, System, SystemError
+    system = System(REPO / "systems" / "ecu-ams.yaml")
+    plants = make_plants(system)
+    assert set(plants) == {"ts"} and plants["ts"].cells == "isospi"
+    doc = yaml.safe_load((REPO / "systems" / "ecu-ams.yaml").read_text())
+    for bad, why in (({"plant": "warp-core"}, "no catalog/plants/warp-core.yaml"),
+                     ({"plant": "tractive-system", "params": {"nope": 1}}, "no parameter 'nope'"),
+                     ({"plant": "tractive-system", "cells": "sd"}, "not an LTC6820")):
+        doc["plants"] = {"ts": bad}
+        path = tmp_path / "ecu-ams.yaml"
+        path.write_text(yaml.safe_dump(doc))
+        with pytest.raises(SystemError, match=why):
+            System(path)

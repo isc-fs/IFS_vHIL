@@ -1,0 +1,21 @@
+kind: scenario
+system: ecu-ams
+description: "TS-1 fault, a leaky DC link (the plant's r_leak 2 kohm across it): through the 690 ohm precharge resistor the link settles at 2000/2690 of the pack, 74 %, short of the AMS's 95 % of the cell sum, so PrechargeMaxMs (5000) after the press the AMS latches Error, reason FsmError (12). Sequencing only: the resistances are uncommissioned. IFS08-CE-AMS state_machine.hpp:117-128, 329-345."
+virtual_ms: 11500
+tags: [beyond-bench]
+stimuli:
+  - {kind: plant, name: leaky-c, at_ms: 0, plant: ts, set: {"r_leak": 2000}}
+  - {kind: gpio, name: tsms-on, at_ms: 5500, board: ams, pin: PF9, level: true}
+  - {kind: gpio, name: dash-press, at_ms: 5600, board: ams, pin: PF10, level: true}
+  - {kind: gpio, name: dash-release, at_ms: 5650, board: ams, pin: PF10, level: false}
+watch:
+  - {kind: symbol, board: ams, name: g_state_telemetry, size: 1, period_ms: 10}
+  - {kind: symbol, board: ams, name: g_fault_reason_telemetry, size: 1, period_ms: 10}
+  - {kind: symbol, board: ecu, name: g_last_ctrl_state, size: 1, period_ms: 10}
+expect:
+  - {check: eventually, name: ams-precharge, at_ms: 5600, until_ms: 5700, signal: "symbol:ams.g_state_telemetry", value: 1}
+  - {check: eventually, name: link-charging, at_ms: 5700, until_ms: 10600, signal: "frame:can_acu.VCU_heartbeat.dc_bus_voltage", op: ">=", value: 200}
+  - {check: never, name: link-short-of-95-percent, at_ms: 0, signal: "frame:can_acu.VCU_heartbeat.dc_bus_voltage", op: ">=", value: 334}
+  - {check: never, name: never-run, at_ms: 0, signal: "symbol:ams.g_state_telemetry", value: 3}
+  - {check: eventually, name: precharge-timeout-error, at_ms: 10600, until_ms: 10800, signal: "symbol:ams.g_state_telemetry", value: 5}
+  - {check: always, name: reason-fsm-error, at_ms: 10800, signal: "symbol:ams.g_fault_reason_telemetry", value: 12}
