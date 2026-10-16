@@ -1,0 +1,33 @@
+# A Cortex-M4 at 100 MIPS copying a word within RAM 64 times, then reading
+# a peripheral, in a loop, with a memory access hook called for every access.
+$warmup?="0.05"
+$measure?="0.25"
+i $ORIGIN/MemoryHookBench.cs
+mach create
+machine LoadPlatformDescriptionFromString """
+cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m4"
+    nvic: nvic
+nvic: IRQControllers.NVIC @ sysbus 0xE000E000
+rom: Memory.MappedMemory @ sysbus 0x0
+    size: 0x40000
+memoryHookBench: Mocks.MemoryHookBench @ sysbus 0x10000000
+    cpu: cpu
+    mode: "all"
+"""
+cpu PerformanceInMips 100
+cpu AssembleBlock 0 """
+ldr r0, =0x10000000
+ldr r1, =0x20000
+loop:
+movs r2, #64
+copy:
+ldr r3, [r1]
+str r3, [r1, #4]
+subs r2, #1
+bne copy
+ldr r3, [r0]
+b loop
+"""
+cpu PC 0
+include $ORIGIN/_measure.resc

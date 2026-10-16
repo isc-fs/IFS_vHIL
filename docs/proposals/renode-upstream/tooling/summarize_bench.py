@@ -9,7 +9,8 @@ VIRTUAL = {"bus-trivial": 0.25, "register-read": 0.25, "register-write": 0.25, "
            "hook-none": 0.25, "hook-always": 0.25, "hook-exclude": 0.25,
            "demo-stm32f4_discovery": 10.0, "demo-nucleo_h753zi_hubris": 60.0, "demo-nrf52840": 60.0,
            "multi-spin-shared": 0.5, "multi-spin-slaves": 0.5, "multi-spin-inline": 0.5,
-           "multi-ble-shared": 5.0, "multi-ble-slaves": 5.0, "multi-ble-inline": 5.0}
+           "multi-ble-shared": 5.0, "multi-ble-slaves": 5.0, "multi-ble-inline": 5.0,
+           "mcan-loopback": 0.1, "memhook-none": 0.25, "memhook-all": 0.25, "memhook-io": 0.25}
 rows = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
 # Runs that ended with another container running may have shared the CPUs
 dropped = [r for r in rows if r.get("contended")]

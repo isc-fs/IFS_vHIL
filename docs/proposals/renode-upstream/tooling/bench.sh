@@ -5,7 +5,9 @@
 # on a loop (none / every call / excluding itself: hook-exclude needs PR 11),
 # three of Renode's own demos, two machines on the master time source, on
 # slave time sources, or on slave time sources on the master's thread
-# (multi-*-inline needs PR 13)). For each repeat, each
+# (multi-*-inline needs PR 13), an MCAN in loopback (PR 15), a memory
+# access hook (none / every access / IO accesses only: memhook-io needs
+# PR 17)). For each repeat, each
 # benchmark runs once on each package, in turn, in its own container limited
 # to 4 cores (--cpuset-cpus 4-7, as the vHIL study measured).
 #
@@ -21,7 +23,7 @@ set -uo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 . "$here/idle.sh"
 out=${1:?out.jsonl}; reps=${2:?repeats}; pkgs=${3:?packages}
-benches=${4:-"bus-trivial register-read register-write stm32-timer hook-none hook-always hook-exclude demo-stm32f4_discovery demo-nucleo_h753zi_hubris demo-nrf52840 multi-spin-shared multi-spin-slaves multi-spin-inline multi-ble-shared multi-ble-slaves multi-ble-inline"}
+benches=${4:-"bus-trivial register-read register-write stm32-timer hook-none hook-always hook-exclude demo-stm32f4_discovery demo-nucleo_h753zi_hubris demo-nrf52840 multi-spin-shared multi-spin-slaves multi-spin-inline multi-ble-shared multi-ble-slaves multi-ble-inline mcan-loopback memhook-none memhook-all memhook-io"}
 for r in $(seq 1 "$reps"); do
   for b in $benches; do
     for p in $pkgs; do
