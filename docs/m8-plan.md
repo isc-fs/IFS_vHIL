@@ -6,6 +6,52 @@ requested from IFSSIM in
 [isc-fs/IFSSIM#669](https://github.com/isc-fs/IFSSIM/issues/669); until it
 lands, a Python stand-in (TS-1) runs the same contract in CI.
 
+## Status (2026-10-16)
+
+Steps 1-5 below are merged: the plan and parameters (#310), the TS-1 stand-in
+on an event-driven port (#311), the FMI 3.0 master (#313), the `plants:`
+switch and the scenarios (#314), and this evidence. `ecu-ams` and
+`ecu-ams-udv` run the plant in every scenario and web-app run.
+
+**Results** against ECU dev 44610a5 and AMS dev 94b59a9. Every scenario
+passes, locally (aarch64) and on CI (x86):
+
+| Scenario (`systems/ecu-ams.scenarios/`) | What the firmware did |
+|---|---|
+| `car-arms-through-the-ecu` | Arms through Precharge to Run on the plant's link. AIR+'s contact closes at 335.0 V of 351.5 V (95.3 %; FS rule 90 %, firmware 95 %), 0.86 s after PRE and AIR- |
+| `ams-fault-puts-the-ecu-in-ams-error`, `dead-ecu-opens-the-airs` | As before, on the plant's link instead of a scripted step |
+| `precharge-never-conducts`, `precharge-into-a-large-capacitance`, `precharge-into-a-leaky-link` | Error, reason 12, at `PrechargeMaxMs`; AIR+ never driven |
+| `welded-air-minus` | Arms as usual: undetectable without aux contacts |
+| `welded-air-plus` | AIR- closes the pack straight onto the empty link (0 % at its closing), Run at once: undetectable without aux contacts |
+| `airs-drop-out-in-run` | Bus collapse confirmed, back to Start without latching; the ECU secures the discharge |
+| `rearm-refused-on-a-charged-link` | A press on the stranded link is refused while the ECU holds the bleed; after the release a press re-arms |
+| `inverter-sense-floor-holds-the-discharge` | With a 48 V reading floor, the ECU secures a **drained** link at TSMS on and holds it for 30 s with a fault; the AMS refuses the arm meanwhile ([IFS08-CE-ECU#266](https://github.com/isc-fs/IFS08-CE-ECU/issues/266); with a silent floor the car never arms) |
+
+No scenario fails against the firmware's intent, so none is an expected
+failure. The welded-AIR cases are hardware the car lacks (aux contacts, out
+of scope). The sense floor is an unmeasured inverter behaviour, filed for the
+measurement.
+
+**Speed**: the plant costs +0.1 % host CPU per virtual s against a scripted
+0x466 of the same frames ([`performance.md`](performance.md#a-plant-on-the-co-simulation-port-m8-147)).
+The identity fingerprint of every system is unchanged.
+
+**#147's exit criteria**:
+
+- [x] On `ecu-ams.yaml` the real AMS and ECU go Start → Precharge →
+  Transition → Run on V_link from TS-1, and no scripted DC-bus value is left
+  in its scenarios.
+- [x] The fault scenarios give the expected firmware state and reason,
+  deterministically.
+- [x] The re-arm and sense-floor scenarios run in CI and pass. The sense
+  floor's consequence is filed (IFS08-CE-ECU#266).
+- [ ] Every parameter cited and the nominal curve validated against a car
+  log. Only `c_link`, `vdc_resolution` and `cells_per_chip` are cited, and no
+  car log exists, so reports say "uncommissioned".
+- [x] Parity runs are unaffected. The bench path runs no plant, IFS_HIL's
+  suites pass, and the fingerprint is unchanged.
+- [x] `docs/cosim.md` and `docs/vision.md` are updated.
+
 ## Why
 
 The firmware has safety logic that only a tractive-system plant can exercise,
