@@ -4,6 +4,74 @@
   "title": "IFS_vHIL catalogue and system documents",
   "description": "Platforms, boards, firmware sources and device models form the catalogue (catalog/); a system (systems/) places boards, gives each its firmware, attaches devices, and wires them together. Nothing above `platform` and `model` names an architecture or a backend.",
   "$defs": {
+    "plant": {
+      "type": "object",
+      "required": [
+        "kind",
+        "id",
+        "parameters"
+      ],
+      "additionalProperties": false,
+      "description": "A plant's parameters (catalog/plants/): each with its value, unit, where it comes from and what it was validated against (docs/m8-plan.md). A plant is outside the electronics and talks to a system through its co-simulation port (docs/cosim.md).",
+      "properties": {
+        "kind": {
+          "const": "plant-parameters"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "description": {
+          "type": "string"
+        },
+        "parameters": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": {
+            "pattern": "^[a-z][a-z0-9_]{0,63}$"
+          },
+          "additionalProperties": {
+            "type": "object",
+            "required": [
+              "value",
+              "unit",
+              "status",
+              "source",
+              "validated_against"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "value": {
+                "description": "A number, a list of numbers, a word, or null (the element is absent)."
+              },
+              "unit": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "status": {
+                "enum": [
+                  "cited",
+                  "uncommissioned"
+                ],
+                "description": "cited: from a schematic, a datasheet or the firmware's documented design. uncommissioned: no citable non-bench source; reports that use it say so."
+              },
+              "source": {
+                "type": "string",
+                "minLength": 1
+              },
+              "validated_against": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The car log it was checked against (id, date, firmware commit), or null."
+              }
+            }
+          }
+        }
+      }
+    },
     "id": {
       "type": "string",
       "pattern": "^[a-z0-9][a-z0-9-]*$"
@@ -1160,6 +1228,9 @@
     },
     {
       "$ref": "#/$defs/system"
+    },
+    {
+      "$ref": "#/$defs/plant"
     }
   ]
 }
