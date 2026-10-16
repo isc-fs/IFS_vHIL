@@ -1,0 +1,37 @@
+# A Cortex-M4 at 100 MIPS running a loop of 15 `nop`s and a branch, without
+# a hook (the baseline).
+$warmup?="0.05"
+$measure?="0.25"
+i $ORIGIN/HookBench.cs
+mach create
+machine LoadPlatformDescriptionFromString """
+cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m4"
+    nvic: nvic
+nvic: IRQControllers.NVIC @ sysbus 0xE000E000
+rom: Memory.MappedMemory @ sysbus 0x0
+    size: 0x40000
+
+"""
+cpu PerformanceInMips 100
+cpu AssembleBlock 0 """
+loop:
+nop
+nop
+nop
+nop
+nop
+nop
+nop
+nop
+nop
+nop
+nop
+nop
+nop
+nop
+nop
+b loop
+"""
+cpu PC 0
+include $ORIGIN/_measure.resc

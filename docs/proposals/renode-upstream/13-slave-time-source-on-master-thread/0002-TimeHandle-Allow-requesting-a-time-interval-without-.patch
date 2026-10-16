@@ -1,0 +1,82 @@
+From c7914b6be90db61fefd94f509ae4478ef3e6a81e Mon Sep 17 00:00:00 2001
+From: Raul Moran <rmg@raulmoranguerra.com>
+Date: Thu, 15 Oct 2026 09:09:42 +0200
+Subject: [PATCH 2/3] TimeHandle: Allow requesting a time interval without
+ waiting
+
+`RequestTimeInterval(noWait: true)` returns false instead of waiting for a
+grant (or for the previous unlatch), and on a blocking handle it unblocks
+the handle in place instead of waiting for the source to unblock it. It is
+for a sink whose source calls the request on the source's own thread
+(next commit): waiting there would wait for itself.
+
+The default (noWait: false) is unchanged.
+---
+ src/Emulator/Main/Time/TimeHandle.cs | 31 +++++++++++++++++++++++++---
+ 1 file changed, 28 insertions(+), 3 deletions(-)
+
+diff --git a/src/Emulator/Main/Time/TimeHandle.cs b/src/Emulator/Main/Time/TimeHandle.cs
+index c7c491090..6d6052f3c 100644
+--- a/src/Emulator/Main/Time/TimeHandle.cs
++++ b/src/Emulator/Main/Time/TimeHandle.cs
+@@ -215,13 +215,18 @@ public bool UnblockHandle()
+         /// If it returned true, <paramref name="interval"> contains the amount of virtual time to be used by the sink. It is the sum of time interval granted by the source (using <see cref="GrantInterval">) and a time left reported previously by <see cref="ReportBackAndContinue"> or <see cref="ReportBackAndBreak">.
+         /// If it returned false, the time interval is not granted and it is illegal to report anything back using <see cref="ReportBackAndContinue"> or <see cref="ReportBackAndBreak">.
+         /// </returns>
+-        public bool RequestTimeInterval(out TimeInterval interval, bool blockWhileDisabled = false)
++        /// <param name="noWait">For a sink whose source calls this method on the source's own thread, so it cannot wait for the source:
++        /// return false instead of waiting for a grant or for the previous unlatch, and when the handle is blocking, unblock it at once (the call takes the place of the source's <see cref="UnblockHandle">).
++        /// Not to be combined with <paramref name="blockWhileDisabled"/>.</param>
++        public bool RequestTimeInterval(out TimeInterval interval, bool blockWhileDisabled = false, bool noWait = false)
+         {
+             this.Trace();
+             using(MonitorSmartLock.Lock(innerLock))
+             {
+                 DebugHelper.Assert(!sinkSideInProgress, "Requested a new time interval, but the previous one is still processed.");
+ 
++                DebugHelper.Assert(!(noWait && blockWhileDisabled), "A request that does not wait cannot block while disabled");
++
+                 var result = true;
+                 if(blockWhileDisabled)
+                 {
+@@ -251,11 +256,27 @@ public bool RequestTimeInterval(out TimeInterval interval, bool blockWhileDisabl
+                         DebugHelper.Assert(!waitsToBeUnblocked, "Should not wait to be unblocked");
+ 
+                         // we cannot latch again when deferredUnlatch is still on as we could overwrite it and never unlatch again
+-                        previousUnlatchCondition.Wait("Waiting for previous unlatch");
+-                        if(!SourceSideActive || interrupt)
++                        if(noWait)
++                        {
++                            result = !deferredUnlatch;
++                        }
++                        else
++                        {
++                            previousUnlatchCondition.Wait("Waiting for previous unlatch");
++                        }
++                        if(!result || !SourceSideActive || interrupt)
+                         {
+                             result = false;
+                         }
++                        else if(noWait)
++                        {
++                            // the source is the caller, so this is the unblocking: what the branch below does once unblocked
++                            Latch();
++                            deferredUnlatch = true;
++                            recentlyUnblocked = true;
++                            isBlocking = false;
++                            this.Trace("Handle unblocked in place");
++                        }
+                         else
+                         {
+                             this.Trace("Asking time source to unblock the time handle");
+@@ -288,6 +309,10 @@ public bool RequestTimeInterval(out TimeInterval interval, bool blockWhileDisabl
+                         }
+                     }
+                 }
++                else if(!grantPending && noWait)
++                {
++                    result = false;
++                }
+                 else if(!grantPending)
+                 {
+                     // wait until a new time interval is granted or this handle is disabled/deactivated

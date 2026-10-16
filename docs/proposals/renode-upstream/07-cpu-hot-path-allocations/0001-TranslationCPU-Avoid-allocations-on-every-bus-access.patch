@@ -1,0 +1,59 @@
+From f30e157abca003240096bffd3d74aecddf90f1c1 Mon Sep 17 00:00:00 2001
+From: Raul Moran <rmg@raulmoranguerra.com>
+Date: Wed, 14 Oct 2026 02:36:00 +0200
+Subject: [PATCH 1/2] TranslationCPU: Avoid allocations on every bus access and
+ execution chunk
+
+CpuThreadPauseGuard.Initialize, called for every bus access, stores a
+new object in a ThreadLocal of which only being set matters: store one
+shared object instead. HookDescriptorBase.ActivateNewHooks, called
+before every execution chunk, filters the hooks with LINQ: loop over
+them directly, in the same order.
+---
+ .../Peripherals/Peripherals/CPU/HookDescriptor.cs         | 8 ++++++--
+ .../Peripherals/Peripherals/CPU/TranslationCPU.cs         | 5 ++++-
+ 2 files changed, 10 insertions(+), 3 deletions(-)
+
+diff --git a/src/Emulator/Peripherals/Peripherals/CPU/HookDescriptor.cs b/src/Emulator/Peripherals/Peripherals/CPU/HookDescriptor.cs
+index be17b2f82..e14dd0e64 100644
+--- a/src/Emulator/Peripherals/Peripherals/CPU/HookDescriptor.cs
++++ b/src/Emulator/Peripherals/Peripherals/CPU/HookDescriptor.cs
+@@ -37,9 +37,13 @@ public void ActivateNewHooks()
+         {
+             lock(hooks)
+             {
+-                foreach(var newHook in hooks.Where(x => x.Value.IsNew))
++                // Called before every execution chunk: no LINQ iterator and closure
++                foreach(var hook in hooks.Values)
+                 {
+-                    Activate(newHook.Value);
++                    if(hook.IsNew)
++                    {
++                        Activate(hook);
++                    }
+                 }
+             }
+         }
+diff --git a/src/Emulator/Peripherals/Peripherals/CPU/TranslationCPU.cs b/src/Emulator/Peripherals/Peripherals/CPU/TranslationCPU.cs
+index 7906fc471..df6745f31 100644
+--- a/src/Emulator/Peripherals/Peripherals/CPU/TranslationCPU.cs
++++ b/src/Emulator/Peripherals/Peripherals/CPU/TranslationCPU.cs
+@@ -2412,7 +2412,8 @@ public void Leave()
+ 
+             public void Initialize()
+             {
+-                guard.Value = new object();
++                // Called for every bus access; only whether the value is set matters
++                guard.Value = initializedGuard;
+             }
+ 
+             public void InitializeForWriting(ulong address, SysbusAccessWidth width, ulong value)
+@@ -2501,6 +2502,8 @@ void IDisposable.Dispose()
+                 guard.Value = null;
+             }
+ 
++            private static readonly object initializedGuard = new object();
++
+             private bool active;
+             private bool restartTranslationBlock;
+ 

@@ -1,0 +1,163 @@
+From 560756bec162a2c93c3acbdbdefb0bca9578f9fc Mon Sep 17 00:00:00 2001
+From: Raul Moran <rmg@raulmoranguerra.com>
+Date: Wed, 14 Oct 2026 18:01:09 +0200
+Subject: [PATCH] Allow excluding a pre-opcode execution hook at an address
+
+A pre-opcode execution hook is called on every executed instruction its
+mask matches, wherever it is. A hook that only has work to do at some of
+those addresses (one that needs only the first execution at each
+address, or that looks for a code idiom found at a few) pays a call into
+the emulator at every other one.
+
+tlib_exclude_pre_opcode_execution_hook(pc, hook_id) adds the pair to a
+per-instance set that generate_pre_opcode_execution_hook consults: blocks
+translated afterwards no longer call that hook at that address (the
+caller invalidates the blocks already translated).
+tlib_clear_pre_opcode_execution_hook_exclusions empties the set. The set
+is open-addressed, 4096 slots, at most three quarters full; while it is
+empty, translation costs one more compare per matching instruction.
+---
+ arch/translate-all.c | 67 +++++++++++++++++++++++++++++++++++++++++++-
+ exports.c            | 19 +++++++++++++
+ include/exec-all.h   |  2 ++
+ include/exports.h    |  2 ++
+ 4 files changed, 89 insertions(+), 1 deletion(-)
+
+diff --git a/arch/translate-all.c b/arch/translate-all.c
+index 8e93b0c0..ae71ceb6 100644
+--- a/arch/translate-all.c
++++ b/arch/translate-all.c
+@@ -472,11 +472,76 @@ void generate_opcode_count_increment(CPUState *env, uint64_t opcode)
+     }
+ }
+ 
++/* Pre-opcode execution hooks excluded at given addresses: an open-addressed set of (pc, hook id)
++ * pairs, one per tlib instance (i.e. per CPU), consulted when an instruction is translated. A hook's
++ * owner excludes an address once it knows the hook has nothing to do there; blocks translated
++ * afterwards don't call the hook at that address. At most three quarters full, so every look-up ends
++ * at an empty slot. */
++#define PRE_OPCODE_HOOK_EXCLUSIONS_BITS     12
++#define PRE_OPCODE_HOOK_EXCLUSIONS_CAPACITY (1u << PRE_OPCODE_HOOK_EXCLUSIONS_BITS)
++#define PRE_OPCODE_HOOK_EXCLUSIONS_MAX      (PRE_OPCODE_HOOK_EXCLUSIONS_CAPACITY / 4 * 3)
++
++typedef struct {
++    uint64_t pc;
++    uint32_t hook_id_plus_one; /* 0 marks an empty slot */
++} pre_opcode_hook_exclusion_t;
++
++static pre_opcode_hook_exclusion_t pre_opcode_hook_exclusions[PRE_OPCODE_HOOK_EXCLUSIONS_CAPACITY];
++static uint32_t pre_opcode_hook_exclusions_count;
++
++static inline uint32_t pre_opcode_hook_exclusion_slot(uint64_t pc, uint32_t hook_id)
++{
++    uint64_t key = pc ^ ((uint64_t)hook_id << 56);
++    return (uint32_t)((key * 0x9E3779B97F4A7C15ull) >> (64 - PRE_OPCODE_HOOK_EXCLUSIONS_BITS));
++}
++
++/* The slot holding (pc, hook_id), or the empty slot where it would go. */
++static pre_opcode_hook_exclusion_t *pre_opcode_hook_exclusion_find(uint64_t pc, uint32_t hook_id)
++{
++    uint32_t i = pre_opcode_hook_exclusion_slot(pc, hook_id);
++    while(true) {
++        pre_opcode_hook_exclusion_t *slot = &pre_opcode_hook_exclusions[i];
++        if(slot->hook_id_plus_one == 0 || (slot->pc == pc && slot->hook_id_plus_one == hook_id + 1)) {
++            return slot;
++        }
++        i = (i + 1) & (PRE_OPCODE_HOOK_EXCLUSIONS_CAPACITY - 1);
++    }
++}
++
++static inline bool pre_opcode_execution_hook_excluded(uint64_t pc, uint32_t hook_id)
++{
++    if(likely(pre_opcode_hook_exclusions_count == 0)) {
++        return false;
++    }
++    return pre_opcode_hook_exclusion_find(pc, hook_id)->hook_id_plus_one != 0;
++}
++
++bool pre_opcode_execution_hook_exclude(uint64_t pc, uint32_t hook_id)
++{
++    if(hook_id >= CPU_HOOKS_MASKS_LIMIT || pre_opcode_hook_exclusions_count >= PRE_OPCODE_HOOK_EXCLUSIONS_MAX) {
++        return false;
++    }
++    pre_opcode_hook_exclusion_t *slot = pre_opcode_hook_exclusion_find(pc, hook_id);
++    if(slot->hook_id_plus_one != 0) {
++        return false;
++    }
++    slot->pc = pc;
++    slot->hook_id_plus_one = hook_id + 1;
++    pre_opcode_hook_exclusions_count++;
++    return true;
++}
++
++void pre_opcode_execution_hook_exclusions_clear(void)
++{
++    memset(pre_opcode_hook_exclusions, 0, sizeof(pre_opcode_hook_exclusions));
++    pre_opcode_hook_exclusions_count = 0;
++}
++
+ void generate_pre_opcode_execution_hook(CPUState *env, uint64_t pc, uint64_t opcode)
+ {
+     for(int hook_id = 0; hook_id < env->pre_opcode_execution_hooks_count; hook_id++) {
+         opcode_hook_mask_t opcode_def = env->pre_opcode_execution_hook_masks[hook_id];
+-        if((opcode & opcode_def.mask) == opcode_def.value) {
++        if((opcode & opcode_def.mask) == opcode_def.value && !pre_opcode_execution_hook_excluded(pc, hook_id)) {
+ 
+             TCGv_i32 tcg_hook_id = tcg_const_i32(hook_id);
+             TCGv_i64 tcg_pc = tcg_const_i64(pc);
+diff --git a/exports.c b/exports.c
+index 77ff8333..8309546c 100644
+--- a/exports.c
++++ b/exports.c
+@@ -858,6 +858,25 @@ uint32_t tlib_install_pre_opcode_execution_hook(uint64_t mask, uint64_t value)
+ 
+ EXC_INT_2(uint32_t, tlib_install_pre_opcode_execution_hook, uint64_t, mask, uint64_t, value)
+ 
++/* Blocks translated from now on don't call pre-opcode execution hook `hook_id` at `pc`; blocks already
++ * translated still do until they are invalidated. Returns 1 if the address was added, 0 if it was
++ * already excluded, the id is out of range or the set is full (the hook is then still called there). */
++uint32_t tlib_exclude_pre_opcode_execution_hook(uint64_t pc, uint32_t hook_id)
++{
++    return pre_opcode_execution_hook_exclude(pc, hook_id) ? 1 : 0;
++}
++
++EXC_INT_2(uint32_t, tlib_exclude_pre_opcode_execution_hook, uint64_t, pc, uint32_t, hook_id)
++
++/* Blocks translated from now on call every pre-opcode execution hook wherever its mask matches again;
++ * blocks already translated keep the exclusions until they are invalidated. */
++void tlib_clear_pre_opcode_execution_hook_exclusions(void)
++{
++    pre_opcode_execution_hook_exclusions_clear();
++}
++
++EXC_VOID_0(tlib_clear_pre_opcode_execution_hook_exclusions)
++
+ void tlib_enable_post_opcode_execution_hooks(uint32_t value)
+ {
+     env->are_post_opcode_execution_hooks_enabled = !!value;
+diff --git a/include/exec-all.h b/include/exec-all.h
+index 0fee8ba9..e14dfc89 100644
+--- a/include/exec-all.h
++++ b/include/exec-all.h
+@@ -394,6 +394,8 @@ void code_gen_free(void);
+ 
+ void generate_opcode_count_increment(CPUState *, uint64_t);
+ void generate_pre_opcode_execution_hook(CPUState *env, uint64_t pc, uint64_t opcode);
++bool pre_opcode_execution_hook_exclude(uint64_t pc, uint32_t hook_id);
++void pre_opcode_execution_hook_exclusions_clear(void);
+ void generate_post_opcode_execution_hook(CPUState *env, uint64_t pc, uint64_t opcode);
+ void generate_stack_announcement_imm_i32(uint32_t addr, int type, bool clear_lsb);
+ void generate_stack_announcement_imm_i64(uint64_t addr, int type, bool clear_lsb);
+diff --git a/include/exports.h b/include/exports.h
+index 49b9a185..5b72a1c1 100644
+--- a/include/exports.h
++++ b/include/exports.h
+@@ -106,6 +106,8 @@ uint64_t tlib_get_mmu_window_addend(uint64_t id);
+ 
+ void tlib_enable_pre_opcode_execution_hooks(uint32_t value);
+ uint32_t tlib_install_pre_opcode_execution_hook(uint64_t mask, uint64_t value);
++uint32_t tlib_exclude_pre_opcode_execution_hook(uint64_t pc, uint32_t hook_id);
++void tlib_clear_pre_opcode_execution_hook_exclusions(void);
+ void tlib_enable_post_opcode_execution_hooks(uint32_t value);
+ uint32_t tlib_install_post_opcode_execution_hook(uint64_t mask, uint64_t value);
+ 

@@ -1,0 +1,159 @@
+From cc1b169319d00f7deae767d17e3b3b40b81298ce Mon Sep 17 00:00:00 2001
+From: Raul Moran <rmg@raulmoranguerra.com>
+Date: Wed, 14 Oct 2026 02:29:22 +0200
+Subject: [PATCH] [FIX] ClockSource: Look the entry up again after running
+ handlers
+
+TryRemoveClockEntry finds the entry's index and then calls
+UpdateLimits, which runs the handlers of the entries that are due;
+GetClockEntry can run the entry's own handler. A handler that adds or
+removes a clock entry moves this one in the list, and the index found
+before points at another entry: TryRemoveClockEntry removes the wrong
+entry (or throws ArgumentOutOfRangeException) and GetClockEntry
+overwrites another entry with this one.
+
+Look the entry up again after the handlers ran. Nothing changes when no
+handler adds or removes entries.
+---
+ .../Main/Tests/UnitTests/TimeTests.cs         | 56 +++++++++++++++++++
+ src/Emulator/Main/Time/BaseClockSource.cs     | 33 ++++++++---
+ 2 files changed, 82 insertions(+), 7 deletions(-)
+
+diff --git a/src/Emulator/Main/Tests/UnitTests/TimeTests.cs b/src/Emulator/Main/Tests/UnitTests/TimeTests.cs
+index 254546d10..9f89bdcff 100644
+--- a/src/Emulator/Main/Tests/UnitTests/TimeTests.cs
++++ b/src/Emulator/Main/Tests/UnitTests/TimeTests.cs
+@@ -7,6 +7,7 @@
+ //
+ using System;
+ using System.Collections.Generic;
++using System.Linq;
+ 
+ using Antmicro.Renode.Time;
+ 
+@@ -118,6 +119,61 @@ public void ShouldObserveShorterPeriodClockAfterAdd()
+             Assert.AreEqual(entryB.Value, 0);
+             Assert.AreEqual(entryB.Period, 100);
+         }
++
++        [Test]
++        public void ShouldRemoveTheGivenEntryWhenAHandlerRemovesAnEntryBeforeIt()
++        {
++            var clockSource = new BaseClockSource();
++            Action handlerA = () => { };
++            Action handlerX = () => { };
++            Action handlerW = () => { };
++            var removeA = false;
++            // An entry with a zero period is reached on every update, so this handler
++            // also runs when TryRemoveClockEntry updates the limits before removing
++            Action handlerZ = () =>
++            {
++                if(removeA)
++                {
++                    removeA = false;
++                    clockSource.TryRemoveClockEntry(handlerA);
++                }
++            };
++            clockSource.AddClockEntry(new ClockEntry(1000, 1, handlerA, null, String.Empty));
++            clockSource.AddClockEntry(new ClockEntry(0, 1, handlerZ, null, String.Empty));
++            clockSource.AddClockEntry(new ClockEntry(1000, 1, handlerX, null, String.Empty));
++            clockSource.AddClockEntry(new ClockEntry(1000, 1, handlerW, null, String.Empty));
++
++            removeA = true;
++            Assert.IsTrue(clockSource.TryRemoveClockEntry(handlerX));
++
++            CollectionAssert.AreEqual(new[] { handlerZ, handlerW }, clockSource.GetAllClockEntries().Select(x => x.Handler));
++        }
++
++        [Test]
++        public void ShouldKeepOtherEntriesWhenAHandlerRunByGetClockEntryRemovesAnEntry()
++        {
++            var clockSource = new BaseClockSource();
++            Action handlerA = () => { };
++            Action handlerW = () => { };
++            var removeA = false;
++            // An entry with a zero period is reached on every update, so GetClockEntry runs its handler
++            Action handlerZ = () =>
++            {
++                if(removeA)
++                {
++                    removeA = false;
++                    clockSource.TryRemoveClockEntry(handlerA);
++                }
++            };
++            clockSource.AddClockEntry(new ClockEntry(1000, 1, handlerA, null, String.Empty));
++            clockSource.AddClockEntry(new ClockEntry(0, 1, handlerZ, null, String.Empty));
++            clockSource.AddClockEntry(new ClockEntry(1000, 1, handlerW, null, String.Empty));
++
++            removeA = true;
++            clockSource.GetClockEntry(handlerZ);
++
++            CollectionAssert.AreEqual(new[] { handlerZ, handlerW }, clockSource.GetAllClockEntries().Select(x => x.Handler));
++        }
+     }
+ 
+     [TestFixture]
+diff --git a/src/Emulator/Main/Time/BaseClockSource.cs b/src/Emulator/Main/Time/BaseClockSource.cs
+index 7af986af1..7ade717d4 100644
+--- a/src/Emulator/Main/Time/BaseClockSource.cs
++++ b/src/Emulator/Main/Time/BaseClockSource.cs
+@@ -118,14 +118,24 @@ public virtual ClockEntry GetClockEntry(Action handler)
+                     if(updateHandler(ref result, elapsed + unaccountedTimes[i], ref nearestLimitIn))
+                     {
+                         result.Handler();
++                        // The handler can add or remove clock entries, which moves this one in the list
++                        i = clockEntries.FindIndex(x => x.Handler == handler);
++                    }
++                    if(i != -1)
++                    {
++                        // This elapsed time is now accounted for this entry so clear it
++                        unaccountedTimes[i] = TimeInterval.Empty;
+                     }
+-                    // This elapsed time is now accounted for this entry so clear it
+-                    unaccountedTimes[i] = TimeInterval.Empty;
+                 }
+                 finally
+                 {
+                     updateAlreadyInProgress.Value = false;
+                 }
++                if(i == -1)
++                {
++                    // A handler removed this entry
++                    return result;
++                }
+                 clockEntries[i] = result;
+ 
+                 // Clear elapsed and deposit it as unaccounted time on all other enabled clock entries
+@@ -143,8 +153,12 @@ public virtual ClockEntry GetClockEntry(Action handler)
+                 if(triggerFullUpdate)
+                 {
+                     UpdateLimits();
+-                    // unaccountedTimes cleared by Update
+-                    result = clockEntries[i];
++                    // unaccountedTimes cleared by Update, whose handlers can move this entry in the list
++                    i = clockEntries.FindIndex(x => x.Handler == handler);
++                    if(i != -1)
++                    {
++                        result = clockEntries[i];
++                    }
+                 }
+ 
+                 return result;
+@@ -177,9 +191,14 @@ public virtual bool TryRemoveClockEntry(Action handler)
+                     return false;
+                 }
+                 UpdateLimits();
+-                clockEntries.RemoveAt(indexToRemove);
+-                clockEntriesUpdateHandlers.RemoveAt(indexToRemove);
+-                unaccountedTimes.RemoveAt(indexToRemove);
++                // UpdateLimits can run handlers that add or remove clock entries, which moves this one in the list
++                indexToRemove = clockEntries.FindIndex(x => x.Handler == handler);
++                if(indexToRemove != -1)
++                {
++                    clockEntries.RemoveAt(indexToRemove);
++                    clockEntriesUpdateHandlers.RemoveAt(indexToRemove);
++                    unaccountedTimes.RemoveAt(indexToRemove);
++                }
+                 UpdateLimits();
+             }
+             NotifyNumberOfEntriesChanged(oldCount, clockEntries.Count);

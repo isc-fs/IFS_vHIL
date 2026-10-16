@@ -1,0 +1,24 @@
+# PR 13 against master on the suites closest to it, in Renode's default setup
+# (every machine on the master time source): the time framework, pausing and
+# stepping, snapshots, and the multi-node suites (BLE, UART hub, CAN, an
+# 802.15.4 mesh, Ethernet). With UnitTests.csproj (TimeSourceTests).
+tests/unit-tests/virtual-time.robot
+tests/unit-tests/precise-pause.robot
+tests/unit-tests/pause-without-sleep.robot
+tests/unit-tests/cpu-pause-halt.robot
+tests/unit-tests/real-time-clock-mode.robot
+tests/unit-tests/timer-reconfiguration.robot
+tests/unit-tests/instructions-counting.robot
+tests/unit-tests/cpu-step.robot
+tests/unit-tests/sync_pc.robot
+tests/unit-tests/snapshot-tracking.robot
+tests/unit-tests/auto-save.robot
+tests/unit-tests/emulation-environment.robot
+tests/unit-tests/demos.robot
+tests/platforms/NRF52840.robot
+tests/platforms/nucleo_h753zi.robot
+tests/platforms/nucleo_f429zi.robot
+tests/platforms/ramn.robot
+tests/platforms/CC2538/cc2538_rpl-udp.robot
+tests/platforms/SAME70.robot
+tests/peripherals/MCAN.robot

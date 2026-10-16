@@ -1,0 +1,17 @@
+# An STM32 general-purpose timer (STM32F4's TIM2, 10 MHz) with a 1 MHz
+# update event, its four compare channels unused, while a Cortex-M4 at 100
+# MIPS spins: the clock source's update path and STM32_Timer's update event
+# (PRs 08 and 09), about 250,000 events in the measured 0.25 s.
+$warmup?="0.05"
+$measure?="0.25"
+mach create
+machine LoadPlatformDescription @platforms/cpus/stm32f4.repl
+cpu PerformanceInMips 100
+cpu AssembleBlock 0x20000000 """
+loop:
+b loop
+"""
+cpu PC 0x20000000
+sysbus WriteDoubleWord 0x4000002C 9
+sysbus WriteDoubleWord 0x40000000 1
+include $ORIGIN/_measure.resc

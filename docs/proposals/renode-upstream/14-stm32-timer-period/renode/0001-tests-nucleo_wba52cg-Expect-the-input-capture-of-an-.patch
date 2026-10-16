@@ -1,0 +1,33 @@
+From 6071010c303d0c8d4416c43cdee20a0f2e769d37 Mon Sep 17 00:00:00 2001
+From: Raul Moran <rmg@raulmoranguerra.com>
+Date: Thu, 15 Oct 2026 12:37:47 +0200
+Subject: [PATCH] tests: nucleo_wba52cg: Expect the input capture of an ARR + 1
+ period
+
+TIM_PWMInput measures a PWM signal whose period is ARR + 1 timer clocks
+on the chip. STM32_Timer now counts ARR + 1 values per period, so the
+captured period (IC2) is 50000 and 33333 instead of 49999 and 33332, and
+the second duty cycle (IC1 * 100 / IC2 in integers) 49 % instead of 50 %.
+---
+ tests/platforms/nucleo_wba52cg.robot | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/tests/platforms/nucleo_wba52cg.robot b/tests/platforms/nucleo_wba52cg.robot
+index 872cef3..e825ac2 100644
+--- a/tests/platforms/nucleo_wba52cg.robot
++++ b/tests/platforms/nucleo_wba52cg.robot
+@@ -60,9 +60,9 @@ Timer Should Support Input Capture
+ 
+     Check Input Capture Line        frequency=0     duty=0   IC2=0
+     Execute Command                 sysbus.gpioPortC.UserButton1 PressAndRelease
+-    Check Input Capture Line        frequency=2000  duty=24  IC2=49999
++    Check Input Capture Line        frequency=2000  duty=24  IC2=50000
+     Execute Command                 sysbus.gpioPortC.UserButton1 PressAndRelease
+-    Check Input Capture Line        frequency=3000  duty=50  IC2=33332
++    Check Input Capture Line        frequency=3000  duty=49  IC2=33333
+ 
+ Should Have Working UART
+     Create Machine                  ${UART_PRINTF}
+-- 
+2.51.0
+

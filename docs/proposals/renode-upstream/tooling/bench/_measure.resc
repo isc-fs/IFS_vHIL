@@ -1,0 +1,12 @@
+# Included by every benchmark after its setup: warm up (JIT tiering), then run
+# $measure of virtual time and print the host wall time it took, the bytes the
+# process allocated and the gen-0 collections, from .NET's own counters, the
+# process's CPU time (all threads).
+# Idle CPUs don't wait for the host clock: by default an idle demo runs at
+# real time at most.
+emulation SetGlobalAdvanceImmediately true
+emulation RunFor $warmup
+python "import time; from System import GC; import clr; clr.AddReference('System.Diagnostics.Process'); from System.Diagnostics import Process; pr = Process.GetCurrentProcess(); c0 = pr.TotalProcessorTime.TotalSeconds; a0 = GC.GetTotalAllocatedBytes(False); g0 = GC.CollectionCount(0); t0 = time.time()"
+emulation RunFor $measure
+python "w = time.time() - t0; pr.Refresh(); print('BENCH wall=%.4f alloc=%d gen0=%d cpu=%.4f' % (w, GC.GetTotalAllocatedBytes(False) - a0, GC.CollectionCount(0) - g0, pr.TotalProcessorTime.TotalSeconds - c0))"
+quit

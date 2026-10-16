@@ -24,21 +24,21 @@ were measured:
 
 | # | Study name | What it does | Upstream |
 |---|---|---|---|
-| 0001 | P2 | `BaseClockSource`: a dictionary from handler to clock-entry index beside the list (no linear delegate search per timer reload, `GetClockEntry` or `ScheduleAction`), plain fields for two `ThreadLocal<bool>` flags only touched under the source's lock, one reused list per update; `TryRemoveClockEntry` looks the entry up again after `UpdateLimits` (stock Renode can remove the wrong entry if a handler removed one below it) | Not submitted (awaiting the CLA) |
-| 0002 | P3 | `SystemBus`: a per-thread initiator stack with one reusable disposer instead of a `Tuple`, closure and wrapper per access; locked-range look-ups skipped until a range is first locked; the last context look-up cached until the peripheral collections change; tags binary-searched without a closure | Not submitted |
-| 0003 | P5 | Register framework (`PeripheralRegister`): lists only when a field changes, a reused scratch list, `Distinct` only with two or more fields, a plain loop for tag checks, unhandled-write messages built only when logged; `CpuThreadPauseGuard`'s per-access `new object()` becomes a static marker; `HookDescriptorBase.ActivateNewHooks` a plain loop; noisy `$"..."` logs (opcode hooks, scheduled actions) built only when the level lets them through | Not submitted |
-| 0004 | — | `STM32_Timer`'s update event leaves a compare channel with neither its interrupt nor its output enabled, whose timer is disabled and counts the parent's way, as it is (it re-applied all four every period: two clock-entry exchanges and CPU return requests each) (#260). The file is upstream PR 08's patch. (Until 1.17.0-vhil.4 it also did `BaseClockSource`'s tick arithmetic in integers, upstream PR 09: exact, but no measurable gain, so dropped there and here) | PR 08 (prepared in `docs/proposals/renode-upstream/`, not submitted) |
-| 0005 + tlib/0001 | — | A pre-opcode execution hook can be excluded at an address: `TranslationCPU.ExcludePreOpcodeExecutionHookAt(action, pc)` and `ClearPreOpcodeExecutionHookExclusions()`, over tlib's `tlib_exclude_pre_opcode_execution_hook` / `tlib_clear_pre_opcode_execution_hook_exclusions` (an open-addressed set of (pc, hook id) pairs, 4,096 slots at most three quarters full, that `generate_pre_opcode_execution_hook` consults at translation; tlib/0001 is upstream PR 10's patch, whose pairs keep pc and hook id apart: the earlier key `(pc << 3) | hook id` collided for hook ids of 8 or more); the blocks holding the address are queued for invalidation. `VhilFastForward` excludes its CMP.W hook at every CMP.W that is not a delay loop's, so the hook reaches C# from the delay loops only (#260) | tlib/0001: PR 10 (prepared, not submitted); 0005: not submitted |
-| tlib/0002 | — | The memory-access flag (`tlib_is_on_memory_access_enabled`, CPU_COMMON) set to 2 reports only peripheral (IO) and slow (unaligned, page-spanning) accesses to `tlib_on_memory_access`: a load or store that hits RAM in the same page is not reported. 1 reports every access as before; `tlib_on_memory_access_event_enabled` still sets 0 or 1. `VhilFastForward` arms its detector with 2: it watches MMIO only, and on a host whose TCG backend calls the softmmu helpers for every access (aarch64, no inline TLB fast path) every RAM load and store reached C# while it was armed (the bootloader's loop, which the detector re-proves every chunk, clears a struct byte by byte): on an M-series Mac boots 25-45 % faster, steady state up to a third. x86 hits RAM inline, so there only TLB misses go through the helpers | Not submitted |
-| 0006 | — | A `SlaveTimeSource` can run on its master's thread (`RunsOnMasterThread`, set before it is attached): `TimeSourceBase.InnerExecute` split into `InnerExecuteBegin` (grant or unblock every handle) and `InnerExecuteEnd` (wait for them, the sync phase); the master begins a slave's iteration when it grants it time and ends it when it waits for it, so the slave's sinks run beside the master's others without the slave's dispatcher thread between them. `TimeHandle.RequestTimeInterval(noWait)` for a sink that cannot wait for its own source; `TimeDomainsManager.SwapCurrentThread` gives the slave's sync phase the slave's time stamp. Off by default; Renode's slave time-source unit tests run both ways. `VhilMachine` turns it on for every board of a lock-step run (invariant 11 holds: each board keeps a time source of its own), one hand-off a quantum per board and N + 1 threads instead of 2N + 1 (#260) | Not submitted |
-| 0007 | — | **Fidelity fix.** `STM32_Timer` counts ARR + 1 values per update period, as the chip does (RM0468 44.3.2: up from 0 to ARR, then an overflow to 0; down from ARR to 0, then an underflow to ARR), so its update event comes every (ARR + 1) x (PSC + 1) timer clocks; stock Renode's clock entry had ARR as its limit, one count short. Every HAL timebase (ARR = 999 at 1 MHz: TIM23 on the ECU, TIM6 on the AMS, TIM1 on the uDV) ticked every 999 us, 0.1 % fast, and the uDV's TIM2 (ARR = 2499) every 2.499 ms. The entry's limit is ARR + 1; counting down its value is CNT + 1 (a descending entry fires on reaching 0). `TIMx_CNT` now reads 0..ARR (it never read ARR); PWM mode 1 has a period of ARR + 1 counts and CCRx high (#292, `tests/sim/test_stm32_timer.py`) | PR 14 (prepared, not submitted) |
-| 0008 | — | `Packet`'s field wrappers (`FieldPropertyInfoWrapper`, already cached per type) keep each kind of attribute they looked up and the declaring type's byte order, instead of calling `GetCustomAttributes` for every attribute read of every field of every value decoded or encoded. MCAN decodes each filter element from the message RAM for every frame it receives (`FilterMessage`, `DecodeFilterElement`) and encodes every frame it stores (`StoreInRxFIFO`): on ecu-ams-udv (x86) the reflection was 6 % of the host's samples and the RX path 8-12 % | Not submitted |
-| 0009 | — | `NVIC`'s ICSR.RETTOBASE value provider built the `SystemException` numbers by reflection (`Enum.GetValues`) and intersected them with the active exceptions through LINQ on every ICSR read; FreeRTOS's Cortex-M ports read ICSR in every outermost critical section (`vPortEnterCritical`'s `configASSERT` on VECTACTIVE). The numbers are built once, and with no exception active (Thread mode) the answer is immediate: the same value | Not submitted |
+| 0001 | P2 | `BaseClockSource`: a dictionary from handler to clock-entry index beside the list (no linear delegate search per timer reload, `GetClockEntry` or `ScheduleAction`), plain fields for two `ThreadLocal<bool>` flags only touched under the source's lock, one reused list per update; `TryRemoveClockEntry` looks the entry up again after `UpdateLimits` (stock Renode can remove the wrong entry if a handler removed one below it) | Prepared as PRs 01 + 02, not submitted (CLA) |
+| 0002 | P3 | `SystemBus`: a per-thread initiator stack with one reusable disposer instead of a `Tuple`, closure and wrapper per access; locked-range look-ups skipped until a range is first locked; the last context look-up cached until the peripheral collections change; tags binary-searched without a closure | Prepared as PRs 03 + 04 + 05, not submitted |
+| 0003 | P5 | Register framework (`PeripheralRegister`): lists only when a field changes, a reused scratch list, `Distinct` only with two or more fields, a plain loop for tag checks, unhandled-write messages built only when logged; `CpuThreadPauseGuard`'s per-access `new object()` becomes a static marker; `HookDescriptorBase.ActivateNewHooks` a plain loop; noisy `$"..."` logs (opcode hooks, scheduled actions) built only when the level lets them through | Prepared as PRs 06 + 07, not submitted |
+| 0004 | — | `STM32_Timer`'s update event leaves a compare channel with neither its interrupt nor its output enabled, whose timer is disabled and counts the parent's way, as it is (it re-applied all four every period: two clock-entry exchanges and CPU return requests each) (#260). The file is upstream PR 08's patch. (Until 1.17.0-vhil.4 it also did `BaseClockSource`'s tick arithmetic in integers, upstream PR 09: exact, but no measurable gain, so dropped there and here) | Prepared as PR 08, not submitted |
+| 0005 + tlib/0001 | — | A pre-opcode execution hook can be excluded at an address: `TranslationCPU.ExcludePreOpcodeExecutionHookAt(action, pc)` and `ClearPreOpcodeExecutionHookExclusions()`, over tlib's `tlib_exclude_pre_opcode_execution_hook` / `tlib_clear_pre_opcode_execution_hook_exclusions` (an open-addressed set of (pc, hook id) pairs, 4,096 slots at most three quarters full, that `generate_pre_opcode_execution_hook` consults at translation; tlib/0001 is upstream PR 10's patch, whose pairs keep pc and hook id apart: the earlier key `(pc << 3) | hook id` collided for hook ids of 8 or more); the blocks holding the address are queued for invalidation. `VhilFastForward` excludes its CMP.W hook at every CMP.W that is not a delay loop's, so the hook reaches C# from the delay loops only (#260) | Prepared as PRs 10 (tlib) + 11 + 12 (tests), not submitted |
+| tlib/0002 | — | The memory-access flag (`tlib_is_on_memory_access_enabled`, CPU_COMMON) set to 2 reports only peripheral (IO) and slow (unaligned, page-spanning) accesses to `tlib_on_memory_access`: a load or store that hits RAM in the same page is not reported. 1 reports every access as before; `tlib_on_memory_access_event_enabled` still sets 0 or 1. `VhilFastForward` arms its detector with 2: it watches MMIO only, and on a host whose TCG backend calls the softmmu helpers for every access (aarch64, no inline TLB fast path) every RAM load and store reached C# while it was armed (the bootloader's loop, which the detector re-proves every chunk, clears a struct byte by byte): on an M-series Mac boots 25-45 % faster, steady state up to a third. x86 hits RAM inline, so there only TLB misses go through the helpers | Prepared as PRs 16 (tlib) + 17 (TranslationCPU) + 18 (tests), not submitted |
+| 0006 | — | A `SlaveTimeSource` can run on its master's thread (`RunsOnMasterThread`, set before it is attached): `TimeSourceBase.InnerExecute` split into `InnerExecuteBegin` (grant or unblock every handle) and `InnerExecuteEnd` (wait for them, the sync phase); the master begins a slave's iteration when it grants it time and ends it when it waits for it, so the slave's sinks run beside the master's others without the slave's dispatcher thread between them. `TimeHandle.RequestTimeInterval(noWait)` for a sink that cannot wait for its own source; `TimeDomainsManager.SwapCurrentThread` gives the slave's sync phase the slave's time stamp. Off by default; Renode's slave time-source unit tests run both ways. `VhilMachine` turns it on for every board of a lock-step run (invariant 11 holds: each board keeps a time source of its own), one hand-off a quantum per board and N + 1 threads instead of 2N + 1 (#260) | Prepared as PR 13, not submitted |
+| 0007 | — | **Fidelity fix.** `STM32_Timer` counts ARR + 1 values per update period, as the chip does (RM0468 44.3.2: up from 0 to ARR, then an overflow to 0; down from ARR to 0, then an underflow to ARR), so its update event comes every (ARR + 1) x (PSC + 1) timer clocks; stock Renode's clock entry had ARR as its limit, one count short. Every HAL timebase (ARR = 999 at 1 MHz: TIM23 on the ECU, TIM6 on the AMS, TIM1 on the uDV) ticked every 999 us, 0.1 % fast, and the uDV's TIM2 (ARR = 2499) every 2.499 ms. The entry's limit is ARR + 1; counting down its value is CNT + 1 (a descending entry fires on reaching 0). `TIMx_CNT` now reads 0..ARR (it never read ARR); PWM mode 1 has a period of ARR + 1 counts and CCRx high (#292, `tests/sim/test_stm32_timer.py`) | Prepared as PR 14, not submitted |
+| 0008 | — | `Packet`'s field wrappers (`FieldPropertyInfoWrapper`, already cached per type) keep each kind of attribute they looked up and the declaring type's byte order, instead of calling `GetCustomAttributes` for every attribute read of every field of every value decoded or encoded. MCAN decodes each filter element from the message RAM for every frame it receives (`FilterMessage`, `DecodeFilterElement`) and encodes every frame it stores (`StoreInRxFIFO`): on ecu-ams-udv (x86) the reflection was 6 % of the host's samples and the RX path 8-12 % | Prepared as PR 15, not submitted |
+| 0009 | — | `NVIC`'s ICSR.RETTOBASE value provider built the `SystemException` numbers by reflection (`Enum.GetValues`) and intersected them with the active exceptions through LINQ on every ICSR read; FreeRTOS's Cortex-M ports read ICSR in every outermost critical section (`vPortEnterCritical`'s `configASSERT` on VECTACTIVE). The numbers are built once, and with no exception active (Thread mode) the answer is immediate: the same value | Upstream already: renode-infrastructure e7a8584c ("[GH#941] NVIC: Make ICSR.RETTOBASE take external interrupts into account", after 1.17.0), constant time and also counting external interrupts; no PR, dropped on the next bump |
 
 The study's P1 (blocking instead of spinning at the lock-step barrier) is
 slower on 4 cores and P4 (aarch64 inline TLB) not worth it; neither is here.
 When upstream takes a patch, the next release carries it: drop it from the
-queue on that bump.
+queue on that bump (plan below, "Upstreaming").
 
 **What a run computes is unchanged by 0001-0006, 0008, 0009, tlib/0001 and tlib/0002**: bus
 timelines, GPIO edges with the instruction count at each write, radio
@@ -67,6 +67,51 @@ ecu `8781ed1d…` → `76394279…`, ams `0778b2ef…` → `74e362eb…`, ecu-am
 `tests/sim/test_fast_forward.py`, `tests/sim/test_lazy_dma.py` and
 `test_two_board_runs_give_the_same_bus_timeline` hold runs identical to each
 other (with and without fast-forward, lazy DMA; run against run) in CI.
+
+## Upstreaming
+
+The patches are prepared as seventeen pull requests to three repositories
+(renode/renode-infrastructure, antmicro/tlib and renode/renode for the
+tests; numbered 01-08 and 10-18, 09 was dropped; 0009 needs none, upstream
+already has it),
+rebased on upstream master, tested with Renode's own suites and measured
+there:
+[`docs/proposals/renode-upstream/`](../../docs/proposals/renode-upstream/README.md)
+(submission order, commands, the CLA). Plan for the queue:
+
+| Local patch | Replaced by upstream PRs | Drop it when | Status |
+|---|---|---|---|
+| 0001 | 01 (bug fix) + 02 | the Renode release the vHIL moves to contains both | 01 submitted: https://github.com/renode/renode-infrastructure/pull/273 (issue A: https://github.com/renode/renode/issues/1029); 02 not yet submitted |
+| 0002 | 03 + 04 + 05 | the release contains all three | 03 submitted: https://github.com/renode/renode-infrastructure/pull/274 (issue B: https://github.com/renode/renode/issues/1030); 04, 05 not yet submitted |
+| 0003 | 06 + 07 | the release contains both | 07 submitted: https://github.com/renode/renode-infrastructure/pull/275 (issue B: https://github.com/renode/renode/issues/1030); 06 not yet submitted |
+| 0004 | 08 (STM32_Timer; the clock source arithmetic, prepared as 09, was dropped here and there) | the release contains it | submitted: https://github.com/renode/renode-infrastructure/pull/276 (issue B: https://github.com/renode/renode/issues/1030) |
+| 0005 + tlib/0001 | 10 (antmicro/tlib) + 11 (TranslationCPU) + 12 (renode's tests) | the release's tlib has 10 and its renode-infrastructure 11; this is a new API, proposed through an issue first, and may come back in another shape (then `VhilFastForward` follows it) or be declined (then the two patches stay here) | not yet submitted (issue C opened: https://github.com/renode/renode/issues/1031) |
+| 0006 | 13 (three commits: the `InnerExecute` split, `RequestTimeInterval(noWait)`, `SlaveTimeSource.RunsOnMasterThread`) | the release contains it; an opt-in mode of a path upstream's own machines no longer take (`mach create` shares the master time source), proposed through issue D first: upstream may make it a default or a `Machine` argument (then `VhilMachine` follows) or decline it (then 0006 stays here) | not yet submitted (issue D opened: https://github.com/renode/renode/issues/1032) |
+| 0007 | 14 (with a renode/renode commit for `nucleo_wba52cg`'s input-capture expectation) | the release contains it (14 is the same change, with tests) | submitted: https://github.com/renode/renode-infrastructure/pull/277 (its renode/renode commit is on raulmoranguerra/renode `stm32_timer_period_tests`, for the submodule bump) |
+| 0008 | 15 (the attributes read in the wrapper's constructor) | the release contains it | not yet submitted |
+| 0009 | none: upstream's e7a8584c ([GH#941], July 2026) | the next bump: the release is past 1.17.0 and has e7a8584c; RETTOBASE then counts every active exception (upstream's fix), not only the system ones | none needed |
+| tlib/0002 | 16 (antmicro/tlib: `MEMORY_ACCESS_EVENT_IO_ONLY`) + 17 (`SetHookAtMemoryAccess(hook, ioAccessesOnly)`) + 18 (renode's tests) | the release's tlib has 16; `VhilFastForward`'s raw write of 2 means the same with 16, and can move to 17's API once the release has it; a new mode proposed through an issue (E) first | not yet submitted (issue E opened: https://github.com/renode/renode/issues/1033) |
+
+Upstream lands a PR through Antmicro's tree (the PR shows "Closed" when its
+commit is on master), possibly rewritten, and a release follows. Until the
+vHIL bumps to a release with every PR that replaces a patch, that patch
+stays here unchanged on 1.17.0; on the bump, a patch whose PRs all landed is
+deleted instead of rebased (step 2 of "Moving to a new Renode release"),
+after checking the landed commits do what the patch did (the fingerprint
+identity check covers the result). A patch whose PRs are partly in is
+rebased down to what is still missing. If upstream rejects a PR, its part of
+the patch stays in the queue.
+
+The PRs differ from the local patches in details reviewed for upstream (a
+separate bug fix and its tests, an exact first-match index, a look-up cache
+owned by the bus and held weakly by threads, no reused scratch list,
+(pc, hook) keys that don't collide for hook ids of 8 or more, 0006 rebased
+onto upstream's reworked `InnerExecute` and split in three, 0008's
+attributes read in the constructor, tlib/0002's mode named and given a
+Renode API; table in the upstream README), not in what a run computes: the vHIL's fingerprint is
+byte-identical between upstream master and master with every PR (with 13:
+ecu, ams, ecu-ams and ecu-ams-ecu, 10 s from power-on; with 15-18: ecu,
+ams, ecu-ams, udv, ecu-ams-udv and ecu-ams-ecu, 10 s).
 
 ## Which build ran
 
@@ -136,9 +181,18 @@ run computes is unchanged ([`docs/performance.md`](../../docs/performance.md)).
    renode-resources commit the release's build uses, a new `VHIL_PATCH_SET`
    (`<new>-vhil.1`), `RENODE_INFRA_PATCHED_TREE`, `RENODE_TLIB_PATCHED_TREE`.
 4. Build the package; check `VhilFastForward` still calibrates (it finds
-   tlib's counters at run time) and that a run is byte-identical to the new
+   tlib's counters at run time) and that its `CMP.W` hook still fires
+   (`scripts/speed.py`'s `fast_forward` reports CMP.W hooks > 0 on the ECU):
+   upstream master (tlib `ff1bb507`, renode-infrastructure `c47c11a6`,
+   after 1.17.0) passes a 32-bit Thumb-2 instruction to opcode hooks as the
+   whole word, first halfword in the upper 16 bits, so the hook's mask
+   (`0xFBF0` / `0xF1B0`) must become `0xFBF00000` / `0xF1B00000` on the
+   first release with that change, or the counter-loop skips silently stop and that a run is byte-identical to the new
    release package's (the study's `fingerprint.py`); run the full CI
-   (`full-ci`) and the `emulation speed` job.
+   (`full-ci`) and the `emulation speed` job. Upstream master also moved
+   `Monitor.SanitizePathSeparator` to `Antmicro.Renode.Utilities.PathHelpers`
+   (renode-infrastructure `24b3a005`, #104075): `VhilMonitor.cs` (#284)
+   uses it, and the models don't compile until it follows.
 5. Bump `1.17.0` everywhere else in the same PR (CLAUDE.md, `.github/`,
    `docs/`): a Renode bump is its own PR.
 

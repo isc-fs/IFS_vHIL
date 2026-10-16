@@ -1,0 +1,154 @@
+From df6b964b3035429d654fefa7a227cced833d7883 Mon Sep 17 00:00:00 2001
+From: Raul Moran <rmg@raulmoranguerra.com>
+Date: Wed, 14 Oct 2026 02:33:44 +0200
+Subject: [PATCH] SystemBus: Set the access context without allocating
+
+Every bus access sets its initiator as the thread's context and puts
+the previous context back afterwards (SetLocalContext), allocating a
+Tuple, a closure and a DisposableWrapper each time. Keep a per-thread
+stack of contexts instead, whose entries are reused: a push returns its
+entry, and disposing the entry restores the stack's depth from before
+the push, which gives back the previous context as before, also when
+the disposables are disposed out of order.
+---
+ .../Main/Peripherals/Bus/SystemBus.cs         | 67 ++++++++++++++++---
+ .../Main/Tests/UnitTests/SystemBusTests.cs    | 27 ++++++++
+ 2 files changed, 83 insertions(+), 11 deletions(-)
+
+diff --git a/src/Emulator/Main/Peripherals/Bus/SystemBus.cs b/src/Emulator/Main/Peripherals/Bus/SystemBus.cs
+index b7291845f..afdc5a411 100644
+--- a/src/Emulator/Main/Peripherals/Bus/SystemBus.cs
++++ b/src/Emulator/Main/Peripherals/Bus/SystemBus.cs
+@@ -2778,22 +2778,19 @@ private class ThreadLocalContext : IDisposable
+         {
+             public ThreadLocalContext()
+             {
+-                context = new ThreadLocal<Tuple<IPeripheral, ulong?>>(() => null, true);
++                context = new ThreadLocal<ContextStack>(() => new ContextStack(), true);
+                 emptyDisposable.Disable();
+             }
+ 
++            // Called for every bus access: pushes the context on a per-thread stack whose entries are
++            // reused, instead of allocating a Tuple, a closure and a DisposableWrapper each time.
+             public IDisposable Initialize(IPeripheral cpu, ulong? initiatorState)
+             {
+                 if(cpu == null)
+                 {
+                     return emptyDisposable;
+                 }
+-                var previousContext = context.Value;
+-                context.Value = Tuple.Create(cpu, initiatorState);
+-                return DisposableWrapper.New(() =>
+-                {
+-                    context.Value = previousContext;
+-                });
++                return context.Value.Push(cpu, initiatorState);
+             }
+ 
+             public void Dispose()
+@@ -2801,15 +2798,63 @@ public void Dispose()
+                 context.Dispose();
+             }
+ 
+-            public bool InUse => context.Value != null;
++            public bool InUse => context.Value.Current != null;
+ 
+-            public IPeripheral Initiator => context.Value.Item1;
++            public IPeripheral Initiator => context.Value.Current.Initiator;
+ 
+-            public ulong? InitiatorState => context.Value.Item2;
++            public ulong? InitiatorState => context.Value.Current.InitiatorState;
+ 
+-            private readonly ThreadLocal<Tuple<IPeripheral, ulong?>> context;
++            private readonly ThreadLocal<ContextStack> context;
+ 
+             private static readonly DisposableWrapper emptyDisposable = new DisposableWrapper();
++
++            private class ContextStack
++            {
++                public ContextEntry Push(IPeripheral initiator, ulong? initiatorState)
++                {
++                    if(depth == entries.Length)
++                    {
++                        Array.Resize(ref entries, depth * 2);
++                    }
++                    var entry = entries[depth] ?? (entries[depth] = new ContextEntry(this, depth));
++                    entry.Initiator = initiator;
++                    entry.InitiatorState = initiatorState;
++                    depth++;
++                    return entry;
++                }
++
++                public void RestoreDepth(int newDepth)
++                {
++                    depth = newDepth;
++                }
++
++                public ContextEntry Current => depth == 0 ? null : entries[depth - 1];
++
++                private ContextEntry[] entries = new ContextEntry[4];
++                private int depth;
++            }
++
++            private class ContextEntry : IDisposable
++            {
++                public ContextEntry(ContextStack stack, int depthBefore)
++                {
++                    this.stack = stack;
++                    this.depthBefore = depthBefore;
++                }
++
++                // Restores the context from before this entry was pushed, as setting the previous context back did
++                public void Dispose()
++                {
++                    stack.RestoreDepth(depthBefore);
++                }
++
++                public IPeripheral Initiator { get; set; }
++
++                public ulong? InitiatorState { get; set; }
++
++                private readonly ContextStack stack;
++                private readonly int depthBefore;
++            }
+         }
+ 
+         // It doesn't implement IDictionary because serialization doesn't work correctly for dictionaries without two generic parameters.
+diff --git a/src/Emulator/Main/Tests/UnitTests/SystemBusTests.cs b/src/Emulator/Main/Tests/UnitTests/SystemBusTests.cs
+index d435181f2..5261fe786 100644
+--- a/src/Emulator/Main/Tests/UnitTests/SystemBusTests.cs
++++ b/src/Emulator/Main/Tests/UnitTests/SystemBusTests.cs
+@@ -137,6 +137,33 @@ public void ShouldPropagateBusAccessExceptionFromPeripheral()
+             Assert.AreSame(expectedException, Assert.Throws<BusAccessException>(() => sysbus.ReadDoubleWord(0x1000)));
+         }
+ 
++        [Test]
++        public void ShouldRestoreTheTransactionInitiatorAfterNestedContexts()
++        {
++            var outer = new EmptyPeripheral();
++            var inner = new EmptyPeripheral();
++
++            Assert.IsFalse(sysbus.TryGetTransactionInitiator(out _));
++            using(sysbus.SetLocalContext(outer))
++            {
++                using(sysbus.SetLocalContext(inner))
++                {
++                    Assert.IsTrue(sysbus.TryGetTransactionInitiator(out var innerInitiator));
++                    Assert.AreSame(inner, innerInitiator);
++                }
++                Assert.IsTrue(sysbus.TryGetTransactionInitiator(out var outerInitiator));
++                Assert.AreSame(outer, outerInitiator);
++
++                // A null context keeps the current one
++                using(sysbus.SetLocalContext(null))
++                {
++                    Assert.IsTrue(sysbus.TryGetTransactionInitiator(out var keptInitiator));
++                    Assert.AreSame(outer, keptInitiator);
++                }
++            }
++            Assert.IsFalse(sysbus.TryGetTransactionInitiator(out _));
++        }
++
+         [Test]
+         public void ShouldFindAfterRegistration()
+         {
