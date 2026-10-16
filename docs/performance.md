@@ -1030,6 +1030,39 @@ tell under `RunFor`. A fix there (check `TimeDomainsManager`'s current thread
 or the master's state instead of `IsStarted`, or drop the sleep) is
 upstreamable; the vHIL's doesn't need a patch to Renode.
 
+Again on dev after M8 (#311-#315: the event-driven tractive-system plant,
+whose inverter reports 0x466 from power-on through `SchedulePeriodic`), dev's
+probe against the fix's, interleaved, on the M-series host (Colima, 8 vCPU)
+and on one GitHub runner (x86, 4 vCPU), 2026-10-16. Host cost of probe
+frames on ecu-ams after the apps' start (median of 3, wall s, Mac / x86):
+
+| | before | after |
+|---|---|---|
+| 1 frame, one 10 ms step | 0.135 / 0.134 | 0.033 / 0.033 |
+| 10 frames, one per 10 ms step | 1.11 / 1.06 | 0.070 / 0.045 |
+| 100 frames, one per 10 ms step | 10.9 / 10.6 | 0.68 / 0.46 |
+| 10 frames, one per 1 ms step | 1.04 / 1.03 | 0.024 / 0.017 |
+| 3 s, 10 ms periodic, 100 ms slices | 4.78 / 4.02 | 1.43 / 0.95 |
+| 3 s, 10 ms periodic, one `RunFor` | 1.72 / 1.04 | 1.40 / 0.90 |
+| 3 s, no frames, 100 ms slices | 1.54 / 1.05 | 1.68 / 1.01 |
+
+So ~100 ms per `RunFor` that sent anything, whatever the frame count, and
+~0.3 ms per frame after (the monitor round trip of the send). Every committed
+scenario (16), whole runs from power-on, wall s (Mac, 2 runs each side; x86,
+2 runs, the seven listed): ecu-ams `car-arms-through-the-ecu` 11.0 virtual s
+18.7-20.2 → 6.5-6.6 (x86 16.4 → 5.1), `rearm-refused-on-a-charged-link` 47.5
+virtual s 81-86 → 27-28 (x86 69 → 21), `inverter-sense-floor-holds-the-
+discharge` 70-79 → 23-26 (x86 60 → 18), the other ecu-ams ones 15-23 → 5-9;
+ecu `heartbeat-r2d` (two 10 ms periodics) 8.0 → 2.6-3.3 (x86 6.4 → 2.0),
+`as-emergency` 20.1 → 5.4; ams `tsms-precharge-run` 9.1 → 2.5-2.7 (x86 7.3 →
+1.9). Runs an hour of `car-arms-through-the-ecu`, Renode start included: Mac
+K=1 168 → 400; x86 K=1 181 → 427, K=2 335 → 618, K=4 552 → 731. Every
+trace (bus frames, samples, edges, payloads) is byte-identical dev against fix,
+run to run and Mac against x86, apart from log lines' `wall_s`, every expect
+passing; the fingerprint is the references above on both; `speed.py` (no
+probe frames) is unchanged on both hosts within noise (x86 steady ecu-ams
+2.98-3.12x → 3.04-3.24x, ams 7.55-8.02x → 7.54-7.88x).
+
 ## What is left
 
 Host `perf` of Renode in lock-step steady state on the final build of this
