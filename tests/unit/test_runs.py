@@ -446,6 +446,10 @@ class FakeBus:
         self.sim.calls.append(("stop_periodic", self.sim.now, self.name, key))
         self.sim.periodic[(self.name, key)]["stop"] = self.sim.now
 
+    def schedule_periodic(self, key, entries):
+        """A plant's forecast (vhil/cosim.py Port.schedule): recorded only."""
+        self.sim.calls.append(("schedule_periodic", self.sim.now, self.name, key, list(entries)))
+
 
 class FakeIO:
     def __init__(self, sim, board):
@@ -465,7 +469,15 @@ class FakeIO:
         return f"{port}:{pin}"
 
     def edges(self, pin="", since_us=0):
-        return [e for e in self.sim.edge_log if e.t_us >= since_us]
+        return [e for e in self.sim.edge_log if e.t_us >= since_us and pin in ("", e.pin)]
+
+    def trigger(self, pin, armed=True):
+        self.sim.calls.append(("trigger", self.sim.now, self.board, pin, armed))
+
+    def driven(self, port, pin):
+        """The level last driven on an input (set_input), False before."""
+        return next((c[4] for c in reversed(self.sim.calls)
+                     if c[0] == "set_input" and c[2] == port and c[3] == pin), False)
 
     def level(self, pin):
         return self.sim.levels.get(pin, False)
@@ -541,6 +553,15 @@ class FakeSim:
     def read_symbol(self, board, name, size=1):
         self.calls.append(("read_symbol", self.now, board, name, size))
         return self.now // 1000
+
+    def run_until_trigger(self, us):
+        """A system with plants (vhil/worker.py): no coil edges in a fake."""
+        return self.run_for(us=us)
+
+    def call(self, path, method, *args, board=None):
+        """The LTC6820's CellSum for a plant: 95 cells at 3700 mV."""
+        assert method == "CellSum", method
+        return hex(95 * 3700)
 
 
 def run_fake(tmp_path, scenario, **kw):
@@ -1666,3 +1687,53 @@ def test_artifacts_are_plain_text_or_attachments_never_markup(client, settings):
     assert r.headers["content-disposition"].startswith("attachment")
     assert r.headers["content-security-policy"].startswith("sandbox")
     assert r.content == b"\x00\x01<html>\xff"
+
+
+# -- a system's plants (M8, docs/m8-plan.md) ---------------------------------------
+
+ECU_AMS_SYSTEM = REPO / "systems" / "ecu-ams.yaml"
+
+
+def test_a_system_s_plants_run_in_every_scenario_and_say_what_is_uncommissioned(tmp_path):
+    """ecu-ams's tractive-system plant: started at power-on (its 0x466
+    schedule on can_inv), a `plant` row sets a fault at its time, the summary
+    and a log record list the uncommissioned parameters."""
+    sim = FakeSim(ECU_AMS_SYSTEM)
+    trace = TraceWriter(tmp_path / "trace.jsonl")
+    summary = execute_run(sim, {"kind": "run", "virtual_ms": 300, "slice_ms": 100, "stimuli": [
+        {"kind": "plant", "at_ms": 150, "plant": "ts", "set": {"pre_open_circuit": True}}]}, trace)
+    trace.close()
+    recs = read_trace(tmp_path / "trace.jsonl")
+    assert summary["plants"]["ts"]["plant"] == "tractive-system"
+    assert "r_precharge" in summary["plants"]["ts"]["uncommissioned"]
+    assert any(r["kind"] == "log" and r["text"].startswith("plant ts: tractive-system") for r in recs)
+    assert [c for c in sim.calls if c[0] == "send_periodic"][0][2:5] == ("can_inv", "port_v_link", 0x466)
+    assert any(c[0] == "schedule_periodic" for c in sim.calls)
+    assert ("trigger", 0, "ams", "sysbus.gpioPortB:5", True) in sim.calls
+    assert any(r["kind"] == "log" and "pre_open_circuit=True" in r["text"] for r in recs)
+
+
+def test_a_plant_row_must_name_a_plant_and_what_it_has():
+    from vhil.server.runs import RunScenario, check_scenario
+    system = System(ECU_AMS_SYSTEM)
+    sc = RunScenario.model_validate({"kind": "run", "stimuli": [
+        {"kind": "plant", "plant": "nope", "set": {"c_scale": 2}},
+        {"kind": "plant", "plant": "ts", "set": {"warp_drive": 1}}],
+        "expect": [{"check": "always", "signal": "plant:other.v_link", "value": 1}]})
+    errors = check_scenario(sc, system)
+    assert any("no plant 'nope'" in e for e in errors)
+    assert any("warp_drive" in e for e in errors)
+    assert any("no plant 'other'" in e for e in errors)
+    assert check_scenario(RunScenario.model_validate({"kind": "run", "stimuli": [
+        {"kind": "plant", "plant": "ts", "set": {"c_scale": 2, "sense_floor": 48}}]}), system) == []
+
+
+def test_a_plant_signal_reads_the_plant_records():
+    from vhil import expect as vexpect
+    recs = [{"kind": "plant", "t_us": 6_488_500, "plant": "ts", "name": "air_pos_close_ratio",
+             "value": 0.9532}]
+    ok, = vexpect.evaluate([{"check": "always", "at_ms": 5600, "signal": "plant:ts.air_pos_close_ratio",
+                             "op": ">=", "value": 0.9}], recs, None, 11_000_000)
+    bad, = vexpect.evaluate([{"check": "always", "at_ms": 5600, "signal": "plant:ts.air_pos_close_ratio",
+                              "op": ">=", "value": 0.96}], recs, None, 11_000_000)
+    assert ok["passed"] and not bad["passed"]

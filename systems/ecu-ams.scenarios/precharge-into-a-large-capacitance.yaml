@@ -1,0 +1,21 @@
+kind: scenario
+system: ecu-ams
+description: "TS-1 fault, a DC link ten times its capacitance (the plant's c_scale 10: 4 mF, tau 2.8 s through the precharge resistor): the link charges, but not to 95 % of the cell sum within PrechargeMaxMs (5000), so the AMS latches Error, reason FsmError (12), instead of closing AIR+ on an undercharged link. Sequencing only: c_link and r_precharge are uncommissioned (catalog/plants/tractive-system.yaml). IFS08-CE-AMS state_machine.hpp:117-128, 329-345, ams_config.hpp:190."
+virtual_ms: 11500
+tags: [beyond-bench]
+stimuli:
+  - {kind: plant, name: large-c, at_ms: 0, plant: ts, set: {"c_scale": 10}}
+  - {kind: gpio, name: tsms-on, at_ms: 5500, board: ams, pin: PF9, level: true}
+  - {kind: gpio, name: dash-press, at_ms: 5600, board: ams, pin: PF10, level: true}
+  - {kind: gpio, name: dash-release, at_ms: 5650, board: ams, pin: PF10, level: false}
+watch:
+  - {kind: symbol, board: ams, name: g_state_telemetry, size: 1, period_ms: 10}
+  - {kind: symbol, board: ams, name: g_fault_reason_telemetry, size: 1, period_ms: 10}
+  - {kind: symbol, board: ecu, name: g_last_ctrl_state, size: 1, period_ms: 10}
+expect:
+  - {check: eventually, name: ams-precharge, at_ms: 5600, until_ms: 5700, signal: "symbol:ams.g_state_telemetry", value: 1}
+  - {check: eventually, name: link-charging, at_ms: 5700, until_ms: 10600, signal: "frame:can_acu.VCU_heartbeat.dc_bus_voltage", op: ">=", value: 100}
+  - {check: never, name: never-run, at_ms: 0, signal: "symbol:ams.g_state_telemetry", value: 3}
+  - {check: never, name: air-plus-never-driven, at_ms: 0, signal: "pin:ams.PB5", value: high}
+  - {check: eventually, name: precharge-timeout-error, at_ms: 10600, until_ms: 10800, signal: "symbol:ams.g_state_telemetry", value: 5}
+  - {check: always, name: reason-fsm-error, at_ms: 10800, signal: "symbol:ams.g_fault_reason_telemetry", value: 12}

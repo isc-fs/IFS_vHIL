@@ -401,13 +401,64 @@ class TsPlant(PortInputs):
         self.ts = ts or TractiveSystem()
         super().__init__(cells, self.ts.p("cells_per_chip"), v_pack)
         self.report, self.horizon_us = report, int(horizon_ms * 1000)
+        self.dirty = True                   # an input changed: forecast again
+        self._recorded = 0
+
+    def apply(self, values: dict, t_us: int) -> None:
+        """Set fault inputs or parameters (a scenario's `plant` row) at t_us;
+        a parameter becomes an override for the rest of the run."""
+        ts = self.ts
+        ts.advance(t_us)
+        for name, value in values.items():
+            if name in FAULTS:
+                ts.fault(name, value, t_us)
+            elif name in ts.params:
+                old = ts.params[name]
+                ts.params = {**ts.params, name: Parameter(
+                    name, value, old.unit, "override", f"set by the run (catalogue: {old.value!r})",
+                    None)}
+                ts._resegment(t_us)
+            else:
+                raise KeyError(f"no fault or parameter '{name}' (settable: "
+                               f"{', '.join(sorted(settable()))})")
+        self.dirty = True
+
+    def records(self, plant: str, upto_us: int) -> list[dict]:
+        """Trace records (docs/scenarios.md, `plant:` signals) of what the
+        plant did up to upto_us, each once: every contact move
+        (`<contact>_closed`, with `v_link` then), and at each contact's
+        closing the link as a fraction of the pack (`<contact>_close_ratio`:
+        AIR+'s against the FS rule's 90 %, the firmware's 95 %)."""
+        out = []
+        # Every input change up to now has been applied (an armed edge stops
+        # the run and steps the plant first), so the plant may move to now.
+        self.ts.advance(max(self.ts.t_us, upto_us))
+        moves = self.ts.history
+        while self._recorded < len(moves) and moves[self._recorded][0] <= upto_us:
+            t, contact, closed, v = moves[self._recorded]
+            self._recorded += 1
+            out.append({"kind": "plant", "t_us": t, "plant": plant, "name": f"{contact}_closed",
+                        "value": int(closed)})
+            out.append({"kind": "plant", "t_us": t, "plant": plant, "name": "v_link",
+                        "value": round(v, 3)})
+            if closed:
+                v_pack = self.ts.inputs["v_pack"]
+                out.append({"kind": "plant", "t_us": t, "plant": plant,
+                            "name": f"{contact}_close_ratio",
+                            "value": round(v / v_pack, 4) if v_pack else 0.0})
+        return out
 
     def step(self, port, t_us: int) -> None:
         self.steps += 1
         ts = self.ts
-        for t, name, value in self.changes(port, t_us, ts.t_us):
+        changes = self.changes(port, t_us, ts.t_us)
+        for t, name, value in changes:
             ts.set(name, value, t)
         ts.advance(t_us)
+        due = self.next_us is not None and t_us >= self.next_us
+        if not (changes or self.dirty or due):
+            return                          # the forecast stands
+        self.dirty = False
         if self.report is None:
             self.next_us = None
             return
@@ -416,3 +467,20 @@ class TsPlant(PortInputs):
         port.schedule(self.report, [(t, vdc_frame(r)) for t, r in entries],
                       period_ms=period_us / 1000)
         self.next_us = None if settled else first + self.horizon_us
+
+
+def settable(plant: str = "tractive-system") -> set[str]:
+    """What a scenario's `plant` row may set: the fault inputs and the
+    parameters."""
+    return set(FAULTS) | set(load_parameters(plant))
+
+
+def make_plants(system) -> dict[str, TsPlant]:
+    """The plants a system's `plants:` declares, ready for its port."""
+    out = {}
+    for name, spec in system.plants.items():
+        if spec["plant"] != "tractive-system":
+            raise ValueError(f"plant '{name}': no implementation of {spec['plant']}")
+        params = load_parameters(spec["plant"], spec.get("params"))
+        out[name] = TsPlant(TractiveSystem(params=params), cells=spec.get("cells"))
+    return out

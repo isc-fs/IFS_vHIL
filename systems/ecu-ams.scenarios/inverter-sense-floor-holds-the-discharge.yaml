@@ -1,0 +1,24 @@
+kind: scenario
+system: ecu-ams
+description: "TS-3, the inverter's sense floor against the ECU's DischargeReleaseV: the plant's inverter reports 48 V for any link below 48 V (sense_floor 48, below_floor hold: the W90's nominal DC-link range starts at 48 V, W90 manual 5.1; whether 0x466 keeps counting below it is unmeasured, IFS08-CE-ECU ecu_config.hpp:520-533). The link is drained, but at TSMS on the ECU reads 48 V, above DischargeReleaseV (10 V), with the AMS in Start: it secures the discharge (PB6) and reports it, so the AMS refuses a DASH_CHG press; the reading never falls below 10 V, so the ECU holds for DischargeTimeoutMs (30 s), then releases and reports the fault; a press after that arms the car. The case the ECU's comment warns of, on a drained link: every TSMS-on costs 30 s and a fault while the floor is above 10 V. IFS08-CE-ECU discharge.cpp:74-83, ecu_config.hpp:520-548; IFS08-CE-AMS state_machine.hpp:163-171."
+virtual_ms: 41500
+tags: [beyond-bench]
+stimuli:
+  - {kind: plant, name: floor, at_ms: 0, plant: ts, set: {"sense_floor": 48, "below_floor": "hold"}}
+  - {kind: gpio, name: tsms-on, at_ms: 5500, board: ams, pin: PF9, level: true}
+  - {kind: gpio, name: press-refused, at_ms: 5800, board: ams, pin: PF10, level: true}
+  - {kind: gpio, name: press-refused-release, at_ms: 5850, board: ams, pin: PF10, level: false}
+  - {kind: gpio, name: press-after-the-timeout, at_ms: 36000, board: ams, pin: PF10, level: true}
+  - {kind: gpio, name: press-after-the-timeout-release, at_ms: 36050, board: ams, pin: PF10, level: false}
+watch:
+  - {kind: symbol, board: ams, name: g_state_telemetry, size: 1, period_ms: 10}
+  - {kind: symbol, board: ecu, name: g_discharge_fault, size: 1, period_ms: 100}
+expect:
+  - {check: never, name: never-read-below-the-floor, at_ms: 3000, signal: "frame:can_acu.VCU_heartbeat.dc_bus_voltage", op: "<", value: 48}
+  - {check: eventually, name: ecu-secures-a-drained-link, at_ms: 5500, until_ms: 5800, signal: "pin:ecu.PB6", value: high}
+  - {check: always, name: press-refused, at_ms: 5800, until_ms: 35400, signal: "symbol:ams.g_state_telemetry", value: 0}
+  - {check: always, name: held-until-the-timeout, at_ms: 5800, until_ms: 35400, signal: "pin:ecu.PB6", value: high}
+  - {check: never, name: no-fault-before-the-timeout, at_ms: 0, until_ms: 35400, signal: "symbol:ecu.g_discharge_fault", op: "!=", value: 0}
+  - {check: eventually, name: released-at-the-timeout, at_ms: 35400, until_ms: 36000, signal: "pin:ecu.PB6", value: low}
+  - {check: eventually, name: discharge-fault-reported, at_ms: 35400, until_ms: 36000, signal: "symbol:ecu.g_discharge_fault", op: "!=", value: 0}
+  - {check: eventually, name: armed-after-the-timeout, at_ms: 36000, until_ms: 41000, signal: "symbol:ams.g_state_telemetry", value: 3}

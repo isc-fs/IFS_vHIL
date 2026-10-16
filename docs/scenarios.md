@@ -56,6 +56,7 @@ and all. By hand, any YAML that parses to the same data is fine.
 | `description` | optional text, at most 2000 characters |
 | `virtual_ms` | the run's virtual time from power-on (default 3000; each MainLite spends its bootloader's 2 s first) |
 | `slice_ms` | how often the trace is flushed and a cancel seen (default 100) |
+| `tags` | labels; `beyond-bench` marks a scenario that needs what the physical bench lacks (a plant), so it never gates a parity run (pytest marker `beyond_bench`) |
 | `stimuli`, `watch`, `expect` | the rows below |
 
 The rows are exactly a `run` scenario's (`RunScenario` in
@@ -77,6 +78,7 @@ timeline and in results, and what a `stop_periodic` names.
 | `watch` | `at_ms`, `board`, `symbol` (with `size`, `period_ms`) or `pin` | from `at_ms` to the end: samples a global (default every 10 ms, its size from the ELF) or records a pin's edges, with its level then |
 | `watch: symbol` | `board`, `name`, `size` (1, 2, 4), `period_ms` | samples a firmware global from power-on |
 | `watch: pin` | `board`, `pin` | records its edges from power-on |
+| `plant` | `at_ms`, `plant` (one of the system's `plants:`), `set` (`{name: value}`) | sets a plant's fault inputs or parameters, e.g. `{pre_open_circuit: true}`, `{sense_floor: 48}`; a parameter set here is reported as an override |
 
 A frame the scenario sends is in the trace with `src: "stimulus"`. A live
 session's ops are these rows without their time
@@ -128,7 +130,20 @@ CAN contract (its `.def` files, `vhil/candef.py`), the message by name or
 a raw `0x` id needs no contract). `symbol:<board>.<name>` is a firmware
 global, sampled every 10 ms unless a watch samples it already, its size
 from the ELF. `pin:<board>.<pin>` is a GPIO, watched from power-on with its
-level then recorded (`edge` with `initial: true`).
+level then recorded (`edge` with `initial: true`). `plant:<plant>.<output>`
+is what one of the system's plants records (`plant` records): the
+tractive-system plant's `<contact>_closed` (air_pos, air_neg, pre) and `v_link`
+at each contact move, and `<contact>_close_ratio`, the link as a fraction of
+the pack as that contact closed (`air_pos_close_ratio >= 0.9`: the FS rule).
+
+**Plants.** A system with `plants:` (`ecu-ams.yaml`, `ecu-ams-udv.yaml`:
+the tractive system, [`m8-plan.md`](m8-plan.md)) runs them on its port in
+every run: stepped at the start, when an armed coil edge ends the run early,
+when a stimulus is applied, and at the plant's own next time, never every
+slice. The plant's 0x466 frames are the probe's (`src: "stimulus"` in the
+trace), so a `frame:` expect sees the link as the ECU relays it on 0x100.
+The run's summary lists each plant's uncommissioned parameters, as does a log
+record at its start.
 
 **Values** are as of the last observation at or before a time: a frame's
 field from the last such frame (the scenario's own frames don't count), a
@@ -205,15 +220,23 @@ exits 1 and the job loses `continue-on-error`) when all of these hold:
 The flip is the owner's call, tracked in #198; meeting the criteria does not
 flip it by itself.
 
-The seeds, which pass against the firmware the systems declare:
+The seeds, which pass against the firmware the systems declare (`ecu-ams/*` run on the tractive-system plant and are tagged `beyond-bench`):
 
 | Scenario | What it checks |
 |---|---|
 | `ams/tsms-precharge-run` | Car mode: TSMS and a DASH_CHG press arm Precharge (AIR- and PRE close, `g_state_telemetry` 1); the link following to the pack gives Run (AIR+ closes, PRE opens; `AMS_status.fsm_state` 3 and `AMS_relay_status.air_positive` on CAN); never Error; AMS_OK held; `AMS_status` every 500 ms |
 | `ams/vcu-stale-opens-the-airs` | Armed to Run, then the ECU's `0x100` stops: 200 ms later Error, reason VcuStale (11), AIR+, AIR- and PRE open and AMS_OK low, latched; `AMS_status.fsm_state` 5 on CAN |
-| `ecu-ams/car-arms-through-the-ecu` | Both boards: the inverter's link (a scripted `0x466` step) reaches the AMS only through the ECU's `0x100`; TSMS and DASH_CHG lock Car and arm Precharge, the relayed link gives Run; the AMS's `ok_precharge` takes the ECU to WaitStartBrake and `VCU_ts_active` to 1; neither errors |
+| `ecu-ams/car-arms-through-the-ecu` | Both boards, on the tractive-system plant: the inverter's link reaches the AMS only through the ECU's `0x100`; TSMS and DASH_CHG lock Car and arm Precharge, the link charges through the precharge resistor and at 95 % gives Run, AIR+ closing above the FS rule's 90 %; the AMS's `ok_precharge` takes the ECU to WaitStartBrake and `VCU_ts_active` to 1; neither errors |
 | `ecu-ams/ams-fault-puts-the-ecu-in-ams-error` | Armed to Run, then 300 A on the pack-current sensor: CurrentOverLimit (10), AIRs open; the ECU enters AmsError with the `0x4A0` that reports it, not before, stays there, and `ts_active` drops |
 | `ecu-ams/dead-ecu-opens-the-airs` | Armed to Run, then the pit tool's `0x002` reboots the ECU into its bootloader: no `0x100` after, and 200 ms after the last the AMS latches VcuStale (11), AIR+, AIR- and PRE open, AMS_OK low; Error on `0x4A0` |
+| `ecu-ams/precharge-never-conducts` | The plant's precharge path never conducts: the link stays at 0 V, and `PrechargeMaxMs` after the press Error, reason FsmError (12); AIR+ never driven |
+| `ecu-ams/precharge-into-a-large-capacitance` | A 10x DC link: it charges, not to 95 % within `PrechargeMaxMs`: Error (12), AIR+ never driven |
+| `ecu-ams/precharge-into-a-leaky-link` | 2 kohm across the link: it settles at 74 %, never 95 %: Error (12) |
+| `ecu-ams/welded-air-minus` | AIR- welded: undetectable without aux contacts; the car arms as usual |
+| `ecu-ams/welded-air-plus` | AIR+ welded: the press closes AIR- straight onto the pack (0 % at AIR-'s closing, no precharge) and the AMS goes to Run at once: undetectable without aux contacts |
+| `ecu-ams/airs-drop-out-in-run` | The AIRs drop out in Run with the coil supply up: the link collapses, the AMS confirms the bus collapse and falls to Start, not latching; the ECU secures the discharge |
+| `ecu-ams/rearm-refused-on-a-charged-link` | The SDC cycled in Run: the link is stranded, the ECU secures the discharge, a press is refused; the ECU releases (below 10 V or at its 30 s timeout) and a later press arms the car again |
+| `ecu-ams/inverter-sense-floor-holds-the-discharge` | An inverter that reports 48 V for anything below 48 V: at TSMS on the ECU secures a drained link, the AMS refuses the press, the ECU holds for `DischargeTimeoutMs` (30 s), releases with a fault, and only then does the car arm |
 | `ecu/ams-error-inhibit` | A fresh `0x4A0` saying Error puts the ECU in AmsError within two ticks and holds it there; the AMS healthy again re-arms from WaitInvVdcConfig back to WaitStartBrake |
 | `ecu/as-emergency` | `0x50A` Emergency: the RTDS sounds 150 ms pulses for exactly 10 s and stops although Emergency persists; silent before the uDV is heard; `PitDiag_dv` flags the tone |
 | `ecu/heartbeat-r2d` | Nothing on the bus in the bootloader's window; `0x100` every 10 ms on the ACU bus only, `0x704` every second; the inverter's DC-bus report and the AMS's `ok_precharge` reach WaitStartBrake; START without the brake sounds no RTDS; with it, R2dDelay and 2 s of RTDS, then WaitInvStandby |

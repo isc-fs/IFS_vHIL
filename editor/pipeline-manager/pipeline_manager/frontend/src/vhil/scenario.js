@@ -205,9 +205,10 @@ export function findMessage(contract, bus, item) {
     return Object.values(msgs).find((m) => m.name === item);
 }
 
-/** "frame:can_acu.AMS_status.fsm_state" -> {kind, owner, item, field}, or null. */
+/** "frame:can_acu.AMS_status.fsm_state" -> {kind, owner, item, field}, or null.
+ *  plant:<plant>.<output> is a plant's (docs/m8-plan.md). */
 export function parseSignal(text) {
-    const m = /^(frame|symbol|pin):([A-Za-z_]\w*)\.([A-Za-z0-9_]+)(?:\.([A-Za-z_]\w*))?$/.exec(text || '');
+    const m = /^(frame|symbol|pin|plant):([A-Za-z_]\w*)\.([A-Za-z0-9_]+)(?:\.([A-Za-z_]\w*))?$/.exec(text || '');
     if (!m) return null;
     if (m[1] !== 'frame' && m[4]) return null;
     return {
@@ -244,6 +245,7 @@ export function targetOf(row, contract) {
         case 'watch': return it.pin !== undefined ? `pin ${it.board}.${it.pin}`
             : `${it.board}.${it.name ?? it.symbol}`;
         case 'expect': return it.signal;
+        case 'plant': return `plant ${it.plant}`;
         default: return '';
     }
 }
@@ -280,6 +282,7 @@ export function valueOf(row) {
         case 'watch': return it.pin !== undefined ? 'edges'
             : `${it.size ? `${it.size} B ` : ''}every ${ms(it.period_ms ?? 10)}`;
         case 'expect': return expectText(it);
+        case 'plant': return Object.entries(it.set || {}).map(([k, v]) => `${k} = ${v}`).join(', ');
         default: return '';
     }
 }

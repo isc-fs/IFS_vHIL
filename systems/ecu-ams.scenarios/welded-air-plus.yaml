@@ -1,0 +1,20 @@
+kind: scenario
+system: ecu-ams
+description: "TS-1 fault, AIR+ welded closed (the plant's welded_air_pos): with AIR- open the link stays drained, but the press closes AIR- straight onto the pack through the welded AIR+, bypassing the precharge resistor (inrush: the second AIR to close does so at 0 % of the pack, against the FS rule's 90 %). The AMS cannot see the weld (no AIR auxiliary contacts, #147 out of scope); the relayed link is at the pack already, so it goes through Precharge and Transition to Run at once. Recorded as what the firmware does, not as its failure: it has no measurement that could tell. IFS08-CE-AMS state_machine.hpp:117-128, 308-314, 366."
+virtual_ms: 9000
+tags: [beyond-bench]
+stimuli:
+  - {kind: plant, name: weld-air-plus, at_ms: 0, plant: ts, set: {"welded_air_pos": true}}
+  - {kind: gpio, name: tsms-on, at_ms: 5500, board: ams, pin: PF9, level: true}
+  - {kind: gpio, name: dash-press, at_ms: 5600, board: ams, pin: PF10, level: true}
+  - {kind: gpio, name: dash-release, at_ms: 5650, board: ams, pin: PF10, level: false}
+watch:
+  - {kind: symbol, board: ams, name: g_state_telemetry, size: 1, period_ms: 10}
+  - {kind: symbol, board: ams, name: g_fault_reason_telemetry, size: 1, period_ms: 10}
+  - {kind: symbol, board: ecu, name: g_last_ctrl_state, size: 1, period_ms: 10}
+expect:
+  - {check: never, name: no-error, at_ms: 0, signal: "symbol:ams.g_state_telemetry", value: 5}
+  - {check: always, name: link-drained-before-arm, at_ms: 3000, until_ms: 5600, signal: "frame:can_acu.VCU_heartbeat.dc_bus_voltage", value: 0}
+  - {check: always, name: air-minus-closes-on-an-empty-link, at_ms: 5600, signal: "plant:ts.air_neg_close_ratio", op: "<", value: 0.1}
+  - {check: eventually, name: link-at-the-pack-at-once, at_ms: 5600, until_ms: 5800, signal: "frame:can_acu.VCU_heartbeat.dc_bus_voltage", op: ">=", value: 351}
+  - {check: eventually, name: ams-run, at_ms: 5600, until_ms: 6000, signal: "symbol:ams.g_state_telemetry", value: 3}

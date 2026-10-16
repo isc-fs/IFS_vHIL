@@ -349,9 +349,16 @@ class CanBus:
         on): each tick sends the last entry's payload at or before it. Pending
         entries at or after the first new one are replaced, in one call
         (models/renode/VhilProbe.cs, SchedulePeriodic)."""
-        items = " ".join(f"{_int(t)}:{'-' if d is None else bytes(d).hex()}" for t, d in entries)
-        if items:
-            self.sim.monitor(f'{self.probe} SchedulePeriodic {rn.quote(key)} {rn.quote(items)}')
+        items = [f"{_int(t)}:{'-' if d is None else bytes(d).hex()}" for t, d in entries]
+        # In calls of at most ~4 KiB (a monitor string's limit, vhil/renode.py):
+        # each later call's entries come after the earlier ones, so it only adds.
+        while items:
+            chunk, size = [], 0
+            while items and size + len(items[0]) + 1 <= 4000:
+                size += len(items[0]) + 1
+                chunk.append(items.pop(0))
+            self.sim.monitor(f'{self.probe} SchedulePeriodic {rn.quote(key)} '
+                             f'{rn.quote(" ".join(chunk))}')
 
 
 class BoardIO:
@@ -664,16 +671,19 @@ class Sim:
         edge of a pin armed with BoardIO.trigger (models/renode/VhilRunner.cs):
         the same quanta and sync points as run_for, so a run that sees no
         armed edge computes exactly what run_for would. Returns the time
-        reached (us). The co-simulation port's event-driven plants use it
-        (vhil/cosim.py)."""
+        reached (us); `triggered` says whether an armed edge ended it (it may
+        have ended where it would have anyway). The co-simulation port's
+        event-driven plants use it (vhil/cosim.py)."""
         us = _int(us)
+        self.triggered = False
         if us <= 0:
             return self.now_us()
         q = self.system.sync_quantum_us() if self.system.own_time_sources(lockstep=True) else 0
         whole = us - us % q if q else us
         if whole:
-            ran = int(self.monitor(f"emulation RunForUntilTrigger {whole}").strip(), 0)
-            if ran < whole:
+            ran, triggered = self.monitor(f"emulation RunForUntilTrigger {whole}").split()
+            self.triggered = triggered == "1"
+            if self.triggered:
                 return self.now_us()
         if us - whole:
             return self.run_for(us=us - whole)

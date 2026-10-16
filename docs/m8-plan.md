@@ -163,9 +163,9 @@ The system file switch, on `ecu-ams.yaml` and `ecu-ams-udv.yaml`:
 
 ```yaml
 plants:
-  ts: {plant: tractive-system}      # catalog/plants/tractive-system.yaml
+  ts: {plant: tractive-system, cells: isospi}   # catalog/plants/tractive-system.yaml
 port:
-  step_ms: 5
+  step_ms: 10
   signals:
     air_pos_cmd:   {gpio_out: ams.PB5}
     air_neg_cmd:   {gpio_out: ams.PB6}

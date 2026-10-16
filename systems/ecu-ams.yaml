@@ -33,6 +33,13 @@ devices:
   imu: {model: bmi088, i2c: ams.I2C2}
   pack_current: {model: ssa-2-250a, outputs: {out_p: ams.PF7, out_n: ams.PF8}}  # S_CURRENT_P/N -> J4.3/J4.2 (docs/backplanes/ams.md)
   dcdc_current: {model: acs758lcb-050b, outputs: {out: ams.PC1}}  # S_CURRENT_DCDC -> J3.5, not sampled on AMS dev (docs/backplanes/ams.md)
+plants:
+  # The car's tractive system (M8, #147; docs/m8-plan.md): AIR+, AIR- and
+  # the precharge relay on the AMS's coil drives, the inverter's DC link and
+  # its 0x466 report (v_link). Runs in scenarios and web-app runs, never on
+  # the wall-clock bench (IFS_HIL parity keeps its own linear ramp). Every
+  # parameter's source is in catalog/plants/tractive-system.yaml.
+  ts: {plant: tractive-system, cells: isospi}
 port:
   # The co-simulation port (vhil/cosim.py). The tractive-system plant's
   # signals (vhil/plant_ts.py, docs/m8-plan.md) are named as the IFSSIM

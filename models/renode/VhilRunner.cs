@@ -3,7 +3,7 @@
 // event-driven exchange (docs/cosim.md, #147). Compiled with the other
 // models (vhil/models.py).
 //
-//     emulation RunForUntilTrigger 100000        -> the us actually run
+//     emulation RunForUntilTrigger 100000        -> "<us run> <triggered 0|1>"
 //     vhil_gpio_ams Trigger "sysbus.gpioPortB:5" true
 //
 // `emulation RunFor` runs the master time source for a fixed interval and
@@ -36,9 +36,13 @@ namespace Antmicro.Renode.Testing
 {
     public static class VhilRunnerExtensions
     {
-        public static ulong RunForUntilTrigger(this Emulation emulation, ulong microseconds)
+        // "<us run> <1 if an armed edge ended it, else 0>": an edge in the
+        // last quantum ends the run where it would have ended anyway, and the
+        // caller still needs to know.
+        public static string RunForUntilTrigger(this Emulation emulation, ulong microseconds)
         {
-            return VhilRunner.Run(emulation, microseconds);
+            var ran = VhilRunner.Run(emulation, microseconds);
+            return $"{ran} {(VhilRunner.Triggered ? 1 : 0)}";
         }
     }
 
