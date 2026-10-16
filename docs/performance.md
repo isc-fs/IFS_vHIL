@@ -65,7 +65,7 @@ that is busy with something else.
 
 `--baseline` runs each configuration a second time as the bench ran before
 #154's speed-ups, on the same host (`VHIL_FAST_FORWARD=0`, .NET's default
-tiering delay). `VHIL_DOCKER_CPUS=N` limits the container to N cores, as a CI
+tiering delay and call-count threshold). `VHIL_DOCKER_CPUS=N` limits the container to N cores, as a CI
 runner (GitHub's have 4). The `emulation speed` job of
 [`sim.yml`](../.github/workflows/sim.yml) runs it with `--baseline` on every
 full-ci pull request and every night, into the job summary and an artifact.

@@ -30,7 +30,7 @@ below it a suite only takes longer, as native tests do.
 --baseline measures each configuration a second time as the bench ran
 before #154's speed-ups, on the same host: without the busy-wait
 fast-forward (VHIL_FAST_FORWARD=0, models/renode/VhilFastForward.cs) and with
-.NET's default tiering delay (vhil/renode.py RENODE_ENV).
+.NET's default tiering delay and call-count threshold (vhil/renode.py RENODE_ENV).
 
 --profile DIR samples each board's PC every millisecond of host time
 (models/renode/VhilPcSampler.cs) and writes, per run and phase, the guest
@@ -296,7 +296,8 @@ BENCH_ONLY = {"ecu-ams-ecu": REPO / "scripts" / "speed-systems" / "ecu-ams-ecu.y
 
 
 # The bench before #154's speed-ups, for --baseline.
-BASELINE_ENV = {"VHIL_FAST_FORWARD": "0", "DOTNET_TC_CallCountingDelayMs": "100"}
+BASELINE_ENV = {"VHIL_FAST_FORWARD": "0", "DOTNET_TC_CallCountingDelayMs": "100",
+                "DOTNET_TC_CallCountThreshold": "30"}
 
 
 def measure(system: str, firmware: dict[str, str], path: str, args, variant: str = "current") -> dict:
