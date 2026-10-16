@@ -5,8 +5,9 @@ and two to tlib ([`docker/renode/patches/`](../../../docker/renode/patches/),
 study: [`../renode-fork-study.md`](../renode-fork-study.md)). This directory
 holds them rewritten as pull requests to the three upstream repositories,
 rebased on upstream master, split the way upstream reviews, tested with
-Renode's own suites and measured on upstream's own workloads. **Nothing here
-has been posted**: Raul submits them after signing the CLA.
+Renode's own suites and measured on upstream's own workloads. The five
+issues and the first wave of PRs (01, 03, 07, 08, 14) were submitted on
+2026-10-16 ("Submitted", below); the rest is not posted yet.
 
 Which repository each change belongs in:
 
@@ -20,6 +21,32 @@ Which repository each change belongs in:
   tests and the issues: PR 12 (tests for 10 + 11), 14's change to one
   Robot expectation, PR 18 (tests for 16 + 17), and issues A, B, C, D and
   E.
+
+## Submitted
+
+From Raul's account (raulmoranguerra), CLAs signed. Forks:
+<https://github.com/raulmoranguerra/renode-infrastructure>,
+<https://github.com/raulmoranguerra/renode>. The issues are `ISSUES.md`'s
+texts; the PR bodies are each `PR.md` with `ISSUE_A`/`ISSUE_B`/`ISSUE_C`
+filled in (1029/1030/1031), and 14's also with the link to its renode/renode
+commit. All five PRs applied to renode-infrastructure master `da0d85bb`
+(2026-10-16) with `git am --keep-non-patch` unchanged: no rebase.
+
+| Item | URL | Date | Status |
+|---|---|---|---|
+| Issue A (ClockSource stale index) | https://github.com/renode/renode/issues/1029 | 2026-10-16 | open |
+| Issue B (host performance series) | https://github.com/renode/renode/issues/1030 | 2026-10-16 | open |
+| Issue C (pre-opcode hook exclusion) | https://github.com/renode/renode/issues/1031 | 2026-10-16 | open; 10-12 wait for an answer |
+| Issue D (slave time source on the master's thread) | https://github.com/renode/renode/issues/1032 | 2026-10-16 | open; 13 waits for an answer |
+| Issue E (IO-only memory access hook) | https://github.com/renode/renode/issues/1033 | 2026-10-16 | open; 16-18 wait for an answer |
+| PR 01 `1029-clock_entry_stale_index` | https://github.com/renode/renode-infrastructure/pull/273 | 2026-10-16 | open, CLA signed (`license/cla` success) |
+| PR 03 `1030-sysbus_locked_ranges_and_tags` | https://github.com/renode/renode-infrastructure/pull/274 | 2026-10-16 | open, CLA signed (`license/cla` success) |
+| PR 07 `1030-cpu_hot_path_allocations` | https://github.com/renode/renode-infrastructure/pull/275 | 2026-10-16 | open, CLA signed (`license/cla` success) |
+| PR 08 `1030-stm32_timer_unused_channels` | https://github.com/renode/renode-infrastructure/pull/276 | 2026-10-16 | open, CLA signed (`license/cla` success) |
+| PR 14 `stm32_timer_period` | https://github.com/renode/renode-infrastructure/pull/277 | 2026-10-16 | open, CLA signed (`license/cla` success) |
+| PR 14's renode/renode commit | https://github.com/raulmoranguerra/renode/commit/b85ab9426d5f374061a02a8fe754d5bcad5a6eb6 (branch `stm32_timer_period_tests`) | 2026-10-16 | pushed to the fork, no PR: for the submodule bump once 14 lands (PR or fold-in, step 3) |
+
+Not submitted yet: 02, 04-06, 10-13, 15-18.
 
 ## The pull requests
 

@@ -79,18 +79,18 @@ there:
 [`docs/proposals/renode-upstream/`](../../docs/proposals/renode-upstream/README.md)
 (submission order, commands, the CLA). Plan for the queue:
 
-| Local patch | Replaced by upstream PRs | Drop it when |
-|---|---|---|
-| 0001 | 01 (bug fix) + 02 | the Renode release the vHIL moves to contains both |
-| 0002 | 03 + 04 + 05 | the release contains all three |
-| 0003 | 06 + 07 | the release contains both |
-| 0004 | 08 (STM32_Timer; the clock source arithmetic, prepared as 09, was dropped here and there) | the release contains it |
-| 0005 + tlib/0001 | 10 (antmicro/tlib) + 11 (TranslationCPU) + 12 (renode's tests) | the release's tlib has 10 and its renode-infrastructure 11; this is a new API, proposed through an issue first, and may come back in another shape (then `VhilFastForward` follows it) or be declined (then the two patches stay here) |
-| 0006 | 13 (three commits: the `InnerExecute` split, `RequestTimeInterval(noWait)`, `SlaveTimeSource.RunsOnMasterThread`) | the release contains it; an opt-in mode of a path upstream's own machines no longer take (`mach create` shares the master time source), proposed through issue D first: upstream may make it a default or a `Machine` argument (then `VhilMachine` follows) or decline it (then 0006 stays here) |
-| 0007 | 14 (with a renode/renode commit for `nucleo_wba52cg`'s input-capture expectation) | the release contains it (14 is the same change, with tests) |
-| 0008 | 15 (the attributes read in the wrapper's constructor) | the release contains it |
-| 0009 | none: upstream's e7a8584c ([GH#941], July 2026) | the next bump: the release is past 1.17.0 and has e7a8584c; RETTOBASE then counts every active exception (upstream's fix), not only the system ones |
-| tlib/0002 | 16 (antmicro/tlib: `MEMORY_ACCESS_EVENT_IO_ONLY`) + 17 (`SetHookAtMemoryAccess(hook, ioAccessesOnly)`) + 18 (renode's tests) | the release's tlib has 16; `VhilFastForward`'s raw write of 2 means the same with 16, and can move to 17's API once the release has it; a new mode proposed through an issue (E) first |
+| Local patch | Replaced by upstream PRs | Drop it when | Status |
+|---|---|---|---|
+| 0001 | 01 (bug fix) + 02 | the Renode release the vHIL moves to contains both | 01 submitted: https://github.com/renode/renode-infrastructure/pull/273 (issue A: https://github.com/renode/renode/issues/1029); 02 not yet submitted |
+| 0002 | 03 + 04 + 05 | the release contains all three | 03 submitted: https://github.com/renode/renode-infrastructure/pull/274 (issue B: https://github.com/renode/renode/issues/1030); 04, 05 not yet submitted |
+| 0003 | 06 + 07 | the release contains both | 07 submitted: https://github.com/renode/renode-infrastructure/pull/275 (issue B: https://github.com/renode/renode/issues/1030); 06 not yet submitted |
+| 0004 | 08 (STM32_Timer; the clock source arithmetic, prepared as 09, was dropped here and there) | the release contains it | submitted: https://github.com/renode/renode-infrastructure/pull/276 (issue B: https://github.com/renode/renode/issues/1030) |
+| 0005 + tlib/0001 | 10 (antmicro/tlib) + 11 (TranslationCPU) + 12 (renode's tests) | the release's tlib has 10 and its renode-infrastructure 11; this is a new API, proposed through an issue first, and may come back in another shape (then `VhilFastForward` follows it) or be declined (then the two patches stay here) | not yet submitted (issue C opened: https://github.com/renode/renode/issues/1031) |
+| 0006 | 13 (three commits: the `InnerExecute` split, `RequestTimeInterval(noWait)`, `SlaveTimeSource.RunsOnMasterThread`) | the release contains it; an opt-in mode of a path upstream's own machines no longer take (`mach create` shares the master time source), proposed through issue D first: upstream may make it a default or a `Machine` argument (then `VhilMachine` follows) or decline it (then 0006 stays here) | not yet submitted (issue D opened: https://github.com/renode/renode/issues/1032) |
+| 0007 | 14 (with a renode/renode commit for `nucleo_wba52cg`'s input-capture expectation) | the release contains it (14 is the same change, with tests) | submitted: https://github.com/renode/renode-infrastructure/pull/277 (its renode/renode commit is on raulmoranguerra/renode `stm32_timer_period_tests`, for the submodule bump) |
+| 0008 | 15 (the attributes read in the wrapper's constructor) | the release contains it | not yet submitted |
+| 0009 | none: upstream's e7a8584c ([GH#941], July 2026) | the next bump: the release is past 1.17.0 and has e7a8584c; RETTOBASE then counts every active exception (upstream's fix), not only the system ones | none needed |
+| tlib/0002 | 16 (antmicro/tlib: `MEMORY_ACCESS_EVENT_IO_ONLY`) + 17 (`SetHookAtMemoryAccess(hook, ioAccessesOnly)`) + 18 (renode's tests) | the release's tlib has 16; `VhilFastForward`'s raw write of 2 means the same with 16, and can move to 17's API once the release has it; a new mode proposed through an issue (E) first | not yet submitted (issue E opened: https://github.com/renode/renode/issues/1033) |
 
 Upstream lands a PR through Antmicro's tree (the PR shows "Closed" when its
 commit is on master), possibly rewritten, and a release follows. Until the
