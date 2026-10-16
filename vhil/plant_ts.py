@@ -91,6 +91,20 @@ def _us(seconds: float) -> int:
     return int(round(float(seconds) * 1e6))
 
 
+def inverter_report(volts: float, params: dict) -> Optional[int]:
+    """What the inverter puts in DCBus_Voltage_V for a link at `volts`:
+    rounded to vdc_resolution, the floor below sense_floor (`hold`), or None
+    for no frame (`silent`). The inverter's, not the battery's: the vHIL
+    applies it to the stand-in's link and to an FMU's alike."""
+    res = float(params["vdc_resolution"].value)
+    floor = float(params["sense_floor"].value)
+    if floor > 0 and volts < floor:
+        if params["below_floor"].value == "silent":
+            return None
+        return int(math.floor(floor / res + 0.5) * res)
+    return int(math.floor(volts / res + 0.5) * res)
+
+
 def vdc_frame(volts: Optional[int]) -> Optional[bytes]:
     """0x466 EMC_TX_STATE_7 as the inverter sends it: DCBus_Voltage_V 10 bits
     LE from bit 16 (ECU NX0001_STS04_A16.dbc:82-87), the E2E counter and CRC
@@ -261,15 +275,8 @@ class TractiveSystem:
 
     def report(self, volts: Optional[float] = None) -> Optional[int]:
         """What the inverter puts in DCBus_Voltage_V for a link at `volts`
-        (default: now): rounded to vdc_resolution, the floor below
-        sense_floor (`hold`), or None for no frame (`silent`)."""
-        v = self.v_link if volts is None else volts
-        res = float(self.p("vdc_resolution"))
-        reading = int(math.floor(v / res + 0.5) * res)
-        floor = float(self.p("sense_floor"))
-        if floor > 0 and v < floor:
-            return None if self.p("below_floor") == "silent" else int(math.floor(floor / res + 0.5) * res)
-        return reading
+        (default: now): inverter_report."""
+        return inverter_report(self.v_link if volts is None else volts, self.params)
 
     def forecast(self, ticks_from_us: int, period_us: int, horizon_us: int
                  ) -> tuple[list[tuple[int, Optional[int]]], bool]:
@@ -310,80 +317,101 @@ class TractiveSystem:
 COIL_SIGNALS = ("air_pos_cmd", "air_neg_cmd", "pre_cmd", "discharge_cmd")
 
 
-class TsPlant:
+class PortInputs:
+    """What a tractive-system plant reads from the co-simulation port, by the
+    contract's names (docs/m8-plan.md), shared by the stand-in (TsPlant) and
+    the FMU master (vhil/fmi.py FmuPlant): gpio_out `air_pos_cmd`,
+    `air_neg_cmd`, `pre_cmd` and optionally `discharge_cmd`, each change with
+    its own time; gpio_in `sdc_closed` (the coil supply as the AMS senses it
+    on PF9: the level a scenario or test drives there), and `v_pack` from the
+    LTC6811 chain's cells (`cells`, the system's LTC6820 device, e.g.
+    "isospi"), both at the step's time; without a chain, a fixed `v_pack`
+    (V) if given."""
+
+    event_driven = True
+
+    def __init__(self, cells: Optional[str], cells_per_chip, v_pack: Optional[float] = None):
+        self.cells, self.v_pack = cells, v_pack
+        self.counts = ",".join(str(int(c)) for c in cells_per_chip)
+        self.started = False
+        self.last: dict = {}
+        self.next_us: Optional[int] = None
+        self.steps = 0
+
+    def triggers(self, port) -> list[str]:
+        return [n for n in COIL_SIGNALS if n in port.signals]
+
+    def changes(self, port, t_us: int, not_before: int) -> list[tuple[int, str, object]]:
+        """Every input change since the last call, [(t_us, name, value)] in
+        time order (coil edges at their own times, no earlier than
+        not_before; the rest at t_us), only those that change something."""
+        out = []
+        for name in self.triggers(port):
+            if not self.started:
+                out.append((t_us, COIL_SIGNALS.index(name), name, port.level(name)))
+                port.edges(name)                # history up to now: consumed
+            else:
+                out += [(max(t, not_before), COIL_SIGNALS.index(name), name, level)
+                        for t, level in port.edges(name)]
+        if "sdc_closed" in port.signals:
+            out.append((t_us, 10, "sdc_closed", port.driven("sdc_closed")))
+        if self.cells is not None:
+            system = port.sim.system
+            board, _, spi = system.resolve(system.devices[self.cells]["spi"])
+            mv = int(port.sim.call(f"{spi}.{self.cells}", "CellSum", self.counts,
+                                   board=board.name).strip(), 0)
+            out.append((t_us, 11, "v_pack", mv / 1000))
+        elif self.v_pack is not None:
+            out.append((t_us, 11, "v_pack", float(self.v_pack)))
+        result = []
+        for t, _, name, value in sorted(out):
+            if name in COIL_SIGNALS or self.last.get(name) != value:
+                self.last[name] = value
+                result.append((t, name, value))
+        self.started = True
+        return result
+
+    @staticmethod
+    def first_tick(port, report: str, t_us: int, period_us: int) -> tuple[int, int]:
+        """The first tick of the report's sender after t_us, and its period."""
+        grid = port.ticks(report)
+        if grid is None:
+            return t_us + period_us, period_us
+        start, period_us = grid
+        return (start if t_us < start else
+                start + ((t_us - start) // period_us + 1) * period_us), period_us
+
+
+class TsPlant(PortInputs):
     """The tractive system on a system's co-simulation port (vhil/cosim.py),
     event-driven: stepped when a coil (or the ECU's discharge drive) changes,
     when its forecast of the inverter's 0x466 runs out, and whenever the
-    port's other plants are.
-
-    Port signals, by the contract's names (docs/m8-plan.md): gpio_out
-    `air_pos_cmd`, `air_neg_cmd`, `pre_cmd` and optionally `discharge_cmd`;
-    gpio_in `sdc_closed` (the coil supply as the AMS senses it on PF9: the
-    level a scenario or test drives there); can_tx `v_link` (0x466 on the
-    inverter bus), unless `report` is None because an Inverter plant reports
-    the link itself (Inverter(dc_link=...)). `cells`: the system's LTC6820
-    device (e.g. "isospi") whose chain's cells give v_pack, read at every
-    step; None leaves v_pack to `set`.
+    port's other plants are. Inputs as PortInputs reads them; output can_tx
+    `v_link` (0x466 on the inverter bus), unless `report` is None because an
+    Inverter plant reports the link itself (Inverter(dc_link=...)).
 
     At each step it applies every input change at its own time, then hands
     the emulation the inverter's reports until the link settles (or
     `horizon_ms`, then it asks to be stepped again): how often it is stepped
     doesn't change what it sends."""
 
-    event_driven = True
-
     def __init__(self, ts: Optional[TractiveSystem] = None, *, cells: Optional[str] = None,
-                 report: Optional[str] = "v_link", horizon_ms: float = 3000):
+                 v_pack: Optional[float] = None, report: Optional[str] = "v_link",
+                 horizon_ms: float = 3000):
         self.ts = ts or TractiveSystem()
-        self.cells, self.report, self.horizon_us = cells, report, int(horizon_ms * 1000)
-        self.next_us: Optional[int] = None
-        self.steps = 0
-        self._started = False
-
-    def triggers(self, port) -> list[str]:
-        return [n for n in COIL_SIGNALS if n in port.signals]
-
-    def _counts(self) -> str:
-        return ",".join(str(int(c)) for c in self.ts.p("cells_per_chip"))
+        super().__init__(cells, self.ts.p("cells_per_chip"), v_pack)
+        self.report, self.horizon_us = report, int(horizon_ms * 1000)
 
     def step(self, port, t_us: int) -> None:
         self.steps += 1
         ts = self.ts
-        changes = []
-        for name in self.triggers(port):
-            if not self._started:
-                changes.append((t_us, COIL_SIGNALS.index(name), name, port.level(name)))
-            else:
-                changes += [(max(t, ts.t_us), COIL_SIGNALS.index(name), name, level)
-                            for t, level in port.edges(name)]
-        if not self._started:
-            for name in self.triggers(port):
-                port.edges(name)                # history up to now: consumed
-        for t, _, name, level in sorted(changes):
-            ts.set(name, level, t)
-        if "sdc_closed" in port.signals:
-            supply = port.driven("sdc_closed")
-            if supply != ts.inputs["sdc_closed"] or not self._started:
-                ts.set("sdc_closed", supply, t_us)
-        if self.cells is not None:
-            system = port.sim.system
-            board, _, spi = system.resolve(system.devices[self.cells]["spi"])
-            mv = int(port.sim.call(f"{spi}.{self.cells}", "CellSum", self._counts(),
-                                   board=board.name).strip(), 0)
-            if mv / 1000 != ts.inputs["v_pack"]:
-                ts.set("v_pack", mv / 1000, t_us)
+        for t, name, value in self.changes(port, t_us, ts.t_us):
+            ts.set(name, value, t)
         ts.advance(t_us)
-        self._started = True
         if self.report is None:
             self.next_us = None
             return
-        period_us = _us(ts.p("vdc_period"))
-        grid = port.ticks(self.report)
-        if grid is None:
-            first = t_us + period_us
-        else:
-            start, period_us = grid
-            first = start if t_us < start else start + ((t_us - start) // period_us + 1) * period_us
+        first, period_us = self.first_tick(port, self.report, t_us, _us(ts.p("vdc_period")))
         entries, settled = ts.forecast(first, period_us, self.horizon_us)
         port.schedule(self.report, [(t, vdc_frame(r)) for t, r in entries],
                       period_ms=period_us / 1000)

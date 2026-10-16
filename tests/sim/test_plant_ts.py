@@ -23,12 +23,12 @@ GPIOF, TSMS, DASH_CHG = "sysbus.gpioPortF", 9, 10
 FS_PRECHARGE_RATIO = 0.90        # FS rules: the second AIR closes at >= 90 % (#147)
 
 
-def _arm(images):
+def _arm(images, make_plant=lambda: TsPlant(cells="isospi")):
     """Power on, then TSMS on 1 s after the apps start and a DASH_CHG press
     0.1 s later; 4 s with the plant. Returns what the run observed."""
     with Sim(REPO / "systems" / "ecu-ams.yaml", images("ecu-ams")) as sim:
         t0 = sim.wait_for_app()
-        port, plant = Port(sim), TsPlant(cells="isospi")
+        port, plant = Port(sim), make_plant()
         ams = sim.io("ams")
         states = []
 
@@ -46,10 +46,12 @@ def _arm(images):
         run(3900)
         hb = [(f.t_us, int.from_bytes(f.data[0:2], "little"), f.data[2])
               for f in sim.can("can_acu").frames(0x100, since_us=t0)]
+        ts = getattr(plant, "ts", None)
         return {
+            "plant": plant,
             "states": states,
-            "history": list(plant.ts.history),
-            "v_pack": plant.ts.inputs["v_pack"],
+            "history": list(ts.history) if ts else None,
+            "v_pack": ts.inputs["v_pack"] if ts else plant.inputs.get("v_pack"),
             "steps": plant.steps,
             "heartbeat": hb,
             "vdc": [(f.t_us, f.data.hex()) for f in sim.can("can_inv").sent(0x466, since_us=t0)],

@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- The reference tractive-system FMU's description (tests/fmu/ts_reference.c):
+     the contract of docs/m8-plan.md and isc-fs/IFSSIM#669. -->
+<fmiModelDescription fmiVersion="3.0" modelName="ts_reference"
+    instantiationToken="{6f1c0e5a-7a52-4c39-9d1f-ts-reference-1}"
+    description="Reference tractive-system plant for the vHIL's FMI master tests">
+  <CoSimulation modelIdentifier="ts_reference" canGetAndSetFMUState="@STATE@"
+      canHandleVariableCommunicationStepSize="true" fixedInternalStepSize="0.005"/>
+  <DefaultExperiment startTime="0" stepSize="0.005"/>
+  <ModelVariables>
+    <Float64 name="c_link" valueReference="1" causality="parameter" variability="tunable" start="400e-6" unit="F"/>
+    <Float64 name="r_precharge" valueReference="2" causality="parameter" variability="tunable" start="690"/>
+    <Float64 name="r_discharge" valueReference="3" causality="parameter" variability="tunable" start="6500"/>
+    <Float64 name="r_inverter_bleed" valueReference="4" causality="parameter" variability="tunable" start="0"/>
+    <Float64 name="air_close" valueReference="5" causality="parameter" variability="tunable" start="0.020"/>
+    <Float64 name="air_open" valueReference="6" causality="parameter" variability="tunable" start="0.010"/>
+    <Float64 name="pre_close" valueReference="7" causality="parameter" variability="tunable" start="0.010"/>
+    <Float64 name="pre_open" valueReference="8" causality="parameter" variability="tunable" start="0.005"/>
+    <Boolean name="welded_air_pos" valueReference="10" causality="input" variability="discrete" start="false"/>
+    <Boolean name="welded_air_neg" valueReference="11" causality="input" variability="discrete" start="false"/>
+    <Boolean name="pre_open_circuit" valueReference="12" causality="input" variability="discrete" start="false"/>
+    <Boolean name="air_external_open" valueReference="13" causality="input" variability="discrete" start="false"/>
+    <Float64 name="c_scale" valueReference="14" causality="input" variability="continuous" start="1"/>
+    <Float64 name="r_leak" valueReference="15" causality="input" variability="continuous" start="0"/>
+    <Boolean name="air_pos_cmd" valueReference="20" causality="input" variability="discrete" start="false"/>
+    <Boolean name="air_neg_cmd" valueReference="21" causality="input" variability="discrete" start="false"/>
+    <Boolean name="pre_cmd" valueReference="22" causality="input" variability="discrete" start="false"/>
+    <Boolean name="discharge_cmd" valueReference="23" causality="input" variability="discrete" start="false"/>
+    <Boolean name="sdc_closed" valueReference="24" causality="input" variability="discrete" start="false"/>
+    <Float64 name="v_pack" valueReference="25" causality="input" variability="continuous" start="0" unit="V"/>
+    <Float64 name="i_inverter_dc" valueReference="26" causality="input" variability="continuous" start="0" unit="A"/>
+    <Float64 name="v_link" valueReference="30" causality="output" variability="continuous" unit="V"/>
+    <Boolean name="air_pos_closed" valueReference="31" causality="output" variability="discrete"/>
+    <Boolean name="air_neg_closed" valueReference="32" causality="output" variability="discrete"/>
+    <Boolean name="pre_closed" valueReference="33" causality="output" variability="discrete"/>
+  </ModelVariables>
+  <ModelStructure>
+    <Output valueReference="30"/>
+    <Output valueReference="31"/>
+    <Output valueReference="32"/>
+    <Output valueReference="33"/>
+  </ModelStructure>
+</fmiModelDescription>
