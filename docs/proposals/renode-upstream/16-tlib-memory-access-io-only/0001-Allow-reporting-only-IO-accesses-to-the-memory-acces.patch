@@ -1,0 +1,85 @@
+From 0c2535a72eebbf871b1b70625bb442c0cb408a27 Mon Sep 17 00:00:00 2001
+From: Raul Moran <rmg@raulmoranguerra.com>
+Date: Fri, 16 Oct 2026 08:42:22 +0200
+Subject: [PATCH] Allow reporting only IO accesses to the memory access hook
+
+While tlib_on_memory_access is enabled, translated code doesn't use the
+TLB fast path and every load and store reaches the softmmu helpers and
+the hook. A user that only watches peripherals (IO accesses) pays for
+every RAM access too: a helper call and a call into the emulator each.
+
+tlib_on_memory_access_event_enabled(MEMORY_ACCESS_EVENT_IO_ONLY), 2,
+reports IO accesses and slow (unaligned, page-spanning) accesses, and not
+a load or store that hits RAM within a page, so translated code keeps the
+TLB fast path. 0 and 1 behave as before (any other non-zero value is 1).
+---
+ exports.c                  |  8 +++++---
+ include/cpu-defs.h         | 10 ++++++++++
+ include/softmmu_template.h |  4 ++--
+ 3 files changed, 17 insertions(+), 5 deletions(-)
+
+diff --git a/exports.c b/exports.c
+index 77ff8333..728eb91e 100644
+--- a/exports.c
++++ b/exports.c
+@@ -775,9 +775,11 @@ EXC_VOID_1(tlib_set_interrupt_end_hook_present, uint32_t, val)
+ 
+ void tlib_on_memory_access_event_enabled(int32_t value)
+ {
+-    cpu->tlib_is_on_memory_access_enabled = !!value;
+-    //  In order to get all of the memory accesses we need to prevent tcg from using the tlb
+-    tcg_context_use_tlb(!value);
++    //  0: disabled, MEMORY_ACCESS_EVENT_IO_ONLY: IO and slow accesses, any other value: every access
++    cpu->tlib_is_on_memory_access_enabled = value == MEMORY_ACCESS_EVENT_IO_ONLY ? MEMORY_ACCESS_EVENT_IO_ONLY : !!value;
++    //  In order to get all of the memory accesses we need to prevent tcg from using the tlb;
++    //  RAM hits are not reported in the IO-only mode, so it keeps using it
++    tcg_context_use_tlb(cpu->tlib_is_on_memory_access_enabled != MEMORY_ACCESS_EVENT_ALL);
+ }
+ 
+ EXC_VOID_1(tlib_on_memory_access_event_enabled, int32_t, value)
+diff --git a/include/cpu-defs.h b/include/cpu-defs.h
+index f0d2e51f..e38ed7b4 100644
+--- a/include/cpu-defs.h
++++ b/include/cpu-defs.h
+@@ -207,6 +207,16 @@ enum block_interrupt_cause {
+     TB_INTERRUPT_SYNCHRONOUS_EXCEPTION = 3,
+ };
+ 
++/* Which accesses tlib_on_memory_access reports (tlib_is_on_memory_access_enabled) */
++enum memory_access_event {
++    MEMORY_ACCESS_EVENT_DISABLED = 0,
++    /* Every access: translated code doesn't use the TLB fast path, so each one reaches the softmmu helpers */
++    MEMORY_ACCESS_EVENT_ALL = 1,
++    /* IO accesses and slow (unaligned, page-spanning) ones: an access that hits RAM within a page is not reported,
++       so translated code keeps the TLB fast path */
++    MEMORY_ACCESS_EVENT_IO_ONLY = 2,
++};
++
+ #define MAX_IO_ACCESS_REGIONS_COUNT 1024
+ 
+ #define CPU_TEMP_BUF_NLONGS    128
+diff --git a/include/softmmu_template.h b/include/softmmu_template.h
+index 214c44ab..c6e00270 100644
+--- a/include/softmmu_template.h
++++ b/include/softmmu_template.h
+@@ -268,7 +268,7 @@ redo:
+ #endif
+             addend = cpu->tlb_table[mmu_idx][index].addend;
+             res = glue(glue(ld, USUFFIX), _raw)((uint8_t *)(uintptr_t)(addr + addend));
+-            if(unlikely(cpu->tlib_is_on_memory_access_enabled != 0)) {
++            if(unlikely(cpu->tlib_is_on_memory_access_enabled == MEMORY_ACCESS_EVENT_ALL)) {
+                 tlib_assert(sizeof(res) <= sizeof(uint64_t));
+                 tlib_on_memory_access(CPU_PC(cpu), is_insn_fetch ? INSN_FETCH : MEMORY_READ, addr, DATA_SIZE, (uint64_t)res);
+             }
+@@ -487,7 +487,7 @@ redo:
+ 
+             addend = cpu->tlb_table[mmu_idx][index].addend;
+             glue(glue(st, SUFFIX), _raw)((uint8_t *)(uintptr_t)(addr + addend), val);
+-            if(unlikely(cpu->tlib_is_on_memory_access_enabled != 0)) {
++            if(unlikely(cpu->tlib_is_on_memory_access_enabled == MEMORY_ACCESS_EVENT_ALL)) {
+                 tlib_assert(sizeof(val) <= sizeof(uint64_t));
+                 tlib_on_memory_access(CPU_PC(cpu), MEMORY_WRITE, addr, DATA_SIZE, (uint64_t)val);
+             }
+-- 
+2.51.0
+

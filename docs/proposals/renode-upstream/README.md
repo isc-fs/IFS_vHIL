@@ -1,7 +1,7 @@
 # Upstreaming the Renode patch queue
 
-The vHIL builds Renode 1.17.0 with six local patches to renode-infrastructure
-and one to tlib ([`docker/renode/patches/`](../../../docker/renode/patches/),
+The vHIL builds Renode 1.17.0 with nine local patches to renode-infrastructure
+and two to tlib ([`docker/renode/patches/`](../../../docker/renode/patches/),
 study: [`../renode-fork-study.md`](../renode-fork-study.md)). This directory
 holds them rewritten as pull requests to the three upstream repositories,
 rebased on upstream master, split the way upstream reviews, tested with
@@ -11,14 +11,15 @@ has been posted**: Raul submits them after signing the CLA.
 Which repository each change belongs in:
 
 - [renode/renode-infrastructure](https://github.com/renode/renode-infrastructure),
-  the emulator's C# core: PRs 01-08, 11, 13 and 14;
+  the emulator's C# core: PRs 01-08, 11, 13, 14, 15 and 17;
 - [antmicro/tlib](https://github.com/antmicro/tlib), the translation library
   (C, a submodule of renode-infrastructure at `src/Emulator/Cores/tlib`):
-  PR 10, which PR 11 needs;
+  PR 10, which PR 11 needs, and PR 16, which PR 17 needs;
 - [renode/renode](https://github.com/renode/renode), which carries the
   submodule pointer (Antmicro bumps it when a change lands), the Robot
   tests and the issues: PR 12 (tests for 10 + 11), 14's change to one
-  Robot expectation, and issues A, B, C and D.
+  Robot expectation, PR 18 (tests for 16 + 17), and issues A, B, C, D and
+  E.
 
 ## The pull requests
 
@@ -28,7 +29,11 @@ renode-infrastructure points at), the heads on 2026-10-14. PRs 01-07 were
 first prepared on `59f8f5d0` / `5474222a`; their patches apply unchanged to
 the new base (`git am`, same trees), so only 05's (reworked, below) is new.
 PR 13 (local patch 0006, added 2026-10-15) is on the same base: the heads
-had not moved.
+had not moved. PRs 15-18 (local patches 0008 and tlib/0002, added
+2026-10-16) are on renode master `d0c70ee3`, renode-infrastructure
+`48cee122` (the commit it points at, also infrastructure's master head) and
+tlib `0dd9a30c` (unchanged), the heads on 2026-10-16; local patch 0009 needs
+no PR (below).
 
 | # | Repository | Directory | Title | Commits | Size | Depends on |
 |---|---|---|---|---|---|---|
@@ -45,15 +50,19 @@ had not moved.
 | 12 | **renode/renode** | [`12-tests-pre-opcode-hook-exclusions/`](12-tests-pre-opcode-hook-exclusions/) | tests: Test excluding a pre-opcode execution hook at an address | 1 | +53/-0, 1 file (tests) | 11 (in `src/Infrastructure`) |
 | 13 | renode-infrastructure | [`13-slave-time-source-on-master-thread/`](13-slave-time-source-on-master-thread/) | SlaveTimeSource: Optionally run on the master's thread | 3 | +371/-89, 5 files (+44/-33 in the tests) | - |
 | 14 | renode-infrastructure (+ one renode/renode test) | [`14-stm32-timer-period/`](14-stm32-timer-period/) | [FIX] STM32_Timer: Count ARR + 1 values per update period | 1 (+ 1 in renode) | +199/-8, 2 files (159 lines are tests); renode: +2/-2 | - |
+| 15 | renode-infrastructure | [`15-packet-field-attributes/`](15-packet-field-attributes/) | Packet: Look up each field's attributes once | 1 | +70/-18, 2 files (35 lines are a test) | - |
+| 16 | **antmicro/tlib** | [`16-tlib-memory-access-io-only/`](16-tlib-memory-access-io-only/) | Allow reporting only IO accesses to the memory access hook | 1 | +17/-5, 3 files | - |
+| 17 | renode-infrastructure | [`17-cpu-memory-access-io-only/`](17-cpu-memory-access-io-only/) | TranslationCPU: Allow a memory access hook for IO accesses only | 1 (+ the tlib bump) | +22/-2, 1 file | 16 (in the tlib submodule) |
+| 18 | **renode/renode** | [`18-tests-memory-access-hook-io-only/`](18-tests-memory-access-hook-io-only/) | tests: Test a memory access hook limited to IO accesses | 1 | +77/-0, 2 files (tests) | 17 (in `src/Infrastructure`) |
 
 Each directory has the `git format-patch` output against its repository's
 master (`*.patch`, author and committer `Raul Moran <rmg@raulmoranguerra.com>`,
 no trailers, ready to `git am`; 02's patches apply on top of 01's; 11's
-patch is the C# change alone, without the commit that moves the tlib
-submodule, see "Submitting") and `PR.md`: the title on its first line, then
+and 17's patches are the C# change alone, without the commit that moves the
+tlib submodule, see "Submitting") and `PR.md`: the title on its first line, then
 the body, in the sections of upstream's PR template (Related issue,
 Description, Usage example, Additional information). [`ISSUES.md`](ISSUES.md)
-has the three issues to open first in renode/renode. The measurements:
+has the five issues to open first in renode/renode. The measurements:
 [`results.md`](results.md). The scripts: [`tooling/`](tooling/).
 
 What the series does, in one line each:
@@ -96,6 +105,16 @@ What the series does, in one line each:
   timebase 0.1 %. With NUnit tests that fail on master; one Robot test
   (`nucleo_wba52cg`'s input capture) encoded the old period and gets the
   chip's values, a renode/renode commit to land with the submodule bump.
+- **15**: `Packet`'s field wrappers look each attribute up once, when they
+  are built, instead of calling `GetCustomAttributes` for every attribute
+  read of every field of every value decoded or encoded (`MCAN` decodes
+  every filter element for every frame it receives).
+- **16 + 17 + 18** (new mode of an existing API): a memory access hook can
+  be limited to IO (peripheral) accesses (`SetHookAtMemoryAccess(hook,
+  ioAccessesOnly: true)`, tlib's `MEMORY_ACCESS_EVENT_IO_ONLY`): RAM hits are
+  not reported and translated code keeps the TLB fast path, so a hook that
+  watches peripherals stops costing a helper call and a managed call per RAM
+  access; tlib side, C# side, Robot tests.
 
 How they map to the local queue:
 
@@ -108,12 +127,15 @@ How they map to the local queue:
 | 0005 + tlib/0001 (hook exclusion) | 10 + 11 + 12 | tlib keys the set by (pc, hook id) pairs; the local patch packs them as `(pc << 3) \| id`, which collides for hook ids of 8 or more (`CPU_HOOKS_MASKS_LIMIT` is 256; harmless for the vHIL, whose only pre-opcode hook is id 0). Same API names and semantics, so `VhilFastForward` uses the upstream version as is; tests added |
 | 0006 (slave time source on the master's thread) | 13 | Rebased onto upstream's simplified `InnerExecute` (#100387, July 2026: unblock the not-ready handles, else grant the ready ones), split into three commits (the `InnerExecute`/`PhaseExecutor` split alone first, then `noWait`, then the mode); `PhaseExecutor`'s now unused `Execute`/`ExecuteInParallel` give way to the two halves; the `noWait` branch simplified to the same outcomes; the per-iteration fields `[Transient]`. Same property and semantics, so `VhilMachine` turns it on as is |
 | 0007 (STM32 timer period, a fidelity fix) | 14 | The same change; 14 adds `STM32_TimerTests` (four NUnit tests that fail on master) and the `nucleo_wba52cg` expectation. Unlike 0001-0006 it changes what a run computes, on purpose (isc-fs/IFS_vHIL#292) |
+| 0008 (Packet attributes) | 15 | The attributes are read once, in the wrapper's constructor (read-only fields), instead of lazily into a `ConcurrentDictionary` per wrapper and a nullable byte-order flag; adds a `PacketTests` test (passes on master too). Same values |
+| 0009 (NVIC RETTOBASE) | none | Upstream already has it: renode-infrastructure e7a8584c ("[GH#941] NVIC: Make ICSR.RETTOBASE take external interrupts into account", July 2026, after 1.17.0) computes RETTOBASE as `activeIRQs.Count() <= 1`, with no reflection or LINQ over the enum (`Count()` on a `Stack` is its `Count`). It is also a fidelity fix: it counts external interrupts too, where 1.17.0 and 0009 count only the system exceptions among the active ones. 0009 goes on the next bump; the vHIL then gets upstream's semantics |
+| tlib/0002 (memory access flag 2) | 16 + 17 + 18 | Independent of tlib/0001 (PR 10): other files and lines. The mode gets a name (`enum memory_access_event`, `MEMORY_ACCESS_EVENT_IO_ONLY`) and `tlib_on_memory_access_event_enabled(2)` sets it and keeps the TLB fast path, where the local patch only made the softmmu helpers test bit 0 and `VhilFastForward` writes 2 into tlib's state by itself; 17 adds the C# API (`SetHookAtMemoryAccess(hook, ioAccessesOnly)`) the vHIL lacked, and 18 its tests. A run of the vHIL is the same: its raw write of 2 means IO only with 16 as with tlib/0002 |
 
 The differences are review-driven, not behavioural: the vHIL's fingerprint
-is byte-identical between master and master with every PR up to 13, as it
-was between 1.17.0 and 1.17.0 with the local queue. 14 is a fidelity fix
-and changes it on purpose: only timing, by one timer count per period
-(the vHIL's `docker/renode/README.md`).
+is byte-identical between master and master with every PR up to 13, and
+with 15-18, as it was between 1.17.0 and 1.17.0 with the local queue. 14 is
+a fidelity fix and changes it on purpose: only timing, by one timer count
+per period (the vHIL's `docker/renode/README.md`).
 
 ## Will upstream want the hook exclusion (10-12)?
 
@@ -169,6 +191,42 @@ slave's thread); a precise pause hangs on a slave time source on master
 already (results.md), so slaves are a path they test little. If they decline
 it, the vHIL keeps patch 0006 (one patch to rebase per release).
 
+## Will upstream want the IO-only memory access hook (16-18)?
+
+Probably: it is a new mode of an existing API rather than a new mechanism,
+small (17 lines of tlib, 22 of C#), off unless asked for, and it removes a
+cost every peripheral-watching hook pays today (the run above 5.6 times
+slower with a hook set; as fast as without one when it is limited to IO
+accesses). Who gains upstream: MMIO tracing of a driver, the profiler's
+peripheral entries (`EnableProfiling` logs `MemoryIORead`/`MemoryIOWrite`
+as `PeripheralEntry`), and any detector or model that reacts to a CPU's
+peripheral accesses. Like 10-12 it goes through an issue (E) first.
+
+What may make Antmicro hesitate: the mode also reports slow (unaligned,
+page-spanning) RAM accesses, because tlib's slow path serves IO and RAM
+alike (the operation tells them apart; reporting exactly IO would need the
+slow path to track which half was IO); they may prefer a separate hook for
+peripheral accesses, or the flag on `ICPUWithMemoryAccessHooks`. Issue E
+offers to adapt. It also mentions an older gap it does not fix: enabling
+an every-access hook after code was translated keeps the blocks translated
+with the TLB fast path, so on x86 hosts their RAM hits go unreported until
+retranslation. If they decline, the vHIL keeps tlib/0002 (and its raw write
+of the flag) as now.
+
+## Local patch 0009: already upstream
+
+The NVIC's RETTOBASE change needs no PR: renode-infrastructure e7a8584c
+("[GH#941] NVIC: Make ICSR.RETTOBASE take external interrupts into
+account", 2026-07-11, after 1.17.0) replaced the reflection and LINQ with
+`activeIRQs.Count() <= 1`, constant time. It is a fidelity fix as well:
+1.17.0 (and the vHIL's 0009, which kept its result) count only the system
+exceptions among the active ones, upstream counts every active exception,
+as ARMv7-M defines ICSR.RETTOBASE (set when no exception other than the
+one being handled is active). The vHIL
+drops 0009 on the next Renode bump and gets upstream's semantics then; on
+FreeRTOS firmware, which reads ICSR for VECTACTIVE and not RETTOBASE, no
+observable change is expected.
+
 ## Results in short
 
 Details and every number: [`results.md`](results.md). Measured on a quiet
@@ -220,6 +278,22 @@ host (no other emulation running; every run checked).
   HAL tick is 1000 us instead of 999 us and the uDV's IMU frame on a 20 ms
   grid within 1 us (722 us of drift over 91 frames before); frames and
   edges otherwise the same, in the same order.
+- **15-18** (measured 2026-10-16 on renode master d0c70ee3,
+  renode-infrastructure 48cee122, tlib 0dd9a30c; results.md, "PRs 15-18"):
+  Renode's tests as master (`UnitTests` 622 vs 621: 15's test, which also
+  passes on master's code; `PeripheralsTests` 113; 14 Robot files, the
+  CAN, Ethernet, USB/SMMU and hook suites, 141 passed as on master, and
+  18's five on top; one Zynq Ethernet case failed once on all with a guest
+  `libc` error and passed 3 of 3 on re-runs, as on master); 18's four new cases fail on
+  master, its three IO-only ones with 17 but without 16. An MCAN in
+  loopback with 16 filter elements 17x as fast with 15 (23.40 → 1.35 s,
+  allocation -95 %); a memory access hook limited to IO accesses as fast as
+  no hook (0.39 s vs 0.37 s; every access 2.08 s). The vHIL's fingerprint
+  (ecu, ams, ecu-ams, udv, ecu-ams-udv, ecu-ams-ecu, 10 s) byte-identical
+  between master and master + 15-18. The vHIL's systems on upstream master
+  (where they run slowly: no `CMP.W` fast-forward, none of 01-05): 15
+  within the noise; 16 + 17 boots 17-43 % faster where the polling
+  detector arms (udv, ams, ecu sim, ecu-ams-udv sim), udv steady 20-29 %.
 - **Found on the way**: the local tlib patch's (pc, hook) key collides for
   hook ids of 8 or more (fixed in 10; harmless for the vHIL); 11's first
   revision left the invalidation of already translated blocks to the caller
@@ -249,7 +323,16 @@ every CPU's creation), and 12's tests need 11 in renode's
 none of which 01-12 touch (01/02 change `BaseClockSource`), applies to master
 alone and on top of 01-08 + 11 (checked with `git am`). 14 touches
 `STM32_Timer` like 08, in other lines, and applies to master alone (its
-renode/renode commit needs 14 in `src/Infrastructure`). Suggested order,
+renode/renode commit needs 14 in `src/Infrastructure`). 15 changes only
+`Packet.cs` and `PacketTests.cs`, which nothing else in the series
+touches. 16-18 are a chain like 10-12, independent of it: 16 (tlib) before
+17 can do what it says (17 adds no import, so it builds and runs on an older
+tlib, where mode 2 is "every access" and 18's three IO-only cases fail), and
+18's tests need 17 and 16 in renode's submodules. 16 and 10 both touch tlib's
+`exports.c`, in other functions, and 17 and 11 (and 07) `TranslationCPU.cs`,
+in other members: all of 01-08, 11, 13, 14, 15 and 17 apply to
+renode-infrastructure master together in either order, 10 and 16 to tlib,
+12 and 18 to renode (checked with `git am`, 2026-10-16). Suggested order,
 smallest risk first:
 
 1. 01 (bug fix, with failing-on-master tests)
@@ -261,9 +344,12 @@ smallest risk first:
    master has 10 and renode-infrastructure's submodule points there), then 12
 6. issue D; once Antmicro answers (opt-in as is, on by default for
    machines with a time source of their own, or not at all): 13
+7. 15 with the issue B series (any time: a few lines and a test)
+8. issue E; once Antmicro agrees on the shape: 16, then 17 (after tlib's
+   master has 16 and the submodule points there), then 18
 
-Opening 03-08 at once is fine too; each says it is one of a series from
-issue B. Upstream merges through its own tree (often rewriting: they
+Opening 03-08 and 15 at once is fine too; each says it is one of a series
+from issue B. Upstream merges through its own tree (often rewriting: they
 simplified renode-infrastructure#217 and "modified and merged" #207; tlib#45
 landed with the issue added to the subject and the submodule bumped by
 Antmicro in renode-infrastructure), so expect each PR to be closed rather
@@ -297,16 +383,17 @@ is needed.
 Upstream's CONTRIBUTING.md asks for an issue even when you send the fix
 yourself. Open [`ISSUES.md`](ISSUES.md)'s issue A (bug report template),
 issue B (feature request template, the performance series), issue C
-(feature request template, the hook exclusion) and issue D (feature request
-template, the slave time source on the master's thread) at
+(feature request template, the hook exclusion), issue D (feature request
+template, the slave time source on the master's thread) and issue E
+(feature request template, the IO-only memory access hook) at
 <https://github.com/renode/renode/issues/new/choose>. Note their numbers:
-`A`, `B`, `C` and `D` below. For C and D, wait for a maintainer's answer
-before opening 10-12 / 13 if you prefer not to spend review time on a shape
-they would change.
+`A`, `B`, `C`, `D` and `E` below. For C, D and E, wait for a maintainer's
+answer before opening 10-12 / 13 / 16-18 if you prefer not to spend review
+time on a shape they would change.
 
 ### 3. Fork, apply, push, open
 
-renode-infrastructure, PRs 01-08 and 13:
+renode-infrastructure, PRs 01-08, 13, 14 and 15:
 
 ```sh
 gh repo fork renode/renode-infrastructure --clone=false     # once, under your account
@@ -314,11 +401,11 @@ git clone https://github.com/renode/renode-infrastructure && cd renode-infrastru
 git remote add fork https://github.com/<you>/renode-infrastructure
 git fetch origin master
 P=<path to IFS_vHIL>/docs/proposals/renode-upstream
-A=<issue A number>; B=<issue B number>; C=<issue C number>; D=<issue D number>
+A=<issue A number>; B=<issue B number>; C=<issue C number>; D=<issue D number>; E=<issue E number>
 
 # Fill the placeholders in the PR bodies (PR_01 once 01 is open, for 02;
-# PR_10, PR_11, PR_12 once those are open)
-sed -i '' "s/ISSUE_A/$A/g; s/ISSUE_B/$B/g; s/ISSUE_C/$C/g; s/ISSUE_D/$D/g" $P/*/PR.md
+# PR_10, PR_11, PR_12, PR_16, PR_17, PR_18 once those are open)
+sed -i '' "s/ISSUE_A/$A/g; s/ISSUE_B/$B/g; s/ISSUE_C/$C/g; s/ISSUE_D/$D/g; s/ISSUE_E/$E/g" $P/*/PR.md
 
 # One PR: a branch named <issue>-<short_name> (CONTRIBUTING.md) off master
 pr() {  # pr <dir> <branch>
@@ -337,6 +424,7 @@ pr 04-sysbus-access-context          $B-sysbus_access_context
 pr 05-sysbus-context-lookup-cache    $B-sysbus_context_lookup_cache
 pr 13-slave-time-source-on-master-thread $D-slave_time_source_on_master_thread   # after issue D's answer
 pr 14-stm32-timer-period             stm32_timer_period   # no issue
+pr 15-packet-field-attributes        $B-packet_field_attributes
 ```
 
 14's `renode/` patch goes to renode/renode, like 12, once Antmicro
@@ -406,6 +494,42 @@ gh pr create --repo renode/renode --base master --head "<you>:$C-pre_opcode_hook
 
 Then fill 10's body with 11's and 12's numbers (`gh pr edit`).
 
+The IO-only memory access hook, 16 then 17 then 18 (after issue E), the
+same way as 10-12:
+
+```sh
+# 16: antmicro/tlib (in the tlib clone)
+git switch -c $E-memory_access_io_only origin/master
+git am $P/16-tlib-memory-access-io-only/*.patch
+git push fork HEAD
+sed -i '' "s/PR_17/the renode-infrastructure PR (to follow)/g; s/PR_18/the renode PR (to follow)/g" $P/16-*/PR.md
+gh pr create --repo antmicro/tlib --base master --head "<you>:$E-memory_access_io_only" \
+    --title "$(head -1 $P/16-*/PR.md)" --body-file <(tail -n +3 $P/16-*/PR.md)
+
+# 17: renode-infrastructure, on a commit moving the submodule to 16's commit
+cd renode-infrastructure
+git switch -c $E-memory_access_io_only origin/master
+git submodule update --init src/Emulator/Cores/tlib
+git -C src/Emulator/Cores/tlib fetch https://github.com/<you>/tlib $E-memory_access_io_only
+git -C src/Emulator/Cores/tlib checkout FETCH_HEAD
+git commit -am "tlib: Bump"
+git am $P/17-cpu-memory-access-io-only/*.patch
+git push fork HEAD
+sed -i '' "s/PR_16/<16's number>/g; s/PR_18/<18's number, or 'a renode PR to follow'>/g" $P/17-*/PR.md
+gh pr create --repo renode/renode-infrastructure --base master --head "<you>:$E-memory_access_io_only" \
+    --title "$(head -1 $P/17-*/PR.md)" --body-file <(tail -n +3 $P/17-*/PR.md)
+
+# 18: renode/renode (in the renode clone)
+git switch -c $E-memory_access_hook_io_only_tests origin/master
+git am $P/18-tests-memory-access-hook-io-only/*.patch
+git push fork HEAD
+sed -i '' "s/PR_16/<16's number>/g; s/PR_17/<17's number>/g" $P/18-*/PR.md
+gh pr create --repo renode/renode --base master --head "<you>:$E-memory_access_hook_io_only_tests" \
+    --title "$(head -1 $P/18-*/PR.md)" --body-file <(tail -n +3 $P/18-*/PR.md)
+```
+
+Then fill 16's body with 17's and 18's numbers.
+
 The `sed -i ''` edits the copies in this checkout; don't commit them back
 (or do, on a branch, once the numbers are known).
 
@@ -417,7 +541,7 @@ git rebase origin/master --exec \
   'git commit --amend --no-edit -m "$(git log -1 --format=%B | sed "1s/^\(\[FIX\] \)\{0,1\}/[#'$B'] /")"'
 ```
 
-(01 with `$A`, 10-12 with `$C`, 13 with `$D`; on 02's branch rebase onto
+(01 with `$A`, 10-12 with `$C`, 13 with `$D`, 16-18 with `$E`; on 02's branch rebase onto
 `$A-clock_entry_stale_index` instead, so only 02's two commits change.)
 Recent external PRs have landed both with and without it
 (renode-infrastructure#217 `[#941] NVIC: ...`, #224 `[#953] ...`; #220 and
@@ -426,8 +550,8 @@ nicety.
 
 Upstream's PR template also asks for a reproduction repository from
 <https://github.com/renode/renode-issue-reproduction-template>. 01 has NUnit
-tests that fail on master instead, 10-12
-Robot tests; 02-08 change no behaviour, and the benchmark scripts quoted in
+tests that fail on master instead, 10-12 and 16-18
+Robot tests; 02-08 and 15 change no behaviour, and the benchmark scripts quoted in
 issue B are their reproduction. Each `PR.md` says so; build the repository
 only if a reviewer asks.
 
@@ -524,6 +648,27 @@ FP_SYSTEMS="ecu ams ecu-ams ecu-ams-ecu" $T/vhil-ab.sh fingerprint master 10000 
 FP_SYSTEMS="ecu ams ecu-ams ecu-ams-ecu" VHIL_INLINE_SLAVES=0 $T/vhil-ab.sh fingerprint pr13 10000 r13-pr13-threads
 $T/vhil-ab.sh speed r13-ab 5 "master pr13" --systems ecu ams ecu-ams ecu-ams-ecu --paths sim bench
 python3 $T/summarize_vhil.py $WORK/results/r13-ab master
+# PRs 15-18 (2026-10-16, a fresh clone: renode master d0c70ee3). Branches in the clone:
+#   src/Infrastructure: up/master, up/15-packet-field-attributes, up/17-cpu-memory-access-io-only
+#     (= "tlib: Bump" to tlib's up/16-memory-access-io-only, then 17's patch), up/all15 (17's + 15),
+#     up/17-without-16 (17's patch on master's tlib), up/15-test-only (15's test alone)
+#   tlib: up/master, up/16-memory-access-io-only; renode: up/18-tests-memory-access-hook-io-only = up/all15
+# WORK=.claude/worktrees/renode-bench/r15: fw/ holds ECU08, AMS, uDV and CAN_BL from vhil-data (dev,
+# 2026-10-15); VHIL_REPO = a worktree at IFS_vHIL dev (udv systems, the 6-system fingerprint), with
+# VhilMonitor.cs's PathHelpers edit (above)
+$T/build.sh master15 up/master $(grep -v '^#' $T/tests-15.txt | grep -v memory-access-hook)
+$T/build.sh pr15 up/15-packet-field-attributes $(grep -v '^#' $T/tests-15.txt | grep -v memory-access-hook)
+RENODE_REF=up/18-tests-memory-access-hook-io-only $T/build.sh pr17 up/17-cpu-memory-access-io-only \
+    $(grep -v '^#' $T/tests-15.txt | grep -v csproj)
+RENODE_REF=up/all15 $T/build.sh all15 up/all15 $(grep -v '^#' $T/tests-15.txt)
+$T/build.sh tests15 up/15-test-only src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj
+RENODE_REF=up/18-tests-memory-access-hook-io-only $T/build.sh pr17-no16 up/17-without-16 \
+    tests/unit-tests/memory-access-hook.robot
+$T/bench.sh $WORK/results/generic.jsonl 5 "master15 pr15 pr17 all15" "mcan-loopback memhook-none memhook-all memhook-io"
+python3 $T/summarize_bench.py $WORK/results/generic.jsonl master15
+$T/vhil-ab.sh fingerprint master15 10000; $T/vhil-ab.sh fingerprint all15 10000   # 6 systems; compare
+$T/vhil-ab.sh speed r15-ab 5 "master15 pr15 pr17 all15" --systems ecu ams udv ecu-ams-udv --paths sim bench
+python3 $T/summarize_vhil.py $WORK/results/r15-ab master15
 ```
 
 The whole round (builds, both test runs, every benchmark) took about five

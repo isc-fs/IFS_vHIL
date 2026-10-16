@@ -4,7 +4,7 @@ Renode's CONTRIBUTING.md asks for an issue even when you send the fix
 yourself ("Please create an issue even if you plan to fix it"), and its
 commit subjects carry the issue number (`[#1234] Tag: Description`; GitHub
 issues land as `[GH#941]`, e.g. renode-infrastructure@[GH#941] NVIC). Open
-these four in https://github.com/renode/renode/issues/new/choose, then put
+these five in https://github.com/renode/renode/issues/new/choose, then put
 the numbers in the PRs (README.md, step 3).
 
 ---
@@ -84,6 +84,7 @@ every timer event, none of which changes what the emulation computes:
 | `SystemBus` (every access) | a `Tuple`, a closure and a `DisposableWrapper` to set the access context; a locked-range check (two locks, up to three dictionary look-ups, `Any` with a closure) although nothing is locked; a lock and dictionary look-ups for the initiator's peripheral collection; a closure for the tag search |
 | `PeripheralRegister` (every register read/write) | a `List` per access, `Distinct()` (a `HashSet`), LINQ over the tags; unhandled-write messages formatted before the logger drops them |
 | `TranslationCPU` | a `new object()` per bus access (pause guard); a LINQ iterator per execution chunk (hooks); noisy log strings formatted before being dropped (opcode hooks, scheduled actions) |
+| `Packet` (every value decoded or encoded: CAN frames and filter elements, DMA and Ethernet descriptors, USB transfers) | `GetCustomAttributes` for every attribute read of every field (offset, width, alignment, padding, order, byte order): several reflection look-ups, each allocating, per field per value |
 
 On a two-machine STM32H7 workload (host `perf`, steady state): clock-entry
 look-ups were 5.5 % of all samples, allocation 6.3 %, garbage collection
@@ -144,8 +145,10 @@ instruction counts, CPU state and RAM).
 
 ### Do you plan to address this issue and file a PR?
 
-Yes: eight small renode-infrastructure PRs, independent of one another except
-that the clock entry index builds on issue A's fix.
+Yes: eight small renode-infrastructure PRs (the clock entry index, the
+system bus, the register framework, `TranslationCPU`, `STM32_Timer`,
+`Packet`), independent of one another except that the clock entry index
+builds on issue A's fix.
 
 ---
 
@@ -294,3 +297,74 @@ end half, `RequestTimeInterval(noWait)`, the mode). We made it opt-in to
 keep the default untouched; if you would rather have it on by default for
 machines with a time source of their own, or set through `Machine`, we are
 happy to change it.
+
+---
+
+## Issue E (template: Feature/support request)
+
+**Title:** `Memory access hook: let a hook see only peripheral (IO) accesses`
+
+### Description
+
+`TranslationCPU.SetHookAtMemoryAccess(hook)` calls `hook` for every load,
+store and instruction fetch, and while it is set translated code doesn't use
+the TLB fast path (`tlib_on_memory_access_event_enabled(1)` turns it off), so
+every RAM access goes through tlib's softmmu helpers and then into C#. Many
+users of the hook only care about peripheral accesses, which tlib already
+tells apart (`MemoryOperation.MemoryIORead`/`MemoryIOWrite`):
+
+- a trace of a driver's MMIO (which registers firmware touches, in which
+  order) while the rest of the code runs normally;
+- the profiler's peripheral entries (`EnableProfiling` logs `MemoryIORead`
+  and `MemoryIOWrite` as `PeripheralEntry`);
+- a detector of polling loops, which needs the reads of the polled register.
+
+Today such a hook pays for every RAM access too, which is nearly all of them:
+on a Cortex-M4 at 100 MIPS copying words within RAM and reading a peripheral
+every 64 copies, setting a hook that counts its calls makes the run
+5.6 times slower (0.37 s of host time for 0.25 s of virtual time without a
+hook, 2.08 s with it; master d0c70ee3, Linux arm64 in Docker).
+
+### Usage example
+
+```python
+cpu = self.Machine["sysbus.cpu"]
+def on_access(pc, operation, virtualAddress, physicalAddress, width, value):
+    self.Machine.InfoLog("%s 0x%x at pc 0x%x" % (operation, physicalAddress, pc))
+cpu.SetHookAtMemoryAccess(on_access, True)   # proposed: IO accesses only
+```
+
+Proposed: a mode of tlib's memory access event,
+`tlib_on_memory_access_event_enabled(2)` (`MEMORY_ACCESS_EVENT_IO_ONLY`):
+IO accesses and slow (unaligned, page-spanning) ones are reported, a load or
+store that hits RAM within a page is not, and translated code keeps the TLB
+fast path; 0 and 1 unchanged. In Renode,
+`SetHookAtMemoryAccess(hook, ioAccessesOnly)` beside the existing
+`SetHookAtMemoryAccess(hook)`. With it, the loop above runs as fast as
+without a hook.
+
+### Additional information
+
+We use it in a virtual hardware-in-the-loop bench (STM32H733 firmware): a
+detector arms a memory access hook around polling loops to fast-forward
+them in virtual time, and only needs their MMIO reads. We carry the tlib
+side as a patch on 1.17.0 (and write tlib's flag directly, as Renode has no
+API for it); on Apple-silicon hosts, whose TCG backend calls the softmmu
+helpers for every access, it made our boards boot 10-54 % faster, with
+byte-identical results.
+
+Noticed on the way, not addressed by the proposal: enabling the hook for
+every access after code was translated leaves the blocks translated with the
+TLB fast path in the cache (nothing flushes it when tlib stops using the
+TLB), so on x86 hosts their RAM hits are not reported until they are
+retranslated.
+
+### Do you plan to address this issue and file a PR?
+
+Yes: antmicro/tlib "Allow reporting only IO accesses to the memory access
+hook", renode/renode-infrastructure "TranslationCPU: Allow a memory access
+hook for IO accesses only" (which needs the tlib change in the submodule)
+and renode/renode "tests: Test a memory access hook limited to IO
+accesses". If you would rather have another shape (a separate hook for
+peripheral accesses, or the mode on `ICPUWithMemoryAccessHooks`), we are
+happy to adapt.

@@ -1,0 +1,108 @@
+From 3f214deb95de5171d99f84142e7a6bbb48ea2796 Mon Sep 17 00:00:00 2001
+From: Raul Moran <rmg@raulmoranguerra.com>
+Date: Fri, 16 Oct 2026 08:44:15 +0200
+Subject: [PATCH] tests: Test a memory access hook limited to IO accesses
+
+---
+ tests/tests.yaml                          |  1 +
+ tests/unit-tests/memory-access-hook.robot | 76 +++++++++++++++++++++++
+ 2 files changed, 77 insertions(+)
+ create mode 100644 tests/unit-tests/memory-access-hook.robot
+
+diff --git a/tests/tests.yaml b/tests/tests.yaml
+index b3a9bfcc..6f2a6196 100644
+--- a/tests/tests.yaml
++++ b/tests/tests.yaml
+@@ -236,6 +236,7 @@
+ - tests/unit-tests/snapshot-tracking.robot
+ - tests/unit-tests/stm32f4-erase.robot
+ - tests/unit-tests/memory-access.robot
++- tests/unit-tests/memory-access-hook.robot
+ - tests/unit-tests/resd-serialization.robot
+ - tests/unit-tests/tlib/arm/thumb2-data-processing-instr.robot
+ - tests/peripherals/VirtioMMIOEntropy.robot
+diff --git a/tests/unit-tests/memory-access-hook.robot b/tests/unit-tests/memory-access-hook.robot
+new file mode 100644
+index 00000000..9ec3e972
+--- /dev/null
++++ b/tests/unit-tests/memory-access-hook.robot
+@@ -0,0 +1,76 @@
++*** Variables ***
++${PLATFORM}                         SEPARATOR=\n
++...                                 """
++...                                 mem: Memory.MappedMemory @ sysbus 0x0
++...                                 ${SPACE*4}size: 0x1000
++...
++...                                 nvic: IRQControllers.NVIC @ sysbus 0xE000E000
++...                                 ${SPACE*4}-> cpu@0
++...
++...                                 cpu: CPU.CortexM @ sysbus
++...                                 ${SPACE*4}cpuType: "cortex-m4"
++...                                 ${SPACE*4}nvic: nvic
++...                                 """
++# A load and a store in RAM (0x800, 0x804), then a load and a store in the
++# NVIC (SYST_CSR 0xE000E010, SYST_RVR 0xE000E014): IO accesses
++${PROGRAM}                          SEPARATOR=;
++...                                 movw r0, \#0x800
++...                                 movw r1, \#0xe010
++...                                 movt r1, \#0xe000
++...                                 ldr r2, [r0]
++...                                 str r2, [r0, \#4]
++...                                 ldr r3, [r1]
++...                                 str r3, [r1, \#4]
++${PROGRAM_LENGTH}                   7
++${ALL_ACCESSES}                     MemoryRead 0x800,MemoryWrite 0x804,MemoryIORead 0xe000e010,MemoryIOWrite 0xe000e014
++${IO_ACCESSES}                      MemoryIORead 0xe000e010,MemoryIOWrite 0xe000e014
++
++*** Keywords ***
++Create Machine
++    Execute Command                 mach create
++    Execute Command                 machine LoadPlatformDescriptionFromString ${PLATFORM}
++    Execute Command                 cpu AssembleBlock 0x0 "${PROGRAM}"
++    # The hook records each data access as "<operation> <address>"
++    Execute Python                  accesses = []
++    Execute Python                  hook = lambda pc, operation, virtualAddress, physicalAddress, width, value: accesses.append("%s 0x%x" % (operation, virtualAddress)) if str(operation) != "InsnFetch" else None
++
++Run Program And Check Accesses
++    [Arguments]  ${expected}
++    Execute Python                  del accesses[:]
++    Execute Command                 cpu PC 0x0
++    Execute Command                 cpu Step ${PROGRAM_LENGTH}
++    ${accesses}=                    Execute Python  ",".join(accesses)
++    Should Be Equal                 ${accesses}  ${expected}
++
++*** Test Cases ***
++Should Report Every Access To A Memory Access Hook
++    Create Machine
++    Execute Python                  self.Machine["sysbus.cpu"].SetHookAtMemoryAccess(hook)
++    Run Program And Check Accesses  ${ALL_ACCESSES}
++
++Should Report Every Access When A Memory Access Hook Is Not Limited To IO Accesses
++    Create Machine
++    Execute Python                  self.Machine["sysbus.cpu"].SetHookAtMemoryAccess(hook, False)
++    Run Program And Check Accesses  ${ALL_ACCESSES}
++
++Should Report Only IO Accesses To A Memory Access Hook Limited To IO Accesses
++    Create Machine
++    Execute Python                  self.Machine["sysbus.cpu"].SetHookAtMemoryAccess(hook, True)
++    Run Program And Check Accesses  ${IO_ACCESSES}
++
++Should Report Only IO Accesses After Limiting A Memory Access Hook To IO Accesses
++    Create Machine
++    Execute Python                  self.Machine["sysbus.cpu"].SetHookAtMemoryAccess(hook)
++    Run Program And Check Accesses  ${ALL_ACCESSES}
++
++    # The blocks translated while every access was reported are still there
++    Execute Python                  self.Machine["sysbus.cpu"].SetHookAtMemoryAccess(hook, True)
++    Run Program And Check Accesses  ${IO_ACCESSES}
++
++Should Not Report Accesses After Removing A Memory Access Hook Limited To IO Accesses
++    Create Machine
++    Execute Python                  self.Machine["sysbus.cpu"].SetHookAtMemoryAccess(hook, True)
++    Run Program And Check Accesses  ${IO_ACCESSES}
++
++    Execute Python                  self.Machine["sysbus.cpu"].SetHookAtMemoryAccess(None)
++    Run Program And Check Accesses  ${EMPTY}
+-- 
+2.51.0
+

@@ -1,6 +1,8 @@
 > **Note (2026-10-14):** PR 09 was dropped after these measurements (no measurable gain). The "all" figures below include it; by its leave-one-out result (no measurable effect) they stand for 01-08 + 11 as well.
 >
 > **PR 13** (2026-10-15, local patch 0006) is measured on its own against master, on the same base: section "PR 13" at the end.
+>
+> **PRs 15-18** (2026-10-16, local patches 0008 and tlib/0002) are measured against a newer master: section "PRs 15-18" at the end.
 
 # Results: the PRs on upstream master
 
@@ -480,6 +482,152 @@ vHIL's view of the same change (local patch 0007): HAL tick 999 → 1000 us,
 the uDV's 20 ms IMU frame no longer drifting (722 us over 91 frames), the
 other frames and edges the same and in the same order
 (isc-fs/IFS_vHIL#292, `docker/renode/README.md`).
+
+## PRs 15-18: Packet's attributes, the IO-only memory access hook
+
+Measured 2026-10-16 on renode master d0c70ee3, renode-infrastructure
+48cee122 (the commit it points at, and infrastructure's master head) and
+tlib 0dd9a30c, in the same Docker setup (Linux arm64, Colima, 8 vCPUs; one
+emulation at a time, no run contended). Packages: master15 (master), pr15,
+pr17 (16 + 17: a commit moving the tlib submodule to 16, then 17; renode
+at 18 for the tests), all15 (15 + 16 + 17, renode at 18). 0009 has no PR:
+upstream already computes RETTOBASE in constant time (README, "Local patch
+0009").
+
+### Renode's tests
+
+[`tooling/tests-15.txt`](tooling/tests-15.txt): `UnitTests` (Packet's
+tests), `PeripheralsTests`, and 15 Robot files: the CAN controllers
+(`MCAN`, `UT32_CAN`, `NXP_FlexCAN`, `IMX8MP_Flexcan`), models that decode or
+encode with Packet (`SynopsysDWCEthernetQualityOfService`,
+`STM32F4_Discovery`'s Ethernet MAC, `nucleo_h753zi`'s USB and FDCAN,
+`external-mmu`'s SMMU), every suite that sets a memory access hook or
+exercises CPU hooks (`execution-tracing`, `stm32f4-erase`, `hooks`,
+`opcodes-execution-hooks`, `memory-access`) and 18's
+`memory-access-hook.robot`.
+
+| Suite | master | pr15 | pr17 | all |
+|---|---|---|---|---|
+| UnitTests | 621 passed, 6 skipped | 622 passed, 6 skipped | - | 622 passed, 6 skipped |
+| PeripheralsTests | 113 passed, 6 skipped | 113 passed, 6 skipped | - | 113 passed, 6 skipped |
+| Robot | 141 passed (14 files) | 141 passed (14 files) | 146 passed (15 files) | 145 passed, 1 failed (15 files) |
+
+- 15's test (`TestFieldAttributesStayPerFieldAcrossDecodesAndEncodes`)
+  also passes on master's code (`up/15-test-only`: 622 passed): it pins
+  what the change keeps.
+- 18's file on master: the first case (an every-access hook, the existing
+  behaviour) passes, the four new ones fail (no such overload). With 17 on
+  master's tlib (without 16, `up/17-without-16`): the first two pass, the
+  three IO-only cases fail (an older tlib reads mode 2 as "every access").
+  With 16 + 17: 5 of 5.
+- all's failure: `SynopsysDWCEthernetQualityOfService`'s "Should Send Lots
+  Of Data Via TCP Twice", the Zynq guest's `yes` failing to load `libc.so.6`
+  ("cannot close file descriptor"); it passed on master, pr15 and pr17, and
+  the whole file passed 3 of 3 times on all and on master on re-runs
+  (`-n 3`, 12 of 12 each): a flake.
+- `dotnet format whitespace --verify-no-changes` on the three changed C#
+  files and `clang-format` 19.1.0 on the three tlib files: no change. Every
+  PR builds alone; 01-08, 11, 13, 14, 15 and 17 apply to
+  renode-infrastructure master together in either order, 10 and 16 to tlib,
+  12 and 18 to renode (`git am`).
+
+### The vHIL's identity check
+
+[`../renode-patches/tooling/fingerprint.py`](../renode-patches/tooling/fingerprint.py)
+(dev's, since #298: with udv and the HAL tick) for 10 s of virtual time
+from power-on of ecu, ams, ecu-ams, udv, ecu-ams-udv and ecu-ams-ecu, the
+firmware at dev (2026-10-15), the models at dev with the `PathHelpers` edit
+(section "PR 13"): master and all the same file byte for byte (SHA-1
+`c1857353…`; ecu-ams-udv 1,594 / 720 / 2,944 / 253 CAN frames on its four
+buses, 134,607 / 6,685 / 1 edges). `VhilFastForward` arms its polling
+detector with the memory access flag at 2 (it writes tlib's state directly):
+every access on master's tlib, IO only with 16, the same detector decisions
+either way.
+
+### Speed: generic workloads
+
+[`tooling/bench.sh`](tooling/bench.sh), median of 5, interleaved, 4 cores;
+host seconds for the measured virtual time, allocation and process CPU per
+virtual second:
+
+| benchmark | master | pr15 | pr17 | all |
+|---|---|---|---|---|
+| `mcan-loopback` (0.1 s) | 23.40 s, 73.4 GB, CPU 456 | **1.35 s (17.3x)**, 3.47 GB (-95 %), CPU 32 | 23.59 s, 73.7 GB | **1.42 s (16.5x)**, 3.47 GB |
+| `memhook-none` (0.25 s) | 0.37 s, 296 MB | 0.36 s | 0.35 s | 0.37 s |
+| `memhook-all` (0.25 s) | 2.08 s, 464 MB | 1.82 s | 1.69 s | 1.74 s |
+| `memhook-io` (0.25 s) | - (no such overload) | - | **0.39 s** (5.3x `memhook-all` on master), 296 MB | **0.39 s** |
+
+- `mcan-loopback`
+  ([`tooling/bench/mcan-loopback.resc`](tooling/bench/mcan-loopback.resc)):
+  an STM32H753's FDCAN1 in internal loopback, 16 standard filter elements
+  (15 non-matching ranges, then a classic filter for the frame's ID into Rx
+  FIFO 0, overwrite mode), one dedicated Tx buffer; a Cortex-M7 at 100 MIPS
+  requests a transmission every ~400 instructions (about 25,000 frames). A
+  frame costs 0.94 ms of host time on master (the Tx buffer header, 16
+  filter elements and the Rx FIFO element through `Packet`, each attribute
+  read by reflection), 54 us with 15. Checked once: Rx FIFO 0 full of
+  frames with ID 0x123, filter index 15, DLC 8; `TXBTO` set.
+- `memhook-*`
+  ([`tooling/bench/MemoryHookBench.cs`](tooling/bench/MemoryHookBench.cs)):
+  a Cortex-M4 at 100 MIPS copying a word within RAM 64 times, then reading
+  a peripheral, in a loop; a C# hook counting its calls. In 0.25 s it was
+  called 12,454,236 times for every access, 96,525 times (the peripheral
+  reads) IO only. `memhook-all`'s 12-23 % between master and the PR
+  packages is this host's noise (15 doesn't touch the path, and 16 + 17
+  don't change the every-access mode); `memhook-io` is as fast as no hook.
+  On this arm64 host tlib's TCG backend has no inline TLB look-up, so every
+  access calls the softmmu helpers with or without a hook: the gain is the
+  calls into C#; on x86 the IO-only mode also keeps the inline TLB that the
+  every-access mode turns off.
+
+### Speed: the vHIL's systems
+
+[`tooling/vhil-ab.sh`](tooling/vhil-ab.sh) `speed` (`VHIL_REPO` = a dev
+worktree, with the uDV), every system but ecu-ams, both paths, boot 0-3 s
+and steady +5 s, median of 5, interleaved, no run contended:
+
+| system | path | phase | master | pr15 | pr17 (16 + 17) | all (15-17) |
+|---|---|---|---|---|---|---|
+| ams | bench | boot | 1.50x, CPU 0.94 | 1.42x (-5 %), CPU 1.00 | 1.92x (+28 %), CPU 0.82 | 1.90x (+27 %), CPU 0.83 |
+| ams | bench | steady | 2.09x, CPU 0.80 | 1.93x (-8 %), CPU 0.85 | 2.03x (-3 %), CPU 0.83 | 1.97x (-6 %), CPU 0.85 |
+| ams | sim | boot | 1.50x, CPU 0.89 | 1.47x (-2 %), CPU 0.92 | 2.13x (+43 %), CPU 0.69 | 1.73x (+16 %), CPU 0.81 |
+| ams | sim | steady | 2.64x, CPU 0.52 | 2.59x (-2 %), CPU 0.52 | 2.79x (+6 %), CPU 0.49 | 2.25x (-15 %), CPU 0.59 |
+| ecu | bench | boot | 0.77x, CPU 1.50 | 0.77x (+0 %), CPU 1.50 | 0.84x (+9 %), CPU 1.40 | 0.74x (-4 %), CPU 1.57 |
+| ecu | bench | steady | 0.46x, CPU 2.27 | 0.43x (-7 %), CPU 2.44 | 0.44x (-5 %), CPU 2.40 | 0.35x (-24 %), CPU 3.00 |
+| ecu | sim | boot | 0.69x, CPU 1.67 | 0.69x (+1 %), CPU 1.65 | 0.82x (+20 %), CPU 1.43 | 0.82x (+20 %), CPU 1.42 |
+| ecu | sim | steady | 0.42x, CPU 2.50 | 0.40x (-5 %), CPU 2.63 | 0.43x (+4 %), CPU 2.40 | 0.42x (+1 %), CPU 2.48 |
+| ecu-ams-udv | bench | boot | 0.51x, CPU 3.80 | 0.50x (-3 %), CPU 3.96 | 0.48x (-6 %), CPU 3.79 | 0.60x (+17 %), CPU 3.04 |
+| ecu-ams-udv | bench | steady | 0.28x, CPU 5.32 | 0.28x (-1 %), CPU 5.66 | 0.23x (-20 %), CPU 6.54 | 0.30x (+6 %), CPU 5.10 |
+| ecu-ams-udv | sim | boot | 0.50x, CPU 3.88 | 0.51x (+3 %), CPU 3.78 | 0.58x (+17 %), CPU 3.22 | 0.55x (+10 %), CPU 3.35 |
+| ecu-ams-udv | sim | steady | 0.29x, CPU 5.42 | 0.30x (+5 %), CPU 5.17 | 0.30x (+7 %), CPU 5.00 | 0.30x (+3 %), CPU 5.09 |
+| udv | bench | boot | 1.34x, CPU 0.95 | 1.36x (+1 %), CPU 0.94 | 1.87x (+39 %), CPU 0.74 | 1.95x (+45 %), CPU 0.71 |
+| udv | bench | steady | 1.07x, CPU 1.04 | 1.15x (+7 %), CPU 0.98 | 1.39x (+29 %), CPU 0.82 | 1.37x (+27 %), CPU 0.83 |
+| udv | sim | boot | 1.15x, CPU 1.06 | 1.15x (+0 %), CPU 1.08 | 1.50x (+31 %), CPU 0.87 | 1.46x (+27 %), CPU 0.89 |
+| udv | sim | steady | 0.90x, CPU 1.22 | 0.94x (+4 %), CPU 1.18 | 1.08x (+20 %), CPU 1.04 | 1.13x (+26 %), CPU 0.99 |
+
+- On upstream master the vHIL runs far slower than on its own build (ecu
+  0.42x here, about 4x with the queue on 1.17.0): `VhilFastForward`'s
+  `CMP.W` hook doesn't fire there (section "Speed", end) and patches
+  0001-0005 are absent, so each board's own work dominates and what 15
+  removes is a small part of it. 15 alone is within the noise (udv and
+  ecu-ams-udv steady +4-7 %, others -8 to +5 %); with the vHIL's queue on
+  1.17.0 (x86, isc-fs/IFS_vHIL#303) the same change made ecu-ams steady
+  10 % and ecu-ams-udv 7-10 % faster.
+- 16 + 17 make the boots faster where the detector arms around polls: udv
+  +31-39 %, ams +28-43 %, ecu sim +20 %, ecu-ams-udv sim +17 %; udv steady
+  +20-29 %. On this arm64 host every RAM access reached the detector's hook
+  while it was armed (isc-fs/IFS_vHIL#302 measured the same on the vHIL's
+  build: boots 10-54 % faster on an M-series Mac, x86 unchanged).
+- Rows that went down (ecu bench steady -24 % on all, ecu-ams-udv bench
+  steady -20 % on pr17, ams sim steady -15 % on all) are this host's
+  bimodal noise: their runs span the master runs' range and below (ecu
+  bench steady: master 0.43-0.47x, pr15 0.32-0.47x, pr17 0.33-0.45x, all
+  0.33-0.48x; ecu-ams-udv bench steady: master 0.28-0.30x, pr17 0.13-0.30x,
+  all 0.28-0.31x): a few slow runs moved those medians, not the PRs.
+
+Raw data: `.claude/worktrees/renode-bench/r15/results/` (`generic.jsonl`,
+`r15-ab/`, `fp/master15.json`, `fp/all15.json`, the build and test logs,
+`eth-n3-*.log`, `mah-master15.log`) and `renode-up-pkgs:/<package>.tests/`.
 
 ## Raw data
 
