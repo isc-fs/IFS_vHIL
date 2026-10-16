@@ -191,11 +191,13 @@ interleaved A/B, ecu-ams, and an ecu-ams scenario with the scripted 0x466
 against the same scenario plant-driven (both send 0x466 every 10 ms). The
 identity fingerprint of every system without a plant stays byte-identical.
 
-Found on the way, not M8's to fix: a CAN probe frame costs ~11 ms of wall
-time on ecu-ams (a 10 ms 0x466 periodic takes ecu-ams from 0.48 to 1.57 wall
-s per virtual s, CPU +20 %): Renode's `TimeSourceBase.WaitIfBlocked`
-`blockingEvent.WaitOne(10)`. Every scenario with a periodic stimulus pays it
-today; tracked separately.
+Found on the way, not M8's to fix: CAN probe frames cost wall time on
+ecu-ams (a 10 ms 0x466 periodic took ecu-ams from 0.48 to 1.57 wall s per
+virtual s, CPU +20 %), and every scenario with a periodic stimulus paid it.
+Suspected to be Renode's `TimeSourceBase.WaitIfBlocked`, it was
+`Emulation.StartAll`'s 100 ms sleep, once per `RunFor` that sent a frame;
+fixed in #312 (performance.md, "A probe's frame"): scenarios ~3x faster in
+wall time, traces unchanged.
 
 ## Where the plant runs
 
