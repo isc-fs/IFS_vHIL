@@ -343,6 +343,16 @@ class CanBus:
     def stop_periodic(self, key: str) -> None:
         self.sim.monitor(f'{self.probe} StopPeriodic {rn.quote(key)}')
 
+    def schedule_periodic(self, key: str, entries) -> None:
+        """Payload changes for a running periodic sender at future times,
+        [(t_us, data or None), ...] in time order (None: no frame from then
+        on): each tick sends the last entry's payload at or before it. Pending
+        entries at or after the first new one are replaced, in one call
+        (models/renode/VhilProbe.cs, SchedulePeriodic)."""
+        items = " ".join(f"{_int(t)}:{'-' if d is None else bytes(d).hex()}" for t, d in entries)
+        if items:
+            self.sim.monitor(f'{self.probe} SchedulePeriodic {rn.quote(key)} {rn.quote(items)}')
+
 
 class BoardIO:
     """GPIO of one board: drive inputs, watch outputs."""
@@ -375,6 +385,17 @@ class BoardIO:
             raise ValueError(f"{self.board}.{pin} is {kind}, not an analog input")
         self.sim.monitor(f"{rn.path(target['adc'])} SetVoltage {round(float(volts) * 1e6)} "
                          f"{_int(target['channel'])}", board=self.board)
+
+    def driven(self, port: str, pin: int) -> bool:
+        """The level set_input holds on an input; False when nothing drives it."""
+        return self.sim.monitor(f'{self.probe} Driven {rn.quote(rn.path(port))} {_int(pin)}',
+                                board=self.board).strip() == "True"
+
+    def trigger(self, pin: str, armed: bool = True) -> None:
+        """Arm a watched pin ("<port>:<pin>", as watch() returns it): its
+        edges end Sim.run_until_trigger at the next sync point."""
+        self.sim.monitor(f'{self.probe} Trigger {rn.quote(pin)} {_arg(bool(armed))}',
+                         board=self.board)
 
     def watch(self, port: str, pin: int) -> str:
         self.sim.monitor(f'{self.probe} Watch {rn.quote(rn.path(port))} {_int(pin)}',
@@ -636,6 +657,26 @@ class Sim:
                 self.monitor(f'emulation RunFor "{rest / 1e6:.6f}"')
             finally:
                 self.monitor(f'emulation SetGlobalQuantum "{q / 1e6:.6f}"')
+        return self.now_us()
+
+    def run_until_trigger(self, us: int) -> int:
+        """run_for(us=us), but returning at the first sync point after an
+        edge of a pin armed with BoardIO.trigger (models/renode/VhilRunner.cs):
+        the same quanta and sync points as run_for, so a run that sees no
+        armed edge computes exactly what run_for would. Returns the time
+        reached (us). The co-simulation port's event-driven plants use it
+        (vhil/cosim.py)."""
+        us = _int(us)
+        if us <= 0:
+            return self.now_us()
+        q = self.system.sync_quantum_us() if self.system.own_time_sources(lockstep=True) else 0
+        whole = us - us % q if q else us
+        if whole:
+            ran = int(self.monitor(f"emulation RunForUntilTrigger {whole}").strip(), 0)
+            if ran < whole:
+                return self.now_us()
+        if us - whole:
+            return self.run_for(us=us - whole)
         return self.now_us()
 
     def run_until(self, condition: Callable[[], bool], timeout_ms: float,
