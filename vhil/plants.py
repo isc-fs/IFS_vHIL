@@ -45,8 +45,16 @@ class Inverter:
 
     Motor: a first-order speed model, d(rpm)/dt = gain * torque - drag * rpm,
     a placeholder for the vehicle MingoCIL will provide.
+
+    DC link: with `dc_link` (a vhil.plant_ts.TractiveSystem, stepped before
+    this plant by its TsPlant with report=None) 0x466 reports that plant's
+    link, and no frame while it reads nothing (its sense floor, `silent`).
+    Without one, the fixed `dc_bus_v`: a charged link whatever the AIRs do,
+    which the car never shows (#147).
     """
     dc_bus_v: int = 350
+    dc_link: object = None
+    vdc_signal: str = "inv_vdc"          # ecu-ams.yaml's port calls it v_link
     state: int = 3                       # boots in Standby with the DC bus up
     period_ms: float = 10.0
     gain_rpm_per_nm_s: float = 20.0
@@ -101,9 +109,11 @@ class Inverter:
             self._last_tx_us = t_us
             self._cnt = (self._cnt + 1) & 0x0F
             port.send("inv_state", _e2e(7, self._cnt, lambda b: b.__setitem__(4, self.state & 0x7F)))
-            v = self.dc_bus_v & 0x3FF
-            port.send("inv_vdc", _e2e(6, self._cnt, lambda b: (b.__setitem__(2, v & 0xFF),
-                                                                b.__setitem__(3, v >> 8))))
+            v = self.dc_bus_v if self.dc_link is None else self.dc_link.report()
+            if v is not None:
+                v = max(0, min(int(v), 0x3FF))
+                port.send(self.vdc_signal, _e2e(6, self._cnt, lambda b: (b.__setitem__(2, v & 0xFF),
+                                                                    b.__setitem__(3, v >> 8))))
             raw = int(round(self.rpm)) & 0xFFFFF
             port.send("inv_rpm", bytes([0, 0, 0, 0, 0, (raw & 0x0F) << 4, (raw >> 4) & 0xFF,
                                         (raw >> 12) & 0xFF]))

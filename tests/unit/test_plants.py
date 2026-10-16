@@ -76,3 +76,20 @@ def test_pedals_map_throttle_onto_the_calibrated_span():
     assert abs(port.volts["apps1"] - APPS1_FULL * COUNTS_TO_V) < 1e-9
     Pedals(lambda t: (0.0, 0.0, False)).step(port, 0)
     assert abs(port.volts["apps1"] - APPS1_REST * COUNTS_TO_V) < 1e-9 and port.levels["start"] is False
+
+
+def test_the_inverter_reports_a_tractive_system_s_link():
+    from vhil.plant_ts import TractiveSystem, load_parameters
+    ts = TractiveSystem(params=load_parameters(overrides={"sense_floor": 48,
+                                                          "below_floor": "silent"}))
+    ts.set("v_pack", 351.5, 0)
+    port, inv = FakePort(), Inverter(dc_link=ts, vdc_signal="v_link")
+    inv.step(port, 0)
+    assert ("v_link", ) not in [(n,) for n, _ in port.sent], "a frame below the sense floor"
+    ts.set("sdc_closed", True, 0)
+    ts.fault("welded_air_pos", True, 0)
+    ts.set("air_neg_cmd", True, 0)
+    ts.advance(100_000)
+    inv.step(port, 100_000)
+    vdc = [d for n, d in port.sent if n == "v_link"]
+    assert vdc and int.from_bytes(vdc[-1][2:4], "little") & 0x3FF == 352
