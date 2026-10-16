@@ -23,7 +23,7 @@ export function laneOf(list, item) {
     if (list === 'watch') return null;
     if (list === 'expect') {
         const s = parseSignal(item.signal);
-        if (!s) return null;
+        if (!s || s.kind === 'plant') return null;   // a plant's output has no lane yet
         return laneId(s.kind === 'frame' ? 'bus' : 'board', s.owner);
     }
     if (['gpio', 'analog', 'watch'].includes(item.kind)) return laneId('board', item.board);

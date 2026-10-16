@@ -128,7 +128,8 @@ def load_text(text: str, system_id: str, name: str):
 
 # Keys of a row, in the order a file writes them.
 _ORDER = ("kind", "check", "name", "at_ms", "until_ms", "bus", "board", "symbol", "id", "ext",
-          "data", "period_ms", "periodic", "pin", "level", "volts", "size", "signal", "op",
+          "data", "period_ms", "periodic", "pin", "level", "volts", "size", "plant", "set",
+          "signal", "op",
           "value", "min_ms", "max_ms", "min", "max")
 _PLAIN = re.compile(r"[A-Za-z_][A-Za-z0-9_./-]*\Z")
 _YAML_WORDS = {"y", "n", "yes", "no", "on", "off", "true", "false", "null", "none", "~"}
@@ -168,6 +169,8 @@ def dump_scenario(sc: RunScenario, system_id: str, description: str = "") -> str
     lines.append(f"virtual_ms: {d['virtual_ms']}")
     if d["slice_ms"] != DEFAULT_SLICE_MS:
         lines.append(f"slice_ms: {d['slice_ms']}")
+    if d.get("tags"):
+        lines.append(f"tags: [{', '.join(d['tags'])}]")
     for key in ("stimuli", "watch", "expect"):
         rows = d[key]
         if not rows:
@@ -183,6 +186,8 @@ def as_data(sc: RunScenario, description: str) -> dict:
     d.pop("kind", None)
     d.pop("name", None)
     d.pop("live", None)
+    if not d.get("tags"):
+        d.pop("tags", None)
     return {"description": description, **d}
 
 

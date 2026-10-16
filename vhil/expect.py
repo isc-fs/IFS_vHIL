@@ -55,15 +55,16 @@ _ID = r"[A-Za-z_][A-Za-z0-9_]{0,63}"
 SIGNAL = re.compile(
     rf"^(?:frame:(?P<bus>{_ID})\.(?P<msg>0x[0-9A-Fa-f]{{1,8}}|{_ID})(?:\.(?P<field>{_ID}))?"
     rf"|symbol:(?P<sboard>{_ID})\.(?P<symbol>[A-Za-z_]\w{{0,127}})"
-    rf"|pin:(?P<pboard>{_ID})\.(?P<pin>[A-Za-z0-9_]{{1,64}}))\Z", re.ASCII)
+    rf"|pin:(?P<pboard>{_ID})\.(?P<pin>[A-Za-z0-9_]{{1,64}})"
+    rf"|plant:(?P<plant>{_ID})\.(?P<output>{_ID}))\Z", re.ASCII)
 # A value given as text: a value-table label, or high/low (fullmatch).
 LABEL = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_ .+:/-]{0,63}")
 
 
 class Signal(NamedTuple):
-    kind: str           # frame | symbol | pin
-    owner: str          # the bus (frame) or board (symbol, pin)
-    item: str           # the message (name or 0x id), symbol or pin
+    kind: str           # frame | symbol | pin | plant
+    owner: str          # the bus (frame), board (symbol, pin) or plant
+    item: str           # the message (name or 0x id), symbol, pin or plant output
     field: str = ""     # a frame's field ("" = the frame itself)
 
     def __str__(self) -> str:
@@ -74,11 +75,13 @@ def parse_signal(text: str) -> Signal:
     m = SIGNAL.match(text or "")
     if not m:
         raise ValueError(f"{text!r} is not a signal: frame:<bus>.<message>[.<field>], "
-                         "symbol:<board>.<name> or pin:<board>.<pin>")
+                         "symbol:<board>.<name>, pin:<board>.<pin> or plant:<plant>.<output>")
     if m["bus"]:
         return Signal("frame", m["bus"], m["msg"], m["field"] or "")
     if m["sboard"]:
         return Signal("symbol", m["sboard"], m["symbol"])
+    if m["plant"]:
+        return Signal("plant", m["plant"], m["output"])
     return Signal("pin", m["pboard"], m["pin"])
 
 
@@ -233,6 +236,10 @@ class _Check:
             return rec["t_us"], _num(raw * self.field["factor"] + self.field["offset"])
         if sig.kind == "symbol":
             if kind == "sample" and rec.get("board") == sig.owner and rec.get("name") == sig.item:
+                return rec["t_us"], rec.get("value")
+            return None
+        if sig.kind == "plant":
+            if kind == "plant" and rec.get("plant") == sig.owner and rec.get("name") == sig.item:
                 return rec["t_us"], rec.get("value")
             return None
         if kind == "edge" and rec.get("board") == sig.owner and rec.get("pin") == sig.item:
@@ -398,13 +405,13 @@ def evaluate(expects: Iterable[dict], records: Iterable[dict], contract: Optiona
     return ev.results()
 
 
-_KINDS = (b'"frame"', b'"edge"', b'"sample"')
+_KINDS = (b'"frame"', b'"edge"', b'"sample"', b'"plant"')
 
 
 def evaluate_trace(path: Path, expects: list[dict], contract: Optional[dict],
                    end_us: int) -> list[dict]:
     """evaluate() over a trace file, read line by line (a long run's trace
-    is hundreds of MiB): only frame, edge and sample records are parsed."""
+    is hundreds of MiB): only frame, edge, sample and plant records are parsed."""
     ev = Evaluation(expects, contract, end_us)
     if expects:
         with open(path, "rb") as f:

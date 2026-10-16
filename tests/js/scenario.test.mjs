@@ -133,3 +133,11 @@ test("the Scenario tab's empty state says how to make one", () => {
   assert.match(text, /Save as scenario/);
   assert.match(emptyScenarioText("ams", 2), /^Pick a scenario/);
 });
+
+test("a plant row and a plant signal read as what they set and check", () => {
+  const row = { action: "plant", item: { kind: "plant", at_ms: 100, plant: "ts", set: { pre_open_circuit: true } } };
+  assert.equal(targetOf(row, CONTRACT), "plant ts");
+  assert.equal(valueOf(row), "pre_open_circuit = true");
+  assert.deepEqual(parseSignal("plant:ts.air_pos_close_ratio"),
+                   { kind: "plant", owner: "ts", item: "air_pos_close_ratio", field: "" });
+});
