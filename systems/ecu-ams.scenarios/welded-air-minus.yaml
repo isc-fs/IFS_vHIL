@@ -1,0 +1,19 @@
+kind: scenario
+system: ecu-ams
+description: "TS-1 fault, AIR- welded closed (the plant's welded_air_neg): the AMS cannot see it (no AIR auxiliary contacts on the car, #147 out of scope), so the car arms as usual: Precharge charges the link through PRE (AIR- already closed), and Run at 95 %. Recorded as what the firmware does with a welded AIR-, not as a failure: detecting it needs hardware the car lacks. IFS08-CE-AMS state_machine.hpp:308-314, 366."
+virtual_ms: 11000
+tags: [beyond-bench]
+stimuli:
+  - {kind: plant, name: weld-air-minus, at_ms: 0, plant: ts, set: {"welded_air_neg": true}}
+  - {kind: gpio, name: tsms-on, at_ms: 5500, board: ams, pin: PF9, level: true}
+  - {kind: gpio, name: dash-press, at_ms: 5600, board: ams, pin: PF10, level: true}
+  - {kind: gpio, name: dash-release, at_ms: 5650, board: ams, pin: PF10, level: false}
+watch:
+  - {kind: symbol, board: ams, name: g_state_telemetry, size: 1, period_ms: 10}
+  - {kind: symbol, board: ams, name: g_fault_reason_telemetry, size: 1, period_ms: 10}
+  - {kind: symbol, board: ecu, name: g_last_ctrl_state, size: 1, period_ms: 10}
+expect:
+  - {check: never, name: no-error, at_ms: 0, signal: "symbol:ams.g_state_telemetry", value: 5}
+  - {check: always, name: link-drained-before-arm, at_ms: 3000, until_ms: 5600, signal: "frame:can_acu.VCU_heartbeat.dc_bus_voltage", value: 0}
+  - {check: eventually, name: ams-run, at_ms: 5600, until_ms: 10600, signal: "symbol:ams.g_state_telemetry", value: 3}
+  - {check: always, name: air-plus-above-the-fs-ratio, at_ms: 5600, signal: "plant:ts.air_pos_close_ratio", op: ">=", value: 0.9}
