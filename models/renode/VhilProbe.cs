@@ -65,10 +65,30 @@ namespace Antmicro.Renode.Testing
     // from the master time source: a probe belongs to no machine, and the
     // hub's per-machine delivery path would throw. ICAN is re-implemented so
     // received frames land here, stamped, instead of in CANTester's list.
+    //
+    // ICAN.FrameSent is re-implemented too, so a frame the probe sends goes to
+    // the bus without CANTester.SendFrame. That calls Emulation.StartAll when
+    // the emulation is not "started", and under `emulation RunFor` (every
+    // vhil.sim run) it never is: Renode 1.17's RunFor runs the master time
+    // source without setting Emulation.IsStarted. StartAll ends in a
+    // Thread.Sleep(100) (Emulation.cs), here in the master's sync phase, so
+    // every CPU and the monitor waited 100 ms of host time, once per RunFor
+    // that sent anything: a periodic sender tripled a run's wall time, a
+    // frame a step cost 13 wall-s per virtual s. Every send already runs in
+    // a synced callback, i.e. while time runs, so nothing needs starting.
+    // CANTester's own senders (SendISOTPMessage) still reach the bus through
+    // its event, forwarded here.
     public class VhilCanProbe : CANTester, ICAN
     {
         public VhilCanProbe() : base(TimeInterval.FromSeconds(1))
         {
+            FrameSent += frame => frameSent?.Invoke(frame);
+        }
+
+        event Action<CANMessageFrame> ICAN.FrameSent
+        {
+            add { frameSent += value; }
+            remove { frameSent -= value; }
         }
 
         void ICAN.OnFrameReceived(CANMessageFrame frame)
@@ -280,7 +300,7 @@ namespace Antmicro.Renode.Testing
                     sent.Add(new Record(NowMicros(), frame));
                 }
             }
-            SendFrame(frame);
+            frameSent?.Invoke(frame);
         }
 
         private void Tick(Periodic job, ulong atUs, bool synced = false)
@@ -381,6 +401,7 @@ namespace Antmicro.Renode.Testing
             public volatile bool Stopped;
         }
 
+        private event Action<CANMessageFrame> frameSent;
         private readonly object sync = new object();
         private readonly List<Record> received = new List<Record>();
         private readonly List<Record> sent = new List<Record>();

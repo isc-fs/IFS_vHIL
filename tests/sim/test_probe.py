@@ -3,6 +3,8 @@ observed through the ECU, which reacts to a single AMS frame: 0x020 [01]
 makes the AMS fresh for AmsStaleMs = 200, and the 100 ms 0x504 then reports
 the tractive system active (IFS08-CE-ECU control_task.cpp:117-120,
 vcu_ts_active.def)."""
+import time
+
 import pytest
 
 from vhil import canframe
@@ -117,3 +119,21 @@ def test_a_periodic_sender_starts_at_the_first_sync_point_after_start(ecu, lead_
     first = -(-start // QUANTUM_US) * QUANTUM_US
     assert [r.offer_ns // 1000 for r in tl[:3]] == [first, first + 10_000, first + 20_000], tl[:3]
     assert [f.t_us for f in bus.sent(OK_PRECHARGE, since_us=t0)] == [r.end_ns // 1000 for r in tl]
+
+
+def test_a_frame_costs_the_run_no_host_sleep(ecu):
+    """A frame the probe sends doesn't stop the run for host time. Through
+    CANTester.SendFrame it did: under `emulation RunFor` the emulation never
+    counts as started, so each send called Emulation.StartAll, which sleeps
+    100 ms, in the master's sync phase (VhilProbe.cs). Ten 10 ms steps with a
+    frame each took at least 1 s of host time that way; they now take about
+    what the 0.1 s of virtual time costs. Every frame still goes out."""
+    bus = ecu.can("can_acu")
+    t0 = ecu.now_us()
+    start = time.monotonic()
+    for _ in range(10):
+        bus.send_batch([(OK_PRECHARGE, b"\x01")])
+        ecu.run_for(ms=10)
+    wall = time.monotonic() - start
+    assert len(bus.sent(OK_PRECHARGE, since_us=t0)) == 10
+    assert wall < 0.8, f"{wall:.2f} s of host time for 10 frames"
