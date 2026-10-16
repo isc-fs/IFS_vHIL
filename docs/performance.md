@@ -912,6 +912,75 @@ IFS09-DV-uDV#18 (~5 % of its CPU polling on the car, and still its largest
 peripheral traffic here: ~300,000 ADC3 accesses a second). Both are handled
 exactly on the vHIL side; no firmware was changed.
 
+### A probe's frame: 100 ms of host time per run (#260)
+
+A frame from the test probe (`VhilCanProbe`, models/renode/VhilProbe.cs)
+cost far more host time than the bus traffic it adds. On ecu-ams after the
+apps' start (M-series host through Colima, 8 vCPU, firmware at dev,
+2026-10-16), host seconds per virtual second (wall, then Renode's CPU):
+
+| | wall | CPU |
+|---|---|---|
+| 30 × `run_for(ms=100)` | 0.48 | 0.80 |
+| the same with a probe `send_periodic` every 10 ms (`can_inv`, any id) | 1.57 | 0.97 |
+| 100 × `run_for(ms=10)` | 0.58 | 0.95 |
+| the same with a `send_batch` or `send_at` frame each step | 11-13 | 1.3-4.2 |
+
+Wall time rose, CPU barely, so something slept. Sampling the state of every
+Renode thread every 0.5 ms (`/proc/<pid>/task/*/stat`) showed all of them
+asleep 68 % of the time with the periodic sender and 90 % with a frame a step,
+in gaps of 100 ms that ended with the CPU threads waking. Renode's
+time framework never blocked: a throwaway model counting the master's and
+each board's time source's `BlockHook` saw none, so
+`TimeSourceBase.WaitIfBlocked`'s 10 ms wait was not it.
+
+The sleep was `Emulation.StartAll`'s `Thread.Sleep(100)`. The probe derives
+from Renode's `CANTester`, and its sends went through `CANTester.SendFrame`,
+which starts the emulation when `Emulation.IsStarted` is false. Under
+`emulation RunFor` (every `vhil.sim` run, `Sim.run_for`) it always is:
+`Emulation.RunFor` runs the master time source without setting it, and
+pauses everything at the end. So the first frame the probe sent in a RunFor
+called `StartAll` from the master's sync phase. That set `IsStarted` (later
+frames of the same RunFor skipped it), found the time source already
+running, and slept 100 ms on the master's thread while every board waited
+for it. The next RunFor's `PauseAll` cleared `IsStarted` again: one 100 ms
+stall per RunFor that sent anything. With the periodic sender that was 30
+stalls in 3 virtual seconds (+1.0 wall-s per virtual s); with a frame a step,
+100 in 1 s (+10).
+
+The probe now re-implements `ICAN.FrameSent` and raises it itself; every
+send already runs in a synced callback, while time runs, so nothing needs
+starting. CANTester's own senders (`SendISOTPMessage`) still reach the bus
+through its event, which the probe forwards. The same measurement after:
+0.49 wall-s per virtual s with the periodic sender (the baseline's), 0.71-0.76
+with a frame a step (the baseline's 0.58 plus the monitor round trip of the
+send itself). `test_a_frame_costs_the_run_no_host_sleep`
+(`tests/sim/test_probe.py`) sends ten frames over ten 10 ms steps and
+requires under 0.8 s of host time; before, the sleeps alone took 1 s.
+
+What a run computes is unchanged: the identity fingerprint is byte-identical
+(ecu `f66bae9a`, ams `e34419b8`, ecu-ams `8afef3de`, udv `f61019b8`,
+ecu-ams-udv `a329f2fb`, ecu-ams-ecu `4718c51b`, the references above), and
+`systems/ecu-ams.scenarios/car-arms-through-the-ecu.yaml`, whose stimuli are
+two 10 ms periodic senders, gives the same bus timelines (every frame, in ns),
+samples, edges and radio payloads before and after (its trace differs only in
+log lines' `wall_s`), all 17 expects passing. Its 8.5 virtual seconds took
+13.2-13.8 s before and 6.7-7.1 s after, interleaved. `speed.py` sends nothing
+from the probe, so it should not move, and doesn't beyond the host's noise:
+three interleaved rounds (`--systems ams ecu ecu-ams --paths sim`), medians
+before → after, boot / steady: ecu 2.57x / 3.92x → 2.58x / 4.12x, ecu-ams
+1.93x / 2.27x → 1.95x / 2.28x, ams 2.32x / 3.81x → 2.87x / 4.94x; three more
+rounds of ams alone, the fixed build first this time: 2.81x / 4.46x → 2.79x /
+4.70x, with an outlier on each side (0.57x before, 2.93x after).
+
+Upstream, this is Renode's: `CANTester.SendFrame` (and the other testers'
+`StartAll` on a not-started emulation, e.g. `TerminalTester`, `LEDTester`)
+should not start the emulation, and above all not sleep, when called on the
+time source's thread while it runs, which `Emulation.IsStarted` doesn't
+tell under `RunFor`. A fix there (check `TimeDomainsManager`'s current thread
+or the master's state instead of `IsStarted`, or drop the sleep) is
+upstreamable; the vHIL's doesn't need a patch to Renode.
+
 ## What is left
 
 Host `perf` of Renode in lock-step steady state on the final build of this
