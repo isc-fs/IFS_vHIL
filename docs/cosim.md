@@ -74,6 +74,34 @@ A plant is any object with `step(port, t_us)`. Inside it, `port.received(name)`,
 `port.level(name)`, `port.set_voltage(name, v)`, `port.set_level(name, b)` and
 `port.send(name, data)` act on the signals by name.
 
+## Event-driven plants
+
+A plant with `event_driven = True` is stepped only when something can
+change for it, not every `step_ms`: at the run's start, when one of the
+gpio_out signals its `triggers(port)` names changes level, at its own
+`next_us`, and whenever the lock-step plants are. Stopping the emulation
+every step costs host CPU (a 10 ms step on ecu-ams is +20-30 %,
+[`m8-plan.md`](m8-plan.md#time-and-determinism)); such a plant costs a stop
+only when it has something to do. It uses:
+
+- `port.edges(name)`: a gpio_out signal's level changes since the last call,
+  each with its time (the start of the sync quantum the board wrote the pin
+  in), so an edge between two steps is applied when it happened, not when
+  the plant heard of it;
+- `port.driven(name)`: the level a scenario row or a test holds on a gpio_in
+  signal;
+- `port.schedule(name, entries, period_ms)`: a can_tx signal sent every
+  `period_ms` by the emulation itself, its payload changing at future times
+  ([(t_us, data or None)], None for no frame). A later call replaces what is
+  still pending from its first entry on. The plant hands over its forecast
+  in one call, and the run doesn't stop for each frame.
+
+The run returns at the sync point after a triggering edge
+(`Sim.run_until_trigger`, `models/renode/VhilRunner.cs`): the same quanta and
+sync points as `run_for`, so a run with no edge computes exactly what
+`run_for` would, and the plant hears of an edge at most one quantum (0.5 ms)
+after it.
+
 ## For an external engine (MingoCIL)
 
 The exchange is the same, carried by a transport instead of a Python call:
@@ -98,9 +126,17 @@ the session ops and the trace, and is versioned with them.
   closing precharge through the AMS's contactor outputs is the faithful next
   step.
 
-The tractive-system plant (M8, #147) closes precharge through the AMS's
-contactor outputs: its contract, its event-driven exchange and the FMU it
-stands in for are in [`m8-plan.md`](m8-plan.md).
+- **`TsPlant`** (`vhil/plant_ts.py`, M8 #147): the tractive system. AIR+,
+  AIR- and the precharge relay follow the AMS's coil drives (PB5/PB6/PB7,
+  with PF9's coil supply) after their delays; the DC link charges through
+  the precharge resistor, follows the pack with both AIRs closed, and
+  bleeds while the shutdown circuit is open or the ECU secures it (PB6).
+  The inverter's 0x466 reports it (`v_link`), or an `Inverter(dc_link=...)`
+  does. Closed form, event-driven, parameters cited or "uncommissioned" in
+  [`catalog/plants/tractive-system.yaml`](../catalog/plants/tractive-system.yaml).
+  Its contract is the IFSSIM electrical FMU's, which it stands in for:
+  [`m8-plan.md`](m8-plan.md). `ecu-ams.yaml` and `ecu-ams-udv.yaml` declare
+  its signals; `tests/sim/test_plant_ts.py` arms the car on it.
 
 ## Cell source
 

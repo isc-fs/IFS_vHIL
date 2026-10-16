@@ -37,6 +37,23 @@ devices:
   dcdc_current: {model: acs758lcb-050b, outputs: {out: ams.PC1}}  # S_CURRENT_DCDC -> J3.5, not sampled on AMS dev (docs/backplanes/ams.md)
   # The uDV's MainLite BMI088, as in udv.yaml.
   udv_imu: {model: bmi088, i2c: udv.I2C2}
+port:
+  # The co-simulation port (vhil/cosim.py). The tractive-system plant's
+  # signals (vhil/plant_ts.py, docs/m8-plan.md) are named as the IFSSIM
+  # electrical FMU's (isc-fs/IFSSIM#669); the inverter's as in ecu.yaml,
+  # except that its DC-link report is `v_link`, the plant's.
+  step_ms: 10
+  signals:
+    air_pos_cmd:   {gpio_out: ams.PB5}  # AIR+ coil low side, Q2 -> J11.6 (docs/backplanes/ams.md)
+    air_neg_cmd:   {gpio_out: ams.PB6}  # AIR- coil low side, Q1 -> J11.5 (docs/backplanes/ams.md)
+    pre_cmd:       {gpio_out: ams.PB7}  # PRECHARGE coil low side, Q3 -> J11.4 (docs/backplanes/ams.md)
+    discharge_cmd: {gpio_out: ecu.PB6}  # DC-link discharge coil-interrupt, header J3.18 only (docs/backplanes/ecu.md)
+    sdc_closed:    {gpio_in: ams.PF9}   # TSMS_FIL senses AIR+_VCC, the coils' supply (docs/backplanes/ams.md)
+    v_link:        {can_tx: {bus: can_inv, id: 0x466}}
+    inv_cmd:       {can_rx: {bus: can_inv, id: 0x360}}
+    inv_torque:    {can_rx: {bus: can_inv, id: 0x362}}
+    inv_state:     {can_tx: {bus: can_inv, id: 0x461}}
+    inv_rpm:       {can_tx: {bus: can_inv, id: 0x463}}
 bench:
   power:
     # As in ecu-ams.yaml. bench-01 has no uDV slot.
