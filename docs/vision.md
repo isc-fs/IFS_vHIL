@@ -63,6 +63,24 @@ testable on their own, and shared.
    physics belongs to **MingoCIL** (car in the loop), which will drive
    IFSSIM through that port.
 
+### The boundary with MingoCIL and IFSSIM
+
+The vHIL owns the car's **electrical plant between the boards' connectors**:
+what the boards drive and measure on their harness. That is the contactor
+coils and contacts, the tractive system's DC link (precharge, discharge),
+the cells and NTCs the LTC6811 chain reads, and the current sensors. Vehicle
+dynamics, motor load, tyres and EBS pneumatics belong to MingoCIL/IFSSIM.
+
+The physics of the accumulator and the powertrain is IFSSIM's in both cases.
+The vHIL runs it as an FMI 3.0 co-simulation FMU, as its master
+([isc-fs/IFSSIM#669](https://github.com/isc-fs/IFSSIM/issues/669), M8
+[#147](https://github.com/isc-fs/IFS_vHIL/issues/147)). The vHIL's own Python
+plants are stand-ins for CI that implement the same contract, not a second
+battery model. Parameters are cited
+([`catalog/plants/`](../catalog/plants/)), never tuned to a test and never
+taken from a bench; an uncited one is reported as uncommissioned
+([`m8-plan.md`](m8-plan.md)).
+
 ## 4. Architecture
 
 ```
@@ -106,6 +124,7 @@ testable on their own, and shared.
 | **M7: beyond STM32** ([#15](https://github.com/isc-fs/IFS_vHIL/issues/15)) | Platform abstraction exercised by a second MCU family, then a Linux SoC spike | A non-STM32 board runs in a system next to the `stm32h733` boards |
 | IFS_HIL routing ([#3](https://github.com/isc-fs/IFS_vHIL/issues/3)) | Virtual bench descriptor in IFS_HIL | A firmware PR gets a virtual verdict without bench-01 (after M1) |
 | Depth ([#4](https://github.com/isc-fs/IFS_vHIL/issues/4)) | Bootloader emulation, fault injection, coverage | A-003 and Block D run virtually |
+| **M8: electrical plant** ([#147](https://github.com/isc-fs/IFS_vHIL/issues/147)) | Tractive-system plant on the co-simulation port (a Python stand-in, then IFSSIM's FMU), fault and safety-gate scenarios | ecu-ams arms Start → Run on the plant's DC link with no scripted value; the fault scenarios give the firmware's state and reason deterministically ([`m8-plan.md`](m8-plan.md)) |
 
 M1 comes first because everything else plugs into it. The AMS model (M2) is
 the first test of how cheaply the catalogue grows. M5 waits for M1–M4,

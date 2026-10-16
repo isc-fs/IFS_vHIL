@@ -98,6 +98,10 @@ the session ops and the trace, and is versioned with them.
   closing precharge through the AMS's contactor outputs is the faithful next
   step.
 
+The tractive-system plant (M8, #147) closes precharge through the AMS's
+contactor outputs: its contract, its event-driven exchange and the FMU it
+stands in for are in [`m8-plan.md`](m8-plan.md).
+
 ## Cell source
 
 The AMS reads its cells and NTCs from the LTC6811 chain model
