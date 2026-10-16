@@ -102,6 +102,32 @@ sync points as `run_for`, so a run with no edge computes exactly what
 `run_for` would, and the plant hears of an edge at most one quantum (0.5 ms)
 after it.
 
+## An FMU as a plant
+
+`vhil/fmi.py` is an FMI 3.0 co-simulation master: `FmuPlant(Fmu("x.fmu"))`
+runs an FMU on the port as one more event-driven plant. It maps the FMU's
+variables to the port by name, which is the contract's (the tractive-system
+FMU's are [`m8-plan.md`](m8-plan.md)'s), and sets the catalogue's parameters
+on the FMU's parameters of the same names (a null as 0). The master uses
+only the standard's C API through ctypes: no dependency, a Linux binary
+(`binaries/<arch>-linux/`) in the FMU.
+
+The FMU steps on a fixed grid (its `DefaultExperiment` step, else 5 ms) with
+its inputs held. An input change takes effect at the first grid point at or
+after it. To forecast the inverter's reports the master steps the FMU ahead
+of the emulation. When an edge then arrives for a time the FMU has passed, it
+goes back to the state it saved at its last exchange
+(`fmi3GetFMUState`/`fmi3SetFMUState`), or, for an FMU that can't, resets
+it and replays every input change from the start. The result is what a
+lock-step master would compute (`tests/unit/test_fmi.py`, both ways).
+
+A reference FMU of the tractive system (`tests/fmu/ts_reference.c`, built
+by the tests with the host's C compiler, `vhil.fmi.build_reference_fmu`)
+tests the master: it computes the stand-in's link on the same inputs to
+1e-9, and on ecu-ams the car arms on it as on the stand-in
+(`tests/sim/test_fmi_plant.py`). IFSSIM's FMU (isc-fs/IFSSIM#669) replaces
+it.
+
 ## For an external engine (MingoCIL)
 
 The exchange is the same, carried by a transport instead of a Python call:
