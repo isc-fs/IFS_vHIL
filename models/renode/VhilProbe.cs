@@ -251,6 +251,35 @@ namespace Antmicro.Renode.Testing
             }
         }
 
+        // Payload changes for a running periodic sender at future times:
+        // "t_us:hex t_us:hex ..." in time order, a hex of "-" for no frame (the
+        // sender stays silent from then until the next entry). Each tick sends
+        // the payload of the last entry at or before it. Entries already
+        // pending at or after the first new one are dropped first, so a plant
+        // that learns something new replaces the rest of its forecast in one
+        // call, and the run never stops for each change (vhil/cosim.py).
+        public void SchedulePeriodic(string key, string entries)
+        {
+            var list = new List<Tuple<ulong, byte[]>>();
+            foreach(var item in entries.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                var parts = item.Split(':');
+                list.Add(Tuple.Create(ulong.Parse(parts[0]), parts[1] == "-" ? null : Bytes(parts[1])));
+            }
+            lock(sync)
+            {
+                if(!periodic.TryGetValue(key, out var job))
+                {
+                    throw new ArgumentException($"no periodic sender '{key}'");
+                }
+                if(list.Count > 0)
+                {
+                    job.Pending.RemoveAll(e => e.Item1 >= list[0].Item1);
+                    job.Pending.AddRange(list);
+                }
+            }
+        }
+
         public void StopPeriodic(string key)
         {
             lock(sync)
@@ -299,7 +328,20 @@ namespace Antmicro.Renode.Testing
                 {
                     return;
                 }
-                Emit(new CANMessageFrame(job.Id, job.Data, job.Extended));
+                byte[] data;
+                lock(sync)
+                {
+                    while(job.Pending.Count > 0 && job.Pending[0].Item1 <= atUs)
+                    {
+                        job.Data = job.Pending[0].Item2;
+                        job.Pending.RemoveAt(0);
+                    }
+                    data = job.Data;
+                }
+                if(data != null)
+                {
+                    Emit(new CANMessageFrame(job.Id, data, job.Extended));
+                }
                 Tick(job, atUs + job.PeriodUs);
             });
         }
@@ -379,6 +421,7 @@ namespace Antmicro.Renode.Testing
             public bool Extended;
             public ulong PeriodUs;
             public volatile bool Stopped;
+            public readonly List<Tuple<ulong, byte[]>> Pending = new List<Tuple<ulong, byte[]>>();
         }
 
         private readonly object sync = new object();
@@ -443,6 +486,16 @@ namespace Antmicro.Renode.Testing
             return idr;
         }
 
+        // The level an outside driver holds on an input (Drive), false when
+        // nothing drives it.
+        public bool Driven(string port, int pin)
+        {
+            lock(sync)
+            {
+                return driven.TryGetValue(Tuple.Create(port, pin), out var level) && level;
+            }
+        }
+
         public void Reset()
         {
             // Watches and history survive a machine reset: a power cycle is
@@ -491,6 +544,31 @@ namespace Antmicro.Renode.Testing
                 }
                 levels[name] = value;
                 edges.Add(Tuple.Create(VhilCanProbe.NowMicros(), name, value, Instructions()));
+                if(triggers.Contains(name))
+                {
+                    VhilRunner.Triggered = true;
+                }
+            }
+        }
+
+        // Arm (or disarm) a watched pin, "<port>:<pin>": its edges end an
+        // `emulation RunForUntilTrigger` at the next sync point (VhilRunner.cs).
+        public void Trigger(string name, bool armed)
+        {
+            lock(sync)
+            {
+                if(!channels.Contains(name))
+                {
+                    throw new ArgumentException($"pin '{name}' is not watched");
+                }
+                if(armed)
+                {
+                    triggers.Add(name);
+                }
+                else
+                {
+                    triggers.Remove(name);
+                }
             }
         }
 
@@ -654,6 +732,7 @@ namespace Antmicro.Renode.Testing
         private readonly IMachine machine;
         private readonly object sync = new object();
         private readonly List<string> channels = new List<string>();
+        private readonly HashSet<string> triggers = new HashSet<string>();
         private readonly Dictionary<string, bool> levels = new Dictionary<string, bool>();
         private readonly Dictionary<Tuple<string, int>, bool> driven = new Dictionary<Tuple<string, int>, bool>();
         private readonly HashSet<string> hookedPorts = new HashSet<string>();

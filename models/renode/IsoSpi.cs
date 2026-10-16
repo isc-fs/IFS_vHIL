@@ -129,6 +129,26 @@ namespace Antmicro.Renode.Peripherals.SPI
             }
         }
 
+        // The sum of the cells the chain carries, mV: the first counts[i % n]
+        // inputs of chip i, e.g. "9,10" for the AMS's module pairs (9 cells
+        // on the first chip of each, 10 on the second). The pack voltage a
+        // tractive-system plant charges the DC link towards (vhil/plant_ts.py).
+        public long CellSum(string counts)
+        {
+            var n = counts.Split(',').Select(c => int.Parse(c.Trim())).ToArray();
+            long sum = 0;
+            var i = 0;
+            foreach(var ic in Chain)
+            {
+                var k = n[i++ % n.Length];
+                for(var c = 0; c < k; c++)
+                {
+                    sum += ic.CellMillivolts(c);
+                }
+            }
+            return sum;
+        }
+
         public void SetAllTemperatures(int deciCelsius)
         {
             foreach(var ic in Chain)
