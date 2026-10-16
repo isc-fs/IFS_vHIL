@@ -501,6 +501,7 @@ namespace Antmicro.Renode.Testing
                 return;   // another user of the hook (flash programming): later
             }
             armed = true;
+            yieldingAttempt = false;
             cuePc = null;
             armedQuanta = 0;
             pollAttempts++;
@@ -627,7 +628,10 @@ namespace Antmicro.Renode.Testing
             boundaryPosition = position;
             boundaryInterrupts = interrupts;
             boundaryPendSvs = pendSvs;
-            boundaryIcsr = Icsr();
+            // ICSR as the boundary found it, for an iteration that yields
+            // (OnBoundary); read only once one has (reading it computes the
+            // NVIC's pending vector, a cost every other poll would pay).
+            boundaryIcsr = yieldingAttempt ? Icsr() : NoIcsr;
             state = next;
         }
 
@@ -679,9 +683,13 @@ namespace Antmicro.Renode.Testing
         {
             var k = position - boundaryPosition;
             var yields = SelfYields();
+            if(yields > 0)
+            {
+                yieldingAttempt = true;   // from the next boundary on, ICSR is read there too
+            }
             selfYieldActive = false;
             if(interrupts != boundaryInterrupts || pendSvs - boundaryPendSvs != (ulong)yields
-               || (yields > 0 && (nvic == null || boundaryIcsr != Icsr()))
+               || (yields > 0 && (nvic == null || boundaryIcsr == NoIcsr || boundaryIcsr != Icsr()))
                || k == 0 || !access.Equals(boundary))
             {
                 // An interrupt in between, or the boundary read itself
@@ -1318,6 +1326,8 @@ namespace Antmicro.Renode.Testing
         private ulong boundaryInterrupts;
         private ulong boundaryPendSvs;
         private uint boundaryIcsr;
+        private bool yieldingAttempt;                 // this attempt has seen an iteration that yields
+        private const uint NoIcsr = 0xFFFFFFFFu;      // not read (ICSR's bit 10 is reserved, never 1)
         private ulong pendSvs;
         private bool selfYieldActive;
         private readonly NVIC nvic;
