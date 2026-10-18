@@ -199,14 +199,15 @@ python -m pytest tests/scenarios -o junit_family=xunit1 --junitxml=scenarios.xml
 ```
 
 CI runs it in `.github/workflows/scenarios.yml` with `full-ci`, nightly on
-`dev` and on dispatch. It is **advisory** for now (owner decision): a
-failing scenario is a warning annotation and a row of the step summary's
-table, not a failed check.
+`dev` and on dispatch. Since #198 it is a **required check** on `dev`
+(`scenarios`): a failing scenario fails it. On a pull request without
+`full-ci` the job is skipped, which GitHub counts as passing, so it gates the
+PRs that run it (labelled ones and release PRs into `main`) and the nightly.
 
-### Promotion to a gate
+### Promotion to a gate (met 2026-10-18, #198)
 
-The suite becomes a required check (the workflow's `Advisory verdict` step
-exits 1 and the job loses `continue-on-error`) when all of these hold:
+The suite became a required check once all of these held. They're kept as the
+bar to restore if it is ever demoted again:
 
 - **10 clean nightlies in a row** on `dev`: the scheduled run completes, every
   scenario passes, and none is skipped for a missing image.
