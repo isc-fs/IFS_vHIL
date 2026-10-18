@@ -912,7 +912,7 @@
             "properties": {
               "plant": {
                 "$ref": "#/$defs/id",
-                "description": "Its parameters in catalog/plants/<plant>.yaml; tractive-system is the Python stand-in (vhil/plant_ts.py)."
+                "description": "Its parameters in catalog/plants/<plant>.yaml; tractive-system is the Python stand-in (vhil/plant_ts.py), shutdown-circuit the SDC logic (vhil/plant_sdc.py)."
               },
               "cells": {
                 "$ref": "#/$defs/name",
