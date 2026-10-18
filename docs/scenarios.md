@@ -78,7 +78,7 @@ timeline and in results, and what a `stop_periodic` names.
 | `watch` | `at_ms`, `board`, `symbol` (with `size`, `period_ms`) or `pin` | from `at_ms` to the end: samples a global (default every 10 ms, its size from the ELF) or records a pin's edges, with its level then |
 | `watch: symbol` | `board`, `name`, `size` (1, 2, 4), `period_ms` | samples a firmware global from power-on |
 | `watch: pin` | `board`, `pin` | records its edges from power-on |
-| `plant` | `at_ms`, `plant` (one of the system's `plants:`), `set` (`{name: value}`) | sets a plant's fault inputs or parameters, e.g. `{pre_open_circuit: true}`, `{sense_floor: 48}`; a parameter set here is reported as an override |
+| `plant` | `at_ms`, `plant` (one of the system's `plants:`), `set` (`{name: value}`) | sets a plant's inputs, fault inputs or parameters, e.g. `{pre_open_circuit: true}`, `{sense_floor: 48}`, the shutdown circuit's `{tsms: true}` or `{reset: true}` (RST_EXT); a parameter set here is reported as an override. A `gpio` row on a pin a plant drives (the circuit's PF9) is refused |
 
 A frame the scenario sends is in the trace with `src: "stimulus"`. A live
 session's ops are these rows without their time
@@ -134,10 +134,12 @@ level then recorded (`edge` with `initial: true`). `plant:<plant>.<output>`
 is what one of the system's plants records (`plant` records): the
 tractive-system plant's `<contact>_closed` (air_pos, air_neg, pre) and `v_link`
 at each contact move, and `<contact>_close_ratio`, the link as a fraction of
-the pack as that contact closed (`air_pos_close_ratio >= 0.9`: the FS rule).
+the pack as that contact closed (`air_pos_close_ratio >= 0.9`: the FS rule). The shutdown circuit's
+(`plant: shutdown-circuit`) records `sdc_closed` (AIR+_VCC) and its two latches,
+`imd_latch` and `ams_latch`, at the run's start and at every change.
 
 **Plants.** A system with `plants:` (`ecu-ams.yaml`, `ecu-ams-udv.yaml`:
-the tractive system, [`m8-plan.md`](m8-plan.md)) runs them on its port in
+the shutdown circuit and the tractive system, [`m8-plan.md`](m8-plan.md)) runs them on its port in
 every run: stepped at the start, when an armed coil edge ends the run early,
 when a stimulus is applied, and at the plant's own next time, never every
 slice. The plant's 0x466 frames are the probe's (`src: "stimulus"` in the
@@ -238,6 +240,10 @@ The seeds, which pass against the firmware the systems declare (`ecu-ams/*` run 
 | `ecu-ams/airs-drop-out-in-run` | The AIRs drop out in Run with the coil supply up: the link collapses, the AMS confirms the bus collapse and falls to Start, not latching; the ECU secures the discharge |
 | `ecu-ams/rearm-refused-on-a-charged-link` | The SDC cycled in Run: the link is stranded, the ECU secures the discharge, a press is refused; the ECU releases (below 10 V or at its 30 s timeout) and a later press arms the car again |
 | `ecu-ams/inverter-sense-floor-holds-the-discharge` | An inverter that reports 48 V for anything below 48 V: at TSMS on the ECU secures a drained link, the AMS refuses the press, the ECU holds for `DischargeTimeoutMs` (30 s), releases with a fault, and only then does the car arm |
+| `ecu-ams/sdc-needs-a-reset-after-power-on` | The shutdown circuit's IMD and AMS latches are open after power-on: TSMS on, PF9 stays low and a press is refused until RST_EXT; then the next press arms Precharge |
+| `ecu-ams/sdc-opens-in-run` | A shutdown button in Run: the coils lose their supply, the contacts open, the AMS drops to Start unlatched; released, the circuit re-closes with no reset |
+| `ecu-ams/imd-latch-holds-the-sdc-open` | IMD_OK falls in Run: K4 drops, Start; IMD_OK back leaves the circuit open until RST_EXT |
+| `ecu-ams/ams-ok-opens-the-sdc` | An AMS Error drops AMS_OK, K5 and AIR+_VCC (PF9 low, contacts open); RST_EXT with AMS_OK low is refused |
 | `ecu/ams-error-inhibit` | A fresh `0x4A0` saying Error puts the ECU in AmsError within two ticks and holds it there; the AMS healthy again re-arms from WaitInvVdcConfig back to WaitStartBrake |
 | `ecu/as-emergency` | `0x50A` Emergency: the RTDS sounds 150 ms pulses for exactly 10 s and stops although Emergency persists; silent before the uDV is heard; `PitDiag_dv` flags the tone |
 | `ecu/heartbeat-r2d` | Nothing on the bus in the bootloader's window; `0x100` every 10 ms on the ACU bus only, `0x704` every second; the inverter's DC-bus report and the AMS's `ok_precharge` reach WaitStartBrake; START without the brake sounds no RTDS; with it, R2dDelay and 2 s of RTDS, then WaitInvStandby |

@@ -39,6 +39,12 @@ plants:
   # its 0x466 report (v_link). Runs in scenarios and web-app runs, never on
   # the wall-clock bench (IFS_HIL parity keeps its own linear ramp). Every
   # parameter's source is in catalog/plants/tractive-system.yaml.
+  # The shutdown circuit (TS-2, #147; docs/m8-plan.md "TS-2"): the AMS
+  # backplane's IMD and AMS latch relays and the harness's switches in
+  # series, ending in AIR+_VCC, the coils' supply, which it drives on PF9.
+  # Its inputs (tsms, the RST_EXT `reset` button, ...) are set by scenario
+  # rows, never by driving PF9. catalog/plants/shutdown-circuit.yaml.
+  sdc: {plant: shutdown-circuit}
   ts: {plant: tractive-system, cells: isospi}
 port:
   # The co-simulation port (vhil/cosim.py). The tractive-system plant's
@@ -52,6 +58,7 @@ port:
     pre_cmd:       {gpio_out: ams.PB7}  # PRECHARGE coil low side, Q3 -> J11.4 (docs/backplanes/ams.md)
     discharge_cmd: {gpio_out: ecu.PB6}  # DC-link discharge coil-interrupt, header J3.18 only (docs/backplanes/ecu.md)
     sdc_closed:    {gpio_in: ams.PF9}   # TSMS_FIL senses AIR+_VCC, the coils' supply (docs/backplanes/ams.md)
+    ams_ok:        {gpio_out: ams.PB4}  # AMS_OK -> Q10 -> K5 AMS latch coil, J1.4 (docs/backplanes/ams.md)
     v_link:        {can_tx: {bus: can_inv, id: 0x466}}
     inv_cmd:       {can_rx: {bus: can_inv, id: 0x360}}
     inv_torque:    {can_rx: {bus: can_inv, id: 0x362}}

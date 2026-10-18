@@ -490,6 +490,11 @@ def check_scenario(sc: RunScenario, system: System) -> list[str]:
                 errors.append(f"{where}: no bus '{s.bus}' in {system.id}")
         elif isinstance(s, GpioSet):
             pin(s.board, s.pin, "gpio", where)
+            owner = system.plant_driven_pins().get(f"{s.board}.{s.pin}")
+            if owner:
+                errors.append(f"{where}: {s.board}.{s.pin} is driven by plant '{owner}' "
+                              f"(AIR+_VCC): set its inputs instead, e.g. "
+                              f"{{kind: plant, plant: {owner}, set: {{tsms: true}}}}")
         elif isinstance(s, AnalogSet):
             pin(s.board, s.pin, "analog", where)
         elif isinstance(s, WatchOp):

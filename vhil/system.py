@@ -839,6 +839,16 @@ class System:
     # (vhil/plant_ts.py; docs/m8-plan.md's contract).
     TS_SIGNALS = {"air_pos_cmd": "gpio_out", "air_neg_cmd": "gpio_out", "pre_cmd": "gpio_out",
                   "v_link": "can_tx"}
+    # The shutdown circuit's (vhil/plant_sdc.py): AMS_OK in, AIR+_VCC out.
+    SDC_SIGNALS = {"ams_ok": "gpio_out", "sdc_closed": "gpio_in"}
+
+    def plant_driven_pins(self) -> dict[str, str]:
+        """"<board>.<pin>" -> the plant that drives it: a shutdown circuit's
+        `sdc_closed` (AIR+_VCC on the AMS's PF9). A scenario row or a live op
+        must set the plant's input instead of driving such a pin."""
+        sig = self.doc.get("port", {}).get("signals", {}).get("sdc_closed", {})
+        return {sig["gpio_in"]: name for name, spec in self.plants.items()
+                if spec["plant"] == "shutdown-circuit" and "gpio_in" in sig}
 
     def _check_plants(self) -> None:
         signals = {n: next(iter(s)) for n, s in self.doc.get("port", {}).get("signals", {}).items()}
@@ -851,6 +861,15 @@ class System:
                 if p not in params:
                     raise SystemError(f"plant '{name}': {spec['plant']} has no parameter '{p}'")
             cells = spec.get("cells")
+            if spec["plant"] == "shutdown-circuit":
+                if cells is not None:
+                    raise SystemError(f"plant '{name}': a shutdown circuit has no cells")
+                for sig, kind in self.SDC_SIGNALS.items():
+                    if signals.get(sig) != kind:
+                        raise SystemError(f"plant '{name}': the port needs a {kind} signal '{sig}'")
+                if "udv_sdc" in signals and signals["udv_sdc"] != "gpio_out":
+                    raise SystemError(f"plant '{name}': 'udv_sdc' must be a gpio_out signal")
+                continue
             if cells is not None:
                 dev = self.devices.get(cells)
                 if dev is None or dev["model_doc"].get("interface", {}).get("provides") != "isospi":

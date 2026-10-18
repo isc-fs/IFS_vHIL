@@ -164,6 +164,14 @@ the session ops and the trace, and is versioned with them.
   [`m8-plan.md`](m8-plan.md). `ecu-ams.yaml` and `ecu-ams-udv.yaml` declare
   its signals; `tests/sim/test_plant_ts.py` arms the car on it.
 
+- **`SdcPlant`** (`vhil/plant_sdc.py`, TS-2): the shutdown circuit. The
+  AMS backplane's IMD and AMS latch relays (K4, K5: closed by an RST_EXT
+  press with IMD_OK / AMS_OK high, dropped when it falls) and the harness's
+  switches in series, ending in AIR+_VCC, which it drives on `ams.PF9`
+  (`sdc_closed`) for the AMS and as the tractive system's coil supply.
+  Event-driven on AMS_OK's edges; its inputs are scenario rows.
+  [`m8-plan.md`](m8-plan.md#ts-2-the-shutdown-circuit).
+
 ## Cell source
 
 The AMS reads its cells and NTCs from the LTC6811 chain model

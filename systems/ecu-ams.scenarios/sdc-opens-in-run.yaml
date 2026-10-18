@@ -1,0 +1,33 @@
+kind: scenario
+system: ecu-ams
+description: "TS-2, a harness element of the shutdown circuit opens in Run and closes again (the shutdown-circuit plant's estop_ok; every unlatched series element, BSPD, inertia switch, BOTS, HV interlock, behaves alike, vhil/plant_sdc.py, tests/unit/test_plant_sdc.py). AIR+_VCC drops: the coils lose their supply, so the plant's contacts open, and PF9 (TSMS_FIL, which senses AIR+_VCC) falls (the AMS's 0x021 tsms, every 100 ms), so the AMS drops from Run to Start without latching (Car mode, IFS08-CE-AMS state_machine.hpp:237-269); the discharge bleed takes the link (its relay follows the SDC). The element closing again re-closes the circuit with no reset (only the IMD and AMS latches need RST_EXT), and the AMS stays in Start until a DASH_CHG press, which the re-arm gate then governs (rearm-refused-on-a-charged-link)."
+virtual_ms: 13000
+tags: [beyond-bench]
+stimuli:
+  - {kind: plant, name: sdc-reset, at_ms: 5400, plant: sdc, set: {reset: true}}
+  - {kind: plant, name: sdc-reset-release, at_ms: 5450, plant: sdc, set: {reset: false}}
+  - {kind: plant, name: tsms-on, at_ms: 5500, plant: sdc, set: {tsms: true}}
+  - {kind: gpio, name: dash-press, at_ms: 5600, board: ams, pin: PF10, level: true}
+  - {kind: gpio, name: dash-release, at_ms: 5650, board: ams, pin: PF10, level: false}
+  - {kind: plant, name: estop-pressed, at_ms: 11000, plant: sdc, set: {estop_ok: false}}
+  - {kind: plant, name: estop-released, at_ms: 11500, plant: sdc, set: {estop_ok: true}}
+watch:
+  - {kind: symbol, board: ams, name: g_state_telemetry, size: 1, period_ms: 10}
+  - {kind: symbol, board: ams, name: g_fault_reason_telemetry, size: 1, period_ms: 10}
+  - {kind: symbol, board: ecu, name: g_last_ctrl_state, size: 1, period_ms: 10}
+expect:
+  - {check: eventually, name: ams-run, at_ms: 5600, until_ms: 10600, signal: "symbol:ams.g_state_telemetry", value: 3}
+  - {check: always, name: sdc-closed-in-run, at_ms: 10600, until_ms: 10999, signal: "plant:sdc.sdc_closed", value: 1}
+  - {check: eventually, name: sdc-opens, at_ms: 11000, until_ms: 11001, signal: "plant:sdc.sdc_closed", value: 0}
+  - {check: eventually, name: tsms-low-at-the-ams, at_ms: 11000, until_ms: 11150, signal: "frame:can_acu.ACU_discharge_interlock.tsms", value: 0}
+  - {check: eventually, name: ams-start, at_ms: 11000, until_ms: 11100, signal: "symbol:ams.g_state_telemetry", value: 0}
+  - {check: eventually, name: air-plus-contact-opens, at_ms: 11000, until_ms: 11100, signal: "plant:ts.air_pos_closed", value: 0}
+  - {check: eventually, name: air-minus-contact-opens, at_ms: 11000, until_ms: 11100, signal: "plant:ts.air_neg_closed", value: 0}
+  - {check: always, name: coils-not-driven-after, at_ms: 11100, signal: "pin:ams.PB5", value: low}
+  - {check: eventually, name: link-bleeds, at_ms: 11000, until_ms: 12500, signal: "frame:can_acu.VCU_heartbeat.dc_bus_voltage", op: "<", value: 300}
+  - {check: eventually, name: sdc-recloses-without-reset, at_ms: 11500, until_ms: 11501, signal: "plant:sdc.sdc_closed", value: 1}
+  - {check: always, name: tsms-back, at_ms: 11650, signal: "frame:can_acu.ACU_discharge_interlock.tsms", value: 1}
+  - {check: always, name: stays-in-start, at_ms: 11100, signal: "symbol:ams.g_state_telemetry", value: 0}
+  - {check: never, name: no-error, at_ms: 0, signal: "symbol:ams.g_state_telemetry", value: 5}
+  - {check: always, name: not-latched, at_ms: 0, signal: "symbol:ams.g_fault_reason_telemetry", value: 0}
+  - {check: always, name: ams-ok-held, at_ms: 4500, signal: "pin:ams.PB4", value: high}

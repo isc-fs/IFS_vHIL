@@ -1,0 +1,30 @@
+kind: scenario
+system: ecu-ams
+description: "TS-2, the IMD latch: IMD_OK falls in Run (the shutdown-circuit plant's imd_ok), the AMS backplane's K4 drops (its coil's low side Q8 follows IMD_OK, IFS08-ES bcb4511 AMS IFS08.kicad_sch) and AIR+_VCC opens: contacts open, the AMS falls to Start (PF9 low; the AMS has no IMD input, safety_predicates.hpp:150-154). IMD_OK back does not re-close the circuit: K4 holds open until RST_EXT is pressed with IMD_OK high (its self-hold, pole 1 11->14). After the press AIR+_VCC is back and the AMS still waits in Start for a DASH_CHG press."
+virtual_ms: 13000
+tags: [beyond-bench]
+stimuli:
+  - {kind: plant, name: sdc-reset, at_ms: 5400, plant: sdc, set: {reset: true}}
+  - {kind: plant, name: sdc-reset-release, at_ms: 5450, plant: sdc, set: {reset: false}}
+  - {kind: plant, name: tsms-on, at_ms: 5500, plant: sdc, set: {tsms: true}}
+  - {kind: gpio, name: dash-press, at_ms: 5600, board: ams, pin: PF10, level: true}
+  - {kind: gpio, name: dash-release, at_ms: 5650, board: ams, pin: PF10, level: false}
+  - {kind: plant, name: imd-fault, at_ms: 11000, plant: sdc, set: {imd_ok: false}}
+  - {kind: plant, name: imd-ok-again, at_ms: 11500, plant: sdc, set: {imd_ok: true}}
+  - {kind: plant, name: rst-ext, at_ms: 12000, plant: sdc, set: {reset: true}}
+  - {kind: plant, name: rst-ext-release, at_ms: 12050, plant: sdc, set: {reset: false}}
+watch:
+  - {kind: symbol, board: ams, name: g_state_telemetry, size: 1, period_ms: 10}
+  - {kind: symbol, board: ams, name: g_fault_reason_telemetry, size: 1, period_ms: 10}
+  - {kind: symbol, board: ecu, name: g_last_ctrl_state, size: 1, period_ms: 10}
+expect:
+  - {check: eventually, name: ams-run, at_ms: 5600, until_ms: 10600, signal: "symbol:ams.g_state_telemetry", value: 3}
+  - {check: eventually, name: imd-latch-drops, at_ms: 11000, until_ms: 11001, signal: "plant:sdc.imd_latch", value: 0}
+  - {check: eventually, name: ams-start, at_ms: 11000, until_ms: 11100, signal: "symbol:ams.g_state_telemetry", value: 0}
+  - {check: eventually, name: contacts-open, at_ms: 11000, until_ms: 11100, signal: "plant:ts.air_pos_closed", value: 0}
+  - {check: always, name: held-open-after-imd-ok, at_ms: 11000, until_ms: 11999, signal: "plant:sdc.sdc_closed", value: 0}
+  - {check: always, name: tsms-low-until-the-reset, at_ms: 11150, until_ms: 11999, signal: "frame:can_acu.ACU_discharge_interlock.tsms", value: 0}
+  - {check: eventually, name: reset-recloses, at_ms: 12000, until_ms: 12001, signal: "plant:sdc.sdc_closed", value: 1}
+  - {check: always, name: latched-again, at_ms: 12001, signal: "plant:sdc.imd_latch", value: 1}
+  - {check: always, name: start-after, at_ms: 11100, signal: "symbol:ams.g_state_telemetry", value: 0}
+  - {check: never, name: no-error, at_ms: 0, signal: "symbol:ams.g_state_telemetry", value: 5}

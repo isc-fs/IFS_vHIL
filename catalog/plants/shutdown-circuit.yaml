@@ -1,0 +1,49 @@
+kind: plant-parameters
+id: shutdown-circuit
+description: >-
+  The car's shutdown circuit (TS-2, M8, #147; docs/m8-plan.md "TS-2"):
+  boolean series logic with the AMS backplane's IMD (K4) and AMS (K5) latch
+  relays, ending in AIR+_VCC, the contactor coils' supply, which the AMS
+  senses on PF9 (TSMS_FIL). The logic is the vHIL's (vhil/plant_sdc.py): the
+  IFSSIM electrical FMU takes its output as the input `sdc_closed`
+  (isc-fs/IFSSIM#669 §3, "the vHIL computes it").
+
+  Topology is cited in vhil/plant_sdc.py and docs/backplanes/ams.md; the
+  harness between SC_OUT and AIR+_VCC has no schematic, so its elements are
+  plain series inputs and what is unknown about them is a parameter here,
+  uncommissioned (CLAUDE.md invariant 9: never taken from either bench).
+# Sources, pinned:
+#   SCH  = isc-fs/IFS08-ES main bcb4511, `boards/AMS_IFS08/kicad/AMS IFS08.kicad_sch`
+#   UDV  = isc-fs/IFS09-DV-uDV feat/5-hardware d2e4250, `MicroDV_PCB_Schematics/MicroDV2/MicroDV2.kicad_sch`
+#   AMS  = isc-fs/IFS08-CE-AMS dev 94b59a9
+parameters:
+  udv_k1_in_series:
+    value: false
+    unit: null
+    status: uncommissioned
+    source: >-
+      The uDV's K1 (RT425012, coil low side Q5 from PB7; contact 24 NO = J7.1
+      `/SDC in 1`, 21 COM = J7.2 `/SDC out`, UDV) is a series break between
+      the two pins of J7, but whether and where J7 is wired into the car's
+      SDC is in no harness schematic. The uDV firmware closes K1 only after
+      its EBS initial check with ASMS on (IFS09-DV-uDV dev 1252022
+      ebs_manager.cpp:53-58, app_task.cpp:666-675) and keeps it open after
+      FINISHED/EMERGENCY until a reset (app_task.cpp:303, 879-881); so with
+      it in series and ASMS off, the car could never arm in manual mode
+      without a bypass no schematic shows. false = not in series.
+    validated_against: null
+# Topology (cited facts, not parameters):
+#   - SC_IN J1.14 -> J4.5/J4.6 (off-board) -> J7.7/J7.8 HV_INTERLOCK+/- ->
+#     K4 21->24 (SC4) -> K5 21->24 (SC5) -> J2.4/J2.3 (off-board) -> SC_OUT
+#     J1.15 (SCH, netlist). AIR+_VCC, AIR-_VCC, PRECH_VCC and TSMS are one net
+#     on J1.16, the coils' high side and R18 62k to PF9 (SCH).
+#   - K4/K5: coil A1 = RST_IMD/RST_BMS (fed from RST_EXT J1.7 through D9/D10,
+#     held by pole 1 11 = +12 V -> 14 NO), A2 = Q8/Q10 drain, gate from
+#     IMD_OK (J1.3) / AMS_OK (J1.4, PB4) through 1k with 2k2 to GND (SCH): a
+#     latch that needs OK high and an RST_EXT press, and drops when OK falls.
+#   - AMS_OK is active high, asserted from the end of the 2 s boot grace
+#     unless the firmware's Error is latched (AMS safety_predicates.hpp:276-286,
+#     relay_driver.cpp:67-73); "AMS_OK ... sits UPSTREAM of TSMS in the loop"
+#     (AMS state_machine.hpp:241-242).
+#   - Relay switching delays: unknown (no part numbers); the circuit switches
+#     instantly. The contactors' own delays are the tractive-system plant's.
