@@ -94,11 +94,11 @@ to the system's port.
 | `discharge_cmd` | in | bool | ECU PB6, high = secure the bleed (`gpio_out`; ECU `control_task.cpp:301`) | yes |
 | `sdc_closed` | in | bool | the coil supply AIR+_VCC, which the AMS senses on PF9 (schematic, below): the level driven on `ams.PF9` | yes |
 | `i_inverter_dc` | in | A, + = discharge | scripted in M8 (0), IFSSIM powertrain in M9 | 0 only |
-| `i_charger`, `cell_bleed[95]`, `t_ambient` | in | A, bool, K | | ignored |
+| `i_charger`, `cell_bleed[95]`, `t_ambient` | in | A, bool, K | scripted; `cell_bleed` from the LTC6811s' DCC bits | with `pack: true` (M9 prep, below) |
 | `v_link` | out | V | inverter DC link, reported on 0x466 (`can_tx`, can_inv) | yes |
 | `v_pack` | out | V | pack terminals | sum of the LTC6811 model's cells |
 | `air_pos_closed`, `air_neg_closed`, `pre_closed` | out | bool | contact state after its delay | yes |
-| `v_cell[95]`, `t_sensor[N]`, `i_pack`, `soc_cell[95]` | out | V, K, A, 1 | the LTC6811 chain, the current sensors | not yet: the LTC6811 model stays the cell source (docs/cosim.md, "Cell source") |
+| `v_cell[95]`, `t_sensor[N]`, `i_pack`, `soc_cell[95]` | out | V, K, A, 1 | the LTC6811 chain (100 uV, 0.1 C), the current sensor's PF7/PF8 legs | with `pack: true` (M9 prep, below) |
 
 Faults are boolean inputs of the plant (IFSSIM#669 §4), test API on the
 stand-in: `welded_air_pos`, `welded_air_neg`, `pre_open_circuit` (the
@@ -317,6 +317,73 @@ circuit, and four are new:
 | `sdc-opens-in-run` | a shutdown button in Run (any unlatched element): contacts open on the lost coil supply, the AMS drops to Start unlatched, the bleed takes the link; released, the circuit re-closes with no reset and the AMS waits for a press |
 | `imd-latch-holds-the-sdc-open` | IMD_OK falls in Run: K4 drops, Start; IMD_OK back leaves the circuit open until RST_EXT |
 | `ams-ok-opens-the-sdc` | an AMS Error (over-current) drops AMS_OK, K5 and AIR+_VCC; an RST_EXT press with AMS_OK low is refused |
+
+## M9 prep: the measurement chain
+
+Tracked in [#318](https://github.com/isc-fs/IFS_vHIL/issues/318), done
+before IFSSIM's FMU so it swaps in on the same contract. With `pack: true`
+on the tractive-system plant (`ecu-ams`, `ecu-ams-udv`) the stand-in carries
+a per-cell pack (`vhil/plant_pack.py`) and drives the AMS's measurement
+chain ([`cosim.md`](cosim.md#cell-source)).
+
+**The model.** 95 series elements, each 6 VTC6 in parallel: OCV(SOC) from
+the VTC6 fit the AMS's own estimator uses (TFM_RMG, from the CMU eVTOL
+dataset), R0 with its temperature coefficient, one RC, a lumped thermal
+mass to ambient, per-element capacity and SOC spreads from a seeded
+generator. Between events every term is closed form (soc linear, RC and
+temperature first order; the heat uses R0 at 25 C so it stays exact), so how
+often the plant is stepped changes nothing. The pack current is the
+inverter's (and charger's) scripted current while both AIRs are closed; the
+bleed removes charge only, since the AMS opens every switch while it
+converts (IFS08-CE-AMS `bms_poll_task.cpp:372-420`). NTCs: 20 per chip on
+ADG731 channels 0-9 and 16-25, spread evenly over the chip's cells
+(uncommissioned map).
+
+**Faults** (IFSSIM#669 §4, scenario rows): `weak_cell` with
+`weak_cell_capacity` / `weak_cell_r0` (scales), `hot_cell` with
+`hot_cell_dt` (K above its thermal state), `imbalance_cell` with
+`imbalance_soc` (a one-shot SOC offset). Scripted inputs: `i_inverter_dc`,
+`i_charger` (A), `t_ambient` (K). A pack parameter set by a row (`soc_init:
+0.15`, `cell_capacity`) rebuilds the pack, reported as an override.
+
+**Cost.** Event-driven: the cells reach the chain when one moves an LTC6811
+LSB (100 uV) or a temperature 0.1 C, no sooner than `cell_exchange_min`
+(0.1 s); a pack at rest is settled and never stops the run; balancing starts
+by a trigger, and while a switch is on the plant reads the on-time every
+`bleed_poll` (5 s) at most. Under 60 A the plant stops the run every 0.1 s
+(the discharge scenario: 265 steps in 40 s).
+
+**Parameters** ([`catalog/plants/tractive-system.yaml`](../catalog/plants/tractive-system.yaml)):
+
+| Parameter | Value | Status | Source |
+|---|---|---|---|
+| `cells_series`, `cells_parallel` | 95, 6 | cited | AMS `ams_config.hpp:420-446` |
+| `cell_capacity` | 3.0 Ah | cited | IFSSIM `ifs08.m:219` (datasheet) |
+| `cell_ocv` / `cell_ocv_soc` | 2.50 ... 4.22 V | cited | TFM_RMG `params.py:23-42` (VTC6 fit), = AMS `soc_estimator.hpp:57-63` |
+| `cell_r0`, `cell_r0_alpha` | 20.06 mOhm, -0.0199/K | cited | TFM_RMG fit, AMS `ams_config.hpp:487-498` |
+| `cell_r1`, `cell_tau1` | 8 mOhm, 30 s | uncommissioned | "typical 18650", not fitted |
+| `cell_mass` | 46.7 g | cited | IFSSIM `ifs08.m:313` (datasheet) |
+| `cell_cp`, `cell_r_th` | 900 J/(kg K), 2.15 K/W | uncommissioned | assumed (IFSSIM, TFM) |
+| `bleed_r` | 23.5 ohm | cited | BMS_LITE R71 \|\| R72, 47 ohm each (IFS08-ES bcb4511) |
+| `soc_init`, `soc_spread`, `capacity_spread`, `spread_seed`, `t_init` | 0.5, 0, 0, 1, 298.15 K | uncommissioned | a run's choice; no pack measurement |
+| `ntc_map` | proportional | uncommissioned | no NTC placement document |
+| `cell_exchange_min`, `bleed_poll` | 0.1 s, 5 s | uncommissioned | co-simulation settings, not physics |
+
+IFSSIM's `ifs08.m` OCV table is a generic NMC curve labelled SECONDARY; the
+stand-in uses the VTC6 fit, and the FMU should say which it uses.
+
+**Scenarios** (`systems/ecu-ams.scenarios/`, beyond-bench), AMS dev 94b59a9:
+
+| Scenario | Result |
+|---|---|
+| `discharge-to-under-voltage` | a 15 % pack, one weak element, 60 A from 11 s: the weak element crosses 2800 mV at 24.2 s, the AMS latches CellUnderVoltage (4) at 24.66 s (its 25-tick confirm plus a 200 ms poll), the AIRs open, the current stops; the plant's minimum never went under 2750 mV |
+| `current-sensor-reads-the-pack` | 100 A for 3 s: 0x135 follows up and back, sign and scale right; the AMS reads ~1.087 x I - 2.1 A on the vHIL's ideal ADC ([#320](https://github.com/isc-fs/IFS_vHIL/issues/320)) |
+| `balancing-only-in-start` | two elements +10 % SOC and 0x103 BALN: the AMS bleeds exactly those two (no neighbour, no low cell) in Start, and stops in Run |
+| `balancing-converges` | the same on 1000x smaller cells (an override): the high element bleeds down to within 20 mV of the floor and balancing stops |
+| `hot-cell-over-temperature` | a 65 C element in Run: the AMS reads it (0x4A2 max 64+) but never faults: `TempFaultsTrusted = false` ([IFS08-CE-AMS#639](https://github.com/isc-fs/IFS08-CE-AMS/issues/639)); the Error expects are strict expected failures |
+
+An expect may carry `xfail: <owner/repo#N>` ([`scenarios.md`](scenarios.md#expects)): a
+strict expected failure on a filed firmware issue.
 
 ## Steps
 
