@@ -4,7 +4,9 @@ description: "A dead ECU faults the armed AMS VcuStale: the car armed to Run on 
 virtual_ms: 13200
 tags: [beyond-bench]
 stimuli:
-  - {kind: gpio, name: tsms-on, at_ms: 5500, board: ams, pin: PF9, level: true}
+  - {kind: plant, name: sdc-reset, at_ms: 5400, plant: sdc, set: {reset: true}}
+  - {kind: plant, name: sdc-reset-release, at_ms: 5450, plant: sdc, set: {reset: false}}
+  - {kind: plant, name: tsms-on, at_ms: 5500, plant: sdc, set: {tsms: true}}
   - {kind: gpio, name: dash-press, at_ms: 5600, board: ams, pin: PF10, level: true}
   - {kind: gpio, name: dash-release, at_ms: 5650, board: ams, pin: PF10, level: false}
   - {kind: can_send, name: ecu-to-bootloader, at_ms: 10700, bus: can_acu, id: 0x002, data: "b007ad12"}

@@ -1,0 +1,32 @@
+kind: scenario
+system: ecu-ams
+description: "TS-2, AMS_OK opening the shutdown circuit: armed to Run, then 300 A on the pack-current sensor (as ams-fault-puts-the-ecu-in-ams-error) latches Error (CurrentOverLimit, 10); the AMS drops AMS_OK (PB4, active high, safety_predicates.hpp:276-286), the backplane's K5 AMS latch drops (coil low side Q10 follows AMS_OK) and AIR+_VCC opens: the coils' supply is gone, the plant's contacts open, PF9 falls. An RST_EXT press while AMS_OK stays low is refused (Q10 off: the coil cannot pull in); the firmware keeps its Error latched until an LV power cycle (error_latch.hpp), so the circuit stays open."
+virtual_ms: 13500
+tags: [beyond-bench]
+stimuli:
+  - {kind: plant, name: sdc-reset, at_ms: 5400, plant: sdc, set: {reset: true}}
+  - {kind: plant, name: sdc-reset-release, at_ms: 5450, plant: sdc, set: {reset: false}}
+  - {kind: plant, name: tsms-on, at_ms: 5500, plant: sdc, set: {tsms: true}}
+  - {kind: gpio, name: dash-press, at_ms: 5600, board: ams, pin: PF10, level: true}
+  - {kind: gpio, name: dash-release, at_ms: 5650, board: ams, pin: PF10, level: false}
+  - {kind: analog, name: overcurrent-p, at_ms: 11000, board: ams, pin: PF7, volts: 2.13}
+  - {kind: analog, name: overcurrent-n, at_ms: 11000, board: ams, pin: PF8, volts: 0.75}
+  - {kind: plant, name: rst-ext, at_ms: 12500, plant: sdc, set: {reset: true}}
+  - {kind: plant, name: rst-ext-release, at_ms: 12550, plant: sdc, set: {reset: false}}
+watch:
+  - {kind: symbol, board: ams, name: g_state_telemetry, size: 1, period_ms: 10}
+  - {kind: symbol, board: ams, name: g_fault_reason_telemetry, size: 1, period_ms: 10}
+  - {kind: symbol, board: ecu, name: g_last_ctrl_state, size: 1, period_ms: 10}
+expect:
+  - {check: eventually, name: ams-run, at_ms: 5600, until_ms: 10600, signal: "symbol:ams.g_state_telemetry", value: 3}
+  - {check: always, name: sdc-closed-in-run, at_ms: 10600, until_ms: 11000, signal: "plant:sdc.sdc_closed", value: 1}
+  - {check: eventually, name: ams-error, at_ms: 11600, until_ms: 11950, signal: "symbol:ams.g_state_telemetry", value: 5}
+  - {check: always, name: reason-over-limit, at_ms: 11950, signal: "symbol:ams.g_fault_reason_telemetry", value: 10}
+  - {check: eventually, name: ams-ok-drops, at_ms: 11600, until_ms: 11960, signal: "pin:ams.PB4", value: low}
+  - {check: eventually, name: ams-latch-drops, at_ms: 11600, until_ms: 11960, signal: "plant:sdc.ams_latch", value: 0}
+  - {check: eventually, name: sdc-opens, at_ms: 11600, until_ms: 11960, signal: "plant:sdc.sdc_closed", value: 0}
+  - {check: eventually, name: tsms-low-at-the-ams, at_ms: 11600, until_ms: 12100, signal: "frame:can_acu.ACU_discharge_interlock.tsms", value: 0}
+  - {check: eventually, name: air-plus-contact-opens, at_ms: 11600, until_ms: 12000, signal: "plant:ts.air_pos_closed", value: 0}
+  - {check: always, name: ams-ok-stays-low, at_ms: 12000, signal: "pin:ams.PB4", value: low}
+  - {check: always, name: reset-refused, at_ms: 12000, signal: "plant:sdc.sdc_closed", value: 0}
+  - {check: always, name: still-error, at_ms: 12000, signal: "symbol:ams.g_state_telemetry", value: 5}
