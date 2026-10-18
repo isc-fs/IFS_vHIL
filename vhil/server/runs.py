@@ -299,6 +299,10 @@ class Expect(_Model):
     # count
     min: Optional[int] = Field(None, ge=0)
     max: Optional[int] = Field(None, ge=0)
+    # A strict expected failure: the firmware departs from its intent here,
+    # filed as this issue (owner/repo#N). The expect must fail; if it passes
+    # the run fails (the issue is fixed: drop the mark).
+    xfail: Optional[str] = Field(None, pattern=r"^[A-Za-z0-9_.-]{1,64}/[A-Za-z0-9_.-]{1,64}#[0-9]{1,7}$")
 
     @field_validator("signal")
     @classmethod

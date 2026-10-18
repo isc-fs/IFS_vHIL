@@ -307,6 +307,8 @@ class _Check:
         out = {"index": self.index, "name": spec.get("name") or "", "check": self.check,
                "signal": spec.get("signal", ""), "at_us": self.a, "until_us": self.b,
                "passed": False, "t_us": None, "value": None, "detail": ""}
+        if spec.get("xfail"):
+            out["xfail"] = spec["xfail"]
         if self.error:
             out["detail"] = self.error
             return out
@@ -421,9 +423,20 @@ def evaluate_trace(path: Path, expects: list[dict], contract: Optional[dict],
     return ev.results()
 
 
+def ok(result: dict) -> bool:
+    """An expect's verdict: it passed, or it is a strict expected failure
+    (`xfail`, a filed firmware issue) that failed."""
+    return bool(result["passed"]) != bool(result.get("xfail"))
+
+
 def summary(results: list[dict]) -> dict:
-    passed = sum(1 for r in results if r["passed"])
-    return {"expects": results, "expects_passed": passed, "expects_failed": len(results) - passed}
+    passed = sum(1 for r in results if r["passed"] and not r.get("xfail"))
+    xfailed = sum(1 for r in results if r.get("xfail") and not r["passed"])
+    out = {"expects": results, "expects_passed": passed,
+           "expects_failed": sum(1 for r in results if not ok(r))}
+    if xfailed:
+        out["expects_xfailed"] = xfailed
+    return out
 
 
 def pins(expects: Iterable[dict]) -> list[tuple[str, str]]:
