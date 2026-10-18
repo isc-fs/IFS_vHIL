@@ -197,3 +197,67 @@ def test_on_the_port_a_late_edge_rolls_back_to_what_lock_step_gives(fmu_path, fm
     # It is the arm the stand-in's contract describes: 0 V, a ramp, the pack.
     values = [d for _, d in sorted(ref.items()) if d is not None]
     assert values[0] == vdc_frame(0) and values[-1] in (vdc_frame(351), vdc_frame(352))
+
+
+class CellChain:
+    """The LTC6811 chain as vhil.plant_pack.ChainDriver drives it, minus Renode."""
+
+    def __init__(self):
+        from vhil.plant_pack import ChainDriver
+        self.real = ChainDriver.__new__(ChainDriver)
+        self.real.chips, self.real.cpc = 10, (9, 10)
+        self.real.last_cells = self.real.last_temps = None
+        self.real.pushes, self.real.armed = 0, False
+        self.calls = []
+        self.real.call = lambda method, arg=None: self.calls.append((method, arg)) or ""
+        self.bits = [0] * 95
+
+    @property
+    def pushes(self):
+        return self.real.pushes
+
+    def push(self, cells):
+        self.real.push(cells)
+
+    def take_bleed(self):
+        return 0, [0] * 95, list(self.bits)
+
+
+def test_the_fmu_s_cells_ntcs_and_current_reach_the_measurement_chain(fmu_path):
+    """M9 prep (#318): v_cell[k] / t_sensor[n] onto the chain's inputs and
+    mux channels, i_pack onto the sensor's legs, the DCC bits back as
+    cell_bleed[k]: the same drivers the stand-in's pack uses."""
+    import yaml
+    from vhil.plant_pack import NTC_CHANNELS, UNUSED_RAW
+    from vhil.system import REPO
+    doc = yaml.safe_load((REPO / "catalog/models/ssa-2-250a.yaml").read_text())
+    chain = CellChain()
+    plant = FmuPlant(Fmu(fmu_path), params=_params(), v_pack=V_PACK, chain=chain,
+                     current=(doc, {"out_p": "i_pack_p", "out_n": "i_pack_n"}))
+    assert sorted(plant.cell_vars) == [0, 1, 2] and sorted(plant.bleed_vars) == [0, 1, 2]
+    port = FakePort()
+    port.volts = {}
+    port.set_voltage = lambda name, v: port.volts.__setitem__(name, v)
+    plant.step(port, 0)
+    method, arg = chain.calls[0]
+    raw = [int(x) for x in arg.split(",")]
+    assert method == "SetPlantCells" and raw[:3] == [36551] * 3 and raw[3] == UNUSED_RAW
+    method, arg = chain.calls[1]
+    temps = arg.split(",")
+    assert method == "SetPlantTemperatures" and temps[NTC_CHANNELS[0]] == temps[NTC_CHANNELS[1]] == "250"
+    assert temps[NTC_CHANNELS[2]] == "", "an NTC the FMU doesn't give is left alone"
+    assert port.volts == {"i_pack_p": pytest.approx(1.44), "i_pack_n": pytest.approx(1.44)}
+    # A balance switch on element 1 becomes the FMU's cell_bleed[2].
+    chain.bits[1] = 1
+    plant.step(port, 50_000)
+    assert plant.fmu.get("cell_bleed[2]") is True or plant.fmu.get("cell_bleed[2]") == 1
+    # The inverter's 100 A with the AIRs closed: the sensor and the sag.
+    plant.apply({"i_inverter_dc": 100.0}, 50_000)
+    for name in ("air_neg_cmd", "air_pos_cmd"):
+        port.pending[name].append((100_000, True))
+        port.levels[name] = True
+    plant.step(port, 100_500)
+    plant.step(port, 200_000)
+    assert port.volts["i_pack_p"] == pytest.approx(1.69)
+    last = [int(x) for x in [c for c in chain.calls if c[0] == "SetPlantCells"][-1][1].split(",")]
+    assert last[0] < 36551 - 300, "100 A x 3.34 mOhm sags the cell ~0.33 V"

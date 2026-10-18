@@ -33,11 +33,27 @@
     <Boolean name="air_pos_closed" valueReference="31" causality="output" variability="discrete"/>
     <Boolean name="air_neg_closed" valueReference="32" causality="output" variability="discrete"/>
     <Boolean name="pre_closed" valueReference="33" causality="output" variability="discrete"/>
+    <Float64 name="t_ambient" valueReference="40" causality="input" variability="continuous" start="298.15" unit="K"/>
+    <Boolean name="cell_bleed[1]" valueReference="41" causality="input" variability="discrete" start="false"/>
+    <Boolean name="cell_bleed[2]" valueReference="42" causality="input" variability="discrete" start="false"/>
+    <Boolean name="cell_bleed[3]" valueReference="43" causality="input" variability="discrete" start="false"/>
+    <Float64 name="i_pack" valueReference="50" causality="output" variability="continuous" unit="A"/>
+    <Float64 name="v_cell[1]" valueReference="51" causality="output" variability="continuous" unit="V"/>
+    <Float64 name="v_cell[2]" valueReference="52" causality="output" variability="continuous" unit="V"/>
+    <Float64 name="v_cell[3]" valueReference="53" causality="output" variability="continuous" unit="V"/>
+    <Float64 name="t_sensor[1]" valueReference="54" causality="output" variability="continuous" unit="K"/>
+    <Float64 name="t_sensor[2]" valueReference="55" causality="output" variability="continuous" unit="K"/>
   </ModelVariables>
   <ModelStructure>
     <Output valueReference="30"/>
     <Output valueReference="31"/>
     <Output valueReference="32"/>
     <Output valueReference="33"/>
+    <Output valueReference="50"/>
+    <Output valueReference="51"/>
+    <Output valueReference="52"/>
+    <Output valueReference="53"/>
+    <Output valueReference="54"/>
+    <Output valueReference="55"/>
   </ModelStructure>
 </fmiModelDescription>
