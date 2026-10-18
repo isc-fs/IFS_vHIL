@@ -6,12 +6,33 @@ requested from IFSSIM in
 [isc-fs/IFSSIM#669](https://github.com/isc-fs/IFSSIM/issues/669); until it
 lands, a Python stand-in (TS-1) runs the same contract in CI.
 
-## Status (2026-10-16)
+## Status (2026-10-18)
 
 Steps 1-5 below are merged: the plan and parameters (#310), the TS-1 stand-in
 on an event-driven port (#311), the FMI 3.0 master (#313), the `plants:`
-switch and the scenarios (#314), and this evidence. `ecu-ams` and
+switch and the scenarios (#314), and the evidence (#315). `ecu-ams` and
 `ecu-ams-udv` run the plant in every scenario and web-app run.
+
+Since then:
+
+- **TS-2, the shutdown circuit** (#317, [below](#ts-2-the-shutdown-circuit)):
+  - The AMS backplane's IMD and AMS latches and the harness's switches are now
+    a plant that drives AIR+_VCC on PF9. Every ecu-ams scenario now presses
+    RST_EXT and sets TSMS on it.
+  - Four new scenarios cover the latches at power-on, a shutdown button in Run,
+    the IMD latch, and AMS_OK opening the circuit.
+  - No firmware departure was found. Speed: within noise (one stop per AMS_OK
+    edge).
+- **The editor** (#319):
+  - A live session sets plant rows (`{kind: plant, ...}` ops, recorded as
+    scenario rows).
+  - The trace carries each plant's state at slice ends, and the inspector and
+    State tab show it (V_link, V_pack, contacts, SDC, discharge, i_pack).
+  - The Scenario timeline draws a lane per plant.
+  - The contract lists each plant's settable inputs, faults and parameters,
+    with their status.
+- **M9 prep** (#318): the plant drives the AMS's measurement chain
+  ([below](#m9-prep-the-measurement-chain), in its own PR).
 
 **Results** against ECU dev 44610a5 and AMS dev 94b59a9. Every scenario
 passes, locally (aarch64) and on CI (x86):
@@ -25,6 +46,10 @@ passes, locally (aarch64) and on CI (x86):
 | `welded-air-plus` | AIR- closes the pack straight onto the empty link (0 % at its closing), Run at once: undetectable without aux contacts |
 | `airs-drop-out-in-run` | Bus collapse confirmed, back to Start without latching; the ECU secures the discharge |
 | `rearm-refused-on-a-charged-link` | A press on the stranded link is refused while the ECU holds the bleed; after the release a press re-arms |
+| `sdc-needs-a-reset-after-power-on` | TSMS on but no RST_EXT press: PF9 low, the press refused; after RST_EXT the next press arms Precharge |
+| `sdc-opens-in-run` | A shutdown button in Run: contacts open on the lost coil supply, Start unlatched, the bleed takes the link; released, the circuit re-closes with no reset |
+| `imd-latch-holds-the-sdc-open` | IMD_OK falls in Run: K4 drops, Start; IMD_OK back, the circuit stays open until RST_EXT |
+| `ams-ok-opens-the-sdc` | Over-current Error drops AMS_OK, K5 and AIR+_VCC; RST_EXT with AMS_OK low refused |
 | `inverter-sense-floor-holds-the-discharge` | With a 48 V reading floor, the ECU secures a **drained** link at TSMS on and holds it for 30 s with a fault; the AMS refuses the arm meanwhile ([IFS08-CE-ECU#266](https://github.com/isc-fs/IFS08-CE-ECU/issues/266); with a silent floor the car never arms) |
 
 No scenario fails against the firmware's intent, so none is an expected
@@ -51,6 +76,11 @@ The identity fingerprint of every system is unchanged.
 - [x] Parity runs are unaffected. The bench path runs no plant, IFS_HIL's
   suites pass, and the fingerprint is unchanged.
 - [x] `docs/cosim.md` and `docs/vision.md` are updated.
+- [x] TS-2 (gated in the issue): the SDC as series logic with the traced
+  latches, its scenarios in CI (#317). The harness elements and the uDV's K1
+  placement are untraceable (no harness schematic) and stay uncommissioned
+  inputs.
+- [x] The editor drives and shows plants (#319).
 
 ## Why
 
