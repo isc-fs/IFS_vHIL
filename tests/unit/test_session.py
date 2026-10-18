@@ -273,6 +273,53 @@ def test_a_recorded_session_replayed_as_a_scenario_gives_the_same_trace(tmp_path
     assert applied(sim.calls) == applied(live_sim.calls) and len(applied(sim.calls)) == 3
 
 
+# -- a plant's fault inputs and parameters (M8) ------------------------------------------
+
+ECU_AMS = REPO / "systems" / "ecu-ams.yaml"
+
+
+def test_a_plant_op_is_the_scenario_row_without_its_time():
+    system = System(ECU_AMS)
+    assert parse_op({"kind": "plant", "at_ms": 5, "plant": "ts",
+                     "set": {"pre_open_circuit": True, "r_leak": None}}, system) == {
+        "kind": "plant", "plant": "ts", "set": {"pre_open_circuit": True, "r_leak": None}}
+    with pytest.raises(OpError, match="no plant 'nope'"):
+        parse_op({"kind": "plant", "plant": "nope", "set": {"c_scale": 2}}, system)
+    with pytest.raises(OpError, match="warp_drive"):
+        parse_op({"kind": "plant", "plant": "ts", "set": {"warp_drive": 1}}, system)
+    with pytest.raises(OpError, match="no plant 'ts'"):
+        parse_op({"kind": "plant", "plant": "ts", "set": {"c_scale": 2}}, System(AMS))
+
+
+def test_a_plant_op_applies_is_recorded_and_replays_as_a_plant_row(tmp_path):
+    sim, session, summary, trace = run_live(tmp_path, [
+        (60_000, {"kind": "plant", "plant": "ts", "set": {"welded_air_pos": True}}),
+        (60_000, {"kind": "plant", "plant": "nope", "set": {"c_scale": 2}}),
+        (60_000, {"kind": "plant", "plant": "ts", "set": {"warp_drive": 1}}),
+        (60_000, {"kind": "plant", "plant": "ts", "set": {"r_leak": 0}}),
+        (160_000, {"kind": "plant", "plant": "ts", "set": {"sense_floor": 48}}),
+        (300_000, {"kind": "stop"})], system=ECU_AMS)
+    st = {s[0]: s[1:] for s in session.settled}
+    assert st[1][:2] == ("applied", 150_000) and st[5][:2] == ("applied", 250_000)
+    assert st[2][0] == "refused" and "no plant 'nope'" in st[2][2]
+    assert st[3][0] == "refused" and "warp_drive" in st[3][2]
+    assert st[4][0] == "refused" and "plant 'ts'" in st[4][2]
+    # In the trace as a stimulus (its log at its time), and the plant's
+    # state shows it at that slice's end.
+    assert any(r["kind"] == "log" and r["t_us"] == 150_000 and "welded_air_pos=True" in r["text"]
+               for r in trace)
+    assert {"kind": "plant", "t_us": 150_000, "plant": "ts", "name": "air_pos_closed",
+            "value": 1} in trace
+    run = {"id": 9, "system": "ecu-ams", "virtual_us": summary["virtual_ms"] * 1000,
+           "scenario": {**LIVE, "slice_ms": 50, "virtual_ms": 3_600_000}}
+    doc = as_scenario(run, trace)
+    assert doc["stimuli"] == [
+        {"kind": "plant", "plant": "ts", "set": {"welded_air_pos": True}, "at_ms": 150.0},
+        {"kind": "plant", "plant": "ts", "set": {"sense_floor": 48}, "at_ms": 250.0}]
+    sc, _, errors = vscen.parse(doc, "ecu-ams", "recorded")
+    assert not errors, errors
+
+
 # -- the worker --------------------------------------------------------------------------
 
 class FixedResolver:

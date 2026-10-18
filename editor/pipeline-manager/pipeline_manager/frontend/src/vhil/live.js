@@ -14,7 +14,9 @@
 
 /* eslint-disable max-classes-per-file -- a session's state, and its buses' rates */
 
-export const STIMULI = ['can_send', 'can_periodic', 'stop_periodic', 'gpio', 'analog', 'watch'];
+import { setText } from './plant.js';
+
+export const STIMULI = ['can_send', 'can_periodic', 'stop_periodic', 'gpio', 'analog', 'watch', 'plant'];
 
 const hex = (n) => `0x${Number(n).toString(16).toUpperCase()}`;
 const spaced = (data) => (data || '').match(/../g)?.join(' ') ?? '';
@@ -30,6 +32,7 @@ export function opText(op) {
         case 'gpio': return `gpio ${op.board}.${op.pin} = ${op.level ? 'HIGH' : 'LOW'}`;
         case 'analog': return `analog ${op.board}.${op.pin} = ${op.volts} V`;
         case 'watch': return op.symbol ? `watch ${op.board}.${op.symbol}` : `watch pin ${op.board}.${op.pin}`;
+        case 'plant': return `plant ${op.plant}: ${setText(op.set)}`;
         case 'debug': { // docs/debugger.md
             const loc = op.location || {};
             const at = loc.function || (loc.file ? `${loc.file}:${loc.line}` : loc.address);
@@ -43,14 +46,16 @@ export function opText(op) {
 /**
  * What a session's applied ops leave in force, folded from its trace's
  * `op` records in order: the periodic senders running (by name), each
- * input's last level or voltage ("ams.PF9"), whether it is paused, and the
- * periodic names used (a name runs once a session: docs/live-session.md).
+ * input's last level or voltage ("ams.PF9"), each plant's last set values
+ * (what its controls show), whether it is paused, and the periodic names
+ * used (a name runs once a session: docs/live-session.md).
  */
 export class SessionState {
     constructor() {
         this.periodics = new Map(); // name -> {name, bus, id, ext, data, period_ms, since}
         this.levels = new Map(); // "board.pin" -> true | false
         this.volts = new Map(); // "board.pin" -> V
+        this.plants = new Map(); // plant -> {name: the value its last op set}
         this.used = new Set();
         this.paused = false;
         this.applied = 0;
@@ -81,6 +86,9 @@ export class SessionState {
             case 'stop_periodic': this.periodics.delete(op.periodic); break;
             case 'gpio': this.levels.set(`${op.board}.${op.pin}`, !!op.level); break;
             case 'analog': this.volts.set(`${op.board}.${op.pin}`, op.volts); break;
+            case 'plant':
+                this.plants.set(op.plant, { ...(this.plants.get(op.plant) || {}), ...op.set });
+                break;
             case 'pause': this.paused = true; break;
             case 'resume': this.paused = false; break;
             default: break;

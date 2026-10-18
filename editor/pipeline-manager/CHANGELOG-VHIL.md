@@ -650,6 +650,44 @@ from `git archive 04613679` except as listed below.
     (`emptyScenarioText`) says how to make one: name it and + New, add
     rows, Commit… to `systems/<system>.scenarios/<name>.yaml`, or record a
     ● Live session and "Save as scenario…".
+29. **A system's plants** (M8, #147: the tractive-system plant of `ecu-ams`
+    and `ecu-ams-udv`; [live sessions](../../docs/live-session.md),
+    [scenarios](../../docs/scenarios.md)). All in `src/vhil/`; no Pipeline
+    Manager file changes.
+    - **The model** (`plant.js`, new, pure; `tests/js/plant.test.mjs`):
+      `PlantTrace` keeps the trace's `plant` records (the worker's per-slice
+      state and the contact moves) per plant and name, and `cardAt(plant, t)`
+      is a plant's state at a time: V_link, V_pack and i_pack with units,
+      AIR+, AIR−, Precharge, SDC (coil supply) and Discharge as two-state
+      pills, any other key as name=value. `plantsOf` reads the contract's
+      `plants` (fault inputs, other inputs, parameters with value, unit and
+      status); `parseSetting`, `defaultSet`, `plantOp`, `setText` are what
+      the controls and the row editor set.
+    - **REPLAY and LIVE** (`replay.js`, `session.js`): the trace's `plant`
+      records load and stream with the samples into `replay.plants`.
+      `live.js` folds `plant` ops into each plant's last set values
+      (`SessionState.plants`, `live.plants`) and reads them ("plant ts:
+      pre_open_circuit = true").
+    - **The plant's card** (`VhilPlantCard.vue`, `VhilPlants.vue`;
+      `state.css`): beside the boards' in the State tab and, with nothing
+      selected, in the inspector, at the scrubber's time (following the
+      clock while live), laid out as a board's card.
+    - **Its controls** (`VhilPlantControls.vue`; `live.css`), under the card
+      while live, as a board's inputs (`VhilInputs.vue`): a boolean fault
+      input is a switch, a number (c_scale, r_leak, a parameter) a field
+      with its unit and Set (empty: none, where null is a value), a
+      parameter's status a pill (cited, uncommissioned dashed, override), a
+      list parameter shown only. Each change is a `plant` op. No `<select>`.
+    - **The Scenario tab** (`scenario.js` `actionsFor`, `newItem`;
+      `timeline.js`; `VhilScenario.vue`, `VhilTimeline.vue`,
+      `VhilScenarioRow.vue`; `scenario.css`): "+ Add row…" offers `plant`
+      when the system has plants (the row sets the first fault on); the
+      timeline has a lane per plant, `plant ts`, with its rows as draggable
+      diamonds and its `plant:` expects; the row editor picks the plant and
+      edits its `set` as name/value pairs from what the plant may set
+      (+ Add setting, ✕), a parameter with its unit and status. Its selects
+      take their value through `v-pick` with `v-memo` options, from
+      computeds that `keep` their value (change 26).
 
 ## Left for later
 

@@ -82,3 +82,14 @@ test("the clock, the idle countdown, inputs and the recording", () => {
   assert.deepEqual(recordedDoc({ kind: "scenario", system: "ams", virtual_ms: 3050, slice_ms: 50, stimuli: [VCU] }),
                    { description: "", watch: [], expect: [], virtual_ms: 3050, slice_ms: 50, stimuli: [VCU] });
 });
+
+test("a plant op reads as what it sets, and its values stay in force", () => {
+  const s = new SessionState();
+  s.add(op(1_000_000, { kind: "plant", plant: "ts", set: { pre_open_circuit: true } }));
+  s.add(op(1_050_000, { kind: "plant", plant: "ts", set: { r_leak: null, c_scale: 2 } }));
+  s.add(op(1_100_000, { kind: "plant", plant: "ts", set: { warp: 1 } }, "refused"));
+  s.add(op(1_150_000, { kind: "plant", plant: "ts", set: { pre_open_circuit: false } }));
+  assert.deepEqual(s.plants.get("ts"), { pre_open_circuit: false, r_leak: null, c_scale: 2 });
+  assert.equal(opText({ kind: "plant", plant: "ts", set: { sense_floor: 48, r_leak: null } }),
+    "plant ts: sense_floor = 48, r_leak = none");
+});

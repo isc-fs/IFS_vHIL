@@ -4,8 +4,9 @@
  * no DOM, no Vue: tests/js/scenario.test.mjs runs it under node.
  *
  * A scenario is the rows of a run (vhil/server/runs.py RunScenario): its
- * `stimuli` (can_send, can_periodic, stop_periodic, gpio, analog, and
- * watch: a watch that starts mid-run), `watch` (symbol, pin, from power-on)
+ * `stimuli` (can_send, can_periodic, stop_periodic, gpio, analog, watch: a
+ * watch that starts mid-run, and plant: a plant's faults or parameters, for
+ * a system with `plants:`), `watch` (symbol, pin, from power-on)
  * and `expect` lists, plus its description and virtual time.
  * The table shows them as one list of rows sorted by time, each pointing at
  * its item; editing a row edits the item in place, so the lists stay what
@@ -14,6 +15,8 @@
 
 /* eslint-disable camelcase -- the schema's own names (at_ms, until_ms…) */
 /* eslint-disable no-param-reassign -- rows are edited in place */
+
+import { setText } from './plant.js';
 
 // action -> what a row of it is (the table's action column).
 export const ACTIONS = [
@@ -31,6 +34,9 @@ export const ACTIONS = [
     },
     {
         action: 'analog', list: 'stimuli', kind: 'analog', label: 'analog',
+    },
+    {
+        action: 'plant', list: 'stimuli', kind: 'plant', label: 'plant',
     },
     {
         action: 'watch', list: 'watch', kind: null, label: 'watch',
@@ -80,6 +86,11 @@ export function emptyScenarioText(id, count) {
         + 'buses and pins, and "Save as scenario…" in the top bar turns what you did into one.';
 }
 
+/** The actions "+ Add row…" offers: a plant row only for a system with
+ *  plants (`plants`: their names). */
+export const actionsFor = (plants = []) => ACTIONS
+    .filter((a) => a.action !== 'plant' || plants.length > 0);
+
 /** The action of a list item. */
 export function actionOf(list, item) {
     if (list === 'stimuli') return BY_KIND[item.kind]?.action ?? item.kind;
@@ -127,9 +138,10 @@ export function uniqueName(stem, taken) {
     for (let i = 1; ; i += 1) if (!taken.includes(`${stem}${i}`)) return `${stem}${i}`;
 }
 
-/** A new item for an action, at time t, on the first bus and board given. */
+/** A new item for an action, at time t, on the first bus, board and plant
+ *  given (a plant row setting `plantSet`: plant.js defaultSet). */
 export function newItem(action, {
-    t = 0, buses = [], boards = [], periodics = [],
+    t = 0, buses = [], boards = [], periodics = [], plants = [], plantSet = {},
 } = {}) {
     const bus = buses[0] || 'can0';
     const board = boards[0] || 'board0';
@@ -147,6 +159,9 @@ export function newItem(action, {
         };
         case 'analog': return {
             kind: 'analog', at_ms, board, pin: '', volts: 0,
+        };
+        case 'plant': return {
+            kind: 'plant', at_ms, plant: plants[0] || '', set: { ...plantSet },
         };
         case 'watch': return {
             kind: 'symbol', board, name: '', size: 1, period_ms: 10,
@@ -282,7 +297,7 @@ export function valueOf(row) {
         case 'watch': return it.pin !== undefined ? 'edges'
             : `${it.size ? `${it.size} B ` : ''}every ${ms(it.period_ms ?? 10)}`;
         case 'expect': return expectText(it);
-        case 'plant': return Object.entries(it.set || {}).map(([k, v]) => `${k} = ${v}`).join(', ');
+        case 'plant': return setText(it.set);
         default: return '';
     }
 }

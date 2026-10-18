@@ -134,9 +134,20 @@ level then recorded (`edge` with `initial: true`). `plant:<plant>.<output>`
 is what one of the system's plants records (`plant` records): the
 tractive-system plant's `<contact>_closed` (air_pos, air_neg, pre) and `v_link`
 at each contact move, and `<contact>_close_ratio`, the link as a fraction of
-the pack as that contact closed (`air_pos_close_ratio >= 0.9`: the FS rule). The shutdown circuit's
+the pack as that contact closed (`air_pos_close_ratio >= 0.9`: the FS rule).
+At each slice's end it also records its state (`TsPlant.state`), the keys
+that changed since the last slice (all of them at the first), which the
+editor's state panel shows: `v_link` and `v_pack` (V, to 0.1),
+`air_pos_closed`, `air_neg_closed` and `pre_closed` (0/1, as the circuit
+sees them: a welded or externally opened contact included), `sdc_closed`
+(0/1: the coil supply as the plant reads it), `discharge` (0/1: the bleed
+across the link) and `i_pack` (A; 0 until the plant models the current).
+So `plant:ts.v_link` has a value at slice ends too, and
+`plant:ts.air_pos_closed` follows a welded contact.
+The shutdown circuit's
 (`plant: shutdown-circuit`) records `sdc_closed` (AIR+_VCC) and its two latches,
-`imd_latch` and `ams_latch`, at the run's start and at every change.
+`imd_latch` and `ams_latch`, at the run's start and at every change. Its state (`SdcPlant.state`) adds each
+series element (`sdc_<element>`, 1 = closed).
 
 **Plants.** A system with `plants:` (`ecu-ams.yaml`, `ecu-ams-udv.yaml`:
 the shutdown circuit and the tractive system, [`m8-plan.md`](m8-plan.md)) runs them on its port in
@@ -253,8 +264,10 @@ The seeds, which pass against the firmware the systems declare (`ecu-ams/*` run 
 The workspace's Scenario tab (`docs/architecture/editor-workspace.md`,
 feature 1) edits the open system's scenarios: a timeline (a lane per bus and
 per board; drag a mark to move it, 1/5/10 ms snap, Ctrl+wheel zoom; the
-watches below) over the row table and a row editor, where frames are edited
-as the contract's decoded fields. The top bar's pick is what Run runs; when
+watches below; a lane per plant, `plant ts`, for `plant` rows and
+`plant:` expects) over the row table and a row editor, where frames are edited
+as the contract's decoded fields and a `plant` row as the plant's settable
+names and values (the contract's `plants`). The top bar's pick is what Run runs; when
 the run ends it is replayed on the tab, each expect's result on its lane at
 its evidence time (a click moves the scrubber there) over the frames and pin
 edges the run produced. The Tests view in the sidebar lists the scenarios
@@ -264,7 +277,7 @@ with their last results.
 
 | | |
 |---|---|
-| `GET /api/systems/{id}/contract?branch=&fw=<image>=<ref>` | the CAN contract the system's firmware speaks, without a run, and which images are built; each board's state view (`state`) and the value labels of its symbols (`labels`) |
+| `GET /api/systems/{id}/contract?branch=&fw=<image>=<ref>` | the CAN contract the system's firmware speaks, without a run, and which images are built; each board's state view (`state`), the value labels of its symbols (`labels`), and what each of its `plants:` may set (`plants`: `{<name>: {plant, settable: {faults: [{name, type, default}], inputs: [...], params: {<name>: {value, unit, status}}}}}`) |
 | `GET /api/firmware/{id}/enums?ref=` | an image's DWARF enums and enum-typed globals ([state-view.md](state-view.md)) |
 | `GET /api/systems/{id}/scenarios?branch=` | its scenarios, each with its last run (`last_run`) |
 | `GET /api/scenarios` | every system's, as checked out |
