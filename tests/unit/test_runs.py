@@ -1713,6 +1713,39 @@ def test_a_system_s_plants_run_in_every_scenario_and_say_what_is_uncommissioned(
     assert any(r["kind"] == "log" and "pre_open_circuit=True" in r["text"] for r in recs)
 
 
+def test_a_plants_state_is_in_the_trace_when_it_changes(tmp_path):
+    """At each slice's end the plant's state (TsPlant.state) as `plant`
+    records: every key at the first, then only what changed."""
+    sim = FakeSim(ECU_AMS_SYSTEM)
+    trace = TraceWriter(tmp_path / "trace.jsonl")
+    execute_run(sim, {"kind": "run", "virtual_ms": 300, "slice_ms": 100, "stimuli": [
+        {"kind": "plant", "at_ms": 150, "plant": "ts", "set": {"welded_air_pos": True}}]}, trace)
+    trace.close()
+    state = {}
+    for r in read_trace(tmp_path / "trace.jsonl"):
+        if r["kind"] == "plant":
+            state.setdefault(r["t_us"], {})[r["name"]] = r["value"]
+    assert state[100_000] == {"v_link": 0.0, "v_pack": 351.5, "air_pos_closed": 0,
+                              "air_neg_closed": 0, "pre_closed": 0, "sdc_closed": 0,
+                              "discharge": 1, "i_pack": 0}
+    assert state[200_000] == {"air_pos_closed": 1}       # welded: closed as the circuit sees it
+    assert 300_000 not in state
+
+
+def test_reading_a_plants_state_never_moves_it():
+    from vhil.plant_ts import TractiveSystem, TsPlant
+    p = TsPlant(TractiveSystem(), v_pack=400.0)
+    p.ts.set("v_pack", 400.0, 0)
+    p.ts.set("sdc_closed", True, 0)
+    p.ts.set("air_neg_cmd", True, 0)
+    p.ts.set("pre_cmd", True, 0)
+    assert p.state(0)["v_link"] == 0.0
+    later = p.state(500_000)                    # past the plant's time: a copy
+    assert later["pre_closed"] == 1 and later["air_neg_closed"] == 1 and later["v_link"] > 300
+    assert later["sdc_closed"] == 1 and later["discharge"] == 0
+    assert p.ts.t_us == 0 and p.ts.history == [] and p.ts.pending
+
+
 def test_a_plant_row_must_name_a_plant_and_what_it_has():
     from vhil.server.runs import RunScenario, check_scenario
     system = System(ECU_AMS_SYSTEM)

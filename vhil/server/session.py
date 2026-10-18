@@ -9,7 +9,7 @@ Limits.max_live_ms, and applies ops to it as it goes. The ops come over
 
 behind the app's auth guard (a session, same origin; vhil/server/auth.py),
 and each is exactly a scenario stimulus (docs/scenarios.md: can_send,
-can_periodic, stop_periodic, gpio, analog, watch) or a control (pause,
+can_periodic, stop_periodic, gpio, analog, watch, plant) or a control (pause,
 resume, stop, keepalive). One connection holds the session's control (a
 lease in the DB, renewed while it is open): the run's owner or an admin, and
 in github mode only after its `hello` carried the session's CSRF token. Every
@@ -62,7 +62,7 @@ from vhil.server.runs import (CONTRACT_VERSION, TERMINAL, TRACE, CanPeriodic, Li
                               RunStore, Stimulus, check_scenario, read_trace, system_at)
 from vhil.system import System, SystemError
 
-STIMULI = ("can_send", "can_periodic", "stop_periodic", "gpio", "analog", "watch")
+STIMULI = ("can_send", "can_periodic", "stop_periodic", "gpio", "analog", "watch", "plant")
 CONTROLS = ("pause", "resume", "stop", "keepalive")
 # A board's debugger (docs/debugger.md; vhil/gdb.py check_op): not a
 # stimulus, never in a session's recording.
@@ -262,6 +262,8 @@ def parse_op(op, system: System) -> dict:
         raise OpError("; ".join(e.removeprefix("stimuli[0]: ") for e in errors))
     out = stim.model_dump(exclude_none=True)
     out.pop("at_ms", None)
+    if out["kind"] == "plant":
+        out["set"] = dict(stim.set)     # a null there is a value (r_leak: none)
     if out.get("ext") is False:
         out.pop("ext")
     return out

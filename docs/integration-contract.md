@@ -16,7 +16,7 @@ this one doesn't repeat it.
 | Scenario | a run as data: timed stimuli, watches, expects | [`scenarios.md`](scenarios.md) | `RunScenario` and its rows in `vhil/server/runs.py` |
 | Session ops | a live run's channel: the scenario's stimulus kinds without their time, plus `pause`, `resume`, `stop`, `keepalive`, `debug` | [`live-session.md`](live-session.md), [`debugger.md`](debugger.md) | `vhil/server/session.py` |
 | Trace | a run's records in virtual time, a JSON line each | [below](#trace-records) | `vhil/worker.py`, `vhil/server/runs.py` (`TRACE_KINDS`, `trace_header`) |
-| Contract | what each board's firmware puts on its buses (from its `.def` files), its state view, value labels and inputs, the sync quantum | [`state-view.md`](state-view.md), [`scenarios.md`](scenarios.md#api) | `system_contract` in `vhil/server/decode.py` |
+| Contract | what each board's firmware puts on its buses (from its `.def` files), its state view, value labels and inputs, its plants' settable faults and parameters, the sync quantum | [`state-view.md`](state-view.md), [`scenarios.md`](scenarios.md#api) | `system_contract` in `vhil/server/decode.py` |
 | HTTP API | runs, traces, artifacts, scenarios, contracts | [`architecture/m5-web-app.md`](architecture/m5-web-app.md#api-contract-v1), [`scenarios.md`](scenarios.md#api) | `vhil/server/` |
 
 Not part of the contract, free to change in any PR: the editor's graph and
@@ -63,7 +63,7 @@ sorts by `t_us`.
 | `edge` | `board`, `pin`, `level`, `initial?` (the level as watching starts) | a watched pin's changes | [`scenarios.md`](scenarios.md#rows) |
 | `sample` | `board`, `name`, `value` | a watched symbol, at its period (at sync points) | [`state-view.md`](state-view.md#what-a-run-records) |
 | `radio` | `board`, `device`, `payload` (hex) | every payload a radio device (a model with `interface.radio`, e.g. the ECU's nRF24L01+) sent, at the end of its packet | [`backplanes/ecu.md`](backplanes/ecu.md#in-the-vhil) |
-| `plant` | `plant`, `name`, `value` | what one of the system's plants did: the tractive-system plant's contact moves (`<contact>_closed`, `v_link`) and each closing's `<contact>_close_ratio` | [`m8-plan.md`](m8-plan.md), [`scenarios.md`](scenarios.md#expects) |
+| `plant` | `plant`, `name`, `value` | what one of the system's plants did: the tractive-system plant's contact moves (`<contact>_closed`, `v_link`) and each closing's `<contact>_close_ratio`; and its state at each slice's end, the keys that changed since the last (all at the first): `v_link`, `v_pack`, `<contact>_closed`, `sdc_closed`, `discharge`, `i_pack` | [`m8-plan.md`](m8-plan.md), [`scenarios.md`](scenarios.md#expects) |
 | `log` | `text`, `source?`, `level?` (`debug`, `info`, `warning`, `error`), `board?`, `wall_s?`, `dropped?` | the worker's notes, the firmware build, Renode's log (filtered), each board's UARTs, stimuli, expects' results, as they happen | [`live-session.md`](live-session.md#logs) |
 | `bus_load` | `bus`, `load` (0..1), `window_us`, `exact` (false on Renode's hub: an estimate) | per bus and slice | [`can-bus.md`](can-bus.md#what-the-bus-does) |
 | `op` | `op_id`, `op`, `status` (`applied`, `refused`), `login`, `detail?` | a live session's op, at the time it took effect | [`live-session.md`](live-session.md#the-channel) |
@@ -107,4 +107,6 @@ above. It is in each trace's header (`contract`), in `GET /api/health`
   `source`, `level`, `board`, `wall_s` and `dropped` (live logs: a record
   without `source` is the run's, at `info`); a system's `plants:`, the `plant`
   stimulus, the `plant:` expect signal and trace record, a scenario's `tags`
-  and the summary's `plants` (M8, #147).
+  and the summary's `plants` (M8, #147); the `plant` op, the plant's
+  per-slice state records and the contract's `plants` (the editor's plant
+  controls and state, M8).
