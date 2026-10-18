@@ -1723,7 +1723,7 @@ def test_a_plants_state_is_in_the_trace_when_it_changes(tmp_path):
     trace.close()
     state = {}
     for r in read_trace(tmp_path / "trace.jsonl"):
-        if r["kind"] == "plant":
+        if r["kind"] == "plant" and r["plant"] == "ts":
             state.setdefault(r["t_us"], {})[r["name"]] = r["value"]
     assert state[100_000] == {"v_link": 0.0, "v_pack": 351.5, "air_pos_closed": 0,
                               "air_neg_closed": 0, "pre_closed": 0, "sdc_closed": 0,

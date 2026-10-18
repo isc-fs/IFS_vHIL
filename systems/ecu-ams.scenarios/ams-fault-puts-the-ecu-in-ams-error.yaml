@@ -1,10 +1,12 @@
 kind: scenario
 system: ecu-ams
-description: "An AMS fault puts the ECU in AmsError: the car armed to Run on the tractive-system plant as in car-arms-through-the-ecu (by 10600 ms at the latest, the AMS's PrechargeMaxMs after the press), then 300 A on the pack-current sensor (PF7/PF8 legs, 5 mV/A about a 1.44 V common mode) trips CurrentOverLimit (10) when the AMS's IIR crosses CurrentMaxMa = 185 A; the AMS latches Error and opens the AIRs, its next 0x4A0 (every 500 ms) says Error, and the ECU enters AmsError then and not before and stays there (every AMS frame keeps it fresh); 0x504 ts_active drops. The native test faults a cell (SetCell), which a scenario cannot drive; over-current is the AMS fault a scenario can. AMS_OK opening the shutdown circuit (and so the coil supply PF9) is TS-2, not modelled: PF9 stays driven. IFS08-CE-AMS safety_predicates.hpp:244, ams_config.hpp:153, current_service.cpp; IFS08-CE-ECU control.cpp:150, 235-236, control_task.cpp:117-120; tests/sim/test_sys_ecu_ams.py test_an_ams_fault_puts_the_ecu_in_ams_error, test_ams_current.py."
+description: "An AMS fault puts the ECU in AmsError: the car armed to Run on the tractive-system plant as in car-arms-through-the-ecu (by 10600 ms at the latest, the AMS's PrechargeMaxMs after the press), then 300 A on the pack-current sensor (PF7/PF8 legs, 5 mV/A about a 1.44 V common mode) trips CurrentOverLimit (10) when the AMS's IIR crosses CurrentMaxMa = 185 A; the AMS latches Error and opens the AIRs, its next 0x4A0 (every 500 ms) says Error, and the ECU enters AmsError then and not before and stays there (every AMS frame keeps it fresh); 0x504 ts_active drops. The native test faults a cell (SetCell), which a scenario cannot drive; over-current is the AMS fault a scenario can. The latched Error drops AMS_OK, which opens the shutdown circuit's AMS latch (K5) and so AIR+_VCC, the coil supply the AMS senses on PF9 (the shutdown-circuit plant, TS-2): ams-ok-opens-the-sdc asserts that part. IFS08-CE-AMS safety_predicates.hpp:244, ams_config.hpp:153, current_service.cpp; IFS08-CE-ECU control.cpp:150, 235-236, control_task.cpp:117-120; tests/sim/test_sys_ecu_ams.py test_an_ams_fault_puts_the_ecu_in_ams_error, test_ams_current.py."
 virtual_ms: 13500
 tags: [beyond-bench]
 stimuli:
-  - {kind: gpio, name: tsms-on, at_ms: 5500, board: ams, pin: PF9, level: true}
+  - {kind: plant, name: sdc-reset, at_ms: 5400, plant: sdc, set: {reset: true}}
+  - {kind: plant, name: sdc-reset-release, at_ms: 5450, plant: sdc, set: {reset: false}}
+  - {kind: plant, name: tsms-on, at_ms: 5500, plant: sdc, set: {tsms: true}}
   - {kind: gpio, name: dash-press, at_ms: 5600, board: ams, pin: PF10, level: true}
   - {kind: gpio, name: dash-release, at_ms: 5650, board: ams, pin: PF10, level: false}
   - {kind: analog, name: overcurrent-p, at_ms: 11000, board: ams, pin: PF7, volts: 2.13}

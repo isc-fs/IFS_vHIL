@@ -544,7 +544,7 @@ def execute_scenario(sim, scenario: dict, trace: TraceWriter, *,
         plant_due["now"] = True
         for pname, p in plants.items():
             note(sim.now_us(), f"plant {pname}: {system.plants[pname]['plant']}; uncommissioned "
-                               f"(no car log): {', '.join(uncommissioned(p.ts.params))}")
+                               f"(no car log): {', '.join(uncommissioned(p.params))}")
 
     for i, s in enumerate(stimuli):
         schedule(s, _us(s.get("at_ms", 0)), f"stim{i}", f"stimuli[{i}]")
@@ -631,6 +631,10 @@ def execute_scenario(sim, scenario: dict, trace: TraceWriter, *,
                 if op["periodic"] not in running:
                     raise ValueError(f"no periodic named '{op['periodic']}' is running")
                 running.discard(op["periodic"])
+            elif kind == "gpio" and f"{op['board']}.{op['pin']}" in system.plant_driven_pins():
+                raise ValueError(f"{op['board']}.{op['pin']} is driven by plant "
+                                 f"'{system.plant_driven_pins()[op['board'] + '.' + op['pin']]}': "
+                                 "set its inputs instead")
             elif kind == "analog":
                 _, pkind, _ = system.resolve(f"{op['board']}.{op['pin']}")
                 if pkind != "analog":
@@ -966,7 +970,7 @@ def execute_scenario(sim, scenario: dict, trace: TraceWriter, *,
                "bus_load": load_summary(loads)}
     if plants:
         summary["plants"] = {n: {"plant": system.plants[n]["plant"], "steps": p.steps,
-                                 "uncommissioned": uncommissioned(p.ts.params)}
+                                 "uncommissioned": uncommissioned(p.params)}
                              for n, p in plants.items()}
     if aligned:
         summary["aligned"] = aligned

@@ -406,6 +406,10 @@ class TsPlant(PortInputs):
         self.dirty = True                   # an input changed: forecast again
         self._recorded = 0
 
+    @property
+    def params(self) -> dict:
+        return self.ts.params
+
     def apply(self, values: dict, t_us: int) -> None:
         """Set fault inputs or parameters (a scenario's `plant` row) at t_us;
         a parameter becomes an override for the rest of the run."""
@@ -490,17 +494,33 @@ class TsPlant(PortInputs):
 
 
 def settable(plant: str = "tractive-system") -> set[str]:
-    """What a scenario's `plant` row may set: the fault inputs and the
-    parameters."""
+    """What a scenario's `plant` row may set on a plant of this kind: the
+    tractive system's fault inputs and parameters; the shutdown circuit's
+    switches, its reset button and parameters (vhil/plant_sdc.py)."""
+    if plant == "shutdown-circuit":
+        from vhil.plant_sdc import settable as sdc_settable
+        return sdc_settable(plant)
     return set(FAULTS) | set(load_parameters(plant))
 
 
-def make_plants(system) -> dict[str, TsPlant]:
-    """The plants a system's `plants:` declares, ready for its port."""
+# Kinds in the order a step runs them: the shutdown circuit drives the coil
+# supply (`sdc_closed`) the tractive system reads in the same step.
+KINDS = ("shutdown-circuit", "tractive-system")
+
+
+def make_plants(system) -> dict:
+    """The plants a system's `plants:` declares, ready for its port, in the
+    order they step (KINDS, then the file's)."""
+    from vhil.plant_sdc import ShutdownCircuit, SdcPlant
     out = {}
-    for name, spec in system.plants.items():
-        if spec["plant"] != "tractive-system":
-            raise ValueError(f"plant '{name}': no implementation of {spec['plant']}")
+    specs = sorted(system.plants.items(),
+                   key=lambda kv: KINDS.index(kv[1]["plant"]) if kv[1]["plant"] in KINDS else len(KINDS))
+    for name, spec in specs:
         params = load_parameters(spec["plant"], spec.get("params"))
-        out[name] = TsPlant(TractiveSystem(params=params), cells=spec.get("cells"))
+        if spec["plant"] == "tractive-system":
+            out[name] = TsPlant(TractiveSystem(params=params), cells=spec.get("cells"))
+        elif spec["plant"] == "shutdown-circuit":
+            out[name] = SdcPlant(ShutdownCircuit(params))
+        else:
+            raise ValueError(f"plant '{name}': no implementation of {spec['plant']}")
     return out

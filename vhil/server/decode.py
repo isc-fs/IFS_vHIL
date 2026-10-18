@@ -124,7 +124,10 @@ def plants(system: System) -> dict:
     settable), its fault inputs and other inputs as [{name, type (bool |
     number), default}], and its parameters as {name: {value, unit, status}}
     (the catalogue's, with the system's own overrides)."""
-    from vhil import plant_ts
+    from vhil import plant_sdc, plant_ts
+    # Defaults by name, which also type the controls: the tractive system's
+    # fault inputs, the shutdown circuit's switches and RST_EXT button.
+    defaults = {**plant_ts.FAULT_DEFAULTS, **plant_sdc.DEFAULTS}
     out = {}
     for name, spec in (getattr(system, "plants", None) or {}).items():
         kind = spec["plant"]
@@ -136,7 +139,7 @@ def plants(system: System) -> dict:
             continue
 
         def entry(n: str) -> dict:
-            default = plant_ts.FAULT_DEFAULTS.get(n)
+            default = defaults.get(n)
             return {"name": n, "type": "bool" if isinstance(default, bool) else "number",
                     "default": default}
         rest = sorted(can - set(params))

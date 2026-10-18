@@ -5,7 +5,9 @@ virtual_ms: 9000
 tags: [beyond-bench]
 stimuli:
   - {kind: plant, name: weld-air-plus, at_ms: 0, plant: ts, set: {"welded_air_pos": true}}
-  - {kind: gpio, name: tsms-on, at_ms: 5500, board: ams, pin: PF9, level: true}
+  - {kind: plant, name: sdc-reset, at_ms: 5400, plant: sdc, set: {reset: true}}
+  - {kind: plant, name: sdc-reset-release, at_ms: 5450, plant: sdc, set: {reset: false}}
+  - {kind: plant, name: tsms-on, at_ms: 5500, plant: sdc, set: {tsms: true}}
   - {kind: gpio, name: dash-press, at_ms: 5600, board: ams, pin: PF10, level: true}
   - {kind: gpio, name: dash-release, at_ms: 5650, board: ams, pin: PF10, level: false}
 watch:

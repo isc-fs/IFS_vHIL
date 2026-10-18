@@ -1,0 +1,27 @@
+kind: scenario
+system: ecu-ams
+description: "TS-2, power-on: the AMS backplane's IMD and AMS latches (K4, K5) are monostable relays wired with a self-hold, so after every power-on they are open until RST_EXT is pressed with IMD_OK and AMS_OK high (IFS08-ES bcb4511 AMS IFS08.kicad_sch). With TSMS on and no press, AIR+_VCC stays off: PF9 reads low, and a DASH_CHG press is refused (the AMS needs TSMS with the press, state_machine.hpp:305). RST_EXT then closes both latches (AMS_OK has been high since the AMS's 2 s boot grace), TSMS reaches the AMS, and the next press arms Precharge."
+virtual_ms: 9000
+tags: [beyond-bench]
+stimuli:
+  - {kind: plant, name: tsms-on, at_ms: 5500, plant: sdc, set: {tsms: true}}
+  - {kind: gpio, name: dash-press, at_ms: 5600, board: ams, pin: PF10, level: true}
+  - {kind: gpio, name: dash-release, at_ms: 5650, board: ams, pin: PF10, level: false}
+  - {kind: plant, name: rst-ext, at_ms: 7000, plant: sdc, set: {reset: true}}
+  - {kind: plant, name: rst-ext-release, at_ms: 7050, plant: sdc, set: {reset: false}}
+  - {kind: gpio, name: dash-press-again, at_ms: 7200, board: ams, pin: PF10, level: true}
+  - {kind: gpio, name: dash-release-again, at_ms: 7250, board: ams, pin: PF10, level: false}
+watch:
+  - {kind: symbol, board: ams, name: g_state_telemetry, size: 1, period_ms: 10}
+  - {kind: symbol, board: ams, name: g_fault_reason_telemetry, size: 1, period_ms: 10}
+  - {kind: symbol, board: ecu, name: g_last_ctrl_state, size: 1, period_ms: 10}
+expect:
+  - {check: always, name: ams-ok-after-the-boot-grace, at_ms: 4500, signal: "pin:ams.PB4", value: high}
+  - {check: always, name: open-until-the-press, at_ms: 0, until_ms: 6999, signal: "plant:sdc.sdc_closed", value: 0}
+  - {check: always, name: latches-open-at-power-on, at_ms: 0, until_ms: 6999, signal: "plant:sdc.ams_latch", value: 0}
+  - {check: always, name: tsms-low-at-the-ams, at_ms: 3000, until_ms: 6999, signal: "frame:can_acu.ACU_discharge_interlock.tsms", value: 0}
+  - {check: always, name: press-refused, at_ms: 5600, until_ms: 7200, signal: "symbol:ams.g_state_telemetry", value: 0}
+  - {check: eventually, name: reset-closes, at_ms: 7000, until_ms: 7001, signal: "plant:sdc.sdc_closed", value: 1}
+  - {check: always, name: tsms-high-after, at_ms: 7150, signal: "frame:can_acu.ACU_discharge_interlock.tsms", value: 1}
+  - {check: eventually, name: precharge-on-the-second-press, at_ms: 7200, until_ms: 7300, signal: "symbol:ams.g_state_telemetry", value: 1}
+  - {check: never, name: no-error, at_ms: 0, signal: "symbol:ams.g_state_telemetry", value: 5}
