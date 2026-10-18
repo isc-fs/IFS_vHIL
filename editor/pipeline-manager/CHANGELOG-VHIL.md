@@ -689,6 +689,13 @@ from `git archive 04613679` except as listed below.
       take their value through `v-pick` with `v-memo` options, from
       computeds that `keep` their value (change 26).
 
+30. **A plant's card shows its own keys.** The shutdown circuit (TS-2,
+    `sdc`) records no link, pack or contacts, and its card listed them all as
+    "no data". `src/vhil/plant.js` `PlantTrace.cardAt` shows, once a plant
+    has recorded anything, only the known keys it records (before, all of
+    them), and knows the circuit's two latches as pills (`imd_latch`,
+    `ams_latch`: IMD latch (K4), AMS latch (K5)); `tests/js/plant.test.mjs`.
+
 ## Left for later
 
 - **Dependabot alerts with no fix.** `showdown` ≤ 2.1.0 (three: ReDoS and
