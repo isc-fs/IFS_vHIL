@@ -21,6 +21,10 @@ description: >-
 #   ECU  = isc-fs/IFS08-CE-ECU dev 44610a5
 #   W90  = EPowerLabs W90 User Manual (inverter), in ECU dev 44610a5, `EPowerLabs W90 UserManual.pdf`
 #   SCH  = isc-fs/IFS08-ES main bcb4511, `boards/AMS_IFS08/kicad/AMS IFS08.kicad_sch`
+#   BMS  = isc-fs/IFS08-ES main bcb4511, `boards/BMS_LITE/kicad/cell*.kicad_sch`
+#   TFM  = TFM_RMG 6b16f73 (the AMS SOC estimator's source), `BMS_DL/sim/params.py`,
+#          its VTC6 fit from the CMU KiltHub eVTOL dataset (doi:10.1184/R1/14226830)
+#   SIM  = isc-fs/IFSSIM 50eee19, `matlab/spec/cars/ifs08.m`
 parameters:
   # -- the link -----------------------------------------------------------
   c_link:
@@ -100,6 +104,168 @@ parameters:
       CellsPerLtcLower 10), 5 modules x 19 cells = 95S (:424, :432). V_pack
       is the sum of those cells in the LTC6811 chain model, the cell source
       until the FMU provides v_cell.
+    validated_against: null
+  # -- the pack, per cell (M9 prep, #318; vhil/plant_pack.py) --------------------
+  # Used when a system's plant says `pack: true`: the stand-in's cells then
+  # drive the LTC6811 chain, and v_pack is their sum. IFSSIM's FMU takes the
+  # same parameters (isc-fs/IFSSIM#669 §4-5).
+  cells_series:
+    value: 95
+    unit: cells
+    status: cited
+    source: AMS ams_config.hpp:420-425 (5 modules x 19 cells).
+    validated_against: null
+  cells_parallel:
+    value: 6
+    unit: cells
+    status: cited
+    source: >-
+      95S6P of Sony VTC6: AMS ams_config.hpp:129-131 (CurrentMaxMa's
+      derivation, "6 x 30 A") and :432-446 (6 x 3.0 Ah per series element).
+    validated_against: null
+  cell_capacity:
+    value: 3.0
+    unit: Ah
+    status: cited
+    source: SIM ifs08.m:219, "DATASHEET 3000 mAh nominal (2800 minimum)"; TFM params.py:23.
+    validated_against: null
+  cell_ocv_soc:
+    value: [0.0, 0.05, 0.1, 0.2, 0.3, 0.5, 0.7, 0.8, 0.9, 1.0]
+    unit: '1'
+    status: cited
+    source: The breakpoints of cell_ocv (TFM params.py:23-42; AMS soc_estimator.hpp:57-63).
+    validated_against: null
+  cell_ocv:
+    value: [2.5000, 2.6954, 2.8908, 3.2815, 3.4676, 3.6551, 3.8426, 3.9364, 3.9936, 4.2200]
+    unit: V
+    status: cited
+    source: >-
+      VTC6 open-circuit voltage at cell_ocv_soc, "fitted from VTC6" (TFM
+      params.py:23-42, real_data/fit_vtc6_params.py: CMU eVTOL dataset);
+      the same table the AMS's SOC estimator uses (soc_estimator.hpp:57-63).
+      IFSSIM's ifs08.m:311-312 has a generic NMC curve labelled SECONDARY,
+      not VTC6 data: not used. Linear between the points.
+    validated_against: null
+  cell_r0:
+    value: 0.02006
+    unit: ohm
+    status: cited
+    source: TFM params.py (R_NOM, VTC6 fit); AMS ams_config.hpp:487-498. SIM ifs08.m:223 assumes 0.020.
+    validated_against: null
+  cell_r0_alpha:
+    value: -0.019926
+    unit: 1/K
+    status: cited
+    source: >-
+      R0 x max(1 + alpha (T - 25 C), 0.4): TFM params.py (ALPHA_R); AMS
+      ams_config.hpp:487-498. The fit's SOC factor (f_SoC, within 5 %) is
+      not modelled.
+    validated_against: null
+  cell_r1:
+    value: 0.008
+    unit: ohm
+    status: uncommissioned
+    source: TFM validate/ekf_baseline.py:40-44, "typical for 18650", not fitted to the VTC6.
+    validated_against: null
+  cell_tau1:
+    value: 30.0
+    unit: s
+    status: uncommissioned
+    source: TFM validate/ekf_baseline.py:40-44 (C1 = 3750 F with R1), not fitted.
+    validated_against: null
+  cell_mass:
+    value: 0.0467
+    unit: kg
+    status: cited
+    source: SIM ifs08.m:313 (DATASHEET); TFM params.py 46.5 g.
+    validated_against: null
+  cell_cp:
+    value: 900.0
+    unit: J/(kg K)
+    status: uncommissioned
+    source: SIM ifs08.m:243 and TFM sim/cell_model.py:33-39, both ASSUMED.
+    validated_against: null
+  cell_r_th:
+    value: 2.15
+    unit: K/W
+    status: uncommissioned
+    source: >-
+      Cell to ambient: 1 / (h A) with TFM sim/cell_model.py:33-39's H_CONV
+      111 W/(m2 K) (assumed) over an 18650's 4.18e-3 m2 (18 x 65 mm can,
+      ends included). The pack's real cooling is unknown. Time constant
+      m cp R_th ~ 90 s.
+    validated_against: null
+  t_init:
+    value: 298.15
+    unit: K
+    status: uncommissioned
+    source: The cells' and the ambient's temperature at power-on (25 C); a run sets t_ambient.
+    validated_against: null
+  soc_init:
+    value: 0.5
+    unit: '1'
+    status: uncommissioned
+    source: The pack's state of charge at power-on; a run's choice (a 15 % pack, a full one).
+    validated_against: null
+  soc_spread:
+    value: 0.0
+    unit: '1'
+    status: uncommissioned
+    source: >-
+      Per-element SOC offset, uniform in +/- this, from spread_seed. No car
+      measurement of the pack's imbalance; 0 = balanced.
+    validated_against: null
+  capacity_spread:
+    value: 0.0
+    unit: '1'
+    status: uncommissioned
+    source: Per-element capacity offset (fraction), uniform in +/- this, from spread_seed. Unmeasured.
+    validated_against: null
+  spread_seed:
+    value: 1
+    unit: null
+    status: uncommissioned
+    source: The seed of the spreads' generator (Python's random.Random, the same on every host).
+    validated_against: null
+  bleed_r:
+    value: 23.5
+    unit: ohm
+    status: cited
+    source: >-
+      Each cell's balance resistor on BMS_LITE: R71 || R72, 47 ohm || 47 ohm,
+      2512, switched by a TSM2323 from the LTC6811's S pin (BMS cell3.kicad_sch,
+      the same on all 24 cell sheets). 157 mA at 3.7 V, as AMS
+      ams_config.hpp:886-898 derives.
+    validated_against: null
+  ntc_map:
+    value: proportional
+    unit: null
+    status: uncommissioned
+    source: >-
+      Which cell each of a chip's 20 NTCs (ADG731 channels 0-9, 16-25, AMS
+      ams_config.hpp:1143-1146) touches is in no document: slot k reads the
+      chip's cell k x n / 20 (n = 9 or 10 cells). Each reads its cell's
+      temperature (no sensor lag, no hot-spot offset).
+    validated_against: null
+  cell_exchange_min:
+    value: 0.1
+    unit: s
+    status: uncommissioned
+    source: >-
+      Co-simulation, not physics: the cells reach the LTC6811 chain when one
+      moves by its 100 uV LSB, no more often than this (the AMS converts
+      every 200 ms, ams_config.hpp:258). Between exchanges the chain holds
+      the last values: an error of at most 0.1 s of the cells' slew (0.3 mV
+      at 150 A).
+    validated_against: null
+  bleed_poll:
+    value: 5.0
+    unit: s
+    status: uncommissioned
+    source: >-
+      Co-simulation: while a balance switch is on, how often at most the
+      plant reads the switches' on-time (the LTC6811 model accounts it
+      exactly in virtual time; this only bounds how stale v_pack may get).
     validated_against: null
   # -- the inverter's report of the link (0x466) --------------------------------
   vdc_period:

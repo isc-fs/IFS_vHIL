@@ -128,6 +128,8 @@ def plants(system: System) -> dict:
     # Defaults by name, which also type the controls: the tractive system's
     # fault inputs, the shutdown circuit's switches and RST_EXT button.
     defaults = {**plant_ts.FAULT_DEFAULTS, **plant_sdc.DEFAULTS}
+    from vhil.plant_pack import Pack
+    faults = set(plant_ts.FAULTS) | set(Pack.FAULTS)      # the pack's by index
     out = {}
     for name, spec in (getattr(system, "plants", None) or {}).items():
         kind = spec["plant"]
@@ -144,8 +146,8 @@ def plants(system: System) -> dict:
                     "default": default}
         rest = sorted(can - set(params))
         out[name] = {"plant": kind, "settable": {
-            "faults": [entry(n) for n in rest if n in plant_ts.FAULTS],
-            "inputs": [entry(n) for n in rest if n not in plant_ts.FAULTS],
+            "faults": [entry(n) for n in rest if n in faults],
+            "inputs": [entry(n) for n in rest if n not in faults],
             "params": {n: {"value": p.value, "unit": p.unit, "status": p.status}
                        for n, p in params.items() if n in can}}}
     return out

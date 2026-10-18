@@ -49,7 +49,11 @@ plants:
   # Its inputs (tsms, the RST_EXT `reset` button, ...) are set by scenario
   # rows, never by driving PF9. catalog/plants/shutdown-circuit.yaml.
   sdc: {plant: shutdown-circuit}
-  ts: {plant: tractive-system, cells: isospi}
+  # With `pack: true` its per-cell pack (M9 prep, #318; vhil/plant_pack.py)
+  # is the cell source: it drives the LTC6811 chain's cells and NTCs, takes
+  # the balance switches back, and puts the pack current on the current
+  # sensor's legs (i_pack_p/i_pack_n).
+  ts: {plant: tractive-system, cells: isospi, pack: true, current: pack_current}
 port:
   # The co-simulation port (vhil/cosim.py). The tractive-system plant's
   # signals (vhil/plant_ts.py, docs/m8-plan.md) are named as the IFSSIM
@@ -65,6 +69,8 @@ port:
     ams_ok:        {gpio_out: ams.PB4}  # AMS_OK -> Q10 -> K5 AMS latch coil, J1.4 (docs/backplanes/ams.md)
     udv_sdc:       {gpio_out: udv.PB7}  # Control SDC Micro (D4) -> Q5 -> K1, J7.1/J7.2 (docs/backplanes/udv.md)
     v_link:        {can_tx: {bus: can_inv, id: 0x466}}
+    i_pack_p:      {analog: ams.PF7}    # the pack current sensor's OUT_P, S_CURRENT_P J4.3 (docs/backplanes/ams.md)
+    i_pack_n:      {analog: ams.PF8}    # its OUT_N, S_CURRENT_N J4.2 (docs/backplanes/ams.md)
     inv_cmd:       {can_rx: {bus: can_inv, id: 0x360}}
     inv_torque:    {can_rx: {bus: can_inv, id: 0x362}}
     inv_state:     {can_tx: {bus: can_inv, id: 0x461}}

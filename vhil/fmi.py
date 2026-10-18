@@ -236,10 +236,26 @@ class FmuPlant(PortInputs):
     def __init__(self, fmu: Fmu, *, params: Optional[dict] = None, cells: Optional[str] = None,
                  v_pack: Optional[float] = None, report: Optional[str] = "v_link",
                  step_s: Optional[float] = None,
-                 horizon_ms: float = 200, max_horizon_ms: float = 5000):
+                 horizon_ms: float = 200, max_horizon_ms: float = 5000,
+                 chain=None, current=None):
         self.fmu = fmu
         self.params = params or load_parameters()
         super().__init__(cells, self.params["cells_per_chip"].value, v_pack)
+        # The measurement chain (M9 prep, #318): the FMU's v_cell[k] / t_sensor[n]
+        # (FMI structured names, 1-based: element k-1, firmware NTC slot n-1)
+        # onto the LTC6811 chain (vhil.plant_pack.ChainDriver), its i_pack onto
+        # the current sensor's legs, and each element's balance switch back as
+        # its input cell_bleed[k].
+        self.chain, self.current = chain, current
+        self.cell_vars = _indexed(fmu, "v_cell", "output")
+        self.ntc_vars = _indexed(fmu, "t_sensor", "output")
+        self.bleed_vars = _indexed(fmu, "cell_bleed", "input")
+        self.has_i_pack = fmu.variables.get("i_pack") is not None
+        self.bleed_bits: dict = {}
+        self.sensor_i: Optional[float] = None
+        self.cell_pushes = 0
+        self.scripted: list = []             # (t_us, name, value) from apply, not yet logged
+        self.i_ahead: list = []              # (emulation us, i_pack) as the forecast stepped
         self.report = report
         self.h_us = int(round((step_s or fmu.default_step or 0.005) * 1e6))
         self.base_horizon_us = self.horizon_us = int(horizon_ms * 1000)
@@ -287,6 +303,8 @@ class FmuPlant(PortInputs):
             self.fmu.do_step(self.t_f / 1e6, self.h_us / 1e6)
             self.t_f += self.h_us
             self.outputs.append((self.origin + self.t_f, self.fmu.get("v_link")))
+            if self.current is not None and self.has_i_pack:
+                self.i_ahead.append((self.origin + self.t_f, float(self.fmu.get("i_pack"))))
 
     def _rollback(self) -> None:
         """Bring the FMU back to its checkpoint: an earlier time, with the
@@ -320,6 +338,16 @@ class FmuPlant(PortInputs):
             self._init_fmu()
         changes = [(self._grid_at_or_after(t), name, value)
                    for t, name, value in self.changes(port, t_us, self.origin)]
+        changes += [(self._grid_at_or_after(t), name, value) for t, name, value in self.scripted]
+        self.scripted = []
+        if self.chain is not None and self.bleed_vars:
+            _, _, bits = self.chain.take_bleed()
+            for k, name in self.bleed_vars.items():
+                b = bool(bits[k]) if k < len(bits) else False
+                if self.bleed_bits.get(k, False) != b:
+                    self.bleed_bits[k] = b
+                    changes.append((self._grid_at_or_after(t_us), name, b))
+            changes.sort(key=lambda c: c[0])
         now_f = (t_us - self.origin) // self.h_us * self.h_us       # last grid point <= now
         if not changes and self.next_us is not None and t_us < self.next_us:
             return                              # the forecast stands: nothing new
@@ -328,6 +356,7 @@ class FmuPlant(PortInputs):
         self.log += changes
         self._step_to(max(now_f, self.t_f))
         self._save()
+        moved = self._measure(port)
         if self.report is None:
             self.next_us = None
             return
@@ -348,15 +377,82 @@ class FmuPlant(PortInputs):
                 last = r
             t += period_us
         port.schedule(self.report, entries, period_ms=period_us / 1000)
-        quiet = len(entries) == 1
+        quiet = len(entries) == 1 and not moved
         self.horizon_us = min(self.horizon_us * 2, self.max_horizon_us) if quiet else self.base_horizon_us
         self.next_us = end
+        if moved:
+            # The cells are moving: come back no later than cell_exchange_min.
+            self.next_us = min(end, t_us + int(round(float(self.params["cell_exchange_min"].value) * 1e6)))
+        change = next((t for t, i in self.i_ahead if t > t_us and i != self.sensor_i), None)
+        if change is not None:
+            self.next_us = min(self.next_us, change)    # the current starts or stops: be there
+        self.i_ahead = []
         self.outputs = self.outputs[-1:]
+
+    def apply(self, values: dict, t_us: int) -> None:
+        """A scenario's `plant` row: the FMU's own inputs by name (the
+        scripted i_inverter_dc, i_charger, t_ambient, the fault inputs),
+        taking effect at the first grid point at or after t_us."""
+        for name, value in values.items():
+            v = self.fmu.variables.get(name)
+            if v is None or v.causality != "input":
+                raise KeyError(f"the FMU has no input '{name}'")
+            self.scripted.append((max(int(t_us), self.origin or 0), name, value))
+        self.next_us = int(t_us)
+
+    def _measure(self, port) -> bool:
+        """The FMU's cells, NTCs and pack current (at the grid point it is
+        on) onto the chain and the sensor; whether a cell moved."""
+        moved = False
+        if self.chain is not None and (self.cell_vars or self.ntc_vars):
+            before = self.chain.pushes
+            self.chain.push(_FmuCells(self))
+            moved = self.chain.pushes != before and self.cell_pushes > 0
+            self.cell_pushes += self.chain.pushes - before
+        if self.current is not None and self.has_i_pack:
+            from vhil.plant_pack import sensor_volts
+            i = float(self.fmu.get("i_pack"))
+            if i != self.sensor_i:
+                model_doc, signals = self.current
+                for out, v in sensor_volts(model_doc, i).items():
+                    port.set_voltage(signals[out], v)
+                self.sensor_i = i
+        return moved
 
     def report(self) -> Optional[int]:
         """The inverter's reading of the FMU's link now (Inverter(dc_link=...),
         with report=None)."""
         return inverter_report(self.fmu.get("v_link"), self.params)
+
+
+def _indexed(fmu: Fmu, base: str, causality: str) -> dict[int, str]:
+    """{0-based index: name} of an FMU's `base[k]` scalars (FMI structured
+    naming, 1-based) of that causality."""
+    import re
+    pat = re.compile(rf"^{base}\[([1-9][0-9]*)\]$")
+    out = {}
+    for name, v in fmu.variables.items():
+        m = pat.match(name)
+        if m and v.causality == causality:
+            out[int(m[1]) - 1] = name
+    return out
+
+
+class _FmuCells:
+    """The FMU's outputs as vhil.plant_pack.ChainDriver reads a pack: an
+    element or NTC the FMU doesn't give is None (left as the chain has it)."""
+
+    def __init__(self, plant: FmuPlant):
+        self.plant = plant
+        self.n = 95
+
+    def v_cell(self, k: int):
+        name = self.plant.cell_vars.get(k)
+        return None if name is None else float(self.plant.fmu.get(name))
+
+    def t_ntc(self, chip: int, slot: int, cells_per_chip=(9, 10)):
+        name = self.plant.ntc_vars.get((chip // 2) * 40 + (chip % 2) * 20 + slot)
+        return None if name is None else float(self.plant.fmu.get(name))
 
 
 def build_reference_fmu(out: Path, *, can_get_set_state: bool = True,

@@ -559,9 +559,17 @@ class FakeSim:
         return self.run_for(us=us)
 
     def call(self, path, method, *args, board=None):
-        """The LTC6820's CellSum for a plant: 95 cells at 3700 mV."""
-        assert method == "CellSum", method
-        return hex(95 * 3700)
+        """The LTC6820 a plant drives: CellSum (95 cells at 3700 mV); a pack's
+        pushes, its balance switches (none on) and its trigger."""
+        self.calls.append(("call", self.now, method))
+        if method == "CellSum":
+            return hex(95 * 3700)
+        if method == "TakeBleed":
+            return "\n".join([str(self.now)] + ["0:" + ",".join(["0"] * 12)] * 10)
+        if method == "BleedTrigger":
+            return "True" if not args else ""
+        assert method in ("SetPlantCells", "SetPlantTemperatures"), method
+        return ""
 
 
 def run_fake(tmp_path, scenario, **kw):
@@ -1725,9 +1733,13 @@ def test_a_plants_state_is_in_the_trace_when_it_changes(tmp_path):
     for r in read_trace(tmp_path / "trace.jsonl"):
         if r["kind"] == "plant" and r["plant"] == "ts":
             state.setdefault(r["t_us"], {})[r["name"]] = r["value"]
-    assert state[100_000] == {"v_link": 0.0, "v_pack": 351.5, "air_pos_closed": 0,
-                              "air_neg_closed": 0, "pre_closed": 0, "sdc_closed": 0,
-                              "discharge": 1, "i_pack": 0}
+    first = state[100_000]
+    assert {k: first[k] for k in ("v_link", "air_pos_closed", "air_neg_closed", "pre_closed",
+                                  "sdc_closed", "discharge", "i_pack")} == {
+        "v_link": 0.0, "air_pos_closed": 0, "air_neg_closed": 0, "pre_closed": 0,
+        "sdc_closed": 0, "discharge": 1, "i_pack": 0}
+    # The pack (pack: true): 95 elements at 50 %, the VTC6 curve's 3.6551 V.
+    assert first["v_pack"] == 347.2 and first["v_cell_min"] == 3.6551 and first["bleeding"] == 0
     assert state[200_000] == {"air_pos_closed": 1}       # welded: closed as the circuit sees it
     assert 300_000 not in state
 

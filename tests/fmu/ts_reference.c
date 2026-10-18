@@ -7,6 +7,12 @@
  * this repo from the FMI 3.0 standard's function signatures (no header or
  * code copied); built by the tests with the host's C compiler.
  *
+ * Three cells (M9 prep, isc-fs/IFS_vHIL#318) test the master's measurement
+ * chain mapping: v_cell[1..3] (an 18 Ah element each, OCV linear about
+ * 3.6551 V at 50 %, R0 3.34 mOhm), carrying the pack current i_pack (the
+ * inverter's while both AIRs are closed) and their bleed (cell_bleed[k],
+ * 23.5 ohm); t_sensor[1..2] read the ambient.
+ *
  * Deterministic: no clock, no randomness. Supports fmi3GetFMUState /
  * fmi3SetFMUState; the tests also package it with canGetAndSetFMUState
  * "false" to exercise the master's reset-and-replay path.
@@ -42,7 +48,15 @@ enum {
     VR_AIR_POS_CMD = 20, VR_AIR_NEG_CMD, VR_PRE_CMD, VR_DISCHARGE_CMD, VR_SDC_CLOSED,
     VR_V_PACK, VR_I_INVERTER_DC,
     VR_V_LINK = 30, VR_AIR_POS_CLOSED, VR_AIR_NEG_CLOSED, VR_PRE_CLOSED,
+    VR_T_AMBIENT = 40, VR_CELL_BLEED_1, VR_CELL_BLEED_2, VR_CELL_BLEED_3,
+    VR_I_PACK = 50, VR_V_CELL_1, VR_V_CELL_2, VR_V_CELL_3, VR_T_SENSOR_1, VR_T_SENSOR_2,
 };
+
+enum { N_CELLS = 3 };
+#define CELL_AH 18.0
+#define CELL_R0 0.00334
+#define CELL_SLOPE 0.94
+#define BLEED_R 23.5
 
 enum { AIR_POS, AIR_NEG, PRE, N_CONTACTS };
 
@@ -60,6 +74,9 @@ typedef struct {
     bool has_pending[N_CONTACTS];
     double pending_t[N_CONTACTS];
     bool pending_closed[N_CONTACTS];
+    /* cells */
+    double soc[N_CELLS], t_ambient, i_pack, v_cell[N_CELLS];
+    bool bleed[N_CELLS];
 } State;
 
 typedef struct {
@@ -71,7 +88,11 @@ static void defaults(State *s) {
     s->c_link = 400e-6; s->r_precharge = 690.0; s->r_discharge = 6500.0; s->r_inverter_bleed = 0.0;
     s->air_close = 0.020; s->air_open = 0.010; s->pre_close = 0.010; s->pre_open = 0.005;
     s->c_scale = 1.0;
+    s->t_ambient = 298.15;
+    for (int k = 0; k < N_CELLS; k++) s->soc[k] = 0.5;
 }
+
+static double ocv(double soc) { return 3.6551 + CELL_SLOPE * (soc - 0.5); }
 
 static bool contact(const State *s, int c) {
     if (c == AIR_POS && s->welded_air_pos) return true;
@@ -116,8 +137,19 @@ static int segment(const State *s, double *v_eq, double *tau) {
     return 2;
 }
 
+static void cells(State *s, double dt) {
+    bool tied = contact(s, AIR_NEG) && contact(s, AIR_POS);
+    s->i_pack = tied ? s->i_inverter_dc : 0.0;
+    for (int k = 0; k < N_CELLS; k++) {
+        double i = s->i_pack + (s->bleed[k] ? ocv(s->soc[k]) / BLEED_R : 0.0);
+        s->soc[k] -= i * dt / (3600.0 * CELL_AH);
+        s->v_cell[k] = ocv(s->soc[k]) - s->i_pack * CELL_R0;
+    }
+}
+
 static void evolve(State *s, double dt) {
     double v_eq, tau;
+    cells(s, dt);
     int kind = segment(s, &v_eq, &tau);
     if (kind == 0) s->v_link = v_eq;
     else if (kind == 2 && dt > 0) s->v_link = v_eq + (s->v_link - v_eq) * exp(-dt / tau);
@@ -156,6 +188,12 @@ static double *f64(State *s, fmi3ValueReference vr) {
     case VR_V_PACK: return &s->v_pack;
     case VR_I_INVERTER_DC: return &s->i_inverter_dc;
     case VR_V_LINK: return &s->v_link;
+    case VR_T_AMBIENT: return &s->t_ambient;
+    case VR_I_PACK: return &s->i_pack;
+    case VR_V_CELL_1: return &s->v_cell[0];
+    case VR_V_CELL_2: return &s->v_cell[1];
+    case VR_V_CELL_3: return &s->v_cell[2];
+    case VR_T_SENSOR_1: case VR_T_SENSOR_2: return &s->t_ambient;
     default: return NULL;
     }
 }
@@ -171,6 +209,9 @@ static bool *boolean(State *s, fmi3ValueReference vr) {
     case VR_PRE_CMD: return &s->cmd[PRE];
     case VR_DISCHARGE_CMD: return &s->discharge_cmd;
     case VR_SDC_CLOSED: return &s->sdc_closed;
+    case VR_CELL_BLEED_1: return &s->bleed[0];
+    case VR_CELL_BLEED_2: return &s->bleed[1];
+    case VR_CELL_BLEED_3: return &s->bleed[2];
     default: return NULL;
     }
 }
@@ -203,6 +244,7 @@ EXPORT fmi3Status fmi3EnterInitializationMode(fmi3Instance i, fmi3Boolean tolDef
 
 EXPORT fmi3Status fmi3ExitInitializationMode(fmi3Instance i) {
     coils(&((Instance *)i)->s);
+    cells(&((Instance *)i)->s, 0.0);
     return fmi3OK;
 }
 
@@ -219,7 +261,7 @@ EXPORT fmi3Status fmi3SetFloat64(fmi3Instance i, const fmi3ValueReference vr[], 
     if (nv != nvr) return fmi3Error;
     for (size_t k = 0; k < nvr; k++) {
         double *p = f64(s, vr[k]);
-        if (!p || vr[k] == VR_V_LINK) return fmi3Error;
+        if (!p || vr[k] == VR_V_LINK || vr[k] >= VR_I_PACK) return fmi3Error;
         *p = v[k];
     }
     coils(s);

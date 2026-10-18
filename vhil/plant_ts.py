@@ -51,6 +51,14 @@ INPUTS = ("air_pos_cmd", "air_neg_cmd", "pre_cmd", "discharge_cmd", "sdc_closed"
           "v_pack", "i_inverter_dc")
 FAULTS = ("welded_air_pos", "welded_air_neg", "pre_open_circuit", "air_external_open",
           "c_scale", "r_leak")
+# Inputs a scenario row scripts (IFSSIM#669 §3): the inverter's and the
+# charger's DC current (A, + = discharge / + = into the pack) and the ambient
+# temperature (K).
+SCRIPTED = ("i_inverter_dc", "i_charger", "t_ambient")
+# Pack parameters a run may override (a row): the pack is rebuilt from them.
+PACK_STATE = ("cells_series", "cells_parallel", "cell_capacity", "cell_ocv_soc", "cell_ocv",
+              "cell_r0", "cell_r0_alpha", "cell_r1", "cell_tau1", "cell_mass", "cell_cp",
+              "cell_r_th", "t_init", "soc_init", "soc_spread", "capacity_spread", "spread_seed")
 CONTACTS = ("air_pos", "air_neg", "pre")
 # Each fault input's value with no fault, which is also its type for the
 # editor's controls (the system contract's `plants`, vhil/server/decode.py).
@@ -395,38 +403,185 @@ class TsPlant(PortInputs):
     At each step it applies every input change at its own time, then hands
     the emulation the inverter's reports until the link settles (or
     `horizon_ms`, then it asks to be stepped again): how often it is stepped
-    doesn't change what it sends."""
+    doesn't change what it sends.
+
+    With a `pack` (vhil/plant_pack.py, M9 prep #318) the plant is also the
+    cell source: the pack's elements give v_pack, carry the pack current
+    (`i_inverter_dc` - `i_charger`, scripted, while both AIRs are closed)
+    and lose charge through their balance switches; the plant puts them on
+    the LTC6811 chain (`chain`, a vhil.plant_pack.ChainDriver) and the pack
+    current on the current sensor's legs (`current`: the sensor's catalogue
+    model and the port's analog signals for its outputs), each only when it
+    moves by the measurement's resolution. Otherwise v_pack is the chain
+    model's cell sum, as in M8."""
 
     def __init__(self, ts: Optional[TractiveSystem] = None, *, cells: Optional[str] = None,
                  v_pack: Optional[float] = None, report: Optional[str] = "v_link",
-                 horizon_ms: float = 3000):
+                 horizon_ms: float = 3000, pack=None, chain=None, current=None):
         self.ts = ts or TractiveSystem()
-        super().__init__(cells, self.ts.p("cells_per_chip"), v_pack)
+        super().__init__(None if pack is not None else cells, self.ts.p("cells_per_chip"), v_pack)
         self.report, self.horizon_us = report, int(horizon_ms * 1000)
         self.dirty = True                   # an input changed: forecast again
         self._recorded = 0
+        self.pack, self.chain, self.current = pack, chain, current
+        self.scripted = {"i_inverter_dc": 0.0, "i_charger": 0.0}
+        self.pack_faults: dict = {}
+        self.pack_next: Optional[int] = None
+        self.ts_next: Optional[int] = None
+        self.sensor_i: Optional[float] = None
+        self.bleeding = False
+        self.bled = [0] * (pack.n if pack is not None else 0)
+        self.pack_records: list = []
+        self._last_rec: dict = {}
+        self.exchange_due = False
 
     @property
     def params(self) -> dict:
         return self.ts.params
 
-    def apply(self, values: dict, t_us: int) -> None:
-        """Set fault inputs or parameters (a scenario's `plant` row) at t_us;
-        a parameter becomes an override for the rest of the run."""
+    # -- the pack ----------------------------------------------------------------
+
+    def _pack_current(self) -> float:
         ts = self.ts
+        tied = ts.contact("air_pos") and ts.contact("air_neg")
+        return (self.scripted["i_inverter_dc"] - self.scripted["i_charger"]) if tied else 0.0
+
+    def _to(self, t_us: int) -> None:
+        """Advance the circuit and the pack together to t_us: the pack
+        current changes where a contact moves."""
+        ts, pack = self.ts, self.pack
+        if pack is None:
+            ts.advance(t_us)
+            return
+        while ts.pending and ts.pending[0][0] <= t_us:
+            at = ts.pending[0][0]
+            pack.advance(at)
+            ts.advance(at)
+            self._sync_pack(at)
+        pack.advance(t_us)
         ts.advance(t_us)
+        self._sync_pack(t_us)
+
+    def _sync_pack(self, t_us: int) -> None:
+        """The pack current for the circuit as it is now, and the circuit's
+        v_pack for the pack as it is now."""
+        pack, ts = self.pack, self.ts
+        i = self._pack_current()
+        if i != pack.i_pack:
+            pack.i_pack = i
+            self.exchange_due = True        # the sensor's legs, the cells' sag
+        v = pack.v_pack
+        if ts.inputs["v_pack"] != v:
+            ts.set("v_pack", v, t_us)
+            self.dirty = True
+
+    def _exchange(self, port, t_us: int) -> None:
+        """Balance switches in, measurements out; when to come back."""
+        pack, chain = self.pack, self.chain
+        p = self.ts.p
+        if chain is not None:
+            _, on, bits = chain.take_bleed()
+            r = float(p("bleed_r"))
+            # The bleed removes charge only: the AMS opens every switch while
+            # it converts (IFS08-CE-AMS bms_poll_task.cpp:372-420), so the
+            # balance current's IR drop is never measured.
+            for k in range(min(pack.n, len(on))):
+                if on[k]:
+                    pack.soc[k] = max(0.0, pack.soc[k] - pack.v_cell(k) / r * on[k] / 1e6
+                                      / (3600 * pack.capacity[k]))
+                if bool(on[k] or bits[k]) != bool(self.bled[k]):
+                    self.bled[k] = int(bool(on[k] or bits[k]))
+                    self.pack_records.append((t_us, f"bleed_c{k}", self.bled[k]))
+            self.bleeding = any(bits) or any(on)
+            chain.arm(not self.bleeding)
+            self._sync_pack(t_us)
+            chain.push(pack)
+        if self.current is not None:
+            model_doc, signals = self.current
+            i = pack.i_pack
+            if i != self.sensor_i:
+                from vhil.plant_pack import sensor_volts
+                for out, v in sensor_volts(model_doc, i).items():
+                    port.set_voltage(signals[out], v)
+                self.sensor_i = i
+        self._record(t_us)
+        # Next exchange: when an element's voltage moves one LTC6811 LSB or a
+        # temperature 0.1 C, no sooner than cell_exchange_min, at most
+        # bleed_poll apart while a switch is on (its on-time is read then).
+        from vhil.plant_pack import LTC_LSB_V
+        rate_v = pack.rate_v()
+        if self.bleeding:
+            rate_v = max(rate_v, max(abs(pack.ocv_slope(pack.soc[k]) * pack.v_cell(k)
+                                         / float(p("bleed_r")) / (3600 * pack.capacity[k]))
+                                     for k in range(pack.n)))
+        rate_t = pack.rate_t()
+        dt = min(LTC_LSB_V / rate_v if rate_v else math.inf, 0.1 / rate_t if rate_t else math.inf)
+        if self.bleeding:
+            dt = min(dt, float(p("bleed_poll")))
+        if dt > 600:
+            self.pack_next = None           # settled: under one LSB in 10 min
+        else:
+            self.pack_next = t_us + max(_us(p("cell_exchange_min")), _us(dt))
+        if (self.scripted["i_inverter_dc"] or self.scripted["i_charger"]) and self.ts.pending:
+            # A contact move that starts or stops the current: be there.
+            at = self.ts.pending[0][0]
+            self.pack_next = at if self.pack_next is None else min(self.pack_next, at)
+        self.exchange_due = False
+
+    def _record(self, t_us: int) -> None:
+        pack = self.pack
+        v = [pack.v_cell(k) for k in range(pack.n)]
+        now = {"v_cell_min": round(min(v), 4), "v_cell_max": round(max(v), 4),
+               "t_cell_max": round(max(pack.t_cell(k) for k in range(pack.n)) - 273.15, 1),
+               "i_pack": round(pack.i_pack, 3), "soc_min": round(min(pack.soc), 5),
+               "v_pack": round(sum(v), 2)}
+        for k, val in now.items():
+            if self._last_rec.get(k) != val:
+                self._last_rec[k] = val
+                self.pack_records.append((t_us, k, val))
+
+    # -- the port -----------------------------------------------------------------
+
+    def apply(self, values: dict, t_us: int) -> None:
+        """Set fault inputs, scripted inputs or parameters (a scenario's
+        `plant` row) at t_us; a parameter becomes an override for the rest
+        of the run."""
+        ts = self.ts
+        self._to(t_us)
         for name, value in values.items():
             if name in FAULTS:
                 ts.fault(name, value, t_us)
+            elif name in SCRIPTED:
+                if name == "t_ambient":
+                    if self.pack is not None:
+                        self.pack.t_amb = float(value)
+                else:
+                    self.scripted[name] = float(value)
+                    if name in INPUTS:
+                        ts.set(name, value, t_us)
+            elif self.pack is not None and name in self.pack.FAULTS:
+                self.pack.fault(name, value, self.pack_faults)
             elif name in ts.params:
                 old = ts.params[name]
                 ts.params = {**ts.params, name: Parameter(
                     name, value, old.unit, "override", f"set by the run (catalogue: {old.value!r})",
                     None)}
                 ts._resegment(t_us)
+                if self.pack is not None and name in PACK_STATE:
+                    # A pack parameter (a 15 % pack, a smaller cell): the pack
+                    # starts again from it, its faults re-applied.
+                    from vhil.plant_pack import Pack
+                    self.pack = Pack(ts.params, t_us)
+                    faults, self.pack_faults = dict(self.pack_faults), {}
+                    for f, v in faults.items():
+                        if v is not None:
+                            self.pack.fault(f, v, self.pack_faults)
             else:
-                raise KeyError(f"no fault or parameter '{name}' (settable: "
+                raise KeyError(f"no fault, input or parameter '{name}' (settable: "
                                f"{', '.join(sorted(settable()))})")
+        if self.pack is not None:
+            self._sync_pack(t_us)
+            self.pack_next = t_us           # exchange now
         self.dirty = True
 
     def records(self, plant: str, upto_us: int) -> list[dict]:
@@ -434,11 +589,14 @@ class TsPlant(PortInputs):
         plant did up to upto_us, each once: every contact move
         (`<contact>_closed`, with `v_link` then), and at each contact's
         closing the link as a fraction of the pack (`<contact>_close_ratio`:
-        AIR+'s against the FS rule's 90 %, the firmware's 95 %)."""
+        AIR+'s against the FS rule's 90 %, the firmware's 95 %); with a pack,
+        at each exchange whatever changed of `v_cell_min`, `v_cell_max` (V),
+        `t_cell_max` (C), `i_pack` (A), `soc_min`, `v_pack` (V), and each
+        element's balance switch (`bleed_c<k>`, 1 while it bled)."""
         out = []
         # Every input change up to now has been applied (an armed edge stops
         # the run and steps the plant first), so the plant may move to now.
-        self.ts.advance(max(self.ts.t_us, upto_us))
+        self._to(max(self.ts.t_us, upto_us))
         moves = self.ts.history
         while self._recorded < len(moves) and moves[self._recorded][0] <= upto_us:
             t, contact, closed, v = moves[self._recorded]
@@ -452,15 +610,33 @@ class TsPlant(PortInputs):
                 out.append({"kind": "plant", "t_us": t, "plant": plant,
                             "name": f"{contact}_close_ratio",
                             "value": round(v / v_pack, 4) if v_pack else 0.0})
+        keep = []
+        for t, name, value in self.pack_records:
+            if t <= upto_us:
+                out.append({"kind": "plant", "t_us": t, "plant": plant, "name": name,
+                            "value": value})
+            else:
+                keep.append((t, name, value))
+        self.pack_records = keep
+        out.sort(key=lambda r: r["t_us"])
         return out
+
+    @property
+    def next_us(self) -> Optional[int]:
+        ns = [n for n in (self.ts_next, self.pack_next) if n is not None]
+        return min(ns) if ns else None
+
+    @next_us.setter
+    def next_us(self, value) -> None:
+        self.ts_next = value
 
     def state(self, t_us: int) -> dict:
         """What the plant is at t_us (no earlier than its own time), for the
         trace's per-slice `plant` records (the editor's state panel;
         docs/scenarios.md, "Signals"): the link and the pack (V, to 0.1), the
         contacts as the circuit sees them (faults included), the coil supply
-        as the plant reads it, the bleed, and the pack current (not modelled
-        yet: 0). Read only: past the plant's time it reads a copy, so neither
+        as the plant reads it, the bleed, and the pack current (0 without a
+        pack); with a pack, also the cells' extremes. Read only: past the plant's time it reads a copy, so neither
         the plant nor what it sends changes. (At a slice end records() has
         advanced the plant there already, so it reads the plant itself.)"""
         ts = self.ts
@@ -470,27 +646,45 @@ class TsPlant(PortInputs):
         return {"v_link": round(ts.v_link, 1), "v_pack": round(float(ts.inputs["v_pack"]), 1),
                 **{f"{c}_closed": int(ts.contact(c)) for c in CONTACTS},
                 "sdc_closed": int(bool(ts.inputs["sdc_closed"])),
-                "discharge": int(ts.bleeding()), "i_pack": 0}
+                "discharge": int(ts.bleeding()), "i_pack": 0,
+                **(self._pack_state() if self.pack is not None else {})}
+
+    def _pack_state(self) -> dict:
+        pack = self.pack
+        v = [pack.v_cell(k) for k in range(pack.n)]
+        return {"i_pack": round(pack.i_pack, 3), "v_cell_min": round(min(v), 4),
+                "v_cell_max": round(max(v), 4),
+                "t_cell_max": round(max(pack.t_cell(k) for k in range(pack.n)) - 273.15, 1),
+                "soc_min": round(min(pack.soc), 5), "bleeding": sum(self.bled)}
 
     def step(self, port, t_us: int) -> None:
         self.steps += 1
         ts = self.ts
+        first = not self.started
         changes = self.changes(port, t_us, ts.t_us)
         for t, name, value in changes:
+            self._to(t)
             ts.set(name, value, t)
-        ts.advance(t_us)
-        due = self.next_us is not None and t_us >= self.next_us
+            if self.pack is not None:
+                self._sync_pack(t)
+        self._to(t_us)
+        if self.chain is not None and self.chain.fired():
+            self.exchange_due = True        # balancing started: the trigger stopped the run
+        if self.pack is not None and (first or changes or self.exchange_due or (
+                self.pack_next is not None and t_us >= self.pack_next)):
+            self._exchange(port, t_us)
+        due = self.ts_next is not None and t_us >= self.ts_next
         if not (changes or self.dirty or due):
             return                          # the forecast stands
         self.dirty = False
         if self.report is None:
-            self.next_us = None
+            self.ts_next = None
             return
-        first, period_us = self.first_tick(port, self.report, t_us, _us(ts.p("vdc_period")))
-        entries, settled = ts.forecast(first, period_us, self.horizon_us)
+        first_tick, period_us = self.first_tick(port, self.report, t_us, _us(ts.p("vdc_period")))
+        entries, settled = ts.forecast(first_tick, period_us, self.horizon_us)
         port.schedule(self.report, [(t, vdc_frame(r)) for t, r in entries],
                       period_ms=period_us / 1000)
-        self.next_us = None if settled else first + self.horizon_us
+        self.ts_next = None if settled else first_tick + self.horizon_us
 
 
 def settable(plant: str = "tractive-system") -> set[str]:
@@ -500,7 +694,27 @@ def settable(plant: str = "tractive-system") -> set[str]:
     if plant == "shutdown-circuit":
         from vhil.plant_sdc import settable as sdc_settable
         return sdc_settable(plant)
-    return set(FAULTS) | set(load_parameters(plant))
+    from vhil.plant_pack import Pack
+    return set(FAULTS) | set(SCRIPTED) | set(Pack.FAULTS) | set(load_parameters(plant))
+
+
+def _pack_parts(system, spec: dict, params: dict, sim) -> dict:
+    """The pack, and on a running sim its chain and current-sensor drivers."""
+    from vhil.plant_pack import ChainDriver, Pack
+    out = {"pack": Pack(params)}
+    if sim is not None and spec.get("cells"):
+        out["chain"] = ChainDriver(sim, system, spec["cells"], params["cells_per_chip"].value)
+    if spec.get("current"):
+        dev = system.devices[spec["current"]]
+        by_pin = {o: e for o, e in dev.get("outputs", {}).items()}
+        signals = {}
+        for sname, sig in system.doc["port"]["signals"].items():
+            (kind, endpoint), = sig.items()
+            for out_name, pin in by_pin.items():
+                if kind == "analog" and endpoint == pin:
+                    signals[out_name] = sname
+        out["current"] = (dev["model_doc"], signals)
+    return out
 
 
 # Kinds in the order a step runs them: the shutdown circuit drives the coil
@@ -508,9 +722,12 @@ def settable(plant: str = "tractive-system") -> set[str]:
 KINDS = ("shutdown-circuit", "tractive-system")
 
 
-def make_plants(system) -> dict:
+def make_plants(system, sim=None) -> dict:
     """The plants a system's `plants:` declares, ready for its port, in the
-    order they step (KINDS, then the file's)."""
+    order they step (KINDS, then the file's). A tractive system with `pack:
+    true` gets the per-cell pack (vhil/plant_pack.py); on a running `sim` it
+    also drives the LTC6811 chain (`cells`) and the current sensor
+    (`current`, its outputs on the port's analog signals)."""
     from vhil.plant_sdc import ShutdownCircuit, SdcPlant
     out = {}
     specs = sorted(system.plants.items(),
@@ -518,7 +735,10 @@ def make_plants(system) -> dict:
     for name, spec in specs:
         params = load_parameters(spec["plant"], spec.get("params"))
         if spec["plant"] == "tractive-system":
-            out[name] = TsPlant(TractiveSystem(params=params), cells=spec.get("cells"))
+            extra = {}
+            if spec.get("pack"):
+                extra = _pack_parts(system, spec, params, sim)
+            out[name] = TsPlant(TractiveSystem(params=params), cells=spec.get("cells"), **extra)
         elif spec["plant"] == "shutdown-circuit":
             out[name] = SdcPlant(ShutdownCircuit(params))
         else:

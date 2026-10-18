@@ -79,8 +79,11 @@ def test_scenario(path, images, tmp_path, request, record_property):
     lines = []
     for r in results:
         verdict = "pass" if r["passed"] else "FAIL"
+        if r.get("xfail"):
+            # A strict expected failure (a filed firmware issue): it must fail.
+            verdict = f"xfail {r['xfail']}" if not r["passed"] else f"XPASS {r['xfail']}"
         record_property(f"expect[{r['index']}] {r['name'] or r['check']}",
                         f"{verdict}: {r['signal']}: {r['detail']}")
         lines.append(f"  {verdict}  {r['name'] or r['check']} {r['signal']}: {r['detail']}")
-    failed = [r for r in results if not r["passed"]]
+    failed = [r for r in results if not vexpect.ok(r)]
     assert not failed, f"{len(failed)} of {len(results)} expects failed:\n" + "\n".join(lines)

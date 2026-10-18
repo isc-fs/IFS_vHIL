@@ -28,6 +28,16 @@
 // Reset() restoring the defaults on the AMS's reset: a plant re-applies its
 // values on its next step.
 //
+// The battery plant (M9 prep, #318; docs/cosim.md "Cell source"): a plant
+// that drives the chain (SetPlantCells, SetPlantTemperatures on the bridge)
+// owns the cells and NTCs from then on, so an AMS reset keeps them: they are
+// the battery's state, not the chip's. The chips account each cell's balance
+// switch (DCC) on-time in virtual time, which the plant takes (TakeBleed) and
+// turns into bleed current; with BleedTrigger armed, a chip's DCC going from
+// none to some ends `emulation RunForUntilTrigger` at the next sync point
+// (VhilRunner.cs), so a plant hears that balancing started without polling.
+// Nothing here runs unless a plant calls it: a run without one is unchanged.
+//
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -54,6 +64,7 @@ namespace Antmicro.Renode.Peripherals.SPI
     {
         public Ltc6820(IMachine machine) : base(machine)
         {
+            clockMachine = machine;
         }
 
         public override void Register(Ltc6811 peripheral, NumberRegistrationPoint<int> registrationPoint)
@@ -201,7 +212,90 @@ namespace Antmicro.Renode.Peripherals.SPI
             return sb.ToString();
         }
 
+        // -- the battery plant's port (M9 prep, #318) -------------------------
+
+        // Every chip's 12 cell inputs, chip by chip from the bridge, in
+        // 100 uV units (the LTC6811's cell register LSB): one call per
+        // exchange, however many cells moved.
+        public void SetPlantCells(string raw100uV)
+        {
+            var v = raw100uV.Split(',');
+            var chain = Chain.ToList();
+            if(v.Length != chain.Count * 12)
+            {
+                throw new ArgumentException($"{v.Length} values for {chain.Count} chips x 12 inputs");
+            }
+            for(var i = 0; i < chain.Count; i++)
+            {
+                chain[i].SetPlantCells(v, i * 12);
+            }
+        }
+
+        // Every chip's 32 ADG731 channels, tenths of a degree C, chip by chip;
+        // an empty entry leaves that channel as it is.
+        public void SetPlantTemperatures(string deciCelsius)
+        {
+            var v = deciCelsius.Split(',');
+            var chain = Chain.ToList();
+            if(v.Length != chain.Count * 32)
+            {
+                throw new ArgumentException($"{v.Length} values for {chain.Count} chips x 32 channels");
+            }
+            for(var i = 0; i < chain.Count; i++)
+            {
+                chain[i].SetPlantTemperatures(v, i * 32);
+            }
+        }
+
+        // The balance switches since the last call: "<now us>" then one line
+        // per chip, "<DCC bits now>:<on-time of DCC1..12 in us>", and the
+        // accounts start again from zero.
+        public string TakeBleed()
+        {
+            var sb = new StringBuilder();
+            sb.Append(Now());
+            foreach(var ic in Chain)
+            {
+                sb.Append('\n').Append(ic.TakeBleed());
+            }
+            return sb.ToString();
+        }
+
+        // Armed: the next chip whose DCC goes from none to some raises the
+        // run's trigger, once (the plant re-arms it).
+        public bool BleedTrigger { get; set; }
+
         public int ChainLength => ChildCollection.Count;
+
+        private ulong Now()
+        {
+            return (ulong)clockMachine.ElapsedVirtualTime.TimeElapsed.TotalMicroseconds;
+        }
+
+        private void OnDischargeStarted()
+        {
+            if(BleedTrigger)
+            {
+                BleedTrigger = false;
+                RunTrigger()?.SetValue(null, true);
+            }
+        }
+
+        // VhilRunner.Triggered (VhilRunner.cs), found at run time: the smoke
+        // suites and the wall-clock bench compile this model without the
+        // runner, and there nothing arms the trigger.
+        private static System.Reflection.FieldInfo RunTrigger()
+        {
+            if(runTrigger == null)
+            {
+                runTrigger = AppDomain.CurrentDomain.GetAssemblies()
+                    .Select(a => a.GetType("Antmicro.Renode.Testing.VhilRunner", false))
+                    .FirstOrDefault(t => t != null)?.GetField("Triggered");
+            }
+            return runTrigger;
+        }
+
+        private static System.Reflection.FieldInfo runTrigger;
 
         private IEnumerable<Ltc6811> Chain => ChildCollection.OrderBy(kv => kv.Key).Select(kv => kv.Value);
 
@@ -216,6 +310,8 @@ namespace Antmicro.Renode.Peripherals.SPI
             {
                 chain[i].Position = i;
                 chain[i].Downstream = i + 1 < chain.Count ? chain[i + 1] : null;
+                chain[i].Clock = Now;
+                chain[i].DischargeStarted = OnDischargeStarted;
             }
         }
 
@@ -226,6 +322,7 @@ namespace Antmicro.Renode.Peripherals.SPI
             First?.BeginTransaction();
         }
 
+        private readonly IMachine clockMachine;
         private Ltc6811 first;
         private bool frameOpen;
         private int bytesInFrame;
@@ -247,14 +344,21 @@ namespace Antmicro.Renode.Peripherals.SPI
 
         public void Reset()
         {
+            if(DischargeBits != 0)
+            {
+                AccrueBleed();             // the switches open with the reset
+            }
             Array.Copy(new byte[] { 0xF8, 0, 0, 0, 0, 0 }, config, 6);   // CFGR power-on
             Array.Clear(comm, 0, 6);
             for(var c = 0; c < CellsPerIc; c++)
             {
-                cells[c] = ToLtc(DefaultCellMillivolts);
+                if(!PlantHeld)
+                {
+                    cells[c] = ToLtc(DefaultCellMillivolts);
+                }
                 cellResults[c] = 0xFFFF;   // cleared result registers read 0xFFFF
             }
-            for(var ch = 0; ch < MuxChannels; ch++)
+            for(var ch = 0; ch < MuxChannels && !PlantHeld; ch++)
             {
                 aux[ch] = NtcAux(DefaultDeciCelsius);
             }
@@ -370,7 +474,17 @@ namespace Antmicro.Renode.Peripherals.SPI
                         badWritePec++;
                         break;
                     }
+                    var before = DischargeBits;
+                    if(before != 0)
+                    {
+                        AccrueBleed();
+                    }
                     TakeSegment(config);
+                    if(before == 0 && DischargeBits != 0)
+                    {
+                        bleedSince = Clock?.Invoke() ?? 0;
+                        DischargeStarted?.Invoke();
+                    }
                     break;
                 case WRCOMM:
                     TakeSegment(comm);
@@ -478,6 +592,71 @@ namespace Antmicro.Renode.Peripherals.SPI
 
         // DCC (discharge) bits last written, cells 1..12.
         public int DischargeBits => config[4] | ((config[5] & 0x0F) << 8);
+
+        // -- the battery plant's port (through the bridge, M9 prep #318) ---------
+
+        // Virtual time in us (the bridge's machine), and what to call when
+        // DCC goes from none to some; set by the bridge when it links the chain.
+        public Func<ulong> Clock { get; set; }
+        public Action DischargeStarted { get; set; }
+
+        // A plant drives this chip's cells and NTCs: an AMS reset keeps them.
+        public bool PlantHeld { get; private set; }
+
+        public void SetPlantCells(string[] raw100uV, int offset)
+        {
+            for(var c = 0; c < CellsPerIc; c++)
+            {
+                cells[c] = (ushort)Math.Max(0, Math.Min(0xFFFF, int.Parse(raw100uV[offset + c])));
+            }
+            PlantHeld = true;
+        }
+
+        public void SetPlantTemperatures(string[] deciCelsius, int offset)
+        {
+            for(var ch = 0; ch < MuxChannels; ch++)
+            {
+                var s = deciCelsius[offset + ch];
+                if(s.Length > 0)
+                {
+                    aux[ch] = NtcAux(int.Parse(s));
+                }
+            }
+            PlantHeld = true;
+        }
+
+        // "<DCC bits now>:<us on of DCC1>,...,<DCC12>" since the last call.
+        public string TakeBleed()
+        {
+            if(DischargeBits != 0)
+            {
+                AccrueBleed();
+            }
+            var line = $"{DischargeBits}:{string.Join(",", bleedUs)}";
+            Array.Clear(bleedUs, 0, CellsPerIc);
+            return line;
+        }
+
+        private void AccrueBleed()
+        {
+            if(Clock == null)
+            {
+                return;
+            }
+            var now = Clock();
+            var bits = DischargeBits;
+            if(bits != 0 && now > bleedSince)
+            {
+                for(var c = 0; c < CellsPerIc; c++)
+                {
+                    if((bits & (1 << c)) != 0)
+                    {
+                        bleedUs[c] += now - bleedSince;
+                    }
+                }
+            }
+            bleedSince = now;
+        }
 
         // Cell conversions started with a discharge switch on: the host is
         // meant to quiesce balancing first, or the reading includes the
@@ -788,6 +967,8 @@ namespace Antmicro.Renode.Peripherals.SPI
         private readonly bool[] openWires = new bool[CellsPerIc + 1];
         private readonly ushort[] cellResults = new ushort[CellsPerIc];
         private readonly ushort[] aux = new ushort[MuxChannels];
+        private readonly ulong[] bleedUs = new ulong[CellsPerIc];
+        private ulong bleedSince;
         private readonly List<byte> rx = new List<byte>();
         private readonly List<byte> relayed = new List<byte>();
         private readonly SortedDictionary<ushort, int> commandCounts = new SortedDictionary<ushort, int>();

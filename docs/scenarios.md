@@ -141,9 +141,15 @@ editor's state panel shows: `v_link` and `v_pack` (V, to 0.1),
 `air_pos_closed`, `air_neg_closed` and `pre_closed` (0/1, as the circuit
 sees them: a welded or externally opened contact included), `sdc_closed`
 (0/1: the coil supply as the plant reads it), `discharge` (0/1: the bleed
-across the link) and `i_pack` (A; 0 until the plant models the current).
+across the link) and `i_pack` (A; with a pack the pack current, and also `v_cell_min`,
+`v_cell_max`, `t_cell_max`, `soc_min` and `bleeding`, the number of elements
+bleeding).
 So `plant:ts.v_link` has a value at slice ends too, and
 `plant:ts.air_pos_closed` follows a welded contact.
+With a pack (`pack: true`) it
+also records, at each exchange, whatever changed of `v_cell_min`, `v_cell_max` (V),
+`t_cell_max` (C), `i_pack` (A), `soc_min` and `v_pack`, and each element's balance
+switch, `bleed_c<k>` (1 while it bled).
 The shutdown circuit's
 (`plant: shutdown-circuit`) records `sdc_closed` (AIR+_VCC) and its two latches,
 `imd_latch` and `ams_latch`, at the run's start and at every change. Its state (`SdcPlant.state`) adds each
@@ -169,6 +175,13 @@ of a symbol's enum, from the image's DWARF or its state view's table
 ([state-view.md](state-view.md); the contract's `labels`), so
 `symbol:ams.g_state_telemetry == Precharge` reads as the firmware does.
 `op` defaults to `==`.
+
+**Expected failures.** An expect with `xfail: "<owner>/<repo>#<n>"` is one the
+firmware is known to fail, filed as that issue (invariant 9: the car's
+hardware and the firmware's intent decide what an expect says). It is strict:
+it must fail (`XFAIL`, the run passes), and if it passes the run fails
+(`XPASS`: the issue is fixed, drop the mark). Its result carries `xfail`; the
+summary counts `expects_xfailed`.
 
 **Results** are the run's `summary.expects`, one per expect:
 `{index, name, check, signal, at_us, until_us, passed, t_us, value, detail}`
@@ -255,6 +268,11 @@ The seeds, which pass against the firmware the systems declare (`ecu-ams/*` run 
 | `ecu-ams/sdc-opens-in-run` | A shutdown button in Run: the coils lose their supply, the contacts open, the AMS drops to Start unlatched; released, the circuit re-closes with no reset |
 | `ecu-ams/imd-latch-holds-the-sdc-open` | IMD_OK falls in Run: K4 drops, Start; IMD_OK back leaves the circuit open until RST_EXT |
 | `ecu-ams/ams-ok-opens-the-sdc` | An AMS Error drops AMS_OK, K5 and AIR+_VCC (PF9 low, contacts open); RST_EXT with AMS_OK low is refused |
+| `ecu-ams/discharge-to-under-voltage` | A 15 % pack with a weak element under 60 A: the AMS latches CellUnderVoltage (4) as the plant's minimum crosses 2800 mV, before it goes 50 mV lower; the current stops |
+| `ecu-ams/current-sensor-reads-the-pack` | 100 A on the plant: the AMS's 0x135 follows up and back with the right sign and scale |
+| `ecu-ams/balancing-only-in-start` | Two high elements and 0x103 BALN: the AMS bleeds exactly those in Start, none in Run |
+| `ecu-ams/balancing-converges` | On 1000x smaller cells, the high element bleeds down to within 20 mV and balancing stops |
+| `ecu-ams/hot-cell-over-temperature` | A 65 C element: the AMS reads it; its CellOverTemp Error is a strict expected failure (IFS08-CE-AMS#639) |
 | `ecu/ams-error-inhibit` | A fresh `0x4A0` saying Error puts the ECU in AmsError within two ticks and holds it there; the AMS healthy again re-arms from WaitInvVdcConfig back to WaitStartBrake |
 | `ecu/as-emergency` | `0x50A` Emergency: the RTDS sounds 150 ms pulses for exactly 10 s and stops although Emergency persists; silent before the uDV is heard; `PitDiag_dv` flags the tone |
 | `ecu/heartbeat-r2d` | Nothing on the bus in the bootloader's window; `0x100` every 10 ms on the ACU bus only, `0x704` every second; the inverter's DC-bus report and the AMS's `ok_precharge` reach WaitStartBrake; START without the brake sounds no RTDS; with it, R2dDelay and 2 s of RTDS, then WaitInvStandby |

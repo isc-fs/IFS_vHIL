@@ -304,3 +304,16 @@ def test_what_the_worker_must_watch():
           {"signal": "frame:can_acu.0x100"}, {"signal": "bad"}]
     assert vexpect.pins(ex) == [("ams", "PB5")]
     assert vexpect.symbols(ex) == [("ams", "g")]
+
+
+def test_an_xfail_expect_is_strict():
+    """An expect marked xfail (a filed firmware issue) passes the run when it
+    fails, and fails it when it passes (the issue no longer reproduces)."""
+    from vhil import expect as vexpect
+    failing = {"passed": False, "xfail": "isc-fs/IFS08-CE-AMS#639"}
+    passing = {"passed": True, "xfail": "isc-fs/IFS08-CE-AMS#639"}
+    assert vexpect.ok(failing) and not vexpect.ok(passing)
+    assert vexpect.ok({"passed": True}) and not vexpect.ok({"passed": False})
+    s = vexpect.summary([failing, {"passed": True}])
+    assert s["expects_failed"] == 0 and s["expects_passed"] == 1 and s["expects_xfailed"] == 1
+    assert vexpect.summary([passing])["expects_failed"] == 1

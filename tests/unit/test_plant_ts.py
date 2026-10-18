@@ -246,7 +246,7 @@ def test_a_system_declares_its_plants_and_they_are_checked(tmp_path):
     from vhil.system import REPO, System, SystemError
     system = System(REPO / "systems" / "ecu-ams.yaml")
     plants = make_plants(system)
-    assert set(plants) == {"sdc", "ts"} and plants["ts"].cells == "isospi"
+    assert set(plants) == {"sdc", "ts"} and plants["ts"].pack is not None
     doc = yaml.safe_load((REPO / "systems" / "ecu-ams.yaml").read_text())
     for bad, why in (({"plant": "warp-core"}, "no catalog/plants/warp-core.yaml"),
                      ({"plant": "tractive-system", "params": {"nope": 1}}, "no parameter 'nope'"),

@@ -1,0 +1,21 @@
+kind: scenario
+system: ecu-ams
+description: "M9 prep (#318), a hot cell: element 30's temperature rises 40 K above the pack's (the plant's hot_cell fault: an external heat source, 65 C) in Run, and the NTCs that touch it read it through the LTC6811 chain (ADG731 channel, 6.8 k divider, the CMFB103F3950 table). The AMS reports it (0x4A2 max_tempC). Intent (FS rules: the AMS opens the shutdown circuit on a cell over its temperature limit; the firmware's own CellOverTempC = 60): Error, reason CellOverTemp (7). At AMS dev it never comes: TempFaultsTrusted = false suppresses both temperature predicates (ams_config.hpp:117-125, safety_predicates.hpp:227), so the expects on it are strict expected failures on the filed issue."
+virtual_ms: 14000
+tags: [beyond-bench]
+stimuli:
+  - {kind: plant, name: sdc-reset, at_ms: 5400, plant: sdc, set: {reset: true}}
+  - {kind: plant, name: sdc-reset-release, at_ms: 5450, plant: sdc, set: {reset: false}}
+  - {kind: plant, name: tsms-on, at_ms: 5500, plant: sdc, set: {tsms: true}}
+  - {kind: gpio, name: dash-press, at_ms: 5600, board: ams, pin: PF10, level: true}
+  - {kind: gpio, name: dash-release, at_ms: 5650, board: ams, pin: PF10, level: false}
+  - {kind: plant, name: hot-element-30, at_ms: 11000, plant: ts, set: {hot_cell: 30, hot_cell_dt: 40}}
+watch:
+  - {kind: symbol, board: ams, name: g_state_telemetry, size: 1, period_ms: 10}
+  - {kind: symbol, board: ams, name: g_fault_reason_telemetry, size: 1, period_ms: 10}
+expect:
+  - {check: eventually, name: ams-run, at_ms: 5600, until_ms: 10600, signal: "symbol:ams.g_state_telemetry", value: 3}
+  - {check: eventually, name: the-plant-is-hot, at_ms: 11000, until_ms: 11001, signal: "plant:ts.t_cell_max", op: ">=", value: 64.9}
+  - {check: eventually, name: the-ams-reads-it, at_ms: 11000, until_ms: 12000, signal: "frame:can_acu.AMS_temps.max_tempC", op: ">=", value: 64}
+  - {check: eventually, name: over-temp-error, at_ms: 11000, until_ms: 13500, signal: "symbol:ams.g_state_telemetry", value: 5, xfail: "isc-fs/IFS08-CE-AMS#639"}
+  - {check: eventually, name: reason-over-temp, at_ms: 11000, until_ms: 13500, signal: "symbol:ams.g_fault_reason_telemetry", value: 7, xfail: "isc-fs/IFS08-CE-AMS#639"}

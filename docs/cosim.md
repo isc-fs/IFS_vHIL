@@ -175,15 +175,34 @@ the session ops and the trace, and is versioned with them.
 ## Cell source
 
 The AMS reads its cells and NTCs from the LTC6811 chain model
-(`models/renode/IsoSpi.cs`). Today a native test sets them through the
-monitor (`SetCell`, `SetAllCells`, `SetTemperature`, `SetAuxRaw` per chip;
-`SetAllCells`, `StopReply` on the bridge), as `tests/sim/test_ams_*.py` do.
-There is no Pico LTC emulator on the virtual bench and won't be (#150). When
-the Simscape battery stacks arrive (M9), the stack plant drives the same
-setters at each step boundary: one more plant, with the chain's chips (module
-`m` = chips `2m` and `2m + 1`) as its signals. The model keeps no other
-writer, so tests and the plant don't contend; a test that sets a cell is a
-scripted stand-in for that plant.
+(`models/renode/IsoSpi.cs`). A native test on a system without a pack sets
+them through the monitor (`SetCell`, `SetAllCells`, `SetTemperature`,
+`SetAuxRaw` per chip; `SetAllCells`, `StopReply` on the bridge), as
+`tests/sim/test_ams_*.py` do. There is no Pico LTC emulator on the virtual
+bench and won't be (#150).
+
+On a system whose tractive-system plant has `pack: true` (`ecu-ams`,
+`ecu-ams-udv`; M9 prep, #318) the plant is the cell source
+(`vhil/plant_pack.py`, [`m8-plan.md`](m8-plan.md#m9-prep-the-measurement-chain)):
+
+- `SetPlantCells` on the bridge takes all ten chips' twelve inputs in
+  100 uV (the LTC6811's LSB) in one call, `SetPlantTemperatures` all 32 mux
+  channels in 0.1 C; the plant calls each only when some value moved by
+  that much, so a pack at rest costs nothing after its first push. A chip a
+  plant drives keeps its cells and NTCs over an AMS reset (they are the
+  battery's, not the chip's).
+- Each chip accounts its balance switches' (DCC) on-time in virtual time;
+  the plant takes it (`TakeBleed`) and removes that charge through the bleed
+  resistor. `BleedTrigger`, armed while nothing bleeds, ends a
+  `RunForUntilTrigger` when a chip's DCC goes from none to some, so the
+  plant hears that balancing started without polling.
+- The pack current reaches the current sensor's legs through the port's
+  analog signals (`i_pack_p`, `i_pack_n`), from the sensor's catalogue
+  model, when it changes.
+
+An FMU with `v_cell[k]`, `t_sensor[n]`, `i_pack` outputs and `cell_bleed[k]`
+inputs drives the same calls (`FmuPlant(..., chain=, current=)`). The model
+keeps no other writer while a plant drives it.
 
 Failures of the link are not the battery's and stay test API: a chip that
 stops answering or a cut cable (`Respond`, `BreakDownstream`, `StopReply`), a

@@ -870,6 +870,19 @@ class System:
                 if "udv_sdc" in signals and signals["udv_sdc"] != "gpio_out":
                     raise SystemError(f"plant '{name}': 'udv_sdc' must be a gpio_out signal")
                 continue
+            if spec.get("current") is not None:
+                if not spec.get("pack"):
+                    raise SystemError(f"plant '{name}': current needs pack: true")
+                dev = self.devices.get(spec["current"])
+                if dev is None or dev["model_doc"].get("backend") != "analog":
+                    raise SystemError(f"plant '{name}': current '{spec['current']}' is not an "
+                                      f"analog sensor of this system")
+                analog = {next(iter(v.values())) for v in self.doc.get("port", {}).get(
+                    "signals", {}).values() if next(iter(v)) == "analog"}
+                for out, pin in dev.get("outputs", {}).items():
+                    if pin not in analog:
+                        raise SystemError(f"plant '{name}': the port needs an analog signal on "
+                                          f"{pin} ({spec['current']}.{out})")
             if cells is not None:
                 dev = self.devices.get(cells)
                 if dev is None or dev["model_doc"].get("interface", {}).get("provides") != "isospi":
