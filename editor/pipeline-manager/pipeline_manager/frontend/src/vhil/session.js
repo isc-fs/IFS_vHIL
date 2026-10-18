@@ -4,8 +4,9 @@
  * WebSockets of a live run and what they feed.
  *
  *   /api/runs/<id>/live      the run's trace as it is written: frames,
- *                            samples, edges and logs into the REPLAY store
- *                            and model (replay.js feedLive), `op` records
+ *                            samples, edges, logs and plant records into
+ *                            the REPLAY store and model (replay.js
+ *                            feedLive), `op` records
  *                            into the session's state (live.js), `clock`
  *                            records into the clock
  *   /api/runs/<id>/session   ops out, acks and control in
@@ -29,7 +30,7 @@ import {
 import { feedLive, replay } from './replay.js';
 import { logEntry } from './runlog.js';
 
-const KINDS = 'frame,log,edge,sample,bus_load,op,clock,debug';
+const KINDS = 'frame,log,edge,sample,bus_load,op,clock,debug,plant';
 const FLUSH_MS = 50;
 const RATES_MS = 250; // the wires' frames/s and dash march: 4 Hz
 
@@ -47,6 +48,7 @@ export const live = reactive({
     periodics: [], // the senders running: {name, bus, id, ext, data, period_ms, since}
     levels: {}, // "board.pin" -> the last level a gpio op set
     volts: {}, // "board.pin" -> the last voltage an analog op set
+    plants: {}, // plant -> {name: the value its last plant op set}
     used: [], // periodic names this session has used
     rates: {}, // bus -> frames/s over the last second of virtual time
     pending: 0, // ops sent, not yet applied or refused
@@ -71,6 +73,7 @@ function publish() {
     live.periodics = state.running();
     live.levels = Object.fromEntries(state.levels);
     live.volts = Object.fromEntries(state.volts);
+    live.plants = Object.fromEntries(state.plants);
     live.used = [...state.used];
     live.version += 1;
 }

@@ -3,7 +3,8 @@
 A live session is the bench at your desk: a run of a system that goes on
 until you stop it, paced to wall time, which you drive while it runs: send
 CAN frames once or periodically, flip GPIO inputs, set analog voltages,
-start watching a symbol or a pin, pause and resume. Feature 3 of the
+start watching a symbol or a pin, set a plant's faults and parameters,
+pause and resume. Feature 3 of the
 [editor workspace plan](architecture/editor-workspace.md) (steps 14 and 15).
 Every op is applied in virtual time and written into the run's trace, so a
 session is recorded as it happens and saves as a [scenario](scenarios.md)
@@ -82,6 +83,7 @@ worker gives it), and four controls:
 | Op | |
 |---|---|
 | `can_send`, `can_periodic`, `stop_periodic`, `gpio`, `analog`, `watch` | as the [scenario rows](scenarios.md#rows), checked by the same models and against the run's system; a `can_periodic` needs a `name`, no `until_ms`, and a name once per session (a recording must stay a valid scenario) |
+| `plant` | `{kind: "plant", plant, set: {name: value}}`: the scenario's `plant` row, setting fault inputs or parameters of one of the system's `plants:` (e.g. `{pre_open_circuit: true}`, `{r_leak: 2000}`, `{sense_floor: 48}`); refused when the system has no such plant, when a name is not one it may set (`vhil.plant_ts.settable`), or when the plant can't take the value (`r_leak: 0`: tried on a copy of the plant first). A parameter set here is the run's override, as a row's is |
 | `pause`, `resume` | hold virtual time where it is, and go on |
 | `stop` | end the session at the end of the next slice |
 | `keepalive` | nothing, but the session is not idle |
@@ -138,7 +140,12 @@ a frame from the contract (or raw hex) and sends it once or periodically,
 with the senders running listed (Stop, Stop all) and a banner while any
 runs. A board's inputs (its role's routed GPIO inputs as switches, analog
 inputs as voltages; the contract's `inputs`) are in the inspector and in its
-context menu ("Inputs and analog…"). The State tab, the inspector's card and
+context menu ("Inputs and analog…"). A system with `plants:` (`ecu-ams`,
+`ecu-ams-udv`) shows each plant's state (the link and the pack, the
+contacts, the coil supply, the bleed: its `plant` records) and, while live,
+its controls (fault inputs as switches or numbers, parameters with their
+value, unit and status; the contract's `plants`, each change a `plant` op)
+in the inspector with nothing selected, and its state in the State tab. The State tab, the inspector's card and
 the node pill follow the clock; bus rails show frames a second and their CAN
 wires march while they carry traffic. Another tab that opens the run
 watches. When the session ends, it stays on the workspace as a REPLAY, and

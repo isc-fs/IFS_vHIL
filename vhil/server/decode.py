@@ -1,7 +1,7 @@
 """A run's CAN contract for the browser's frame decoder (M5.3, #115).
 
     GET /api/runs/{id}/contract -> {buses: {bus: {id: message}}, boards, conflicts,
-                                    state, labels}
+                                    state, labels, inputs, plants}
 
 The contract is the firmware's own: the .def files of the source each board's
 image was built from (vhil/candef.py), found next to the ELF the worker ran
@@ -60,7 +60,7 @@ def run_contract(run: dict, workspace: Path, fw_dir: Path) -> dict:
         system = System(path)
     except (OSError, SystemError) as e:
         return {"buses": {}, "boards": {}, "conflicts": [], "state": {}, "labels": {},
-                "inputs": {}, "error": f"system '{run['system']}': {e}"}
+                "inputs": {}, "plants": {}, "error": f"system '{run['system']}': {e}"}
     return system_contract(system, board_elfs(run, system, fw_dir))
 
 
@@ -110,9 +110,46 @@ def system_contract(system: System, elfs: dict[str, Path]) -> dict:
     out["labels"] = stateview.labels(system, elfs, out)
     # What a live session's pin switches and analog inputs drive.
     out["inputs"] = stateview.inputs(system)
+    # What a live session's plant controls and a scenario's plant rows set.
+    out["plants"] = plants(system)
     # Where a stimulus takes effect: the next sync point (docs/scenarios.md,
     # "Times"); the scenario editor shows a time between two moved there.
     out["sync_quantum_us"] = system.sync_quantum_us()
+    return out
+
+
+def plants(system: System) -> dict:
+    """{plant: {plant: <kind>, settable: {faults, inputs, params}}} for the
+    system's `plants:`: what a `plant` row or op may set (vhil.plant_ts
+    settable), its fault inputs and other inputs as [{name, type (bool |
+    number), default}], and its parameters as {name: {value, unit, status}}
+    (the catalogue's, with the system's own overrides)."""
+    from vhil import plant_sdc, plant_ts
+    # Defaults by name, which also type the controls: the tractive system's
+    # fault inputs, the shutdown circuit's switches and RST_EXT button.
+    defaults = {**plant_ts.FAULT_DEFAULTS, **plant_sdc.DEFAULTS}
+    from vhil.plant_pack import Pack
+    faults = set(plant_ts.FAULTS) | set(Pack.FAULTS)      # the pack's by index
+    out = {}
+    for name, spec in (getattr(system, "plants", None) or {}).items():
+        kind = spec["plant"]
+        try:
+            params = plant_ts.load_parameters(kind, spec.get("params"))
+            can = plant_ts.settable(kind)
+        except (OSError, KeyError, ValueError) as e:
+            out[name] = {"plant": kind, "error": str(e)}
+            continue
+
+        def entry(n: str) -> dict:
+            default = defaults.get(n)
+            return {"name": n, "type": "bool" if isinstance(default, bool) else "number",
+                    "default": default}
+        rest = sorted(can - set(params))
+        out[name] = {"plant": kind, "settable": {
+            "faults": [entry(n) for n in rest if n in faults],
+            "inputs": [entry(n) for n in rest if n not in faults],
+            "params": {n: {"value": p.value, "unit": p.unit, "status": p.status}
+                       for n, p in params.items() if n in can}}}
     return out
 
 

@@ -60,6 +60,10 @@ PACK_STATE = ("cells_series", "cells_parallel", "cell_capacity", "cell_ocv_soc",
               "cell_r0", "cell_r0_alpha", "cell_r1", "cell_tau1", "cell_mass", "cell_cp",
               "cell_r_th", "t_init", "soc_init", "soc_spread", "capacity_spread", "spread_seed")
 CONTACTS = ("air_pos", "air_neg", "pre")
+# Each fault input's value with no fault, which is also its type for the
+# editor's controls (the system contract's `plants`, vhil/server/decode.py).
+FAULT_DEFAULTS = {"welded_air_pos": False, "welded_air_neg": False, "pre_open_circuit": False,
+                  "air_external_open": False, "c_scale": 1.0, "r_leak": None}
 
 
 @dataclass(frozen=True)
@@ -131,9 +135,7 @@ class TractiveSystem:
     inputs: dict = field(default_factory=lambda: {
         "air_pos_cmd": False, "air_neg_cmd": False, "pre_cmd": False, "discharge_cmd": False,
         "sdc_closed": False, "v_pack": 0.0, "i_inverter_dc": 0.0})
-    faults: dict = field(default_factory=lambda: {
-        "welded_air_pos": False, "welded_air_neg": False, "pre_open_circuit": False,
-        "air_external_open": False, "c_scale": 1.0, "r_leak": None})
+    faults: dict = field(default_factory=lambda: dict(FAULT_DEFAULTS))
     closed: dict = field(default_factory=lambda: {c: False for c in CONTACTS})
     # (t_us, contact, closed): contact moves pending, in time order.
     pending: list = field(default_factory=list)
@@ -627,6 +629,33 @@ class TsPlant(PortInputs):
     @next_us.setter
     def next_us(self, value) -> None:
         self.ts_next = value
+
+    def state(self, t_us: int) -> dict:
+        """What the plant is at t_us (no earlier than its own time), for the
+        trace's per-slice `plant` records (the editor's state panel;
+        docs/scenarios.md, "Signals"): the link and the pack (V, to 0.1), the
+        contacts as the circuit sees them (faults included), the coil supply
+        as the plant reads it, the bleed, and the pack current (0 without a
+        pack); with a pack, also the cells' extremes. Read only: past the plant's time it reads a copy, so neither
+        the plant nor what it sends changes. (At a slice end records() has
+        advanced the plant there already, so it reads the plant itself.)"""
+        ts = self.ts
+        if t_us > ts.t_us:
+            ts = copy.deepcopy(ts)
+            ts.advance(t_us)
+        return {"v_link": round(ts.v_link, 1), "v_pack": round(float(ts.inputs["v_pack"]), 1),
+                **{f"{c}_closed": int(ts.contact(c)) for c in CONTACTS},
+                "sdc_closed": int(bool(ts.inputs["sdc_closed"])),
+                "discharge": int(ts.bleeding()), "i_pack": 0,
+                **(self._pack_state() if self.pack is not None else {})}
+
+    def _pack_state(self) -> dict:
+        pack = self.pack
+        v = [pack.v_cell(k) for k in range(pack.n)]
+        return {"i_pack": round(pack.i_pack, 3), "v_cell_min": round(min(v), 4),
+                "v_cell_max": round(max(v), 4),
+                "t_cell_max": round(max(pack.t_cell(k) for k in range(pack.n)) - 273.15, 1),
+                "soc_min": round(min(pack.soc), 5), "bleeding": sum(self.bled)}
 
     def step(self, port, t_us: int) -> None:
         self.steps += 1

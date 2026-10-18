@@ -70,6 +70,7 @@ a client that opens a queued run never sees the stale trace it replaces.
 from __future__ import annotations
 
 import argparse
+import copy
 import fcntl
 import heapq
 import json
@@ -526,6 +527,7 @@ def execute_scenario(sim, scenario: dict, trace: TraceWriter, *,
     plants: dict = {}
     port = None
     plant_due = {"now": False}
+    plant_state: dict[str, dict] = {}       # plant -> its state as last recorded
     if getattr(system, "plants", None):
         from vhil.cosim import Port
         from vhil.plant_ts import make_plants, uncommissioned
@@ -637,6 +639,22 @@ def execute_scenario(sim, scenario: dict, trace: TraceWriter, *,
                 _, pkind, _ = system.resolve(f"{op['board']}.{op['pin']}")
                 if pkind != "analog":
                     raise ValueError(f"{op['board']}.{op['pin']} is {pkind}, not analog")
+            elif kind == "plant":
+                # Refused here, not mid-run when the plant applies it.
+                if op["plant"] not in plants:
+                    raise ValueError(f"no plant '{op['plant']}' in {system.id}")
+                from vhil.plant_ts import settable
+                bad = sorted(set(op["set"]) - settable(system.plants[op["plant"]]["plant"]))
+                if bad:
+                    raise ValueError(f"plant '{op['plant']}' has no fault or parameter "
+                                     f"{', '.join(bad)}")
+                # A value the plant can't take (r_leak 0, a word for a
+                # number) would end the run where it applies: tried on a copy.
+                trial = copy.deepcopy(plants[op["plant"]])
+                try:
+                    trial.apply(op["set"], trial.ts.t_us)
+                except (TypeError, ValueError, ZeroDivisionError) as e:
+                    raise ValueError(f"plant '{op['plant']}': {e}") from None
             elif kind == "watch" and op.get("symbol") and getattr(sim, "firmware", None) \
                     and not has_symbol(sim, op["board"], op["symbol"]):
                 raise ValueError(f"no symbol {op['symbol']} in {op['board']}'s image")
@@ -906,6 +924,16 @@ def execute_scenario(sim, scenario: dict, trace: TraceWriter, *,
                                   "device": device, "payload": p.data.hex()})
             for pname, p in plants.items():
                 batch += p.records(pname, now)
+                # Its state for the editor's panel (docs/scenarios.md,
+                # "Signals"): what changed since the last slice, all at the
+                # first; a plant kind without `state` records none.
+                if hasattr(p, "state"):
+                    last = plant_state.setdefault(pname, {})
+                    for key, value in p.state(now).items():
+                        if key not in last or last[key] != value:
+                            last[key] = value
+                            batch.append({"kind": "plant", "t_us": now, "plant": pname,
+                                          "name": key, "value": value})
             while notes and notes[0][0] <= now:
                 batch.append(heapq.heappop(notes)[2])
             if logs is not None:
@@ -971,7 +999,7 @@ def load_summary(loads: dict[str, list[float]]) -> dict:
             for bus, v in loads.items() if v}
 
 
-STIMULUS_KINDS = ("can_send", "can_periodic", "stop_periodic", "gpio", "analog", "watch")
+STIMULUS_KINDS = ("can_send", "can_periodic", "stop_periodic", "gpio", "analog", "watch", "plant")
 
 
 def has_symbol(sim, board: str, name: str) -> bool:

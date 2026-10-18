@@ -388,6 +388,29 @@ def test_the_contract_carries_each_boards_state_view(env):
     assert out["labels"]["symbol:ams.g_fault_reason_telemetry"] == {"12": "FsmError"}
 
 
+def test_the_contract_describes_the_systems_plants(env):
+    """What the editor's plant controls and plant rows set (vhil.plant_ts
+    settable): the fault inputs with their type and no-fault value, and the
+    parameters with their value, unit and status."""
+    from vhil import plant_ts
+    assert env.client.get("/api/systems/ams/contract").json()["plants"] == {}
+    ts = env.client.get("/api/systems/ecu-ams/contract").json()["plants"]["ts"]
+    assert ts["plant"] == "tractive-system"
+    can = ts["settable"]
+    assert {"name": "pre_open_circuit", "type": "bool", "default": False} in can["faults"]
+    assert {"name": "r_leak", "type": "number", "default": None} in can["faults"]
+    assert {"name": "c_scale", "type": "number", "default": 1.0} in can["faults"]
+    assert {"name": "hot_cell", "type": "number", "default": None} in can["faults"]
+    assert sorted(i["name"] for i in can["inputs"]) == ["i_charger", "i_inverter_dc", "t_ambient"]
+    sdc = env.client.get("/api/systems/ecu-ams/contract").json()["plants"]["sdc"]
+    assert {"name": "tsms", "type": "bool", "default": False} in sdc["settable"]["inputs"]
+    assert can["params"]["r_precharge"] == {"value": 690.0, "unit": "ohm",
+                                            "status": "uncommissioned"}
+    assert can["params"]["c_link"]["status"] == "cited"
+    assert ({f["name"] for f in can["faults"] + can["inputs"]} | set(can["params"])
+            == plant_ts.settable("tractive-system"))
+
+
 def test_a_firmwares_enums(env):
     from tests.unit.test_elf import _dwarf_elf
     fw = env.app.state.fw_dir

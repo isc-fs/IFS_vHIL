@@ -3,14 +3,16 @@
  * docs/architecture/editor-workspace.md). Pure, no DOM, no Vue:
  * tests/js/timeline.test.mjs runs it under node; VhilTimeline.vue draws it.
  *
- * One lane per bus (CAN rows, frame expects) and per board (gpio, analog,
- * symbol and pin expects), on the virtual-time axis REPLAY's scrubber uses:
- * a send is a diamond, a periodic a hatched bar to its stop (or the run's
- * end), a gpio or analog set a step, an expect a bracket over its window.
+ * One lane per bus (CAN rows, frame expects), per board (gpio, analog,
+ * symbol and pin expects) and per plant (`plant` rows, plant expects; M8),
+ * on the virtual-time axis REPLAY's scrubber uses: a send is a diamond, a
+ * periodic a hatched bar to its stop (or the run's end), a gpio or analog
+ * set a step, a plant row a diamond, an expect a bracket over its window.
  * Watches are the gutter below the lanes.
  */
 
 import { parseSignal } from './scenario.js';
+import { setText } from './plant.js';
 
 export const LANE_H = 22;
 export const AXIS_H = 18;
@@ -23,19 +25,28 @@ export function laneOf(list, item) {
     if (list === 'watch') return null;
     if (list === 'expect') {
         const s = parseSignal(item.signal);
-        if (!s || s.kind === 'plant') return null;   // a plant's output has no lane yet
+        if (!s) return null;
+        if (s.kind === 'plant') return laneId('plant', s.owner);
         return laneId(s.kind === 'frame' ? 'bus' : 'board', s.owner);
     }
+    if (item.kind === 'plant') return item.plant ? laneId('plant', item.plant) : null;
     if (['gpio', 'analog', 'watch'].includes(item.kind)) return laneId('board', item.board);
     return item.bus ? laneId('bus', item.bus) : null;
 }
 
-/** The lanes: the system's buses then boards, and any a row names that the
- *  system lacks (so a bad row still shows). */
-export function lanesOf(doc, { buses = [], boards = [] } = {}) {
+// A lane's label: a plant's reads "plant ts".
+const laneLabel = (kind, name) => (kind === 'plant' ? `plant ${name}` : name);
+const makeLane = (kind, name) => ({
+    id: laneId(kind, name), kind, name, label: laneLabel(kind, name),
+});
+
+/** The lanes: the system's buses, boards then plants, and any a row names
+ *  that the system lacks (so a bad row still shows). */
+export function lanesOf(doc, { buses = [], boards = [], plants = [] } = {}) {
     const lanes = [
-        ...buses.map((b) => ({ id: laneId('bus', b), kind: 'bus', name: b })),
-        ...boards.map((b) => ({ id: laneId('board', b), kind: 'board', name: b })),
+        ...buses.map((b) => makeLane('bus', b)),
+        ...boards.map((b) => makeLane('board', b)),
+        ...plants.map((p) => makeLane('plant', p)),
     ];
     const known = new Set(lanes.map((l) => l.id));
     ['stimuli', 'expect'].forEach((list) => (doc?.[list] || []).forEach((item) => {
@@ -43,7 +54,7 @@ export function lanesOf(doc, { buses = [], boards = [] } = {}) {
         if (id && !known.has(id)) {
             known.add(id);
             const [kind, name] = id.split(':');
-            lanes.push({ id, kind, name });
+            lanes.push(makeLane(kind, name));
         }
     }));
     return lanes;
@@ -87,6 +98,10 @@ export function marksOf(doc, endMs) {
         } else if (item.kind === 'analog') {
             out.push({
                 ...base, lane, shape: 'step', label: `${item.pin} ${item.volts} V`, up: true,
+            });
+        } else if (item.kind === 'plant') {
+            out.push({
+                ...base, lane, shape: 'diamond', label: setText(item.set) || 'plant',
             });
         } else if (item.kind === 'watch') {
             out.push({

@@ -52,7 +52,7 @@ evidence, and the timeline lays them over what the run did.
                     <span class="vhil-visually-hidden">Add a row</span>
                     <select class="vhil-input" @change="add">
                         <option value="" disabled selected>+ Add row…</option>
-                        <option v-for="a in ACTIONS" :key="a.action" :value="a.action">
+                        <option v-for="a in actions" :key="a.action" :value="a.action">
                             {{ a.label }}
                         </option>
                     </select>
@@ -82,7 +82,7 @@ evidence, and the timeline lays them over what the run did.
         <template v-else>
             <p v-if="scen.contractNote" class="vhil-bus-note muted">{{ scen.contractNote }}</p>
             <p v-for="m in docMessages" :key="m" class="vhil-scen-msg --error">✕ {{ m }}</p>
-            <VhilTimeline :buses="buses" :boards="boardNames" />
+            <VhilTimeline :buses="buses" :boards="boardNames" :plants="plants" />
             <div class="vhil-scen-body">
                 <div class="vhil-scen-table" role="table" aria-label="Scenario rows">
                     <div class="vhil-scen-row vhil-rt-head" role="row">
@@ -141,7 +141,7 @@ evidence, and the timeline lays them over what the run did.
                 </div>
                 <VhilScenarioRow
                     v-if="sel" :key="sel.key" :row="sel" :buses="buses" :boards="boardNames"
-                    :periodics="periodics" :messages="selMessages"
+                    :plants="plants" :periodics="periodics" :messages="selMessages"
                     :result="results.get(sel.key) || null"
                 />
                 <p v-else class="vhil-scen-editor vhil-placeholder muted">
@@ -157,7 +157,7 @@ import {
     computed, defineComponent, nextTick, onMounted, ref, watch,
 } from 'vue';
 import {
-    ACTIONS, addRow, appliedAt, emptyScenarioText, messagesByRow, periodicNames, removeRow,
+    actionsFor, addRow, appliedAt, emptyScenarioText, messagesByRow, periodicNames, removeRow,
     resultsByRow, rowsOf, targetOf, valueOf,
 } from './scenario.js';
 import { edited, scen } from './scenarios.js';
@@ -165,6 +165,8 @@ import { ws, createScenario, pickScenario } from './workspace.js';
 import {
     boards, liveNodes, nodeName, vhilKind,
 } from './graph.js';
+import { defaultSet } from './plant.js';
+import { keep } from './stable.js';
 import VhilScenarioRow from './VhilScenarioRow.vue';
 import VhilTimeline from './VhilTimeline.vue';
 import './scenario.css';
@@ -216,6 +218,13 @@ export default defineComponent({
             scen.version; // eslint-disable-line no-unused-expressions
             return scen.doc ? periodicNames(scen.doc) : [];
         });
+        // The system's plants (the contract's `plants`, M8): their lanes,
+        // and a plant row in "+ Add row…" only when there are any.
+        const plants = computed((old) => {
+            scen.version; // eslint-disable-line no-unused-expressions
+            return keep(old, Object.keys(scen.contract?.plants || {}).sort());
+        });
+        const actions = computed((old) => keep(old, actionsFor(plants.value)));
 
         const sel = computed(() => rows.value.find((r) => r.key === scen.selected) || null);
         const selMessages = computed(() => (sel.value
@@ -233,6 +242,8 @@ export default defineComponent({
                 buses: buses.value,
                 boards: boardNames.value,
                 periodics: periodics.value,
+                plants: plants.value,
+                plantSet: defaultSet(scen.contract, plants.value[0]),
             });
             edited();
         };
@@ -276,7 +287,7 @@ export default defineComponent({
         };
 
         return {
-            ACTIONS,
+            actions,
             ws,
             scen,
             newName,
@@ -295,6 +306,7 @@ export default defineComponent({
             boardNames,
             buses,
             periodics,
+            plants,
             sel,
             selMessages,
             add,

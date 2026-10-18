@@ -134,12 +134,26 @@ level then recorded (`edge` with `initial: true`). `plant:<plant>.<output>`
 is what one of the system's plants records (`plant` records): the
 tractive-system plant's `<contact>_closed` (air_pos, air_neg, pre) and `v_link`
 at each contact move, and `<contact>_close_ratio`, the link as a fraction of
-the pack as that contact closed (`air_pos_close_ratio >= 0.9`: the FS rule). With a pack (`pack: true`) it
+the pack as that contact closed (`air_pos_close_ratio >= 0.9`: the FS rule).
+At each slice's end it also records its state (`TsPlant.state`), the keys
+that changed since the last slice (all of them at the first), which the
+editor's state panel shows: `v_link` and `v_pack` (V, to 0.1),
+`air_pos_closed`, `air_neg_closed` and `pre_closed` (0/1, as the circuit
+sees them: a welded or externally opened contact included), `sdc_closed`
+(0/1: the coil supply as the plant reads it), `discharge` (0/1: the bleed
+across the link) and `i_pack` (A; with a pack the pack current, and also `v_cell_min`,
+`v_cell_max`, `t_cell_max`, `soc_min` and `bleeding`, the number of elements
+bleeding).
+So `plant:ts.v_link` has a value at slice ends too, and
+`plant:ts.air_pos_closed` follows a welded contact.
+With a pack (`pack: true`) it
 also records, at each exchange, whatever changed of `v_cell_min`, `v_cell_max` (V),
 `t_cell_max` (C), `i_pack` (A), `soc_min` and `v_pack`, and each element's balance
-switch, `bleed_c<k>` (1 while it bled). The shutdown circuit's
+switch, `bleed_c<k>` (1 while it bled).
+The shutdown circuit's
 (`plant: shutdown-circuit`) records `sdc_closed` (AIR+_VCC) and its two latches,
-`imd_latch` and `ams_latch`, at the run's start and at every change.
+`imd_latch` and `ams_latch`, at the run's start and at every change. Its state (`SdcPlant.state`) adds each
+series element (`sdc_<element>`, 1 = closed).
 
 **Plants.** A system with `plants:` (`ecu-ams.yaml`, `ecu-ams-udv.yaml`:
 the shutdown circuit and the tractive system, [`m8-plan.md`](m8-plan.md)) runs them on its port in
@@ -211,14 +225,15 @@ python -m pytest tests/scenarios -o junit_family=xunit1 --junitxml=scenarios.xml
 ```
 
 CI runs it in `.github/workflows/scenarios.yml` with `full-ci`, nightly on
-`dev` and on dispatch. It is **advisory** for now (owner decision): a
-failing scenario is a warning annotation and a row of the step summary's
-table, not a failed check.
+`dev` and on dispatch. Since #198 it is a **required check** on `dev`
+(`scenarios`): a failing scenario fails it. On a pull request without
+`full-ci` the job is skipped, which GitHub counts as passing, so it gates the
+PRs that run it (labelled ones and release PRs into `main`) and the nightly.
 
-### Promotion to a gate
+### Promotion to a gate (met 2026-10-18, #198)
 
-The suite becomes a required check (the workflow's `Advisory verdict` step
-exits 1 and the job loses `continue-on-error`) when all of these hold:
+The suite became a required check once all of these held. They're kept as the
+bar to restore if it is ever demoted again:
 
 - **10 clean nightlies in a row** on `dev`: the scheduled run completes, every
   scenario passes, and none is skipped for a missing image.
@@ -267,8 +282,10 @@ The seeds, which pass against the firmware the systems declare (`ecu-ams/*` run 
 The workspace's Scenario tab (`docs/architecture/editor-workspace.md`,
 feature 1) edits the open system's scenarios: a timeline (a lane per bus and
 per board; drag a mark to move it, 1/5/10 ms snap, Ctrl+wheel zoom; the
-watches below) over the row table and a row editor, where frames are edited
-as the contract's decoded fields. The top bar's pick is what Run runs; when
+watches below; a lane per plant, `plant ts`, for `plant` rows and
+`plant:` expects) over the row table and a row editor, where frames are edited
+as the contract's decoded fields and a `plant` row as the plant's settable
+names and values (the contract's `plants`). The top bar's pick is what Run runs; when
 the run ends it is replayed on the tab, each expect's result on its lane at
 its evidence time (a click moves the scrubber there) over the frames and pin
 edges the run produced. The Tests view in the sidebar lists the scenarios
@@ -278,7 +295,7 @@ with their last results.
 
 | | |
 |---|---|
-| `GET /api/systems/{id}/contract?branch=&fw=<image>=<ref>` | the CAN contract the system's firmware speaks, without a run, and which images are built; each board's state view (`state`) and the value labels of its symbols (`labels`) |
+| `GET /api/systems/{id}/contract?branch=&fw=<image>=<ref>` | the CAN contract the system's firmware speaks, without a run, and which images are built; each board's state view (`state`), the value labels of its symbols (`labels`), and what each of its `plants:` may set (`plants`: `{<name>: {plant, settable: {faults: [{name, type, default}], inputs: [...], params: {<name>: {value, unit, status}}}}}`) |
 | `GET /api/firmware/{id}/enums?ref=` | an image's DWARF enums and enum-typed globals ([state-view.md](state-view.md)) |
 | `GET /api/systems/{id}/scenarios?branch=` | its scenarios, each with its last run (`last_run`) |
 | `GET /api/scenarios` | every system's, as checked out |

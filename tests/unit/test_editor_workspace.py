@@ -159,7 +159,7 @@ def test_the_workspace_covers_the_old_run_page():
     assert "kind: 'pytest', select: tests" in workspace and "export function runPytest()" in workspace
     assert "@click=\"ws.dialog = 'pytest'\"" in (VHIL / "VhilTopBar.vue").read_text()
     replay = (VHIL / "replay.js").read_text()
-    assert "kinds: 'frame,log,edge,sample,bus_load,debug'" in replay
+    assert "kinds: 'frame,log,edge,sample,bus_load,debug,plant'" in replay
 
 
 def test_replay():
@@ -234,7 +234,7 @@ def test_the_timeline_and_the_tests_view():
     attributes and classes, no style attribute), drags with a snap, zooms
     with Ctrl+wheel and lays the run's results over its lanes; a scenario's
     run is replayed on the Scenario tab when it ends; Tests lists them."""
-    assert "<VhilTimeline :buses=\"buses\" :boards=\"boardNames\" />" in (
+    assert "<VhilTimeline :buses=\"buses\" :boards=\"boardNames\" :plants=\"plants\" />" in (
         VHIL / "VhilScenario.vue").read_text()
     tl = (VHIL / "VhilTimeline.vue").read_text()
     template = tl.split("<script>")[0]
@@ -242,7 +242,7 @@ def test_the_timeline_and_the_tests_view():
     assert "snap(drag.t0 + (ev.clientX - drag.x0) / scale.value, snapMs.value)" in tl
     assert "if (!ev.ctrlKey && !ev.metaKey) return;" in tl
     assert "replay.t = Math.min(replay.end, r.tUs);" in tl
-    assert "kinds: 'frame,log,edge,sample,bus_load,debug'" in (VHIL / "replay.js").read_text()
+    assert "kinds: 'frame,log,edge,sample,bus_load,debug,plant'" in (VHIL / "replay.js").read_text()
     workspace = (VHIL / "workspace.js").read_text()
     assert "openRun(id, { tab: 'scenario' });" in workspace
     rail = (VHIL / "VhilRail.vue").read_text()

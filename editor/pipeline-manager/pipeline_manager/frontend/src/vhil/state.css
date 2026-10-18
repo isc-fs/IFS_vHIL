@@ -102,3 +102,14 @@
 .vhil-transition:hover { background: var(--bg-3); }
 .vhil-transition.--current { background: var(--sel-bg); border-left-color: var(--focus); font-weight: 600; }
 .vhil-transition.--future { color: var(--fg-muted); }
+
+/* A system's plants (M8; VhilPlants.vue, VhilPlantCard.vue): a card per
+   plant beside the boards', its controls under it while live. */
+.vhil-plants {
+  display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--sp-3);
+  padding: 0 var(--sp-3) var(--sp-3);
+}
+.vhil-plants.--compact { display: block; padding: 0; }
+.vhil-plant { display: flex; flex-direction: column; gap: var(--sp-1); }
+.vhil-plants:not(.--compact) .vhil-plant { width: 340px; }
+.vhil-plant-extra { margin: 0; font-size: var(--fs-small); overflow-wrap: anywhere; }
