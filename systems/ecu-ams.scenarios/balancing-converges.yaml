@@ -1,0 +1,20 @@
+kind: scenario
+system: ecu-ams
+description: "M9 prep (#318), the bleed's effect, accelerated: the pack's elements made 1000x smaller (the plant's cell_capacity 3 mAh, an override reported as such: at the real 18 Ah, 157 mA moves a cell 3 uV/s and a 50 mV spread takes hours) so the AMS's balancing loop runs to its end in a minute. One element 10 % SOC high (index 30, ~94 mV); with 0x103 BALN in Start the AMS bleeds it (DCC through BMS_LITE's 23.5 ohm) until it is within BalanceStopMv (20 mV) of the second-lowest cell, then stops (balance_controller.hpp:182-193, ams_config.hpp:855, 873)."
+virtual_ms: 70000
+tags: [beyond-bench]
+stimuli:
+  - {kind: plant, name: small-cells, at_ms: 0, plant: ts, set: {cell_capacity: 0.003}}
+  - {kind: plant, name: high-element-30, at_ms: 0, plant: ts, set: {imbalance_cell: 30, imbalance_soc: 0.1}}
+  - {kind: can_periodic, name: baln, at_ms: 2500, bus: can_acu, id: 0x103, data: "42414C4E", period_ms: 500}
+watch:
+  - {kind: symbol, board: ams, name: g_state_telemetry, size: 1, period_ms: 10}
+  - {kind: symbol, board: ams, name: g_fault_reason_telemetry, size: 1, period_ms: 10}
+expect:
+  - {check: eventually, name: starts-high, at_ms: 2500, until_ms: 3500, signal: "frame:can_acu.AMS_status.max_cell_mV", op: ">=", value: 3740}
+  - {check: eventually, name: bleeds-30, at_ms: 2500, until_ms: 6000, signal: "plant:ts.bleed_c30", value: 1}
+  - {check: eventually, name: comes-down, at_ms: 6000, until_ms: 65000, signal: "plant:ts.v_cell_max", op: "<=", value: 3.676}
+  - {check: eventually, name: stops-bleeding, at_ms: 6000, until_ms: 68000, signal: "plant:ts.bleed_c30", value: 0}
+  - {check: always, name: stays-stopped, at_ms: 68000, signal: "plant:ts.bleed_c30", value: 0}
+  - {check: never, name: not-overbled, at_ms: 0, signal: "plant:ts.v_cell_max", op: "<", value: 3.655}
+  - {check: never, name: no-error, at_ms: 0, signal: "symbol:ams.g_state_telemetry", value: 5}

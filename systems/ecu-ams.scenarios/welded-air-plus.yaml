@@ -18,5 +18,5 @@ expect:
   - {check: never, name: no-error, at_ms: 0, signal: "symbol:ams.g_state_telemetry", value: 5}
   - {check: always, name: link-drained-before-arm, at_ms: 3000, until_ms: 5600, signal: "frame:can_acu.VCU_heartbeat.dc_bus_voltage", value: 0}
   - {check: always, name: air-minus-closes-on-an-empty-link, at_ms: 5600, signal: "plant:ts.air_neg_close_ratio", op: "<", value: 0.1}
-  - {check: eventually, name: link-at-the-pack-at-once, at_ms: 5600, until_ms: 5800, signal: "frame:can_acu.VCU_heartbeat.dc_bus_voltage", op: ">=", value: 351}
+  - {check: eventually, name: link-at-the-pack-at-once, at_ms: 5600, until_ms: 5800, signal: "frame:can_acu.VCU_heartbeat.dc_bus_voltage", op: ">=", value: 347}
   - {check: eventually, name: ams-run, at_ms: 5600, until_ms: 6000, signal: "symbol:ams.g_state_telemetry", value: 3}

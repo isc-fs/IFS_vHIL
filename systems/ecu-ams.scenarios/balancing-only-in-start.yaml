@@ -1,0 +1,27 @@
+kind: scenario
+system: ecu-ams
+description: "M9 prep (#318), balancing on the plant: two elements 10 % SOC above the rest (indices 20 and 60, ~94 mV on the VTC6 curve; the plant's imbalance fault) and the operator's 0x103 BALN (balance in Start or Charge) every 500 ms. In Start the AMS selects exactly those two (more than BalanceStartMv 50 mV over the second-lowest cell, never an adjacent one), the LTC6811s' DCC bits close their switches and the plant bleeds them through BMS_LITE's 23.5 ohm (R71 || R72). Armed to Run, balancing stops (the plant reads the switches' on-time at most bleed_poll, 5 s, apart while one is on, so the expect looks after that): the AMS balances only in Start and Charge (ams_config.hpp:545-560, balance_controller.hpp:112-178). The bleed itself (157 mA from 18 Ah) moves a cell 3 uV/s: balancing-converges shows its effect on a reduced capacity."
+virtual_ms: 22000
+tags: [beyond-bench]
+stimuli:
+  - {kind: plant, name: high-element-20, at_ms: 0, plant: ts, set: {imbalance_cell: 20, imbalance_soc: 0.1}}
+  - {kind: plant, name: high-element-60, at_ms: 0, plant: ts, set: {imbalance_cell: 60, imbalance_soc: 0.1}}
+  - {kind: can_periodic, name: baln, at_ms: 2500, bus: can_acu, id: 0x103, data: "42414C4E", period_ms: 500}
+  - {kind: plant, name: sdc-reset, at_ms: 9400, plant: sdc, set: {reset: true}}
+  - {kind: plant, name: sdc-reset-release, at_ms: 9450, plant: sdc, set: {reset: false}}
+  - {kind: plant, name: tsms-on, at_ms: 9500, plant: sdc, set: {tsms: true}}
+  - {kind: gpio, name: dash-press, at_ms: 9600, board: ams, pin: PF10, level: true}
+  - {kind: gpio, name: dash-release, at_ms: 9650, board: ams, pin: PF10, level: false}
+watch:
+  - {kind: symbol, board: ams, name: g_state_telemetry, size: 1, period_ms: 10}
+  - {kind: symbol, board: ams, name: g_fault_reason_telemetry, size: 1, period_ms: 10}
+expect:
+  - {check: eventually, name: bleeds-20, at_ms: 2500, until_ms: 9000, signal: "plant:ts.bleed_c20", value: 1}
+  - {check: eventually, name: bleeds-60, at_ms: 2500, until_ms: 9000, signal: "plant:ts.bleed_c60", value: 1}
+  - {check: never, name: not-the-neighbour-19, at_ms: 0, signal: "plant:ts.bleed_c19", value: 1}
+  - {check: never, name: not-the-neighbour-21, at_ms: 0, signal: "plant:ts.bleed_c21", value: 1}
+  - {check: never, name: not-a-low-cell, at_ms: 0, signal: "plant:ts.bleed_c0", value: 1}
+  - {check: eventually, name: ams-run, at_ms: 9600, until_ms: 14600, signal: "symbol:ams.g_state_telemetry", value: 3}
+  - {check: always, name: no-bleed-in-run, at_ms: 21000, signal: "plant:ts.bleed_c20", value: 0}
+  - {check: always, name: no-bleed-in-run-60, at_ms: 21000, signal: "plant:ts.bleed_c60", value: 0}
+  - {check: never, name: no-error, at_ms: 0, signal: "symbol:ams.g_state_telemetry", value: 5}
