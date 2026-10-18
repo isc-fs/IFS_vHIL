@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
-  NEW_SCENARIO, addRow, appliedAt, emptyScenario, emptyScenarioText, expectText, findMessage, looseSignal, messagesByRow, moveItem, parseSignal,
+  NEW_SCENARIO, actionsFor, addRow, appliedAt, emptyScenario, emptyScenarioText, expectText, findMessage, looseSignal, messagesByRow, moveItem, parseSignal,
   periodicNames, removeRow, resultsByRow, rowsOf, scenarioChoices, signalText, snap, targetOf, valueOf,
 } from "../../editor/pipeline-manager/pipeline_manager/frontend/src/vhil/scenario.js";
 
@@ -140,4 +140,15 @@ test("a plant row and a plant signal read as what they set and check", () => {
   assert.equal(valueOf(row), "pre_open_circuit = true");
   assert.deepEqual(parseSignal("plant:ts.air_pos_close_ratio"),
                    { kind: "plant", owner: "ts", item: "air_pos_close_ratio", field: "" });
+});
+
+test("a plant row is offered for a system with plants, on its first plant", () => {
+  assert.equal(actionsFor([]).some((a) => a.action === "plant"), false);
+  assert.equal(actionsFor(["ts"]).some((a) => a.action === "plant"), true);
+  const doc = emptyScenario(1000);
+  const key = addRow(doc, "plant", { t: 250, plants: ["ts"], plantSet: { pre_open_circuit: true } });
+  assert.equal(key, "stimuli[0]");
+  assert.deepEqual(doc.stimuli[0], { kind: "plant", at_ms: 250, plant: "ts", set: { pre_open_circuit: true } });
+  assert.equal(rowsOf(doc)[0].action, "plant");
+  assert.equal(valueOf(rowsOf(doc)[0]), "pre_open_circuit = true");
 });

@@ -6,6 +6,8 @@ scrubber); its FSM and relay lanes are plotted in the Signals tab. The data
 is the run's own trace (frames, samples, edges), as the worker recorded it
 for each board's state view; a live session feeds the same model (state.js)
 as its records stream.
+A system with plants (M8) has a card per plant too (VhilPlants.vue: its
+state from the trace's `plant` records, and its controls while live).
 In a live session, each board's debugger watch list too (VhilWatches.vue,
 step 17): the same list as the Debug tab's, its values at the board's stop.
 -->
@@ -38,6 +40,7 @@ step 17): the same list as the Debug tab's, its values at the board's stop.
                     @seek="seek" @lanes="toSignals"
                 />
             </div>
+            <VhilPlants />
             <section v-if="replay.live" class="vhil-state-watches" aria-label="Debugger watches">
                 <h4>Debugger watches <span class="muted">· read at each stop (Debug tab)</span></h4>
                 <div v-for="b in tr.boards" :key="b" class="vhil-state-watch">
@@ -53,12 +56,13 @@ step 17): the same list as the Debug tab's, its values at the board's stop.
 import { computed, defineComponent } from 'vue';
 import VhilStateCard from './VhilStateCard.vue';
 import VhilWatches from './VhilWatches.vue';
+import VhilPlants from './VhilPlants.vue';
 import { replay } from './replay.js';
 import { ws } from './workspace.js';
 import './debug.css';
 
 export default defineComponent({
-    components: { VhilStateCard, VhilWatches },
+    components: { VhilStateCard, VhilWatches, VhilPlants },
     setup() {
         const tr = computed(() => {
             replay.version; // eslint-disable-line no-unused-expressions

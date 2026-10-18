@@ -1,8 +1,9 @@
 <!--
 vHIL: the Scenario tab's timeline (step 11 of
 docs/architecture/editor-workspace.md; CHANGELOG-VHIL.md), above its table,
-on the virtual-time axis REPLAY's scrubber uses. A lane per bus and per
-board (timeline.js lays them out): a diamond per can_send, a hatched bar per
+on the virtual-time axis REPLAY's scrubber uses. A lane per bus, per
+board and per plant (`plant ts`: its rows and expects; timeline.js lays
+them out): a diamond per can_send, a hatched bar per
 can_periodic (to its stop), a step per gpio/analog set, a bracket per expect
 over its window; the watches are the gutter below. Drag a mark to move it
 (1/5/10 ms snap), or focus it and use the arrow keys; Ctrl+wheel zooms
@@ -42,7 +43,7 @@ colour is classes (scenario.css): nothing goes through style attributes.
                 <div
                     v-for="lane in lanes" :key="lane.id" class="vhil-tl-label"
                     :class="`--${lane.kind}`" :title="lane.id"
-                >{{ lane.name }}</div>
+                >{{ lane.label || lane.name }}</div>
             </div>
             <div ref="scrollEl" class="vhil-tl-scroll" @wheel="onWheel">
                 <svg
@@ -190,6 +191,7 @@ export default defineComponent({
     props: {
         buses: { type: Array, default: () => [] },
         boards: { type: Array, default: () => [] },
+        plants: { type: Array, default: () => [] },
     },
     setup(props) {
         const scrollEl = ref(null);
@@ -200,7 +202,9 @@ export default defineComponent({
         const endMs = computed(() => Number(scen.doc?.virtual_ms) || 3000);
         const lanes = computed(() => {
             scen.version; // eslint-disable-line no-unused-expressions
-            return lanesOf(scen.doc, { buses: props.buses, boards: props.boards });
+            return lanesOf(scen.doc, {
+                buses: props.buses, boards: props.boards, plants: props.plants,
+            });
         });
         const laneIndex = computed(() => new Map(lanes.value.map((l, i) => [l.id, i])));
         const laneY = (id) => AXIS_H + (laneIndex.value.get(id) ?? 0) * LANE_H;

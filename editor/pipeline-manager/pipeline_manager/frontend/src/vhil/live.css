@@ -104,6 +104,18 @@
 .vhil-inputs-menu:focus { outline: none; }
 .vhil-inputs-menu .vhil-actions { margin-top: var(--sp-1); }
 
+/* A plant's controls (VhilPlantControls.vue): a parameter's status as text in
+   a pill, never colour alone (uncommissioned is dashed). */
+.vhil-plant-controls .vhil-analog .vhil-input { width: 5.5rem; }
+.vhil-plant-badge {
+  margin-left: 4px; padding: 0 5px; border: 1px solid var(--border-control);
+  border-radius: var(--r-pill); color: var(--fg-muted); font-family: var(--font-ui);
+  font-size: var(--fs-small);
+}
+.vhil-plant-badge.--cited { border-color: var(--status-ok); color: var(--status-ok); }
+.vhil-plant-badge.--uncommissioned { border-style: dashed; border-color: var(--status-warn); color: var(--status-warn); }
+.vhil-plant-badge.--override { border-color: var(--accent); color: var(--accent); }
+
 /* -- the canvas ------------------------------------------------------------- */
 
 /* A bus's frames a second, along its rail. */

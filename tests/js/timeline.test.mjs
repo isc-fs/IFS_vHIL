@@ -73,3 +73,18 @@ test("a watch op is a mark on its board's lane", () => {
   assert.equal(mark.label, "watch g_state_telemetry");
   assert.equal(mark.lane, "board:ams");
 });
+
+test("a lane per plant, labelled plant <name>, for its rows and its expects", () => {
+  const doc = {
+    stimuli: [{ kind: "plant", at_ms: 11000, plant: "ts", set: { air_external_open: true, r_leak: 1000 } }],
+    expect: [{ check: "eventually", at_ms: 11600, signal: "plant:ts.air_pos_closed", value: 0 },
+             { check: "always", at_ms: 0, signal: "plant:other.v_link", value: 0 }],
+  };
+  const lanes = lanesOf(doc, { buses: ["can_acu"], boards: ["ams"], plants: ["ts"] });
+  assert.deepEqual(lanes.map((l) => [l.id, l.label]), [
+    ["bus:can_acu", "can_acu"], ["board:ams", "ams"], ["plant:ts", "plant ts"], ["plant:other", "plant other"]]);
+  const [row, exp] = marksOf(doc, 20000);
+  assert.deepEqual([row.lane, row.shape, row.t0, row.label],
+                   ["plant:ts", "diamond", 11000, "air_external_open = true, r_leak = 1000"]);
+  assert.equal(exp.lane, "plant:ts");
+});

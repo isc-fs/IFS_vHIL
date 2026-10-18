@@ -7,8 +7,12 @@ with the hex in sync (the shell's decode.js, one copy); with no contract,
 raw hex. An expect's signal is built from its source (a frame's field, a
 frame, a symbol, a pin), owner and item; its value is a select of the
 field's labels where it has a value table, or of the symbol's enum (the
-contract's `labels`: DWARF or the state view's table). Every edit is the row's item,
-edited in place, then checked on the server (scenarios.js edited).
+contract's `labels`: DWARF or the state view's table). A `plant` row (M8)
+picks one of the system's plants and edits its `set` as name/value pairs from
+what the plant may set (the contract's `plants`, plant.js), a parameter with
+its unit and status; its selects keep a pick (v-pick, CHANGELOG-VHIL.md 26).
+Every edit is the row's item, edited in place, then checked on the server
+(scenarios.js edited).
 -->
 
 <template>
@@ -106,6 +110,60 @@ edited in place, then checked on the server (scenarios.js edited).
                             @change="(ev) => setField(f, ev.target.value, false)"
                         />
                     </label>
+                </fieldset>
+            </template>
+
+            <template v-if="row.action === 'plant'">
+                <label>Plant
+                    <select
+                        v-pick="it.plant" class="vhil-input mono"
+                        @change="(ev) => setPlant(ev.target.value)"
+                    >
+                        <option v-for="p in plantChoices" :key="p" v-memo="[p]" :value="p">
+                            {{ p }}
+                        </option>
+                    </select>
+                </label>
+                <fieldset class="vhil-scen-fields vhil-scen-plant --wide">
+                    <legend>
+                        sets · plant {{ it.plant }}{{ plantKind ? ` (${plantKind})` : '' }}
+                    </legend>
+                    <div v-for="(pair, i) in pairs" :key="pair.name" class="vhil-scen-pair">
+                        <select
+                            v-pick="pair.name" class="vhil-input mono"
+                            :aria-label="`Setting ${i + 1}`"
+                            @change="(ev) => renameSetting(pair.name, ev.target.value)"
+                        >
+                            <option
+                                v-for="n in pair.choices" :key="n" v-memo="[n]" :value="n"
+                            >{{ n }}</option>
+                        </select>
+                        <input
+                            v-if="pair.entry.type === 'bool'" type="checkbox"
+                            :checked="Boolean(pair.value)" :aria-label="`${pair.name} value`"
+                            @change="(ev) => setSetting(pair.name, ev.target.checked)"
+                        />
+                        <input
+                            v-else :type="pair.entry.type === 'number' ? 'number' : 'text'"
+                            step="any" class="vhil-input mono" :value="pair.value ?? ''"
+                            :placeholder="pair.entry.nullable ? 'none' : ''"
+                            :aria-label="`${pair.name} value`"
+                            @change="(ev) => setSettingText(pair, ev.target.value)"
+                        />
+                        <span class="muted">{{ pair.entry.unit || '' }}</span>
+                        <span
+                            v-if="pair.entry.status" class="vhil-plant-badge"
+                            :class="`--${pair.entry.status}`"
+                        >{{ pair.entry.status }}</span>
+                        <button
+                            type="button" class="vhil-btn --small"
+                            :aria-label="`Remove ${pair.name}`" @click="removeSetting(pair.name)"
+                        >✕</button>
+                    </div>
+                    <button
+                        type="button" class="vhil-btn --small" :disabled="!unusedSettings.length"
+                        @click="addSetting"
+                    >+ Add setting</button>
                 </fieldset>
             </template>
 
@@ -321,14 +379,20 @@ import {
     CHECKS, OPS, VALUE_CHECKS, findMessage, looseSignal, messageOf, parseSignal, signalText,
 } from './scenario.js';
 import { edited, scen } from './scenarios.js';
+import {
+    firstValue, keyChoices, parseSetting, plantsOf, renameKey, settableOf,
+} from './plant.js';
+import { keep, vPick } from './stable.js';
 
 const PLAIN_UNITS = ['', 'enum', 'bool', 'bit'];
 
 export default defineComponent({
+    directives: { pick: vPick },
     props: {
         row: { type: Object, required: true },
         buses: { type: Array, default: () => [] },
         boards: { type: Array, default: () => [] },
+        plants: { type: Array, default: () => [] },
         periodics: { type: Array, default: () => [] },
         messages: { type: Array, default: () => [] },
         result: { type: Object, default: null },
@@ -428,6 +492,67 @@ export default defineComponent({
                 Object.assign(item, { [symbolKey.value]: '', size: 1, period_ms: 10 });
             }
             edited();
+        };
+
+        // -- plant rows (M8) -------------------------------------------------
+        // The plant's settings (the contract's `plants`), and the row's set
+        // as pairs, each with the names its select offers.
+        const plantChoices = computed((old) => keep(
+            old, keyChoices(props.plants, {}, it.value.plant),
+        ));
+        const plantKind = computed(() => {
+            scen.version; // eslint-disable-line no-unused-expressions
+            return plantsOf(scen.contract).find((p) => p.name === it.value.plant)?.plant || '';
+        });
+        const settings = computed((old) => {
+            scen.version; // eslint-disable-line no-unused-expressions
+            return keep(old, settableOf(scen.contract, it.value.plant));
+        });
+        const settingNames = computed(() => settings.value.map((e) => e.name));
+        const TEXT = { type: 'text', nullable: false };
+        const pairs = computed((old) => {
+            scen.version; // eslint-disable-line no-unused-expressions
+            const set = it.value.set || {};
+            return keep(old, Object.entries(set).map(([name, value]) => ({
+                name,
+                value,
+                entry: settings.value.find((e) => e.name === name) || TEXT,
+                choices: keyChoices(settingNames.value, set, name),
+            })));
+        });
+        const unusedSettings = computed(() => {
+            scen.version; // eslint-disable-line no-unused-expressions
+            return settings.value.filter((e) => !Object.hasOwn(it.value.set || {}, e.name));
+        });
+        const setPlant = (plant) => {
+            it.value.plant = plant;
+            // What one plant may set, another may not: start its set afresh.
+            const [first] = settableOf(scen.contract, plant);
+            it.value.set = first ? { [first.name]: firstValue(first) } : {};
+            edited();
+        };
+        const setSetting = (name, value) => {
+            it.value.set = { ...(it.value.set || {}), [name]: value };
+            edited();
+        };
+        const setSettingText = (pair, text) => {
+            const v = parseSetting(pair.entry, text);
+            if (v !== undefined) setSetting(pair.name, v);
+        };
+        const renameSetting = (from, to) => {
+            const e = settings.value.find((x) => x.name === to);
+            it.value.set = renameKey(it.value.set, from, to, e ? firstValue(e) : null);
+            edited();
+        };
+        const removeSetting = (name) => {
+            const rest = { ...(it.value.set || {}) };
+            delete rest[name];
+            it.value.set = rest;
+            edited();
+        };
+        const addSetting = () => {
+            const [e] = unusedSettings.value;
+            if (e) setSetting(e.name, firstValue(e));
         };
 
         // -- expects --------------------------------------------------------
@@ -532,6 +657,16 @@ export default defineComponent({
             setSig,
             setValue,
             checkKind,
+            plantChoices,
+            plantKind,
+            pairs,
+            unusedSettings,
+            setPlant,
+            setSetting,
+            setSettingText,
+            renameSetting,
+            removeSetting,
+            addSetting,
         };
     },
 });

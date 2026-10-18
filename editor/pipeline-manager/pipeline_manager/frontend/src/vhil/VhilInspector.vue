@@ -7,7 +7,8 @@ inputs (VhilInputs.vue, step 15: pin switches, analog voltages); PAUSED at a
 debugger stop, the held board's stack, locals and registers
 (VhilDebugInspect.vue, step 17), with nothing selected too; with nothing selected,
 the open system and its Check, Commit and PR, which used to be the shell's
-fixed aside. A board's role, firmware and bootloader are edited on its node
+fixed aside, and in REPLAY and LIVE its plants' state and, live, their
+controls (VhilPlants.vue, M8). A board's role, firmware and bootloader are edited on its node
 (VhilBoardControls.vue) and only shown here, so one place edits each.
 -->
 
@@ -102,6 +103,7 @@ fixed aside. A board's role, firmware and bootloader are edited on its node
                 :board="session.held.board" :stop="stopOf(session.held.board)"
             />
             <template v-if="ws.id">
+                <VhilPlants compact />
                 <dl class="vhil-props">
                     <dt>System</dt><dd class="mono">{{ ws.id }}{{ ws.isNew ? ' (new)' : '' }}</dd>
                     <dt>Branch</dt><dd class="mono">{{ ws.branch || 'checked-out tree' }}</dd>
@@ -137,6 +139,7 @@ import {
 import VhilStateCard from './VhilStateCard.vue';
 import VhilInputs from './VhilInputs.vue';
 import VhilDebugInspect from './VhilDebugInspect.vue';
+import VhilPlants from './VhilPlants.vue';
 import { stopOf } from './debugui.js';
 import { live as session } from './session.js';
 import { replay } from './replay.js';
@@ -157,7 +160,9 @@ const ON_NODE = ['role', 'firmware', 'firmware_ref', 'bootloader', 'bootloader_r
 const ON_NODE_NOTE = 'Pick the role, firmware and bootloader on the board.';
 
 export default defineComponent({
-    components: { VhilStateCard, VhilInputs, VhilDebugInspect },
+    components: {
+        VhilStateCard, VhilInputs, VhilDebugInspect, VhilPlants,
+    },
     directives: { pick: vPick },
     setup() {
         // Bumped when the graph changes (Home.vue).

@@ -56,6 +56,11 @@
   border: 1px solid var(--line); border-radius: var(--r-panel);
 }
 .vhil-scen-fields legend { padding: 0 var(--sp-1); font-size: var(--fs-small); color: var(--fg-muted); }
+/* A plant row's set (M8): one name/value pair a line. */
+.vhil-scen-plant { grid-template-columns: minmax(0, 1fr); }
+.vhil-scen-pair { display: flex; align-items: center; gap: var(--sp-1); min-width: 0; font-size: var(--fs-dense); }
+.vhil-scen-pair .vhil-input { min-width: 0; flex: 1; }
+.vhil-scen-plant > .vhil-btn { justify-self: start; }
 .vhil-scen-msgs { margin: 0 0 var(--sp-2); padding-left: var(--sp-4); color: var(--status-failed);
   font-family: var(--font-mono); font-size: var(--fs-small); }
 .vhil-scen-editor .vhil-note { overflow-wrap: anywhere; }
@@ -82,6 +87,7 @@
 }
 .vhil-tl-label.--bus { border-left-color: var(--wire-can); }
 .vhil-tl-label.--board { border-left-color: var(--wire-gpio); }
+.vhil-tl-label.--plant { border-left-color: var(--wire-analog); }
 /* Room under the lanes for the horizontal scrollbar, so it covers no lane. */
 .vhil-tl-scroll { flex: 1; min-width: 0; overflow-x: auto; overflow-y: hidden; padding-bottom: 10px; }
 .vhil-tl-svg { display: block; user-select: none; }
