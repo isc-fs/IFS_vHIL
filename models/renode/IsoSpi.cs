@@ -45,7 +45,6 @@ using System.Text;
 using Antmicro.Renode.Core;
 using Antmicro.Renode.Core.Structure;
 using Antmicro.Renode.Logging;
-using Antmicro.Renode.Testing;
 
 namespace Antmicro.Renode.Peripherals.SPI
 {
@@ -278,9 +277,25 @@ namespace Antmicro.Renode.Peripherals.SPI
             if(BleedTrigger)
             {
                 BleedTrigger = false;
-                VhilRunner.Triggered = true;
+                RunTrigger()?.SetValue(null, true);
             }
         }
+
+        // VhilRunner.Triggered (VhilRunner.cs), found at run time: the smoke
+        // suites and the wall-clock bench compile this model without the
+        // runner, and there nothing arms the trigger.
+        private static System.Reflection.FieldInfo RunTrigger()
+        {
+            if(runTrigger == null)
+            {
+                runTrigger = AppDomain.CurrentDomain.GetAssemblies()
+                    .Select(a => a.GetType("Antmicro.Renode.Testing.VhilRunner", false))
+                    .FirstOrDefault(t => t != null)?.GetField("Triggered");
+            }
+            return runTrigger;
+        }
+
+        private static System.Reflection.FieldInfo runTrigger;
 
         private IEnumerable<Ltc6811> Chain => ChildCollection.OrderBy(kv => kv.Key).Select(kv => kv.Value);
 
@@ -329,7 +344,10 @@ namespace Antmicro.Renode.Peripherals.SPI
 
         public void Reset()
         {
-            AccrueBleed();                 // the switches open with the reset
+            if(DischargeBits != 0)
+            {
+                AccrueBleed();             // the switches open with the reset
+            }
             Array.Copy(new byte[] { 0xF8, 0, 0, 0, 0, 0 }, config, 6);   // CFGR power-on
             Array.Clear(comm, 0, 6);
             for(var c = 0; c < CellsPerIc; c++)
@@ -457,10 +475,14 @@ namespace Antmicro.Renode.Peripherals.SPI
                         break;
                     }
                     var before = DischargeBits;
-                    AccrueBleed();
+                    if(before != 0)
+                    {
+                        AccrueBleed();
+                    }
                     TakeSegment(config);
                     if(before == 0 && DischargeBits != 0)
                     {
+                        bleedSince = Clock?.Invoke() ?? 0;
                         DischargeStarted?.Invoke();
                     }
                     break;
@@ -606,7 +628,10 @@ namespace Antmicro.Renode.Peripherals.SPI
         // "<DCC bits now>:<us on of DCC1>,...,<DCC12>" since the last call.
         public string TakeBleed()
         {
-            AccrueBleed();
+            if(DischargeBits != 0)
+            {
+                AccrueBleed();
+            }
             var line = $"{DischargeBits}:{string.Join(",", bleedUs)}";
             Array.Clear(bleedUs, 0, CellsPerIc);
             return line;
