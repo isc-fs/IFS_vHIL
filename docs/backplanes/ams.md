@@ -25,7 +25,7 @@ and the ACU bus.
 | FDCAN3 (CAN_3) | no-connect | — | — | — |
 | SPI1 (MOSI / MISO / SCK) | to U4 LTC6820. U4's IP/IM reach the BMS chain through T1 | J5 (isoSPI side, through T1) | T1 isoSPI transformer | `main.c:596` `MX_SPI1_Init` |
 | PB9 (GPIO6) | `LTC6820_CS`: U4 chip select | on board (U4) | direct | `main.h:82` `LTC6820_CS_Pin` |
-| PB4 (GPIO1) | `AMS_OK`: K5 AMS latch relay in the shutdown circuit | J1.4 | R21 / Q10 driver | `main.h:74` `AMS_OK_Pin` |
+| PB4 (GPIO1) | `AMS_OK`: K5 AMS latch relay in the shutdown circuit ² | J1.4 | R21 1 kΩ gate / R9 2.2 kΩ pull-down / Q10 low side of K5's coil, D17 flyback ² | `main.h:74` `AMS_OK_Pin` |
 | PB5 (GPIO2) | `AIR+`: AIR+ coil low side; TSAL | J11.6 (coil), J7.4 (TSAL) | R7 / Q2 low-side driver | `main.h:76` `RELAY_AIR_P_Pin` |
 | PB6 (GPIO3) | `AIR-`: AIR- coil low side; TSAL | J11.5 (coil), J7.6 (TSAL) | R15 1 kΩ gate / R14 2.2 kΩ pull-down / Q1 DMN6075S low-side driver, flyback D6 to AIR+_VCC ¹ | `main.h:78` `RELAY_AIR_N_Pin` |
 | PB7 (GPIO4) | `PRECHARGE`: precharge relay coil low side; TSAL | J11.4 (coil), J7.5 (TSAL) | R5 1 kΩ gate / R3 2.2 kΩ pull-down / Q3 DMN6075S low-side driver, flyback D2 to AIR+_VCC ¹ | `main.h:80` `RELAY_PRECHARGE_Pin` |
@@ -42,6 +42,17 @@ current schematic, isc-fs/IFS08-ES main bcb4511,
 `boards/AMS_IFS08/kicad/AMS IFS08.kicad_sch` (its netlist): AIR+, AIR- and
 PRECHARGE are MainLite pads 7, 8 and 9; the three coils' high side and
 flyback diodes (D5, D6, D2) are on AIR+_VCC.
+
+² Traced for TS-2 (#147, [`m8-plan.md`](../m8-plan.md#ts-2-the-shutdown-circuit))
+from the same schematic: the SDC runs SC_IN (J1.14) → J4.5/J4.6 (off-board) →
+J7.7/J7.8 (HV_INTERLOCK+/-) → K4 IMD latch → K5 AMS latch → J2.4/J2.3
+(off-board) → SC_OUT (J1.15); the harness returns it as TSMS = AIR+_VCC on
+J1.16. K4 (IMD_OK, J1.3, Q8) and K5 (AMS_OK, Q10) are self-holding latches:
+their coils' high side is RST_IMD / RST_BMS, fed by the RST_EXT button
+(J1.7, through D9/D10) and held by each relay's pole 1, so each closes on an
+RST_EXT press with its OK line high and drops when it falls. RST_PILOTO
+(J1.6) reaches only PF10 (DASH_CHG), not the latches, whatever the board's
+datasheet says.
 
 The MainLite's own microSD (SDMMC1) and BMI088 (I2C2) are not routed by
 the backplane.

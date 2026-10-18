@@ -248,6 +248,76 @@ When the firmware fails one, invariant 9 decides: the car's hardware and
 the firmware's intent, a firmware issue with the evidence, and the scenario
 held as a strict expected failure.
 
+## TS-2: the shutdown circuit
+
+`vhil/plant_sdc.py`, parameters in
+[`catalog/plants/shutdown-circuit.yaml`](../catalog/plants/shutdown-circuit.yaml).
+The SDC is the vHIL's, not the FMU's: IFSSIM#669 takes `sdc_closed` as an
+input ("the vHIL computes it"), so the circuit stays when the FMU replaces
+the stand-in.
+
+**Traced** (isc-fs/IFS08-ES main bcb4511, `boards/AMS_IFS08/kicad/AMS IFS08.kicad_sch`,
+its netlist): the only board of the car with SDC parts is the AMS backplane.
+
+```
+SC_IN J1.14 -> J4.5..J4.6 (off-board) -> J7.7..J7.8 HV_INTERLOCK+/- ("interlock amphenol")
+  -> K4 IMD latch -> K5 AMS latch -> J2.4..J2.3 (off-board) -> SC_OUT J1.15
+  -> [harness, no schematic: BSPD, inertia, BOTS, shutdown buttons, uDV K1?, TSMS]
+  -> TSMS = AIR+_VCC (J1.16): the three coils' high side, and PF9 through R18 62k
+```
+
+- K4 and K5 are monostable relays wired as latches: the coil's low side is
+  Q8 / Q10, gated by IMD_OK (J1.3) / AMS_OK (PB4, J1.4); the high side is
+  RST_IMD / RST_BMS, fed by the **RST_EXT** button (J1.7, through D9/D10)
+  and held by the relay's own pole 1. A latch closes only while its OK line
+  is high and RST_EXT is pressed, holds while OK stays high, and drops for
+  good when OK falls, so both are open after every power-on until a press.
+  One RST_EXT resets both. (The library symbol says "RT2 bistable" and the
+  BOM has no part number: the relay type is unconfirmed; the wiring is the
+  self-hold. The board's datasheet says RST_PILOTO also resets the latch;
+  the netlist routes it only to PF10, DASH_CHG.)
+- The AMS firmware agrees: "AMS_OK ... sits UPSTREAM of TSMS in the loop"
+  (IFS08-CE-AMS 94b59a9 `state_machine.hpp:241-242`); AMS_OK is active high
+  from the end of the 2 s boot grace unless Error is latched
+  (`safety_predicates.hpp:276-286`). The AMS has no IMD or SDC-feedback
+  input (`safety_predicates.hpp:150-154`), the ECU none at all.
+- The uDV's K1 (MicroDV2, isc-fs/IFS09-DV-uDV feat/5-hardware d2e4250) is a
+  traced series break between J7.1 `/SDC in 1` and J7.2 `/SDC out`, closed
+  when PB7 is high; whether J7 is in the car's SDC is in no schematic. It is
+  in series only when `udv_k1_in_series` (uncommissioned, false) says so:
+  with it in series, the uDV firmware, which closes K1 only after its EBS
+  check with ASMS on (`ebs_manager.cpp:53-58`, `app_task.cpp:666-675`),
+  would keep a manual car from ever arming.
+
+**The model.** Boolean series logic: `interlocks_ok` (the two untraced
+off-board loops), `hv_interlock`, the K4 and K5 latches, `bspd_ok`,
+`inertia_ok`, `bots_ok`, `estop_ok`, the uDV's K1 when in series, `tsms`.
+Every harness element is a plain switch, since no latch is traced there
+(the FS rules want the BSPD latched too; its board is in no repo). Relays
+switch instantly (no part numbers); the contactors' delays stay the
+tractive-system plant's. Inputs are scenario rows (`{kind: plant, plant:
+sdc, set: {tsms: true}}`, `{reset: true}` / `{reset: false}` for an
+RST_EXT press); a row that drives PF9 directly is refused, since the
+circuit drives it.
+
+**On the port.** `ams_ok: {gpio_out: ams.PB4}` (and `udv_sdc: {gpio_out:
+udv.PB7}` on ecu-ams-udv) in, `sdc_closed: {gpio_in: ams.PF9}` out, which the
+tractive-system plant reads as its coil supply: the circuit steps first.
+Event-driven: an AMS_OK edge ends the run at the next sync point, a row is
+applied at its time, and PF9 is driven only when the circuit changes. It
+costs a stop per AMS_OK edge (two a run: the boot grace and an Error).
+
+**Scenarios** (`systems/ecu-ams.scenarios/`, beyond-bench): every ecu-ams
+scenario now presses RST_EXT at 5.4 s and sets TSMS at 5.5 s on the
+circuit, and four are new:
+
+| Scenario | Expect |
+|---|---|
+| `sdc-needs-a-reset-after-power-on` | TSMS on but no press: PF9 low, a DASH_CHG press refused; RST_EXT closes both latches and the next press arms Precharge |
+| `sdc-opens-in-run` | a shutdown button in Run (any unlatched element): contacts open on the lost coil supply, the AMS drops to Start unlatched, the bleed takes the link; released, the circuit re-closes with no reset and the AMS waits for a press |
+| `imd-latch-holds-the-sdc-open` | IMD_OK falls in Run: K4 drops, Start; IMD_OK back leaves the circuit open until RST_EXT |
+| `ams-ok-opens-the-sdc` | an AMS Error (over-current) drops AMS_OK, K5 and AIR+_VCC; an RST_EXT press with AMS_OK low is refused |
+
 ## Steps
 
 1. This plan, the boundary in vision.md, the parameter file.
@@ -267,4 +337,6 @@ held as a strict expected failure.
 - IFSSIM's FMU swapped in for the stand-in.
 - The accumulator's TS schematic (precharge R, AIR and precharge-relay part
   numbers, bleed R), to cite what is a placeholder now.
-- TS-2 (SDC chain), the observer fixtures.
+- The observer fixtures (RTDS on-time, brake light, IMD source).
+- The car's harness schematic, to place the BSPD, inertia switch, BOTS,
+  shutdown buttons, TSMS and the uDV's K1 in the SDC and cite their latches.
