@@ -924,6 +924,14 @@
                   "pattern": "^[a-z][a-z0-9_]{0,63}$"
                 },
                 "description": "Parameter overrides for this system, reported as such (never a substitute for a citation)."
+              },
+              "pack": {
+                "type": "boolean",
+                "description": "Tractive system only: its per-cell pack (vhil/plant_pack.py, M9 prep #318) is the cell source; it drives the `cells` chain's cells and NTCs, takes its balance switches back, and v_pack is the pack's."
+              },
+              "current": {
+                "$ref": "#/$defs/name",
+                "description": "Tractive system with pack only: the analog current-sensor device whose outputs carry the pack current; each output needs an analog port signal on its pin."
               }
             }
           }

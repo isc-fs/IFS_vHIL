@@ -529,7 +529,7 @@ def execute_scenario(sim, scenario: dict, trace: TraceWriter, *,
     if getattr(system, "plants", None):
         from vhil.cosim import Port
         from vhil.plant_ts import make_plants, uncommissioned
-        plants = make_plants(system)
+        plants = make_plants(system, sim)
         port = Port(sim)
         for sname, sig in port.signals.items():
             if sig.kind == "gpio_out":
@@ -1009,9 +1009,14 @@ def evaluate_expects(run_dir: Path, scenario: dict, system: System, firmware: di
     elfs = {b: Path(p) for b, p in firmware.items() if "." not in b and b in system.boards}
     contract = system_contract(system, elfs)
     results = vexpect.evaluate_trace(run_dir / TRACE, scenario["expect"], contract, end_us)
+    def verdict(r: dict) -> str:
+        if r.get("xfail"):
+            return (f"XFAIL ({r['xfail']})" if not r["passed"]
+                    else f"XPASS, FAILED: {r['xfail']} no longer reproduces")
+        return "passed" if r["passed"] else "FAILED"
     trace.write([{"kind": "log", "t_us": end_us, "source": "scenario",
-                  "level": "info" if r["passed"] else "error",
-                  "text": f"expect {'passed' if r['passed'] else 'FAILED'} "
+                  "level": "info" if vexpect.ok(r) else "error",
+                  "text": f"expect {verdict(r)} "
                           f"{r['name'] or r['check']} {r['signal']}: {r['detail']}"}
                  for r in results])
     return vexpect.summary(results)

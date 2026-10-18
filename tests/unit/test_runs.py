@@ -559,9 +559,17 @@ class FakeSim:
         return self.run_for(us=us)
 
     def call(self, path, method, *args, board=None):
-        """The LTC6820's CellSum for a plant: 95 cells at 3700 mV."""
-        assert method == "CellSum", method
-        return hex(95 * 3700)
+        """The LTC6820 a plant drives: CellSum (95 cells at 3700 mV); a pack's
+        pushes, its balance switches (none on) and its trigger."""
+        self.calls.append(("call", self.now, method))
+        if method == "CellSum":
+            return hex(95 * 3700)
+        if method == "TakeBleed":
+            return "\n".join([str(self.now)] + ["0:" + ",".join(["0"] * 12)] * 10)
+        if method == "BleedTrigger":
+            return "True" if not args else ""
+        assert method in ("SetPlantCells", "SetPlantTemperatures"), method
+        return ""
 
 
 def run_fake(tmp_path, scenario, **kw):
