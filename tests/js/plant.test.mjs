@@ -49,7 +49,7 @@ test("a plant's card at a time: its last value of each key", () => {
                    [["V_link", "0.0", true], ["V_pack", "351.5", true], ["i_pack", "0", true]]);
   const pills = Object.fromEntries(early.pills.map((p) => [p.label, [p.on, p.word]]));
   assert.deepEqual(pills["AIR+"], [false, "open"]);
-  assert.deepEqual(pills["AIR−"], [null, "no data"]);
+  assert.equal(pills["AIR−"], undefined, "a key the plant never records is not shown");
   assert.deepEqual(pills["SDC (coil supply)"], [true, "closed"]);
   assert.deepEqual(pills.Discharge, [false, "off"]);
   assert.deepEqual(early.extra, []);
@@ -60,6 +60,18 @@ test("a plant's card at a time: its last value of each key", () => {
   assert.deepEqual(late.extra, [{ key: "air_pos_close_ratio", text: "air_pos_close_ratio=0.9532" }]);
   assert.equal(tr.cardAt("ts", 0).has, false);
   assert.equal(tr.cardAt("other", 6_000_000).has, false);
+});
+
+test("the shutdown circuit's card shows its own keys, not the link's", () => {
+  const tr = new PlantTrace();
+  [rec(0, "sdc_closed", 0, "sdc"), rec(0, "imd_latch", 0, "sdc"), rec(0, "ams_latch", 0, "sdc"),
+    rec(100_000, "sdc_estop", 1, "sdc"), rec(5_400_000, "ams_latch", 1, "sdc")]
+    .forEach((r) => tr.add(r));
+  const card = tr.cardAt("sdc", 6_000_000);
+  assert.deepEqual(card.values, []);
+  assert.deepEqual(card.pills.map((p) => [p.label, p.word]),
+                   [["SDC (coil supply)", "open"], ["IMD latch (K4)", "open"], ["AMS latch (K5)", "closed"]]);
+  assert.deepEqual(card.extra, [{ key: "sdc_estop", text: "sdc_estop=1" }]);
 });
 
 test("the contract's plants as the controls list them", () => {

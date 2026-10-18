@@ -32,6 +32,9 @@ export const PLANT_PILLS = [
     pill('pre_closed', 'Precharge'),
     pill('sdc_closed', 'SDC (coil supply)'),
     pill('discharge', 'Discharge', 'on', 'off'),
+    // The shutdown circuit's (SdcPlant.state): its two latch relays.
+    pill('imd_latch', 'IMD latch (K4)'),
+    pill('ams_latch', 'AMS latch (K5)'),
 ];
 const KNOWN = new Set([...PLANT_VALUES, ...PLANT_PILLS].map((k) => k.key));
 
@@ -82,12 +85,16 @@ export class PlantTrace {
      */
     cardAt(plant, t) {
         const now = this.valuesAt(plant, t);
-        const values = PLANT_VALUES.map((k) => ({
+        // Once a plant has recorded anything, only the known keys it records
+        // (the shutdown circuit has no link or contacts); before, all of them.
+        const names = this.series.get(plant);
+        const mine = (k) => !names || names.size === 0 || names.has(k.key);
+        const values = PLANT_VALUES.filter(mine).map((k) => ({
             ...k,
             has: k.key in now,
             text: plantValueText(now[k.key], k.unit),
         }));
-        const pills = PLANT_PILLS.map((k) => {
+        const pills = PLANT_PILLS.filter(mine).map((k) => {
             const on = k.key in now ? Boolean(Number(now[k.key])) : null;
             let word = 'no data';
             if (on !== null) word = on ? k.on : k.off;

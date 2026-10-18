@@ -652,7 +652,7 @@ def execute_scenario(sim, scenario: dict, trace: TraceWriter, *,
                 # number) would end the run where it applies: tried on a copy.
                 trial = copy.deepcopy(plants[op["plant"]])
                 try:
-                    trial.apply(op["set"], trial.ts.t_us)
+                    trial.apply(op["set"], t_us)
                 except (TypeError, ValueError, ZeroDivisionError) as e:
                     raise ValueError(f"plant '{op['plant']}': {e}") from None
             elif kind == "watch" and op.get("symbol") and getattr(sim, "firmware", None) \

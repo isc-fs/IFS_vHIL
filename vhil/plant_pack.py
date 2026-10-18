@@ -238,6 +238,12 @@ class ChainDriver:
         self.pushes = 0
         self.armed = False
 
+    def __deepcopy__(self, memo):
+        # The emulation is not the plant's to copy (a live op is tried on a
+        # copy of the plant, vhil/worker.py): the copy shares this driver,
+        # which applying an op never calls.
+        return self
+
     def call(self, method: str, arg: Optional[str] = None) -> str:
         return self.sim.call(self.path, method, *([arg] if arg is not None else []),
                              board=self.board)

@@ -320,6 +320,21 @@ def test_a_plant_op_applies_is_recorded_and_replays_as_a_plant_row(tmp_path):
     assert not errors, errors
 
 
+def test_a_shutdown_circuit_op_applies_in_a_live_session(tmp_path):
+    """The circuit (TS-2) takes ops like the tractive system: RST_EXT and
+    TSMS from the editor's switches; the copy an op is tried on shares the
+    chain driver rather than copying the emulation."""
+    sim, session, summary, trace = run_live(tmp_path, [
+        (60_000, {"kind": "plant", "plant": "sdc", "set": {"reset": True, "tsms": True}}),
+        (60_000, {"kind": "plant", "plant": "ts", "set": {"hot_cell": 3, "hot_cell_dt": 5}}),
+        (300_000, {"kind": "stop"})], system=ECU_AMS)
+    st = {s[0]: s[1:] for s in session.settled}
+    assert st[1][:2] == ("applied", 150_000), st
+    assert st[2][:2] == ("applied", 150_000), st
+    assert any(r["kind"] == "log" and r["t_us"] == 150_000 and "tsms=True" in r["text"]
+               for r in trace)
+
+
 # -- the worker --------------------------------------------------------------------------
 
 class FixedResolver:
