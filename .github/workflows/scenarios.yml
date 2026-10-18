@@ -7,9 +7,10 @@ name: Scenario tests (vHIL suite)
 #
 # Heavy, so it runs as the native tests do (sim.yml; owner, 2026-10-06): a
 # pull request labelled `full-ci`, a release pull request into main, the
-# nightly run on dev, or a manual dispatch. Advisory for now (owner decision:
-# scenario tests don't gate firmware PRs yet): a failing scenario is a warning
-# and the step summary's table, not a failed check.
+# nightly run on dev, or a manual dispatch. A gate since #198 (10 clean
+# nightlies, 2026-10-09..18): a failing scenario fails the check, which is
+# required on dev. On an unlabelled PR the job is skipped, which GitHub counts
+# as passing, so it gates the PRs that run it.
 on:
   pull_request:
     types: [opened, synchronize, reopened, labeled]
@@ -29,8 +30,6 @@ jobs:
     if: github.event_name != 'pull_request' || github.base_ref == 'main' || contains(github.event.pull_request.labels.*.name, 'full-ci')
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    # Advisory: the job reports, it never fails the workflow.
-    continue-on-error: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -86,7 +85,7 @@ jobs:
           python - <<'EOF'
           import os
           import xml.etree.ElementTree as ET
-          out = ["## vHIL scenario tests (advisory)", "",
+          out = ["## vHIL scenario tests", "",
                  "| Scenario | Result | Expects |", "|---|---|---|"]
           if not os.path.exists("scenarios.xml"):
               out.append("| – | no JUnit report | |")
@@ -116,8 +115,8 @@ jobs:
             sim-logs/
           if-no-files-found: ignore
 
-      - name: Advisory verdict
-        if: steps.run.outputs.rc != '0'
-        # A warning, not a red check, while the suite is advisory. To make it
-        # a gate: `exit 1` here and drop the job's continue-on-error.
-        run: echo "::warning::scenario tests failed (advisory, not a gate yet); see the step summary"
+      - name: Fail the check on a failed scenario
+        if: always()
+        run: |
+          rc="${{ steps.run.outputs.rc }}"
+          if [ "${rc:-1}" != "0" ]; then echo "::error::scenario suite failed (pytest exit $rc)"; exit 1; fi
