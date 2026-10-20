@@ -57,6 +57,11 @@ jobs:
         with:
           release: '14.2.Rel1'
 
+      - uses: ./.github/actions/firmware-cache
+        with:
+          step: restore
+          scope: scenarios
+
       - name: Build the ECU and AMS firmware their systems declare
         id: fw
         run: |
@@ -67,6 +72,11 @@ jobs:
           echo "ecu=$(sed -n 's/^ecu=//p' built.txt | tail -1)" >> "$GITHUB_OUTPUT"
           echo "ams=$(sed -n 's/^ams=//p' built.txt | tail -1)" >> "$GITHUB_OUTPUT"
           echo "bootloader=$(sed -n 's/^ecu.bootloader=//p' built.txt | tail -1)" >> "$GITHUB_OUTPUT"
+
+      - uses: ./.github/actions/firmware-cache
+        with:
+          step: save
+          scope: scenarios
 
       # Renode 1.17.0 + docker/renode's patches, as the image builds it.
       - name: Renode (vHIL build)

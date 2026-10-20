@@ -64,6 +64,7 @@ everything:
   - vhil/__init__.py
   - vhil/sim.py
   - vhil/system.py
+  - vhil/fwcache.py                        # CI builds every image through it
   - vhil/worker.py
   - vhil/renode.py
   - vhil/broker.py

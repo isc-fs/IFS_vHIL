@@ -1,0 +1,67 @@
+name: Firmware image cache
+description: >
+  The built firmware images (vhil/fwcache.py) in the GitHub Actions cache.
+  `restore`, before `vhil.system build`: the newest store this workflow
+  saved (on this branch, else its base) into $RUNNER_TEMP/fw-cache, and
+  VHIL_FW_CACHE set, so a build whose exact commit, recipe, toolchain and
+  build code are in it copies the image (checking its SHA-256) instead of
+  building. `save`, after: when a build added an image, the store pruned to
+  what this job used, saved under a key of its entries. A miss only builds;
+  a stale image cannot be used, its key would differ.
+
+inputs:
+  step:
+    description: restore or save
+    required: true
+  scope:
+    description: >
+      The workflow's store (sim, smoke, scenarios, ifs-hil): each saves what
+      its jobs build, so one workflow's store never evicts another's images.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Firmware images (cached)
+      if: inputs.step == 'restore'
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/fw-cache
+        # Never an exact hit: the newest entry under the prefix is restored.
+        key: vhil-fw-v1-${{ runner.os }}-${{ inputs.scope }}-run-${{ github.run_id }}
+        restore-keys: vhil-fw-v1-${{ runner.os }}-${{ inputs.scope }}-
+
+    - name: Use the firmware cache
+      if: inputs.step == 'restore'
+      shell: bash
+      run: |
+        d="$RUNNER_TEMP/fw-cache"
+        mkdir -p "$d"
+        rm -f "$d/.used" "$d/.added"
+        echo "VHIL_FW_CACHE=$d" >> "$GITHUB_ENV"
+        echo "firmware cache: $(find "$d" -mindepth 1 -maxdepth 1 -type d | wc -l) image(s) restored"
+
+    - name: Prune the firmware cache
+      id: prune
+      if: inputs.step == 'save'
+      shell: bash
+      run: |
+        d="$RUNNER_TEMP/fw-cache"
+        if [ ! -s "$d/.added" ]; then
+          echo "firmware cache: every image was a hit, nothing to save"
+          echo "save=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        echo "firmware cache: built $(wc -l < "$d/.added") image(s):"; cat "$d/.added"
+        key=$(python3 -m vhil.fwcache prune "$d")
+        echo "key=vhil-fw-v1-$RUNNER_OS-$SCOPE-$key" >> "$GITHUB_OUTPUT"
+        echo "save=true" >> "$GITHUB_OUTPUT"
+      env:
+        SCOPE: ${{ inputs.scope }}
+
+    - name: Save the firmware images
+      if: inputs.step == 'save' && steps.prune.outputs.save == 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/fw-cache
+        key: ${{ steps.prune.outputs.key }}

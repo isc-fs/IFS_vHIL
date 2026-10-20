@@ -31,6 +31,7 @@ from typing import Iterable
 import yaml
 
 from vhil import flash_image
+from vhil import fwcache
 from vhil import pin_model as pm
 from vhil import renode as rn
 from vhil.flash_image import FLASH_BASE
@@ -1318,20 +1319,48 @@ class System:
                     if fw.get("submodules"):
                         cmd[2:2] = ["--recurse-submodules"]
                     subprocess.run(cmd, check=True)
-                # Build output goes to stderr: stdout carries only the
-                # board=elf results, so callers can parse it.
-                for step in ("configure", "build"):
-                    log(f"[{name}] {fw['build'][step]}")
-                    subprocess.run(fw["build"][step], shell=True, cwd=src, check=True,
-                                   stdout=sys.stderr)
                 elf = src / fw["build"]["elf"]
-                subprocess.run(["arm-none-eabi-objcopy", "-O", "binary", str(elf),
-                                str(elf.with_suffix(".bin"))], check=True)
+                cache, cache_key = fwcache.root(), None
+                if cache is not None:
+                    cache_key = fwcache.key(fw, fwcache.head(src), src, recipe_id(fw),
+                                            _build_code())
+                    try:
+                        hit = fwcache.restore(cache, cache_key, elf)
+                    except fwcache.FirmwareCacheError as e:
+                        raise SystemError(f"{name}: firmware cache ({fwcache.ENV}): {e}") from None
+                    if hit:
+                        log(f"[{name}] {cache_key['commit'][:12]}: image from the firmware "
+                            f"cache ({fwcache.entry_dir(cache, cache_key).name}), not built")
+                if cache_key is None or not hit:
+                    # Build output goes to stderr: stdout carries only the
+                    # board=elf results, so callers can parse it.
+                    for step in ("configure", "build"):
+                        log(f"[{name}] {fw['build'][step]}")
+                        subprocess.run(fw["build"][step], shell=True, cwd=src, check=True,
+                                       stdout=sys.stderr)
+                    _objcopy(elf)
+                    if cache_key is not None:
+                        entry = fwcache.store(cache, cache_key, elf)
+                        log(f"[{name}] filed in the firmware cache as {entry.name}")
                 if commit:
                     stamp_ref(src, fw, commit, ref)
                 by_source[key] = elf
             built[name] = by_source[key]
         return built
+
+
+def _objcopy(elf: Path) -> None:
+    """The flat .bin a build writes next to its ELF."""
+    subprocess.run(["arm-none-eabi-objcopy", "-O", "binary", str(elf),
+                    str(elf.with_suffix(".bin"))], check=True)
+
+
+def _build_code() -> str:
+    """The SHA-256 of the code that builds an image (part of a firmware cache
+    key, vhil/fwcache.py)."""
+    import inspect
+    return hashlib.sha256((inspect.getsource(System.build_firmware)
+                           + inspect.getsource(_objcopy)).encode()).hexdigest()
 
 
 def _pairs(items) -> dict[str, str]:

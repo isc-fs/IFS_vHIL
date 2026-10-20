@@ -170,6 +170,39 @@ Platform models (ADC3, DMA, SPI, ...) are loaded by every board, so "loaded"
 says little about what a test exercises; the map leaves them to the subsystem
 markers and the guard.
 
+## The firmware image cache
+
+Every heavy job builds the firmware it runs (`python -m vhil.system build`:
+clone at the ref, IFS_HIL's recipe). Building is most of a job's set-up
+(13-74 s a job, about 11.5 runner-minutes of a full run before the cache), so
+CI keeps the built images in the Actions cache
+([`.github/actions/firmware-cache`](../.github/actions/firmware-cache/action.yml),
+[`vhil/fwcache.py`](../vhil/fwcache.py)):
+
+- **Per image, keyed by what decides its bytes:** the firmware's id, repo and
+  exact commit (the checkout's `HEAD`: the source is still cloned, so a ref
+  that moved is a new key, and what reads the checkout, such as
+  `vhil/candef.py`'s `.def` files, still finds it), the recipe
+  (`system.recipe_id`: configure and build commands, declared toolchain, ELF
+  path, submodules; and `recipe_source`), the absolute source directory (debug
+  info and `__FILE__` carry it), the toolchain as `arm-none-eabi-gcc`, `cmake`
+  and `make` report their versions, and the SHA-256 of the build code
+  (`System.build_firmware`). A hit is the image a fresh build there would give
+  (invariant 1); anything else is a miss, and a miss builds.
+- **Integrity:** each entry records its ELF's and `.bin`'s SHA-256; a hit
+  checks them before and after the copy and fails the build, naming both, on
+  a mismatch, as it does for an entry filed under another key.
+- **Once per run:** the `renode build` job of `sim.yml`, `smoke.yml` and
+  `ifs-hil-ecu.yml` also builds (or finds) the firmware its workflow's
+  selected jobs need and saves the store; the jobs then restore it and copy
+  each image. `scenarios.yml` has one job, which saves its own. A job saves
+  only when it built something, pruned to what it used, under
+  `vhil-fw-v1-<os>-<workflow>-<hash of its entries>`; a restore takes the
+  newest such entry of its workflow (this branch's, else the base branch's).
+  A failed warm-up fails nothing: the jobs build themselves.
+- **Only CI:** `VHIL_FW_CACHE` is unset everywhere else (the Docker wrapper,
+  the web app's workers), and every build runs as before.
+
 ## Measuring
 
 Runner-minutes of a run: the sum of its jobs' durations,

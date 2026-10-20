@@ -48,6 +48,49 @@ jobs:
         with:
           save: 'true'
 
+      # The firmware every job below builds, into the firmware cache once
+      # (.github/actions/firmware-cache, vhil/fwcache.py): they copy each
+      # image from there (its SHA-256 checked) instead of building it, and
+      # build it themselves when it is not there (this step failed, a ref
+      # moved since). Failing here fails nothing: the jobs build.
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+      - name: Arm GNU toolchain (pinned like IFS_HIL's recipe)
+        uses: carlosperate/arm-none-eabi-gcc-action@0edbb000a5a98e2292b051b463bff6f512547118 # v1.14.0
+        with:
+          release: '14.2.Rel1'
+      - uses: ./.github/actions/firmware-cache
+        with:
+          step: restore
+          scope: sim
+      - name: Build the firmware the jobs below build (the shards', the guard's)
+        continue-on-error: true
+        env:
+          SHARDS: ${{ needs.select.outputs.sim == 'true' || needs.select.outputs.speed == 'true' }}
+          GUARD: ${{ needs.select.outputs.guard }}
+        run: |
+          pip install -q pyyaml "jsonschema>=4"
+          if [ "$SHARDS" = true ]; then
+            for s in ecu ams udv; do
+              python -m vhil.system build "systems/$s.yaml" --workdir "$RUNNER_TEMP/fw"
+            done
+          fi
+          [ "$GUARD" = true ] || exit 0
+          commits=$(python - <<'EOF'
+          import json
+          fw = json.load(open("ci/fingerprints.json"))["firmware"]
+          pairs = [f"{b}={fw[b]}" for b in ("ecu", "ams", "udv")]
+          pairs += [f"{b}.bootloader={fw['can-bootloader']}" for b in ("ecu", "ams", "udv")]
+          print(" ".join(f"--commit {p}" for p in pairs))
+          EOF
+          )
+          python -m vhil.system build systems/ecu-ams-udv.yaml --workdir "$RUNNER_TEMP/fw" $commits
+      - uses: ./.github/actions/firmware-cache
+        with:
+          step: save
+          scope: sim
+
   shard:
     name: sim (${{ matrix.shard }})
     needs: [select, renode]
@@ -87,6 +130,11 @@ jobs:
         with:
           release: '14.2.Rel1'
 
+      - uses: ./.github/actions/firmware-cache
+        with:
+          step: restore
+          scope: sim
+
       - name: Build the ECU, AMS and uDV firmware their systems declare
         id: fw
         run: |
@@ -98,6 +146,11 @@ jobs:
           echo "ams=$(sed -n 's/^ams=//p' built.txt | tail -1)" >> "$GITHUB_OUTPUT"
           echo "udv=$(sed -n 's/^udv=//p' built.txt | tail -1)" >> "$GITHUB_OUTPUT"
           echo "bootloader=$(sed -n 's/^ecu.bootloader=//p' built.txt | tail -1)" >> "$GITHUB_OUTPUT"
+
+      - uses: ./.github/actions/firmware-cache
+        with:
+          step: save
+          scope: sim
 
       # Renode 1.17.0 + docker/renode's patches, as the image builds it.
       - name: Renode (vHIL build)
@@ -179,6 +232,11 @@ jobs:
         with:
           release: '14.2.Rel1'
 
+      - uses: ./.github/actions/firmware-cache
+        with:
+          step: restore
+          scope: sim
+
       - name: Build the ECU, AMS and uDV firmware their systems declare
         id: fw
         run: |
@@ -190,6 +248,11 @@ jobs:
           echo "ams=$(sed -n 's/^ams=//p' built.txt | tail -1)" >> "$GITHUB_OUTPUT"
           echo "udv=$(sed -n 's/^udv=//p' built.txt | tail -1)" >> "$GITHUB_OUTPUT"
           echo "bootloader=$(sed -n 's/^ecu.bootloader=//p' built.txt | tail -1)" >> "$GITHUB_OUTPUT"
+
+      - uses: ./.github/actions/firmware-cache
+        with:
+          step: save
+          scope: sim
 
       # Renode 1.17.0 + docker/renode's patches, as the image builds it.
       - name: Renode (vHIL build)
@@ -245,6 +308,11 @@ jobs:
         with:
           release: '14.2.Rel1'
 
+      - uses: ./.github/actions/firmware-cache
+        with:
+          step: restore
+          scope: sim
+
       - name: Build the firmware ci/fingerprints.json pins
         id: fw
         run: |
@@ -262,6 +330,11 @@ jobs:
           echo "ams=$(sed -n 's/^ams=//p' built.txt | tail -1)" >> "$GITHUB_OUTPUT"
           echo "udv=$(sed -n 's/^udv=//p' built.txt | tail -1)" >> "$GITHUB_OUTPUT"
           echo "bootloader=$(sed -n 's/^ecu.bootloader=//p' built.txt | tail -1)" >> "$GITHUB_OUTPUT"
+
+      - uses: ./.github/actions/firmware-cache
+        with:
+          step: save
+          scope: sim
 
       # Renode 1.17.0 + docker/renode's patches, as the image builds it.
       - name: Renode (vHIL build)
