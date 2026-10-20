@@ -1,3 +1,4 @@
+// impact-selection demo: a one-model change (throwaway, not for merge)
 //
 // SDMMC1 of the STM32H7 with its internal DMA (IDMA), compiled by Renode at
 // load time and placed by platforms/cpus/stm32h733.repl in place of the
