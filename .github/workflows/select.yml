@@ -28,6 +28,7 @@ on:
       ifs_hil_ecu_ams:  {value: '${{ jobs.select.outputs.ifs_hil_ecu_ams }}'}
       ifs_hil_ams:      {value: '${{ jobs.select.outputs.ifs_hil_ams }}'}
       editor:           {value: '${{ jobs.select.outputs.editor }}'}
+      renode_save:      {value: '${{ jobs.select.outputs.renode_save }}'}
 
 permissions:
   contents: read
@@ -56,6 +57,7 @@ jobs:
       ifs_hil_ecu_ams: ${{ steps.select.outputs.ifs_hil_ecu_ams }}
       ifs_hil_ams: ${{ steps.select.outputs.ifs_hil_ams }}
       editor: ${{ steps.select.outputs.editor }}
+      renode_save: ${{ steps.renode_save.outputs.renode_save }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -87,3 +89,23 @@ jobs:
           python scripts/ci-select.py --event "$EVENT" --base-ref "$BASE_REF" --labels "$LABELS" \
             --diff "$base" HEAD --github-output "$GITHUB_OUTPUT" --summary "$GITHUB_STEP_SUMMARY"
           cat "$GITHUB_OUTPUT"
+
+      # Whether this run's `renode build` jobs write the Renode build to the
+      # Actions cache (docs/ci.md, the cache's budget): runs on dev (the
+      # nightly, a dispatch) do, every pull request reads dev's; a pull
+      # request that changes the build's inputs saves its own (in its own
+      # scope, deleted when it closes: cache-clean.yml), so its jobs don't
+      # each build Renode again.
+      - name: Save the Renode build?
+        id: renode_save
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+        run: |
+          save=false
+          if [ "$EVENT" = pull_request ]; then
+            git diff --quiet HEAD^1 HEAD -- docker/renode docker/Dockerfile || save=true
+          elif [ "$REF" = refs/heads/dev ]; then
+            save=true
+          fi
+          echo "renode_save=$save" | tee -a "$GITHUB_OUTPUT"

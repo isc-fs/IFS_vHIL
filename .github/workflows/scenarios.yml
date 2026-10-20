@@ -82,7 +82,7 @@ jobs:
       - name: Renode (vHIL build)
         uses: ./.github/actions/setup-renode
         with:
-          save: 'true'
+          save: ${{ needs.select.outputs.renode_save }}
 
       - name: FAT tools for SD card images
         run: sudo apt-get install -y -qq dosfstools mtools >/dev/null

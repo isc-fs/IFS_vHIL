@@ -9,8 +9,10 @@ description: >
 inputs:
   save:
     description: >
-      Write the stage to the cache too: one job per workflow (`renode`) does,
-      the jobs that need it only read it.
+      Write the stage to the cache too: one job per workflow (`renode`)
+      does, and only when select.yml's `renode_save` says so (runs on dev, a
+      pull request changing docker/renode/ or docker/Dockerfile); the jobs
+      that need it only read it.
     default: 'false'
 
 outputs:

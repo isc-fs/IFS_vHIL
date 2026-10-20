@@ -1,0 +1,45 @@
+name: Actions cache clean-up
+
+# Keeps the repository's Actions cache (10 GB, least recently used evicted
+# past it) to what runs read: a closed pull request's entries, and dev's
+# entries superseded by newer ones of the same kind (scripts/ci-cache-clean.py,
+# docs/ci.md). Deletes cache entries only.
+on:
+  schedule:
+    - cron: '0 6 * * *'    # after the nightlies and the impact audit
+  pull_request:
+    types: [closed]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "List what would be deleted, delete nothing"
+        type: boolean
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || 'all' }}
+
+permissions:
+  contents: read        # the script
+  actions: write        # delete cache entries
+  pull-requests: read   # which pull requests are closed
+
+jobs:
+  clean:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: dev
+          persist-credentials: false
+      - name: Delete stale cache entries
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          args=(--summary "$GITHUB_STEP_SUMMARY")
+          if [ -n "$PR" ]; then args+=(--pr "$PR"); fi
+          if [ "$DRY_RUN" = true ]; then args+=(--dry-run); fi
+          python3 scripts/ci-cache-clean.py "${args[@]}"
