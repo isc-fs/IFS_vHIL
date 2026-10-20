@@ -141,9 +141,12 @@ roles:
     #   Not modelled: those offsets' size follows a 250 ms cycle (rms 2-7 Q4
     #   by phase; the firmware's own 4 Hz activity), and their kurtosis is
     #   3.9, not 3. The run's mean, raw 2047.7 (-2.19 A), is the 0 V-difference
-    #   code, not the +6 zero above: the sensor's state that day is
-    #   unrecorded (isc-fs/IFS_vHIL#329), so these are the car's ADC3 path's
-    #   figures with whatever drove it.
+    #   code, not the +6 zero above, because the current sensor was unpowered
+    #   that day (owner, 2026-10-20; isc-fs/IFS_vHIL#329). So these figures are
+    #   the ADC3 path and front end alone; the sensor's own output noise is
+    #   not in them, and the modelled noise is a lower bound until a log with
+    #   the sensor powered measures it (uncommissioned). The zero and gain
+    #   above come from powered calibrations and stand.
     adc_differential:
       PF7: {gain: 0.92, offset_codes: 6, noise_codes_rms: 1.07, start_noise_codes_rms: 0.32}
   udv:
