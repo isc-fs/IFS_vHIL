@@ -170,3 +170,5 @@ drifts from upstream loses the models and fixes we rely on Antmicro for.
 - **Two benches, neither the truth.** A pass on either is not a pass on the
   car. When they disagree, check both against the car's hardware and the
   firmware's intent: the gap can be in the models or in the physical bench.
+
+<!-- impact-selection demo: a docs-only change (throwaway, not for merge) -->
