@@ -104,7 +104,10 @@ on the car, and its current filter sits a few tens of mA off 0 at rest. A
 noise-free ADC left it at exactly 0, which the firmware takes as unseeded
 (IFS08-CE-AMS#640): a step then seeded it directly and skipped the ramp. The
 draws are seeded (the system's `seed`, default 1, and the board's name), so a
-run repeats byte for byte.
+run repeats byte for byte. That log was taken with the current sensor
+unpowered (#329), so the figures are the ADC3 path and front end alone: the
+sensor's own output noise isn't in them, and the modelled noise is a lower
+bound until a log with the sensor powered measures it.
 
 ## Known gotchas
 
