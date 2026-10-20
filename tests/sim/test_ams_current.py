@@ -21,12 +21,20 @@ Firmware facts (IFS08-CE-AMS):
   Error latches for the boot (state_machine.hpp step: sticky ERROR)
   0x6C0 byte 6 = fault reason once 0x7F0 DE AD BE EF arms the pit stream
                                                    pit_fsm_status.def, ams_config.hpp:588
+
+The car's carrier reads the pair through a measured transfer (gain 0.92 on
+the differential, +6 codes; catalog/boards/mainlite.yaml roles.ams
+adc_differential, #320), which the firmware's calibration (46 for the
+sensor's 5 mV/A, zero 2054) cancels: the AMS reads the true current. On the
+ideal ADC it read ~1.087 x I - 2.1 A and tripped at 173 A.
 """
 import pytest
+import yaml
 
 from vhil import elf
+from vhil.plant_pack import sensor_volts
 from vhil.sim import Sim
-from vhil.system import REPO
+from vhil.system import CATALOG, REPO
 
 VREF = 3.3
 CURRENT_ZERO_COUNT = 2054
@@ -44,10 +52,15 @@ ERROR = 5
 COMMON_MODE_V = 1.44       # the sensor's output common mode (ams_config.hpp:692)
 SETTLE_MS = 8000           # 10 time constants of the 800 ms IIR (residue < 0.01 %)
 
+SSA2 = yaml.safe_load((CATALOG / "models" / "ssa-2-250a.yaml").read_text())
+_T = yaml.safe_load((CATALOG / "boards" / "mainlite.yaml").read_text())["roles"]["ams"]["adc_differential"]["PF7"]
+DIFF_GAIN, DIFF_OFFSET = _T["gain"], _T.get("offset_codes", 0)
+
 
 def _code_diff(vp, vn):
-    """What the ADC3 model returns for a 12-bit differential conversion."""
-    return max(0, min(4095, round((1 + (vp - vn) / VREF) * 2048)))
+    """What the ADC3 model returns for a 12-bit differential conversion of
+    the AMS carrier's pack-current pair (its measured transfer)."""
+    return max(0, min(4095, round((1 + DIFF_GAIN * (vp - vn) / VREF) * 2048 + DIFF_OFFSET)))
 
 
 def _code_single(v):
@@ -68,8 +81,17 @@ def _pack_mA(vp, vn):
 
 
 def _legs(amps):
-    half = amps * CURRENT_MV_PER_A_E1 / 10 / 1000 / 2
-    return COMMON_MODE_V + half, COMMON_MODE_V - half
+    """The SSA-2-250A's legs at a true current (its catalogue transfer, 5 mV/A)."""
+    v = sensor_volts(SSA2, amps)
+    return v["out_p"], v["out_n"]
+
+
+def _accuracy_dA(amps):
+    """What the AMS's reading may miss a true current by: the firmware's
+    calibration residual (CurrentMvPerAmpe1 46 vs the carrier's 4.6 mV/A
+    within the car's check; the bench saw +0.4 %), one 12-bit code (0.35 A)
+    and the IIR's dropped low bits (0.5 A)."""
+    return 0.004 * abs(amps) * 10 + 3.5 + 5
 
 
 def _samples_to_trip(f0, mA, limit=400):
@@ -103,9 +125,9 @@ def ams(make_sim):
 
 def test_sensors_keep_the_ams_out_of_error(ams):
     """With its sensors fitted at 0 A, the AMS passes its boot grace without a
-    current fault (0 V legs read as a disconnected sensor), and reads ~0 A
-    up to the firmware's zero calibration (CurrentZeroCount 2054 vs the
-    ideal 2048: about -2 A)."""
+    current fault (0 V legs read as a disconnected sensor), and reads 0 A:
+    the carrier's zero (+6 codes) is the firmware's CurrentZeroCount 2054
+    (on the ideal ADC it read -2.1 A, #320)."""
     can = ams.can("can_acu")
     ams.run_for(ms=1000)                           # booted: listening for the arm
     can.send(PIT_ARM, bytes.fromhex("DEADBEEF"))
@@ -116,13 +138,17 @@ def test_sensors_keep_the_ams_out_of_error(ams):
     assert {f.data[6] for f in status} == {0}, f"fault reasons {sorted({f.data[6] for f in status})}"
     accu, dcdc = _currents(can.last(CURRENTS))
     assert abs(accu - _pack_dA(COMMON_MODE_V, COMMON_MODE_V)) <= 5 and abs(dcdc) <= 5
+    assert abs(accu) <= 5, f"0 A reads {accu} dA"
 
 
-@pytest.mark.parametrize("amps", [0, 100, -50])
+@pytest.mark.parametrize("amps", [0, 50, -50, 100, 172, 185])
 def test_pack_current_reaches_0x135(ams, amps):
+    """A true current on the sensor reads as itself on 0x135, within the
+    firmware's calibration accuracy, and exactly as its converter computes
+    from the carrier's code. 172 A read 184.997 A on the ideal ADC (#320);
+    185 A, the limit, stays under it."""
     io = ams.io("ams")
-    half = amps * CURRENT_MV_PER_A_E1 / 10 / 1000 / 2      # volts per leg
-    vp, vn = COMMON_MODE_V + half, COMMON_MODE_V - half
+    vp, vn = _legs(amps)
     io.set_voltage("PF7", vp)
     io.set_voltage("PF8", vn)
     since = ams.run_for(ms=SETTLE_MS)
@@ -130,6 +156,7 @@ def test_pack_current_reaches_0x135(ams, amps):
     expected = _pack_dA(vp, vn)
     # 0.5 A: the firmware's IIR drops the low 4 bits of every step.
     assert abs(accu - expected) <= 5, f"{amps} A in: 0x135 accu {accu} dA, expected {expected:.0f}"
+    assert abs(accu - 10 * amps) <= _accuracy_dA(amps), f"{amps} A in: 0x135 accu {accu} dA"
     assert ams.can("can_acu").count(CURRENTS, since_us=since - 1_000_000) >= 15, "0x135 not at 20 Hz"
 
 
@@ -186,19 +213,32 @@ def _drive(sim, amps):
     return _pack_mA(vp, vn)
 
 
-def test_just_under_the_limit_never_trips(fresh):
-    """J-100: 180 A held for 8 s (ten IIR time constants) stays healthy."""
-    _drive(fresh, 180)
+@pytest.mark.parametrize("amps", [175, 185, -185], ids=["175A", "185A", "charge-185A"])
+def test_up_to_the_limit_never_trips(fresh, amps):
+    """J-100: up to CurrentMaxMa = 185 A of true current (ams_config.hpp:153;
+    the predicate is |filtered| > the limit, safety_predicates.hpp:244),
+    held for 8 s (ten IIR time constants), stays healthy. On the ideal ADC
+    175 A tripped (read ~188 A, #320)."""
+    _drive(fresh, amps)
     fresh.run_for(ms=SETTLE_MS)
     assert fresh.read_symbol("ams", "g_state_telemetry") == 0
 
 
-@pytest.mark.parametrize("amps", [190, -190, 300], ids=["190A", "charge-190A", "300A"])
+@pytest.mark.parametrize("amps", [190, -190, 200, 300], ids=["190A", "charge-190A", "200A", "300A"])
 def test_over_current_trips_on_the_filter_curve(fresh, amps):
     """J-101, J-102, I-100: the trip comes when the IIR crosses 185 A, either
     sign, at the sample the firmware's own filter predicts (IFS_HIL's J-102
-    profile says 200 A: drift)."""
-    f0 = _pack_mA(*_legs(0))
+    profile says 200 A: drift).
+
+    From 20 A, not 0: the firmware seeds its filter with the first sample
+    while it holds exactly 0 (current_service.cpp update_from_q4), which the
+    noise-free ADC leaves it at when the carrier reads 0 A exactly; that
+    sample is the partial 50 ms capture of the step, so the trip would come
+    anywhere up to the filter's prediction. On the car the ADC's noise keeps
+    the filter off 0 (#327)."""
+    _drive(fresh, 20)
+    fresh.run_for(ms=3000)                     # ~4 time constants: within 0.4 A of 20 A
+    f0 = _pack_mA(*_legs(20))
     mA = _drive(fresh, amps)
     n = _samples_to_trip(f0, mA)
     assert n is not None

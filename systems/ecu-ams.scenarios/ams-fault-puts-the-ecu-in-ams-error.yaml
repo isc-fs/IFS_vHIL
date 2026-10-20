@@ -9,8 +9,8 @@ stimuli:
   - {kind: plant, name: tsms-on, at_ms: 5500, plant: sdc, set: {tsms: true}}
   - {kind: gpio, name: dash-press, at_ms: 5600, board: ams, pin: PF10, level: true}
   - {kind: gpio, name: dash-release, at_ms: 5650, board: ams, pin: PF10, level: false}
-  - {kind: analog, name: overcurrent-p, at_ms: 11000, board: ams, pin: PF7, volts: 2.13}
-  - {kind: analog, name: overcurrent-n, at_ms: 11000, board: ams, pin: PF8, volts: 0.75}
+  - {kind: analog, name: overcurrent-p, at_ms: 11000, board: ams, pin: PF7, volts: 2.19}
+  - {kind: analog, name: overcurrent-n, at_ms: 11000, board: ams, pin: PF8, volts: 0.69}
 watch:
   - {kind: symbol, board: ams, name: g_state_telemetry, size: 1, period_ms: 10}
   - {kind: symbol, board: ams, name: g_mode_locked_telemetry, size: 1, period_ms: 10}

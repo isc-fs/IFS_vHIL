@@ -24,7 +24,8 @@ skips it.
 import pytest
 
 from ams_car import Car, RUN
-from test_ams_current import CURRENT_STALE, SETTLE_MS, _code_diff, _code_single, _legs, _pack_dA
+from test_ams_current import (CURRENT_STALE, SETTLE_MS, _accuracy_dA, _code_diff, _code_single, _legs,
+                              _pack_dA)
 from vhil import elf
 from vhil.sim import Sim
 from vhil.system import REPO
@@ -121,4 +122,5 @@ def _run_at(car, amps):
     accu = int.from_bytes(car.can.last(CURRENTS).data[0:2], "big", signed=True)
     expected = _pack_dA(vp, vn)
     assert abs(accu - expected) <= 5, f"{amps} A in: 0x135 accu {accu} dA, expected {expected:.0f}"
+    assert abs(accu - 10 * amps) <= _accuracy_dA(amps), f"{amps} A in: 0x135 accu {accu} dA"
     assert car.can.count(CURRENTS, since_us=since - 1_000_000) >= 15, "0x135 not at 20 Hz"
