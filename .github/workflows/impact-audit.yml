@@ -1,0 +1,45 @@
+name: Impact audit (nightly)
+
+# The safety net behind CI's test-impact selection (docs/ci.md): after the
+# nightly runs on dev, each pull request merged since the last audit gets the
+# selection `full-ci` gives its changes, and a nightly failure outside it is
+# reported (step summary, a warning, a comment on the PR when it was labelled
+# `full-ci`); and ci/impact.yaml is checked against what each tests/sim file
+# exercised in the nightly (its systems, firmware, device models and vhil/
+# Python: sim.yml with VHIL_IMPACT_MAP). Report only: it never fails.
+on:
+  schedule:
+    - cron: '30 5 * * *'   # after the nightlies (02:30, 03:00) finish
+  workflow_dispatch:
+    inputs:
+      since:
+        description: "ISO-8601 start of the window (default: the previous audit, else 26 h ago)"
+        required: false
+
+permissions:
+  contents: read
+  actions: read
+  pull-requests: write
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: dev
+          persist-credentials: false
+          fetch-depth: 0
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+
+      - name: Audit the selections against the nightly
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SINCE: ${{ inputs.since }}
+        run: |
+          pip install -q "pyyaml==6.0.*" "coverage==7.6.*"
+          python scripts/ci-audit.py ${SINCE:+--since "$SINCE"} --summary "$GITHUB_STEP_SUMMARY" --comment

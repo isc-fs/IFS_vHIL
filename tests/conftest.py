@@ -33,11 +33,28 @@ def pytest_configure(config):
     ones a test module builds itself."""
     from vhil import sim
     sim.INSTRUMENT.trace = config.getoption("--vhil-trace") or 0
+    _record_systems(sim, os.environ.get("VHIL_IMPACT_RECORD"))
     cov = config.getoption("--vhil-coverage")
     if cov:
         # A fresh run: logs left by an earlier one would be counted again.
         shutil.rmtree(Path(cov) / "raw", ignore_errors=True)
         sim.INSTRUMENT.coverage_dir = Path(cov).resolve()
+
+
+def _record_systems(sim, path):
+    """VHIL_IMPACT_RECORD=<file>: append the id of every system a Sim of this
+    run starts, one per line (the nightly impact map, scripts/sim-shard.sh,
+    scripts/ci-audit.py). Changes nothing a test sees."""
+    if not path:
+        return
+    start = sim.Sim.start
+
+    def recording_start(self, *args, **kwargs):
+        with open(path, "a") as f:
+            f.write(f"{self.system.id}\n")
+        return start(self, *args, **kwargs)
+
+    sim.Sim.start = recording_start
 
 
 def pytest_sessionfinish(session):
