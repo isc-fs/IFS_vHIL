@@ -1,0 +1,11 @@
+{
+ "firmware": {
+  "ams": "94b59a9e5bc5a5fe90705018ebcd8e6a23e851d0",
+  "can-bootloader": "1c5f1be67712b8977efa832c93c6bb9d615d8583",
+  "ecu": "44610a5366ad5c785751a6eccb1cf4a8616890ca",
+  "udv": "125202217216e0c8cf7b4d0d117c16362a7adedf"
+ },
+ "renode": null,
+ "run_ms": 5000,
+ "systems": {}
+}
