@@ -213,6 +213,16 @@ def _drive(sim, amps):
     return _pack_mA(vp, vn)
 
 
+def _off_zero(sim):
+    """Settle the AMS's current filter on 20 A, off exactly 0: the firmware
+    re-seeds the filter with the next sample while it holds exactly 0
+    (current_service.cpp update_from_q4), where the noise-free ADC leaves it
+    at rest and the car's noise does not (#327). ~4 time constants: within
+    0.4 A of 20 A."""
+    _drive(sim, 20)
+    sim.run_for(ms=3000)
+
+
 @pytest.mark.parametrize("amps", [175, 185, -185], ids=["175A", "185A", "charge-185A"])
 def test_up_to_the_limit_never_trips(fresh, amps):
     """J-100: up to CurrentMaxMa = 185 A of true current (ams_config.hpp:153;
@@ -230,14 +240,10 @@ def test_over_current_trips_on_the_filter_curve(fresh, amps):
     sign, at the sample the firmware's own filter predicts (IFS_HIL's J-102
     profile says 200 A: drift).
 
-    From 20 A, not 0: the firmware seeds its filter with the first sample
-    while it holds exactly 0 (current_service.cpp update_from_q4), which the
-    noise-free ADC leaves it at when the carrier reads 0 A exactly; that
-    sample is the partial 50 ms capture of the step, so the trip would come
-    anywhere up to the filter's prediction. On the car the ADC's noise keeps
-    the filter off 0 (#327)."""
-    _drive(fresh, 20)
-    fresh.run_for(ms=3000)                     # ~4 time constants: within 0.4 A of 20 A
+    From 20 A (_off_zero): from exactly 0 the filter would re-seed with the
+    step's partial 50 ms capture, and the trip come anywhere up to the
+    filter's prediction (#327)."""
+    _off_zero(fresh)
     f0 = _pack_mA(*_legs(20))
     mA = _drive(fresh, amps)
     n = _samples_to_trip(f0, mA)
@@ -260,7 +266,10 @@ def test_the_over_current_latch_survives_the_current_falling(fresh):
 @pytest.mark.parametrize("volts", [0.0, 0.6, 2.5], ids=["open", "low", "rail"])
 def test_a_disconnected_leg_faults_the_sensor(fresh, volts):
     """N-001..N-003: OUT_P outside 700..2300 mV for three reads -> reason 8,
-    inside ~3 samples."""
+    inside ~3 samples, before the over-current check: from 20 A the filter
+    takes far longer to cross 185 A (#327: from exactly 0 it would re-seed
+    and trip CurrentOverLimit first)."""
+    _off_zero(fresh)
     fresh.io("ams").set_voltage("PF7", volts)
     elapsed = _ms_to_error(fresh, 400)
     assert elapsed is not None and elapsed <= 220, f"Error after {elapsed} ms"
@@ -268,11 +277,12 @@ def test_a_disconnected_leg_faults_the_sensor(fresh, volts):
 
 
 def test_a_leg_glitch_shorter_than_the_confirmation_is_ignored(fresh):
-    """N-004: out of window for at most two reads."""
+    """N-004: out of window for at most two reads (from 20 A, #327)."""
+    _off_zero(fresh)
     io = fresh.io("ams")
     io.set_voltage("PF7", 0.0)
     fresh.run_for(ms=80)
-    io.set_voltage("PF7", COMMON_MODE_V)
+    io.set_voltage("PF7", _legs(20)[0])
     fresh.run_for(ms=1000)
     assert fresh.read_symbol("ams", "g_state_telemetry") == 0
 

@@ -82,10 +82,24 @@
 - path: tests/hil/ams/test_block_c_fsm.py::test_c039c_charge_survives_dash_release
   why: "test and firmware disagree: it expects a TSMS drop in Charge to return to Start (IFS_HIL #327), AMS dev latches Error with ChargerTsmsOpen (reason 15) since IFS08-CE-AMS#491"
 
-- path: tests/hil/ams/test_block_i_current.py::test_i100_reported_current_tracks_injection
-  why: "physical-only: analog accuracy. The firmware's current gain and zero (AMS #350) are commissioned on bench-01's own sensor front-end and VREF; the virtual ADC is ideal and reads -200 A as -218 A"
+# I-100 left this list with #320: the AMS carrier reads the pair through the
+# car's measured transfer, so the injected current reads as itself.
 - path: tests/hil/ams/test_block_i_current.py::test_j102_under_limit_does_not_trip
-  why: "physical-only: analog accuracy. 190 A reads above the 200 A trip through the bench-commissioned gain (see I-100)"
+  why: "test and firmware disagree: J-102 brackets a 200 A trip (190 A must not trip), AMS dev trips at CurrentMaxMa = 185 A (ams_config.hpp:153), which 190 A of true current crosses"
+
+# N-001/N-002 disconnect OUT_P from rest. The noise-free ADC leaves the AMS's
+# current filter at exactly 0 there, which the firmware takes as unseeded: the
+# disconnected pair's first sample (~-290 A) seeds it and CurrentOverLimit
+# (10) latches before CurrentSensorFault (8). The car's ADC noise keeps the
+# filter off 0. The native tests disconnect from 20 A.
+- path: tests/hil/ams/test_block_n_disconnect.py::test_n001_outp_disconnect_latches_reason8
+  replaced_by:
+    - tests/sim/test_ams_current.py::test_a_disconnected_leg_faults_the_sensor[open]
+  why: "noise-free ADC: the AMS current filter sits at exactly 0 at rest and re-seeds on the disconnect, so reason 10 latches before 8 (isc-fs/IFS_vHIL#327)"
+- path: tests/hil/ams/test_block_n_disconnect.py::test_n002_disconnect_latch_sticky
+  replaced_by:
+    - tests/sim/test_ams_current.py::test_a_disconnected_leg_faults_the_sensor[open]
+  why: "noise-free ADC: the AMS current filter sits at exactly 0 at rest and re-seeds on the disconnect, so reason 10 latches before 8 (isc-fs/IFS_vHIL#327)"
 
 # K-103 watches 1000 0x4A2 heartbeats (500 s) beside IFS_HIL's 20 Hz 0x100.
 # The IWDG reset ~100 s into it (#151) was IFS08-CE-AMS#599 on AMS main:
