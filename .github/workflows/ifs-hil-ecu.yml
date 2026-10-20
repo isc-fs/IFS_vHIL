@@ -73,7 +73,7 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/setup-renode
         with:
-          save: 'true'
+          save: ${{ needs.select.outputs.renode_save }}
 
       # The firmware the jobs below build, into the firmware cache once
       # (.github/actions/firmware-cache, vhil/fwcache.py): they copy each

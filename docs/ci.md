@@ -203,6 +203,39 @@ CI keeps the built images in the Actions cache
 - **Only CI:** `VHIL_FW_CACHE` is unset everywhere else (the Docker wrapper,
   the web app's workers), and every build runs as before.
 
+## The Actions cache's budget
+
+The repository's Actions cache holds 10 GB; past that GitHub evicts the
+least recently used entries. The Renode build (BuildKit's `type=gha` cache of
+`docker/Dockerfile`'s renode-package stage, about 0.6 GB of layers) is the
+large one, and every pull request used to save its own copy (each rebuild
+writes new ~92 MB layer blobs, and a cache entry is visible only to its
+branch): by 2026-10-20 there were 10.7 GB, 9.9 GB of it from closed pull
+requests, and dev's own layers were being evicted, so a pull request's jobs
+each rebuilt Renode (~7 min a job). Two rules keep it small:
+
+- **Who saves the Renode build** (`select.yml`'s `renode_save`, passed to
+  `setup-renode`'s `save` by each workflow's `renode build` job): runs on
+  `dev` (the nightly, a dispatch on dev) save it; a pull request reads dev's
+  and saves nothing, unless it changes the build's inputs (`docker/renode/**`
+  or `docker/Dockerfile`), when its `renode build` jobs save it in the pull
+  request's own scope so its other jobs don't each build Renode. The firmware
+  stores (`vhil-fw-v1-*`, 2-5 MB) are saved as described above.
+- **The clean-up** ([`cache-clean.yml`](../.github/workflows/cache-clean.yml),
+  [`scripts/ci-cache-clean.py`](../scripts/ci-cache-clean.py); daily at 06:00
+  UTC, on every closed pull request, and by dispatch with a dry run) deletes
+  cache entries only: every entry of a closed or merged pull request
+  (`refs/pull/N/merge`), and on dev every entry but the newest of each kind
+  (BuildKit's index without its `#n`, a firmware store's
+  `vhil-fw-v1-<os>-<workflow>-`, any other key as itself) and the BuildKit
+  layer blobs no run has read for 3 days (each heavy run reads the current
+  build's layers, the nightly daily). Other branches are left alone.
+
+Check what it would delete with `python scripts/ci-cache-clean.py --dry-run`
+(`gh` signed in). If dev's Renode build is ever missing (the clean-up ran
+after a long pause in heavy runs), a dispatch of `smoke.yml` on dev restores
+it in about 10 runner-minutes.
+
 ## Measuring
 
 Runner-minutes of a run: the sum of its jobs' durations,
