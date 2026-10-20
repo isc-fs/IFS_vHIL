@@ -75,6 +75,47 @@ jobs:
         with:
           save: 'true'
 
+      # The firmware the jobs below build, into the firmware cache once
+      # (.github/actions/firmware-cache, vhil/fwcache.py): they copy each
+      # image from there (its SHA-256 checked) instead of building it, and
+      # build it themselves when it is not there (this step failed, a ref
+      # moved since). Failing here fails nothing: the jobs build.
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+      - name: Arm GNU toolchain (pinned like IFS_HIL's recipe)
+        uses: carlosperate/arm-none-eabi-gcc-action@0edbb000a5a98e2292b051b463bff6f512547118 # v1.14.0
+        with:
+          release: '14.2.Rel1'
+      - uses: ./.github/actions/firmware-cache
+        with:
+          step: restore
+          scope: ifs-hil
+      - name: Build the firmware the jobs below build
+        continue-on-error: true
+        env:
+          ECU_REF: ${{ inputs.ecu_ref }}
+          JOB_ECU: ${{ needs.select.outputs.ifs_hil_ecu }}
+          JOB_ECU_AMS: ${{ needs.select.outputs.ifs_hil_ecu_ams }}
+          JOB_AMS: ${{ needs.select.outputs.ifs_hil_ams }}
+        run: |
+          pip install -q pyyaml "jsonschema>=4"
+          if [ "$JOB_ECU" = true ]; then
+            python -m vhil.system build systems/ecu.yaml --workdir "$RUNNER_TEMP/fw" \
+              ${ECU_REF:+--ref "ecu=$ECU_REF"}
+          fi
+          if [ "$JOB_ECU_AMS" = true ]; then
+            python -m vhil.system build systems/ecu-ams.yaml --workdir "$RUNNER_TEMP/fw" \
+              ${ECU_REF:+--ref "ecu=$ECU_REF"}
+          fi
+          if [ "$JOB_AMS" = true ]; then
+            python -m vhil.system build systems/ams.yaml --workdir "$RUNNER_TEMP/fw"
+          fi
+      - uses: ./.github/actions/firmware-cache
+        with:
+          step: save
+          scope: ifs-hil
+
   # The ECU boots through its CAN bootloader, as every MainLite does, so the
   # smoke suite's boot block (A-002 discover, A-006 round trip, A-003 flash
   # and jump through can-flasher over vcan, #4) runs here: a skip in it fails
@@ -116,6 +157,11 @@ jobs:
         with:
           release: '14.2.Rel1'
 
+      - uses: ./.github/actions/firmware-cache
+        with:
+          step: restore
+          scope: ifs-hil
+
       - name: Build the ECU and its bootloader from systems/ecu.yaml
         id: fw
         env:
@@ -126,6 +172,11 @@ jobs:
             ${ECU_REF:+--ref "ecu=$ECU_REF"} | tee built.txt
           echo "elf=$(sed -n 's/^ecu=//p' built.txt)" >> "$GITHUB_OUTPUT"
           echo "bootloader=$(sed -n 's/^ecu.bootloader=//p' built.txt)" >> "$GITHUB_OUTPUT"
+
+      - uses: ./.github/actions/firmware-cache
+        with:
+          step: save
+          scope: ifs-hil
 
       # Renode 1.17.0 + docker/renode's patches, as the image builds it.
       - name: Renode (vHIL build)
@@ -222,6 +273,11 @@ jobs:
         with:
           release: '14.2.Rel1'
 
+      - uses: ./.github/actions/firmware-cache
+        with:
+          step: restore
+          scope: ifs-hil
+
       - name: Build the ECU and AMS firmware from systems/ecu-ams.yaml
         id: fw
         env:
@@ -233,6 +289,11 @@ jobs:
           echo "ecu=$(sed -n 's/^ecu=//p' built.txt)" >> "$GITHUB_OUTPUT"
           echo "ams=$(sed -n 's/^ams=//p' built.txt)" >> "$GITHUB_OUTPUT"
           echo "bootloader=$(sed -n 's/^ecu.bootloader=//p' built.txt)" >> "$GITHUB_OUTPUT"
+
+      - uses: ./.github/actions/firmware-cache
+        with:
+          step: save
+          scope: ifs-hil
 
       # Renode 1.17.0 + docker/renode's patches, as the image builds it.
       - name: Renode (vHIL build)
@@ -326,6 +387,11 @@ jobs:
         with:
           release: '14.2.Rel1'
 
+      - uses: ./.github/actions/firmware-cache
+        with:
+          step: restore
+          scope: ifs-hil
+
       - name: Build the AMS and its bootloader from systems/ams.yaml
         id: fw
         run: |
@@ -333,6 +399,11 @@ jobs:
           python -m vhil.system build systems/ams.yaml --workdir "$RUNNER_TEMP/fw" | tee built.txt
           echo "elf=$(sed -n 's/^ams=//p' built.txt)" >> "$GITHUB_OUTPUT"
           echo "bootloader=$(sed -n 's/^ams.bootloader=//p' built.txt)" >> "$GITHUB_OUTPUT"
+
+      - uses: ./.github/actions/firmware-cache
+        with:
+          step: save
+          scope: ifs-hil
 
       # Renode 1.17.0 + docker/renode's patches, as the image builds it.
       - name: Renode (vHIL build)

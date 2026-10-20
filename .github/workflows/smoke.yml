@@ -47,6 +47,39 @@ jobs:
         with:
           save: 'true'
 
+      # The firmware the jobs below build, into the firmware cache once
+      # (.github/actions/firmware-cache, vhil/fwcache.py): they copy each
+      # image from there (its SHA-256 checked) instead of building it, and
+      # build it themselves when it is not there (this step failed, a ref
+      # moved since). Failing here fails nothing: the jobs build.
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+      - name: Arm GNU toolchain (pinned like IFS_HIL's recipe)
+        uses: carlosperate/arm-none-eabi-gcc-action@0edbb000a5a98e2292b051b463bff6f512547118 # v1.14.0
+        with:
+          release: '14.2.Rel1'
+      - uses: ./.github/actions/firmware-cache
+        with:
+          step: restore
+          scope: smoke
+      - name: Build the firmware the jobs below build
+        continue-on-error: true
+        env:
+          SMOKE_ECU: ${{ needs.select.outputs.smoke_ecu }}
+          SMOKE_AMS: ${{ needs.select.outputs.smoke_ams }}
+        run: |
+          pip install -q pyyaml "jsonschema>=4"
+          for s in ecu ams; do
+            if [ "$(eval echo \$SMOKE_${s^^})" = true ]; then
+              python -m vhil.system build "systems/$s.yaml" --workdir "$RUNNER_TEMP/fw"
+            fi
+          done
+      - uses: ./.github/actions/firmware-cache
+        with:
+          step: save
+          scope: smoke
+
   smoke:
     needs: [select, renode]
     # Every leg always runs (a skipped matrix job would not report
@@ -85,6 +118,12 @@ jobs:
         with:
           release: '14.2.Rel1'
 
+      - uses: ./.github/actions/firmware-cache
+        if: env.FULL == 'true'
+        with:
+          step: restore
+          scope: smoke
+
       - name: Build firmware from systems/${{ matrix.system }}.yaml
         if: env.FULL == 'true'
         id: fw
@@ -96,6 +135,12 @@ jobs:
             --workdir "$RUNNER_TEMP/fw" | tee built.txt
           echo "elf=$(sed -n "s/^$SYSTEM=//p" built.txt)" >> "$GITHUB_OUTPUT"
           echo "bootloader=$(sed -n "s/^$SYSTEM.bootloader=//p" built.txt)" >> "$GITHUB_OUTPUT"
+
+      - uses: ./.github/actions/firmware-cache
+        if: env.FULL == 'true'
+        with:
+          step: save
+          scope: smoke
 
       # Renode 1.17.0 + docker/renode's patches, as the image builds it.
       - name: Renode (vHIL build)
