@@ -5,7 +5,80 @@
   "ecu": "44610a5366ad5c785751a6eccb1cf4a8616890ca",
   "udv": "125202217216e0c8cf7b4d0d117c16362a7adedf"
  },
- "renode": null,
+ "renode": "renode 1.17.0 (ab721d88e135) + vhil patches 1.17.0-vhil.9 [0001,0002,0003,0004,0005,0006,0007,0008,0009,tlib/0001,tlib/0002] queue 6d3b1e779966",
  "run_ms": 5000,
- "systems": {}
+ "systems": {
+  "ams": {
+   "digest": "5797ae3f56ed2abe8a7d1e8f1f9a9c3211b7199ac5d10aacbeb50032d8f46ef6",
+   "edges": {
+    "ams": 2393
+   },
+   "frames": {
+    "can_acu": 341
+   }
+  },
+  "ecu": {
+   "digest": "16215c5300c3f750aad844f5e373197c2c0a32c57726d6b26e30ec4f3554300e",
+   "edges": {
+    "ecu": 54001
+   },
+   "frames": {
+    "can_acu": 712,
+    "can_dash": 270,
+    "can_inv": 594
+   }
+  },
+  "ecu-ams": {
+   "digest": "36ab6011afc2dd621ec7f623a817f6f265ea16dab2fd2d49a12ac5cf0deecdf9",
+   "edges": {
+    "ams": 2393,
+    "ecu": 50857
+   },
+   "frames": {
+    "can_acu": 1053,
+    "can_dash": 270,
+    "can_inv": 594
+   }
+  },
+  "ecu-ams-ecu": {
+   "digest": "d0d5ed81cde236e68cae2f2aa1010a17b315a51acf30c2876d22538497112e37",
+   "edges": {
+    "ams": 2393,
+    "ecu": 50857,
+    "ecu2": 49776
+   },
+   "frames": {
+    "can2_acu": 712,
+    "can2_dash": 270,
+    "can2_inv": 594,
+    "can_acu": 1053,
+    "can_dash": 270,
+    "can_inv": 594
+   }
+  },
+  "ecu-ams-udv": {
+   "digest": "f16edacb6f27737b6fa2c5a4e2e7525c8a3d13759911b0e14253e2cb38337c1d",
+   "edges": {
+    "ams": 2393,
+    "ecu": 50857,
+    "udv": 1
+   },
+   "frames": {
+    "can_acu": 1053,
+    "can_dash": 270,
+    "can_dv": 93,
+    "can_inv": 594
+   }
+  },
+  "udv": {
+   "digest": "9ed55abfbd3dc66aab253ff39c1eb215a2415ef2d3426fd1fdc01eefebbac224",
+   "edges": {
+    "udv": 2
+   },
+   "frames": {
+    "can_acu": 0,
+    "can_dv": 93
+   }
+  }
+ }
 }
