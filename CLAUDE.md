@@ -244,6 +244,24 @@ fixes such as 0007, STM32 timers' ARR + 1 period, #292; a log's
 first line names the build, `vhil: renode 1.17.0 ... + vhil patches ...`);
 a new release means rebasing them ([`docker/renode/README.md`](docker/renode/README.md)).
 
+## CI policy
+
+Heavy CI runs only in special cases ([`docs/ci.md`](docs/ci.md)). Every PR
+runs `unit`. A PR labelled **`full-ci`** runs the tests its changed paths
+select ([`ci/impact.yaml`](ci/impact.yaml), `scripts/ci-select.py`) plus the
+guard (every system's identity fingerprint against `ci/fingerprints.json`, the
+two-board determinism test); **`full-ci-all`**, a release PR into `main`, the
+nightly on `dev` and a dispatch run everything. An unmapped path selects
+everything. Required checks on `dev` (`unit`, `smoke (ecu)`, `smoke (ams)`,
+`sim`, `ecu`, `scenarios`) always report: a job not selected is skipped (or,
+for the smoke legs, its steps are), a failed selection fails them. A new
+tests/sim file needs its `pytestmark` (boards, systems, subsystem; strict
+markers in `pytest.ini`); a new model or module, a rule in `ci/impact.yaml`.
+A fingerprint change on purpose: commit the guard's `fingerprint` artifact as
+`ci/fingerprints.json`. The nightly impact audit (`impact-audit.yml`) reports
+nightly failures a merged PR's selection skipped. Lint workflow changes with
+actionlint: a bad expression yields no check run at all.
+
 ## Style
 
 - English for technical content. Concise.
