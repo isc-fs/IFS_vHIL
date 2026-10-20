@@ -333,6 +333,8 @@ class System:
         self.card_dirs = [*card_dirs(), *(Path(d) for d in extra_card_dirs)]
         self.doc = _load(self.path, "system")
         self.id = self.doc["id"]
+        # The run's seed: every modelled noise draws from it (noise_seed).
+        self.seed: int = int(self.doc.get("seed", 1))
         self.boards: dict[str, Board] = {}
         for name, spec in self.doc["boards"].items():
             # The bootloader comes with the board (every MainLite carries
@@ -1045,6 +1047,13 @@ class System:
         does not survive in Renode 1.17 (it hung IFS_HIL's power cycles)."""
         return lockstep and len(self.boards) > 1
 
+    def noise_seed(self, board: str) -> int:
+        """A board's noise seed: the run's seed and the board's name hashed
+        (SHA-256, 63 bits, a long to Renode's monitor), so boards draw apart
+        and every host agrees."""
+        digest = hashlib.sha256(f"{self.seed}:{board}".encode()).digest()
+        return int.from_bytes(digest[:8], "little") >> 1
+
     def render_renode(self, firmware: dict[str, Path] | None = None,
                       socketcan: bool = False, lockstep: bool = False,
                       sources: tuple[Path, ...] = (), preloaded: bool = False) -> str:
@@ -1122,6 +1131,13 @@ class System:
                 out.append(f"{rn.path(target['adc'])} DifferentialTransfer "
                            f"{int(target['channel'])} {rn.number(float(t['gain']))} "
                            f"{int(t.get('offset_codes', 0))}")
+                if t.get("noise_codes_rms") or t.get("start_noise_codes_rms"):
+                    # Its measured noise (#327), drawn from the run's seed.
+                    out.append(f"{rn.path(target['adc'])} DifferentialNoise "
+                               f"{int(target['channel'])} "
+                               f"{rn.number(float(t.get('noise_codes_rms', 0)))} "
+                               f"{rn.number(float(t.get('start_noise_codes_rms', 0)))} "
+                               f"{self.noise_seed(b.name)}")
             if "cpu" in b.firmware:
                 # The rate the chip runs this firmware's code at, which its
                 # caches and memory placement set (docs/cpu-timing.md); the

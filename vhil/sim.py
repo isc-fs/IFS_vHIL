@@ -468,14 +468,16 @@ class Radio:
 class Sim:
     def __init__(self, system: Path | str, firmware: dict[str, Path | str], *,
                  renode: str = DEFAULT_RENODE, advance_immediately: bool = True,
-                 seed: int = 1, log_path: Path | None = None,
+                 seed: int | None = None, log_path: Path | None = None,
                  params: dict[str, dict] | None = None,
                  write_protect: dict[str, list[int]] | None = None,
                  trace: Optional[int] = None, coverage_dir: Optional[Path] = None,
                  card_dirs: Iterable[Path | str] = (),
                  arbitration: Iterable[str] = (), hub: Iterable[str] = (),
                  uart_log_dir: Path | None = None):
-        """params overrides device params for this run, e.g.
+        """seed: the run's seed, which every modelled noise draws from (the
+        system file's `seed`, default 1, when None); also Renode's.
+        params overrides device params for this run, e.g.
         {"sd": {"image": "card.img"}}, checked as the system file's are;
         write_protect a board's write-protected flash sectors at power-on, as
         the system file's write_protect, e.g. {"ecu": [0]}. card_dirs adds
@@ -511,7 +513,9 @@ class Sim:
         missing = set(self.system.images()) - set(self.firmware)
         if missing:
             raise ValueError(f"no firmware for boards {sorted(missing)}")
-        self.renode, self.advance_immediately, self.seed = renode, advance_immediately, seed
+        if seed is not None:
+            self.system.seed = int(seed)   # the system file's otherwise (default 1)
+        self.renode, self.advance_immediately, self.seed = renode, advance_immediately, self.system.seed
         self.log_path = log_path
         self.uart_log_dir = Path(uart_log_dir) if uart_log_dir is not None else None
         self.uart_logs: dict[str, Path] = {}    # "<board>.<UART>" -> its TX file

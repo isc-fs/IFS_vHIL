@@ -117,9 +117,38 @@ roles:
     #   own offset is <= +/-0.4 mV, a quarter code, COMMISSIONING.md:139-140).
     #   Per carrier (the bench carrier read 2050): this is the car's.
     # Single-ended reads (the OUT_P disconnect window, PC1) have no
-    # measurement and stay ideal. UNCOMMISSIONED beyond the two figures.
+    # measurement and stay ideal (noise-free too). UNCOMMISSIONED beyond the
+    # figures here.
+    # - noise (#327), measured on the car's AMS: ELE0122.BIN, pulled from it
+    #   on 2026-10-03 (the accumulator's 95 cells, all 10 LTC6811s reading;
+    #   no ECU; AMS 3.1.0, CurrentZeroCount 2054, 46), 25 895 consecutive
+    #   10 ms windows (259 s) at rest, each the mean, min and max of ~125
+    #   samples, a sample being the mean of 64 conversions in Q4
+    #   (ams_config.hpp:800-820, current_capture.hpp make_record). The noise
+    #   has two parts, and the firmware's 50 ms filter input sees the second:
+    #   - noise_codes_rms 1.07: within a window the samples spread 11.08 Q4
+    #     LSB min to max on average, sigma 2.14 Q4 (expected range of 125
+    #     Gaussian draws 5.17 sigma) = 2 x sigma per conversion (a Q4 sample
+    #     is 16 x the mean of 64): 1.07 codes per conversion.
+    #   - start_noise_codes_rms 0.32: one capture's five 10 ms means agree
+    #     (variance 0.22 Q4^2 around their capture's mean) while capture
+    #     means scatter 5.16 Q4 rms (0.11 A) from one 50 ms capture to the
+    #     next; the 10 ms means' autocorrelation falls linearly to 0 at
+    #     50 ms (0.78, 0.57, 0.35, 0.14, -0.06): an offset held through each
+    #     capture, which the firmware starts afresh every cycle after its
+    #     single-ended read (current_task.cpp:237-267). 5.16 / 16 = 0.32
+    #     codes, per sequence start.
+    #   Not modelled: those offsets' size follows a 250 ms cycle (rms 2-7 Q4
+    #   by phase; the firmware's own 4 Hz activity), and their kurtosis is
+    #   3.9, not 3. The run's mean, raw 2047.7 (-2.19 A), is the 0 V-difference
+    #   code, not the +6 zero above, because the current sensor was unpowered
+    #   that day (owner, 2026-10-20; isc-fs/IFS_vHIL#329). So these figures are
+    #   the ADC3 path and front end alone; the sensor's own output noise is
+    #   not in them, and the modelled noise is a lower bound until a log with
+    #   the sensor powered measures it (uncommissioned). The zero and gain
+    #   above come from powered calibrations and stand.
     adc_differential:
-      PF7: {gain: 0.92, offset_codes: 6}
+      PF7: {gain: 0.92, offset_codes: 6, noise_codes_rms: 1.07, start_noise_codes_rms: 0.32}
   udv:
     node_id: 0x3
     flash_bus: FDCAN2
