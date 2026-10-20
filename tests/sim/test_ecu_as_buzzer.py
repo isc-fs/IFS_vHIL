@@ -34,6 +34,9 @@ import pytest
 from vhil.sim import Sim
 from vhil.system import REPO
 
+# Impact selection (ci/impact.yaml, docs/ci.md): boards, systems, subsystems.
+pytestmark = [pytest.mark.ecu, pytest.mark.system_ecu, pytest.mark.timers]
+
 AS_STATUS, PIT_CMD, PIT_DV = 0x50A, 0x7E0, 0x707
 OFF, EMERGENCY, READY, DRIVING, FINISHED = range(5)
 TICK_MS, HALF_MS, SOUND_MS, STALE_MS = 10, 150, 10_000, 400

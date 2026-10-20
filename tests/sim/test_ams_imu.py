@@ -39,6 +39,9 @@ from vhil import peripheral_guard as guard
 from vhil.sim import Sim
 from vhil.system import REPO
 
+# Impact selection (ci/impact.yaml, docs/ci.md): boards, systems, subsystems.
+pytestmark = [pytest.mark.ams, pytest.mark.system_ams, pytest.mark.i2c]
+
 ACC, GYR = "sysbus.i2c2_h7.imu_acc", "sysbus.i2c2_h7.imu_gyr"
 INIT, RUNNING, NOT_FOUND, BUS_ERROR = range(4)
 STEP_ACC_CHIP_ID = 1

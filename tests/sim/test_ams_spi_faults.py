@@ -44,6 +44,9 @@ from vhil import elf
 from vhil.sim import Sim
 from vhil.system import REPO
 
+# Impact selection (ci/impact.yaml, docs/ci.md): boards, systems, subsystems.
+pytestmark = [pytest.mark.ams, pytest.mark.system_ams, pytest.mark.isospi, pytest.mark.fault_hooks]
+
 BAL = 0x103
 STATUS = 0x4A0                  # byte 2: module_online_mask (500 ms, ungated)
 START, ERROR = 0, 5

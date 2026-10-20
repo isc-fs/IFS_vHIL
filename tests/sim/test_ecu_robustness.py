@@ -80,6 +80,9 @@ from vhil.renode import MachineAborted
 from vhil.sim import BUS_ERROR_ADDRESS, XN_ADDRESS, Frame, Sim, assert_cadence
 from vhil.system import REPO
 
+# Impact selection (ci/impact.yaml, docs/ci.md): boards, systems, subsystems.
+pytestmark = [pytest.mark.ecu, pytest.mark.system_ecu, pytest.mark.fault_hooks, pytest.mark.reset]
+
 HEARTBEAT, HEALTH, PIT_STATUS = 0x100, 0x704, 0x700
 PIT_ARM, PIT_ACK, UDV_TICK, MOTOR_RPM = 0x7E0, 0x7E1, 0x504, 0x506
 BOOT_TRIGGER, VDC, INV_RPM, AMS_STATUS = 0x002, 0x466, 0x463, 0x4A0

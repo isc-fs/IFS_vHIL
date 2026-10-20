@@ -22,6 +22,9 @@ import pytest
 from vhil.sim import Sim
 from vhil.system import REPO
 
+# Impact selection (ci/impact.yaml, docs/ci.md): boards, systems, subsystems.
+pytestmark = [pytest.mark.ams, pytest.mark.system_ams, pytest.mark.isospi]
+
 PIT_ARM, PIT_FSM, PIT_TEMPS, TMAX_A = 0x7F0, 0x6C0, 0x6A0, 0x136
 START, ERROR = 0, 5
 DISCONNECTED = 13

@@ -22,6 +22,9 @@ from vhil import peripheral_guard as guard
 from vhil.sim import Sim
 from vhil.system import REPO
 
+# Impact selection (ci/impact.yaml, docs/ci.md): boards, systems, subsystems.
+pytestmark = [pytest.mark.ecu, pytest.mark.system_ecu, pytest.mark.reset]
+
 RCC = 0x58024400
 AHB3, AHB1, AHB2, AHB4, APB3, APB1L, APB1H, APB2, APB4 = (
     0x7C, 0x80, 0x84, 0x88, 0x8C, 0x90, 0x94, 0x98, 0x9C)

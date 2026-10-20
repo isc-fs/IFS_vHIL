@@ -18,6 +18,9 @@ from vhil.sim import Frame, assert_cadence  # noqa: E402
 from vhil.system import REPO  # noqa: E402
 from vhil.worker import Worker  # noqa: E402
 
+# Impact selection (ci/impact.yaml, docs/ci.md): boards, systems, subsystems.
+pytestmark = [pytest.mark.ecu, pytest.mark.system_ecu, pytest.mark.server]
+
 HEARTBEAT = 0x100
 CONTROL_PERIOD_US = 10_000
 # A run's times count from power-on (vhil.worker.execute_run): the ECU's app

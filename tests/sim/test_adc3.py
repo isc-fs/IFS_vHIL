@@ -14,6 +14,9 @@ import pytest
 from vhil.sim import Sim
 from vhil.system import REPO
 
+# Impact selection (ci/impact.yaml, docs/ci.md): boards, systems, subsystems.
+pytestmark = [pytest.mark.ecu, pytest.mark.system_ecu, pytest.mark.adc]
+
 ADC3 = 0x58026000
 ISR, CR, CFGR, SQR1, DR = ADC3 + 0x00, ADC3 + 0x08, ADC3 + 0x0C, ADC3 + 0x30, ADC3 + 0x40
 ADEN, ADSTART = 1 << 0, 1 << 2

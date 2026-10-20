@@ -19,6 +19,9 @@ from vhil.sim import Sim
 from vhil.can_bootloader import CanBootloader
 from vhil.system import REPO
 
+# Impact selection (ci/impact.yaml, docs/ci.md): boards, systems, subsystems.
+pytestmark = [pytest.mark.ams, pytest.mark.system_ams, pytest.mark.reset]
+
 PIT_ARM, PIT_FSM, BOOT_DIAG = 0x7F0, 0x6C0, 0x6C4
 BOOT_TRIGGER = (0x002, bytes.fromhex("B007AD11"))
 START, ERROR, CELL_OVER_VOLTAGE = 0, 5, 5

@@ -74,6 +74,9 @@ from vhil import candef
 from vhil.sim import Frame, Sim, assert_cadence, assert_period, intervals_us
 from vhil.system import REPO
 
+# Impact selection (ci/impact.yaml, docs/ci.md): boards, systems, subsystems.
+pytestmark = [pytest.mark.ecu, pytest.mark.system_ecu, pytest.mark.can]
+
 PIT_CMD, PIT_ACK, HEALTH = 0x7E0, 0x7E1, 0x704
 FWINFO, HEARTBEAT, MOTOR_RPM = 0x703, 0x100, 0x506
 GPS_POSITION, GPS_STATUS = 0x508, 0x509

@@ -37,6 +37,9 @@ from vhil.can_bootloader import CanBootloader
 from vhil.sim import Sim
 from vhil.system import REPO
 
+# Impact selection (ci/impact.yaml, docs/ci.md): boards, systems, subsystems.
+pytestmark = [pytest.mark.ams, pytest.mark.system_ams, pytest.mark.sd, pytest.mark.can]
+
 APP_CTRL, MSG_CMD, ACK, NACK = 0x06, 0x00, 0x01, 0x02
 CONNECT, DISCONNECT = 0x01, 0x02
 LIST, OPEN, READ, CRC, CLOSE, DELETE, FINALIZE = 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27

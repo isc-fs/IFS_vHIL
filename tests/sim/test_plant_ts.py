@@ -18,6 +18,9 @@ from vhil.plant_ts import TsPlant
 from vhil.sim import Sim
 from vhil.system import REPO
 
+# Impact selection (ci/impact.yaml, docs/ci.md): boards, systems, subsystems.
+pytestmark = [pytest.mark.ecu, pytest.mark.ams, pytest.mark.system_ecu_ams, pytest.mark.plant]
+
 START, PRECHARGE, TRANSITION, RUN, ERROR = 0, 1, 2, 3, 5
 GPIOF, TSMS, DASH_CHG = "sysbus.gpioPortF", 9, 10
 FS_PRECHARGE_RATIO = 0.90        # FS rules: the second AIR closes at >= 90 % (#147)

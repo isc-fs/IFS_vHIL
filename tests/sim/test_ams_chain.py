@@ -25,6 +25,9 @@ import pytest
 from vhil.sim import Sim
 from vhil.system import REPO
 
+# Impact selection (ci/impact.yaml, docs/ci.md): boards, systems, subsystems.
+pytestmark = [pytest.mark.ams, pytest.mark.system_ams, pytest.mark.isospi, pytest.mark.fault_hooks]
+
 PIT_ARM, PIT_CELLS, PIT_FSM, PIT_TIMING, PEC_A, PEC_B = 0x7F0, 0x680, 0x6C0, 0x6C1, 0x6C7, 0x6C8
 STATUS = 0x4A0
 START, ERROR = 0, 5

@@ -13,6 +13,9 @@ import pytest
 from cpu_timing import CHIP_TOLERANCE, INSTRUCTION_TOLERANCE, Window, mips, widths
 from vhil.system import System, REPO
 
+# Impact selection (ci/impact.yaml, docs/ci.md): boards, systems, subsystems.
+pytestmark = [pytest.mark.ecu, pytest.mark.system_ecu, pytest.mark.cpu_timing]
+
 BOARD = "ecu"
 SCK_HIGH = Window("sysbus.gpioPortA", 5, True, instructions=2875, chip_us=None)
 CSN = ("sysbus.gpioPortB", 0)     # the nRF24's chip select, low through a transfer

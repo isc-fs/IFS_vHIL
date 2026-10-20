@@ -38,6 +38,9 @@ from vhil.plants import (APPS1_FULL, APPS1_REST, APPS2_FULL, APPS2_REST, BRAKE_F
 from vhil.sim import Frame, Sim, assert_cadence
 from vhil.system import REPO
 
+# Impact selection (ci/impact.yaml, docs/ci.md): boards, systems, subsystems.
+pytestmark = [pytest.mark.ecu, pytest.mark.system_ecu, pytest.mark.can, pytest.mark.plant]
+
 MODE, TORQUE, INV_STATE, VDC = 0x360, 0x362, 0x461, 0x466
 OK_PRECHARGE, AMS_STATUS, PIT_ARM, INV_FAULTS = 0x020, 0x4A0, 0x7E0, 0x708
 OFF, READY, TORQUE_ENABLE, FAULT, HARD_FAULT_RESET = 0x01, 0x04, 0x06, 0x13, 0x0D

@@ -23,6 +23,10 @@ from vhil.gdb import Debugger, DebugError, DebugHub
 from vhil.system import REPO
 from vhil.worker import TraceWriter, execute_run
 
+# Impact selection (ci/impact.yaml, docs/ci.md): boards, systems, subsystems.
+pytestmark = [pytest.mark.ecu, pytest.mark.ams, pytest.mark.system_ecu_ams, pytest.mark.debugger,
+              pytest.mark.live_session]
+
 pytest.importorskip("fastapi")
 
 ECU_AMS = REPO / "systems" / "ecu-ams.yaml"

@@ -30,6 +30,9 @@ from ams_car import Car, ERROR, PACK_V, PRECHARGE, RUN, START
 from vhil.sim import Sim
 from vhil.system import REPO
 
+# Impact selection (ci/impact.yaml, docs/ci.md): boards, systems, subsystems.
+pytestmark = [pytest.mark.ams, pytest.mark.system_ams, pytest.mark.can]
+
 RELAYS = 0x4A4
 PIT_ARM, PIT_FSM = 0x7F0, 0x6C0
 TICK_US = 10_000

@@ -13,6 +13,9 @@ from vhil.broker import make_backend
 from vhil.sim import Sim
 from vhil.system import REPO
 
+# Impact selection (ci/impact.yaml, docs/ci.md): boards, systems, subsystems.
+pytestmark = [pytest.mark.ecu, pytest.mark.system_ecu, pytest.mark.broker, pytest.mark.reset]
+
 K4 = (0x20, 0, 3)                       # slot 4 relay = the ECU (systems/ecu.yaml)
 
 

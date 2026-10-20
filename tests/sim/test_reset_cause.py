@@ -31,6 +31,10 @@ pytestmark = pytest.mark.xfail(strict=True, reason=(
     "stm32-can-bootloader#193: v1.7.0 bl_health.c:59-63 clears RCC_RSR before the "
     "jump: the app reads no reset flag and reports cause 0 (Unknown)"))
 
+# Impact selection (ci/impact.yaml, docs/ci.md): boards, systems, subsystems.
+pytestmark = [pytestmark, pytest.mark.ecu, pytest.mark.ams, pytest.mark.system_ecu,
+              pytest.mark.system_ams, pytest.mark.reset]
+
 
 def _software_reset(sim, board):
     # SYSRESETREQ (AIRCR, VECTKEY 0x05FA). Not the AMS's 0x002 boot trigger:
