@@ -683,6 +683,27 @@ def test_the_ams_carrier_reads_the_current_pair_through_its_measured_transfer():
     assert "DifferentialTransfer" not in System(REPO / "systems" / "ecu.yaml").render_renode()
 
 
+def test_the_ams_carrier_reads_the_current_pair_with_the_cars_noise(tmp_path):
+    """#327: the AMS role's measured ADC3 noise is set beside its transfer,
+    seeded by the system's seed and the board's name: the same script on
+    every render and host, another seed another draw."""
+    system = System(REPO / "systems" / "ecu-ams.yaml")
+    script = system.render_renode()
+    seed = system.noise_seed("ams")
+    assert seed == System(REPO / "systems" / "ecu-ams.yaml").noise_seed("ams") and 0 <= seed < 2 ** 63
+    line = f"sysbus.adc3_h73x DifferentialNoise 3 1.07 0.32 {seed}"
+    assert script.count("DifferentialNoise") == 1 and line in script
+    assert script.index("DifferentialTransfer 3") < script.index(line) < script.index("macro reset", script.index('"ams"'))
+    assert system.noise_seed("ecu") != seed
+    doc = yaml.safe_load((REPO / "systems" / "ecu-ams.yaml").read_text())
+    doc["seed"] = 7
+    p = tmp_path / "ecu-ams.yaml"
+    p.write_text(yaml.safe_dump(doc))
+    other = System(p)
+    assert other.seed == 7 and other.noise_seed("ams") != seed
+    assert "DifferentialNoise" not in System(REPO / "systems" / "ecu.yaml").render_renode()
+
+
 @pytest.mark.parametrize("old, new, message", [
     # The schema refuses a label, a firmware id or a page that isn't one
     # (test_injection checks System() refuses them without it); System()
@@ -695,9 +716,10 @@ def test_the_ams_carrier_reads_the_current_pair_through_its_measured_transfer():
                                                  "v1.0 lacks"),
     ("      PF9: {port: sysbus.gpioPortF, pin: 9}", "      PB4: {port: sysbus.gpioPortB, pin: 4}",
      "makes 'PB4' a GPIO, but the board models no analog input"),
-    ("      PF7: {gain: 0.92, offset_codes: 6}", "      PF9: {gain: 0.92, offset_codes: 6}",
+    ("      PF7: {gain: 0.92, offset_codes: 6,", "      PF9: {gain: 0.92, offset_codes: 6,",
      "gives 'PF9' a differential ADC transfer, but it is not an analog input"),
-    ("      PF7: {gain: 0.92, offset_codes: 6}", "      PF7: {gain: 0.2}", "not valid under any"),
+    ("      PF7: {gain: 0.92,", "      PF7: {gain: 0.2,", "not valid under any"),
+    ("noise_codes_rms: 1.07", "noise_codes_rms: -1", "not valid under any"),
 ])
 def test_the_roles_table_is_checked(tmp_path, old, new, message):
     with pytest.raises(SystemError, match=message):
