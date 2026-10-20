@@ -95,6 +95,17 @@ datasheet term found explains the gain (VREF+ is VDD through 47 Ω, VDD
 take a few tenths of a percent), so the figures are the measurement's.
 Single-ended reads stay ideal: nothing measured them.
 
+The pair also carries the car's measured ADC3 noise (#327): 1.07 codes rms
+per conversion and 0.32 codes rms held through each capture (an offset drawn
+at every ADSTART), from an ELE log of the car's AMS at rest
+(`adc_differential` in the catalogue cites it; `Stm32H7Adc3.cs`
+`DifferentialNoise`). The firmware's 50 ms mean then scatters 0.11 A rms, as
+on the car, and its current filter sits a few tens of mA off 0 at rest. A
+noise-free ADC left it at exactly 0, which the firmware takes as unseeded
+(IFS08-CE-AMS#640): a step then seeded it directly and skipped the ramp. The
+draws are seeded (the system's `seed`, default 1, and the board's name), so a
+run repeats byte for byte.
+
 ## Known gotchas
 
 - **CAN_H/L swapped at the MainLite connector**

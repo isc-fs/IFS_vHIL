@@ -45,10 +45,11 @@
 // both and compares them.
 //
 // Oversampling: each of the N conversions of a result reads the same input
-// (the emulated inputs are noise-free), the N codes are summed, shifted right
-// by OVSS and kept to the 16 bits of DR, right-aligned whatever ALIGN says
-// (RM0468 ADC3 "Oversampler"). The truncating shift is exact for the shifts
-// the firmwares use (OVSS <= log2 N).
+// (noise-free unless the channel has DifferentialNoise, below), the N codes
+// are summed, shifted right by OVSS and kept to the 16 bits of DR,
+// right-aligned whatever ALIGN says (RM0468 ADC3 "Oversampler"). The
+// truncating shift is exact for the shifts the firmwares use (OVSS <= log2 N)
+// on noise-free codes; a noisy sum truncates as the hardware's would.
 // Not modelled: injected conversions, hardware triggers, triggered
 // oversampling (TROVS), the DMA one-shot stop after the DMA's last transfer
 // (the DMA stream stops instead; the ADC's further requests are ignored), and
@@ -67,6 +68,25 @@
 // the chip's: a system sets it from its board role's catalogue entry
 // (catalog/boards/mainlite.yaml `adc_differential`, which cites the
 // measurement), once, and it survives Reset as the board's analog path does.
+//
+// A differential channel may also carry the board's measured noise (#327):
+//     sysbus.adc3_h73x DifferentialNoise 3 1.07 0.32 <seed>
+//         (channel, per-conversion rms, per-start rms, both 12-bit codes)
+// adds to each conversion's code a zero-mean draw of the first rms, and to
+// every conversion of one regular sequence start (ADSTART) one held draw of
+// the second, before the code is rounded to an integer: an oversampled
+// result sums N conversions, so it gets N x the held draw plus one draw of
+// sqrt(N) x the first (the sum of N independent ones), rounded once. The
+// draws are Gaussian-shaped (Irwin-Hall, 8 uniforms: bounded at +/-4.9 rms)
+// and come from a counter-based hash (SplitMix64) of the seed, the channel
+// and the result's (or the start's) index on this ADC, in integers and IEEE
+// basic operations only: the same on every host and run, lazy-DMA or not
+// (a result's value depends on its index, not on when it is handed over).
+// The indices count from load, not from Reset. Absent (the default) or
+// single-ended reads: noise-free, as before. A system sets it from its
+// board role's catalogue entry (catalog/boards/mainlite.yaml
+// `adc_differential`, which cites the measurement) with a seed vhil.system
+// derives from the system's `seed` and the board's name.
 //
 // Fault injection: while ConversionFault is true a started conversion never
 // ends (no EOC, no DMA request, DR unchanged), as when the ADC kernel clock
@@ -184,6 +204,27 @@ namespace Antmicro.Renode.Peripherals.Analog
             else
             {
                 diffTransfer[channel] = Tuple.Create(gain, offsetCodes);
+            }
+        }
+
+        // The board's measured noise on a differential INP channel (see the
+        // header): per-conversion and per-start rms in 12-bit codes, and the
+        // seed of its draws. 0 and 0 removes it.
+        public void DifferentialNoise(int channel, double codesRms, double startCodesRms, ulong seed)
+        {
+            CheckChannel(channel);
+            if(codesRms < 0 || startCodesRms < 0)
+            {
+                throw new ArgumentException("noise rms must be >= 0");
+            }
+            CatchUpForObserver();   // results due before the change convert the old way
+            if(codesRms == 0 && startCodesRms == 0)
+            {
+                diffNoise.Remove(channel);
+            }
+            else
+            {
+                diffNoise[channel] = new Noise { Rms = codesRms, StartRms = startCodesRms, Seed = seed };
             }
         }
 
@@ -376,6 +417,7 @@ namespace Antmicro.Renode.Peripherals.Analog
 
             if((value & CR_ADSTART) != 0 && !running && enabled)
             {
+                startIndex++;   // a new held draw for this sequence's conversions
                 rank = 1;
                 running = true;
                 nextAt = Now() + PeriodTicks(rank);
@@ -459,7 +501,7 @@ namespace Antmicro.Renode.Peripherals.Analog
             uint last = 0;
             while(t <= now && bulkValues.Count < cap)
             {
-                last = Convert(SequenceChannel(r));
+                last = Convert(SequenceChannel(r), noiseIndex + (ulong)bulkValues.Count);
                 bulkValues.Add(size == 4 ? last : last & (size == 2 ? 0xFFFFu : 0xFFu));
                 if(r < length)
                 {
@@ -478,6 +520,7 @@ namespace Antmicro.Renode.Peripherals.Analog
             }
             regs[DR / 4] = last;
             conversions += (ulong)bulkValues.Count;
+            noiseIndex += (ulong)bulkValues.Count;
             regs[ISR / 4] = (regs[ISR / 4] | ISR_EOSMP | (sequenceEnded ? ISR_EOS : 0)) & ~ISR_EOC;
             rank = r;
             nextAt = t;
@@ -508,7 +551,7 @@ namespace Antmicro.Renode.Peripherals.Analog
             {
                 regs[ISR / 4] |= ISR_OVR;   // the previous result was never read
             }
-            regs[DR / 4] = Convert(SequenceChannel(rank));
+            regs[DR / 4] = Convert(SequenceChannel(rank), noiseIndex++);
             conversions++;
             regs[ISR / 4] |= ISR_EOSMP | ISR_EOC;
             if(rank < length)
@@ -891,7 +934,8 @@ namespace Antmicro.Renode.Peripherals.Analog
             return (int)((reg >> (6 * index)) & 0x1F);
         }
 
-        private uint Convert(int channel)
+        // `index`: the result's place on this ADC since load (the noise's).
+        private uint Convert(int channel, ulong index)
         {
             if(channel >= Channels)
             {
@@ -921,6 +965,11 @@ namespace Antmicro.Renode.Peripherals.Analog
             {
                 code = volts[channel] / vref * full;
             }
+            if(diffNoise.Count != 0 && (regs[DIFSEL / 4] & (1u << channel)) != 0
+               && diffNoise.TryGetValue(channel, out var noise))
+            {
+                return ConvertNoisy(channel, code, full, bits, noise, index);
+            }
             var value = (int)Math.Round(code);
             value = ApplyOffsets(channel, value, full);
             value = Math.Max(0, Math.Min(full, value));
@@ -936,6 +985,56 @@ namespace Antmicro.Renode.Peripherals.Analog
                 value <<= 16 - bits;   // left-aligned in the 16-bit DR
             }
             return (uint)value;
+        }
+
+        // A differential result with the board's noise (see the header): the
+        // N conversions' codes summed as one draw, offsets and clamping per
+        // conversion, then the oversampler's shift (or the alignment).
+        private uint ConvertNoisy(int channel, double code, int full, int bits, Noise noise, ulong index)
+        {
+            var scale = 1.0 / (1 << (12 - bits));   // 12-bit codes to this resolution
+            var n = Oversampling ? OversamplingRatio : 1;
+            var held = noise.StartRms * scale * Gauss(noise.Seed, StartStream, channel, startIndex);
+            var spread = noise.Rms * scale * Gauss(noise.Seed, ConversionStream, channel, index);
+            var sum = (long)Math.Round(n * (code + held) + Math.Sqrt(n) * spread);
+            sum += (long)n * ApplyOffsets(channel, 0, full);
+            sum = Math.Max(0, Math.Min((long)n * full, sum));
+            if(Oversampling)
+            {
+                var shift = (int)((regs[CFGR2 / 4] >> 5) & 0xF);
+                return (uint)((sum >> Math.Min(shift, 8)) & 0xFFFF);
+            }
+            var value = (int)sum;
+            if((regs[CFGR / 4] & CFGR_ALIGN) != 0)
+            {
+                value <<= 16 - bits;
+            }
+            return (uint)value;
+        }
+
+        // A zero-mean, unit-rms draw: Irwin-Hall of eight 16-bit uniforms from
+        // two SplitMix64 outputs keyed by (seed, stream, channel, index).
+        // Integer arithmetic and one IEEE division: bit-identical everywhere.
+        private static double Gauss(ulong seed, ulong stream, int channel, ulong index)
+        {
+            var key = Mix(seed ^ Mix(stream * 0x100 + (ulong)channel));
+            var a = Mix(key + 2 * index);
+            var b = Mix(key + 2 * index + 1);
+            long s = 0;
+            for(var i = 0; i < 64; i += 16)
+            {
+                s += (long)((a >> i) & 0xFFFF) + (long)((b >> i) & 0xFFFF);
+            }
+            // 8 uniforms on 0..65535: mean 8 x 32767.5, variance 8 x (65536^2 - 1) / 12.
+            return (s - 262140) / IrwinHallRms;
+        }
+
+        private static ulong Mix(ulong x)
+        {
+            var z = x + 0x9E3779B97F4A7C15UL;
+            z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9UL;
+            z = (z ^ (z >> 27)) * 0x94D049BB133111EBUL;
+            return z ^ (z >> 31);
         }
 
         // ADC3_OFRy: OFFSET [11:0], OFFSETPOS 24, SATEN 25, OFFSET_CH [30:26], EN 31.
@@ -1066,6 +1165,20 @@ namespace Antmicro.Renode.Peripherals.Analog
         private readonly double[] volts = new double[Channels];
         private readonly Dictionary<int, int> innOf = new Dictionary<int, int>();
         private readonly Dictionary<int, Tuple<double, int>> diffTransfer = new Dictionary<int, Tuple<double, int>>();
+        private readonly Dictionary<int, Noise> diffNoise = new Dictionary<int, Noise>();
         private readonly HashSet<string> warned = new HashSet<string>();
+        private ulong noiseIndex;    // results since load (not Reset): the noise's counter
+        private ulong startIndex;    // regular sequence starts since load
+
+        private const ulong ConversionStream = 1;
+        private const ulong StartStream = 2;
+        private static readonly double IrwinHallRms = Math.Sqrt(8.0 * (65536.0 * 65536.0 - 1) / 12.0);
+
+        private class Noise
+        {
+            public double Rms;
+            public double StartRms;
+            public ulong Seed;
+        }
     }
 }

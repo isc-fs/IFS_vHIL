@@ -282,7 +282,7 @@
               },
               "adc_differential": {
                 "type": "object",
-                "description": "The measured transfer of this role's carrier on a differential ADC input, by the INP pin (an analog input of the board): the code reads (1 + gain * dV / VREF+) * 2^(n-1) + offset_codes (12-bit codes). Cite the measurement. Absent: the ideal transfer (gain 1, offset 0).",
+                "description": "The measured transfer of this role's carrier on a differential ADC input, by the INP pin (an analog input of the board): the code reads (1 + gain * dV / VREF+) * 2^(n-1) + offset_codes (12-bit codes), plus its measured noise (noise_codes_rms, start_noise_codes_rms; seeded by the system's seed). Cite the measurement. Absent: the ideal transfer (gain 1, offset 0, noise-free).",
                 "propertyNames": {
                   "$ref": "#/$defs/name"
                 },
@@ -292,7 +292,9 @@
                   "additionalProperties": false,
                   "properties": {
                     "gain": {"type": "number", "exclusiveMinimum": 0.5, "maximum": 1.5},
-                    "offset_codes": {"type": "integer", "minimum": -2048, "maximum": 2048}
+                    "offset_codes": {"type": "integer", "minimum": -2048, "maximum": 2048},
+                    "noise_codes_rms": {"type": "number", "minimum": 0, "maximum": 64, "description": "Measured rms noise of each conversion, 12-bit codes (Gaussian-shaped, drawn per conversion). Cite the measurement."},
+                    "start_noise_codes_rms": {"type": "number", "minimum": 0, "maximum": 64, "description": "Measured rms of an offset drawn at each regular sequence start (ADSTART) and held for its conversions, 12-bit codes. Cite the measurement."}
                   }
                 }
               }
@@ -572,6 +574,11 @@
         },
         "description": {
           "type": "string"
+        },
+        "seed": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "The run's seed (default 1): every modelled noise (a role's adc_differential noise) draws from it, with the board's name, so runs repeat byte for byte on any host. vhil.sim.Sim(seed=...) overrides it for a run."
         },
         "time": {
           "type": "object",

@@ -44,6 +44,20 @@ and ECU's instruction counts, PB9 / ECU edges (by a few us, same count),
 state and RAM digests. Frame counts, edge counts and the ecu and udv
 fingerprints are unchanged.
 
+Since #327 (the car's measured ADC3 noise on the same pair, seed 1, not a
+speed change; same patch set, firmware AMS dev 94b59a9, ECU dev 44610a5, uDV
+dev 1252022, CAN_BL v1.7.0; 2026-10-20): ecu `f66bae9a`, ams `79f9b368`,
+ecu-ams `ca19a9e9`, udv `f61019b8`, ecu-ams-udv `82f40a77`, ecu-ams-ecu
+`5a060988`; two runs byte-identical. What moved, only in systems with the
+AMS: the pack current it reads at rest, 0 -> a few tens of mA either side,
+so 0x135's accu (0 -> -2..+1 dA, 32 of its frames in ams) and 0x4A1's
+current (0 -> -94..+35 mA, 15 frames) on can_acu, and the ECU's relay of it
+on can_dash (0x518, 9 frames) and in its nRF24 payloads (11 of 200); then,
+from those frames' bit stuffing, later frames' timing by a few us, the AMS's
+and ECU's instruction counts, PB9 / ECU edge instruction counts and times,
+state and RAM digests. SoC (0x130), frame counts, edge counts and the ecu and
+udv fingerprints are unchanged.
+
 `ecu-ams-ecu` is a benchmark, not a car system
 ([`scripts/speed-systems/`](../scripts/speed-systems/ecu-ams-ecu.yaml), named
 in `speed.py`'s `BENCH_ONLY`, so the catalogue, the editor and the scenarios

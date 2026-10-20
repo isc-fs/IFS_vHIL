@@ -72,9 +72,11 @@ def test_the_capture_runs_at_the_oversampled_rate(ams):
 
 
 def test_the_buffers_hold_the_oversampled_code(ams):
-    """Each sample is the sum of 64 identical 12-bit conversions >> 2: 16 x
-    the differential code, in both ping-pong buffers once both have been
-    refilled under the new input."""
+    """Each sample is the sum of 64 12-bit conversions >> 2: 16 x the
+    differential code, in both ping-pong buffers once both have been refilled
+    under the new input, spread by the car's ADC3 noise (#327,
+    catalog/boards/mainlite.yaml): 2 x 1.07 = 2.14 Q4 rms per sample around
+    the capture's own offset (0.32 x 16 = 5.1 Q4 rms, held per start)."""
     io = ams.io("ams")
     vp, vn = _legs(40)
     io.set_voltage("PF7", vp)
@@ -82,7 +84,11 @@ def test_the_buffers_hold_the_oversampled_code(ams):
     ams.run_for(ms=200)                       # each buffer restarts every 100 ms
     want = 16 * _code_diff(vp, vn)
     for buf in (0, 1):
-        assert set(_capture(ams, buf, 16)) == {want}, f"buffer {buf}"
+        samples = _capture(ams, buf, 200)
+        mean = sum(samples) / len(samples)
+        rms = (sum((x - mean) ** 2 for x in samples) / len(samples)) ** 0.5
+        assert abs(mean - want) <= 8 + 4 * 5.1, f"buffer {buf}: mean {mean:.1f}, code {want}"
+        assert 1.6 <= rms <= 2.8, f"buffer {buf}: {rms:.2f} Q4 rms"
     io.set_voltage("PF7", _legs(0)[0])
     io.set_voltage("PF8", _legs(0)[1])
 
