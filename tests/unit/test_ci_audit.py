@@ -64,3 +64,15 @@ def test_the_impact_map_lists_what_a_rule_would_not_select(tmp_path):
     assert "tests/sim/test_ams_sd.py" in gaps["models/renode/IsoSpi.cs"]
     assert "models/renode/Stm32H7Sdmmc.cs" not in gaps
     assert "catalog/firmware/ams.yaml" not in gaps
+
+
+def test_a_failure_counts_only_against_prs_merged_before_its_nightly():
+    sd = SEL.select(["models/renode/Stm32H7Sdmmc.cs"])
+    radio = F("sim", "tests/sim/test_ecu_radio.py", "u", "2026-10-20T02:30:00Z")
+    before = {"number": 1, "title": "a", "labels": [{"name": "full-ci"}], "base": {"ref": "dev"},
+              "merged_at": "2026-10-19T18:00:00Z"}
+    after = dict(before, number=2, merged_at="2026-10-20T09:00:00Z")
+    assert audit.could_cause(before, radio) and not audit.could_cause(after, radio)
+    flagged = audit.report(__import__("datetime").datetime(2026, 10, 19), [(before, "impact", sd),
+                           (after, "impact", sd)], [radio], [], {}, "", set(SEL.markers))[1]
+    assert flagged == {1: [radio]}
