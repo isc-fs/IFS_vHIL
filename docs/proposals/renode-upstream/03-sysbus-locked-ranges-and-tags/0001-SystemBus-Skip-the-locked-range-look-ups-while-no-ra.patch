@@ -1,0 +1,52 @@
+From ab31003f65dd3b8e1cbbbd5af1a13586b3b2bdba Mon Sep 17 00:00:00 2001
+From: Raul Moran <rmg@raulmoranguerra.com>
+Date: Wed, 14 Oct 2026 02:32:45 +0200
+Subject: [PATCH 1/2] SystemBus: Skip the locked range look-ups while no range
+ is locked
+
+Every bus access calls IsAddressRangeLocked, which takes the context
+dictionary's lock twice and does up to three dictionary look-ups,
+although most platforms never lock an address range. Remember whether a
+range has ever been locked and return false without the look-ups until
+then: no collection holds a range before the first one is locked, so
+the answer is the same.
+---
+ src/Emulator/Main/Peripherals/Bus/SystemBus.cs | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/src/Emulator/Main/Peripherals/Bus/SystemBus.cs b/src/Emulator/Main/Peripherals/Bus/SystemBus.cs
+index b7291845f..743efdaea 100644
+--- a/src/Emulator/Main/Peripherals/Bus/SystemBus.cs
++++ b/src/Emulator/Main/Peripherals/Bus/SystemBus.cs
+@@ -489,6 +489,11 @@ public void Clear()
+         /// <returns>True if any part of the <c>range</c> is locked for the given CPU (globally if <c>null</c> passed as <c>context</c>).</returns>
+         public bool IsAddressRangeLocked(Range range, IPeripheral context = null)
+         {
++            // Every bus access asks: there is nothing to look up until a range has been locked
++            if(!anyAddressRangeLocked)
++            {
++                return false;
++            }
+             // The locked range is either mapped for the CPU context, or globally (that is the reason for the OR)
+             return (lockedRangesCollectionByContext.TryGetValue(context, initiatorState: null, out var collection) && collection.ContainsOverlappingRange(range))
+                 || lockedRangesCollectionByContext[null].ContainsOverlappingRange(range);
+@@ -521,6 +526,10 @@ public void SetAddressRangeLocked(Range range, bool locked, IPeripheral context
+ 
+                 using(Machine.ObtainPausedState(internalPause: true))
+                 {
++                    if(locked)
++                    {
++                        anyAddressRangeLocked = true;
++                    }
+                     RelockRange(range, locked, context);
+ 
+                     lockedRangesCollectionByContext.WithStateCollection(context, stateMask: null, collection =>
+@@ -2626,6 +2635,8 @@ private void PostDeserializationInitStructures()
+         private SymbolLookup globalLookup;
+         [Transient]
+         private ThreadLocalContext threadLocalContext;
++        // Set when a range is locked for the first time, never cleared
++        private volatile bool anyAddressRangeLocked;
+ 
+         [Constructor]
+         private ThreadLocal<int> cachedCpuId;

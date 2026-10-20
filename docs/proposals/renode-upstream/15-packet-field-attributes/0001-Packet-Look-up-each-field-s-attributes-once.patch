@@ -1,0 +1,191 @@
+From 4afe8db223ee863c7533bda1ecac1c3d13f19539 Mon Sep 17 00:00:00 2001
+From: Raul Moran <rmg@raulmoranguerra.com>
+Date: Fri, 16 Oct 2026 08:41:33 +0200
+Subject: [PATCH] Packet: Look up each field's attributes once
+
+Packet's decoders and encoders read a field's offset, alignment,
+padding, width, order and byte order through FieldPropertyInfoWrapper,
+which called GetCustomAttributes for every one of those reads: several
+reflection look-ups (each allocating the attribute array and attribute
+instances) per field of every value decoded or encoded. The wrappers are
+already cached per type and a member's attributes never change, so look
+them up once, when the wrapper is created.
+
+Every model decoding descriptors or frames with Packet gains: MCAN, for
+example, decodes each filter element from its message RAM for every
+frame it receives and encodes every frame it stores.
+---
+ .../Main/Tests/UnitTests/PacketTests.cs       | 35 ++++++++++++
+ src/Emulator/Main/Utilities/Packets/Packet.cs | 53 ++++++++++++-------
+ 2 files changed, 70 insertions(+), 18 deletions(-)
+
+diff --git a/src/Emulator/Main/Tests/UnitTests/PacketTests.cs b/src/Emulator/Main/Tests/UnitTests/PacketTests.cs
+index 3cdee1bed..29e41eab7 100644
+--- a/src/Emulator/Main/Tests/UnitTests/PacketTests.cs
++++ b/src/Emulator/Main/Tests/UnitTests/PacketTests.cs
+@@ -520,6 +520,25 @@ public void TestSerializingReadOnlyProperties()
+             Assert.AreEqual(data.Value, bytes[0]);
+         }
+ 
++        [Test]
++        public void TestFieldAttributesStayPerFieldAcrossDecodesAndEncodes()
++        {
++            // Each field keeps its own attributes (offset, width, byte order; the
++            // declaring type gives no byte order) on every decode and encode of
++            // the type, not only on the first
++            var data = new byte[] { 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0 };
++            for(var i = 0; i < 3; i++)
++            {
++                var structure = Packet.Decode<TestStructMixedByteOrder>(data);
++                Assert.AreEqual(0x1234, structure.MsbFirst);
++                Assert.AreEqual(0x7856, structure.LsbFirst);
++                Assert.AreEqual(0xbc9a, structure.LsbFirstAtOffset);
++                Assert.AreEqual(0xf0, structure.Last);
++                Assert.AreEqual(0xde, structure.Sixth);
++                Assert.AreEqual(data, Packet.Encode(structure));
++            }
++        }
++
+         [LeastSignificantByteFirst]
+         private struct TestStructA
+         {
+@@ -938,6 +957,22 @@ private struct TestStructNestedOptionalParent
+ #pragma warning restore 649
+         }
+ 
++        private struct TestStructMixedByteOrder
++        {
++#pragma warning disable 649
++            [PacketField, Width(bits: 16)]
++            public ushort MsbFirst;
++            [PacketField, LeastSignificantByteFirst, Width(bits: 16)]
++            public ushort LsbFirst;
++            [PacketField, LeastSignificantByteFirst, Offset(bytes: 4), Width(bits: 16)]
++            public ushort LsbFirstAtOffset;
++            [PacketField, Offset(bytes: 7), Width(bits: 8)]
++            public byte Last;
++            [PacketField, Offset(bytes: 6), Width(bits: 8)]
++            public byte Sixth;
++#pragma warning restore 649
++        }
++
+         [LeastSignificantByteFirst]
+         private struct TestStructWithReadOnlyProperty
+         {
+diff --git a/src/Emulator/Main/Utilities/Packets/Packet.cs b/src/Emulator/Main/Utilities/Packets/Packet.cs
+index 796c35b9c..a5162aa62 100644
+--- a/src/Emulator/Main/Utilities/Packets/Packet.cs
++++ b/src/Emulator/Main/Utilities/Packets/Packet.cs
+@@ -744,16 +744,14 @@ private static int CalculateOffsetGenerator(Type t, UInt128 optionalFieldPresenc
+ 
+         private class FieldPropertyInfoWrapper
+         {
+-            public FieldPropertyInfoWrapper(FieldInfo info)
++            public FieldPropertyInfoWrapper(FieldInfo info) : this((MemberInfo)info)
+             {
+                 fieldInfo = info;
+-                GetPresentMethod(info, out presentMethod, out presentArgs);
+             }
+ 
+-            public FieldPropertyInfoWrapper(PropertyInfo info)
++            public FieldPropertyInfoWrapper(PropertyInfo info) : this((MemberInfo)info)
+             {
+                 propertyInfo = info;
+-                GetPresentMethod(info, out presentMethod, out presentArgs);
+             }
+ 
+             public bool IsPresent(object o)
+@@ -786,27 +784,21 @@ public bool SetValue(object o, object v)
+                 return true;
+             }
+ 
+-            public T GetAttribute<T>()
+-            {
+-                return (T)((MemberInfo)fieldInfo ?? propertyInfo).GetCustomAttributes(typeof(T), false).FirstOrDefault();
+-            }
+-
+-            public bool IsLSBFirst => ((MemberInfo)fieldInfo ?? propertyInfo).DeclaringType.GetCustomAttribute<LeastSignificantByteFirst>(true) != null
+-                    || GetAttribute<LeastSignificantByteFirst>() != null;
++            public bool IsLSBFirst => isLSBFirst;
+ 
+             public bool IsOptional => presentMethod != null;
+ 
+-            public int? ByteOffset => (int?)GetAttribute<OffsetAttribute>()?.OffsetInBytes;
++            public int? ByteOffset => (int?)offsetAttribute?.OffsetInBytes;
+ 
+-            public int? BitOffset => (int?)GetAttribute<OffsetAttribute>()?.OffsetInBits;
++            public int? BitOffset => (int?)offsetAttribute?.OffsetInBits;
+ 
+-            public int? ByteAlign => (int?)GetAttribute<AlignAttribute>()?.AlignmentInBytes;
++            public int? ByteAlign => (int?)alignAttribute?.AlignmentInBytes;
+ 
+-            public int? BytePaddingBefore => (int?)GetAttribute<PaddingBeforeAttribute>()?.PaddingInBytes;
++            public int? BytePaddingBefore => (int?)paddingBeforeAttribute?.PaddingInBytes;
+ 
+             public int BytesRequired => ((BitOffset ?? 0) + BitWidth + 7) / 8 ?? (Width + (BitOffset > 0 ? 1 : 0));
+ 
+-            public int Order => GetAttribute<PacketFieldAttribute>().Order;
++            public int Order => packetFieldAttribute.Order;
+ 
+             public int Width
+             {
+@@ -838,7 +830,7 @@ public int Width
+                     if(type.IsArray)
+                     {
+                         // attribute value is in bits
+-                        return (GetCustomWidth(type, GetAttribute<WidthAttribute>()) ?? throw new ArgumentException("Array type must have specified Width")) / 8;
++                        return (GetCustomWidth(type, widthAttribute) ?? throw new ArgumentException("Array type must have specified Width")) / 8;
+                     }
+                     if(Misc.IsStructType(type) || type.IsClass)
+                     {
+@@ -888,7 +880,7 @@ public int? BitWidth
+                     }
+ 
+                     var width = inBytes << 3;
+-                    var setWidth = GetCustomWidth(type, GetAttribute<WidthAttribute>());
++                    var setWidth = GetCustomWidth(type, widthAttribute);
+                     if(setWidth < 0)
+                     {
+                         throw new ArgumentException($"Width is less than zero.");
+@@ -905,6 +897,25 @@ public int? BitWidth
+ 
+             public string ElementName => fieldInfo?.Name ?? propertyInfo.Name;
+ 
++            private FieldPropertyInfoWrapper(MemberInfo info)
++            {
++                GetPresentMethod(info, out presentMethod, out presentArgs);
++                // A member's attributes never change: look them up once here,
++                // not on every read of every field of every value decoded or encoded
++                offsetAttribute = GetAttribute<OffsetAttribute>(info);
++                alignAttribute = GetAttribute<AlignAttribute>(info);
++                paddingBeforeAttribute = GetAttribute<PaddingBeforeAttribute>(info);
++                widthAttribute = GetAttribute<WidthAttribute>(info);
++                packetFieldAttribute = GetAttribute<PacketFieldAttribute>(info);
++                isLSBFirst = info.DeclaringType.GetCustomAttribute<LeastSignificantByteFirst>(true) != null
++                    || GetAttribute<LeastSignificantByteFirst>(info) != null;
++            }
++
++            private static T GetAttribute<T>(MemberInfo info) where T : Attribute
++            {
++                return (T)info.GetCustomAttributes(typeof(T), false).FirstOrDefault();
++            }
++
+             private bool GetPresentMethod(MemberInfo info, out MethodInfo foundMethod, out object[] foundArgs)
+             {
+                 foundMethod = null;
+@@ -951,6 +962,12 @@ private bool GetPresentMethod(MemberInfo info, out MethodInfo foundMethod, out o
+             private readonly PropertyInfo propertyInfo;
+             private readonly MethodInfo presentMethod;
+             private readonly object[] presentArgs;
++            private readonly OffsetAttribute offsetAttribute;
++            private readonly AlignAttribute alignAttribute;
++            private readonly PaddingBeforeAttribute paddingBeforeAttribute;
++            private readonly WidthAttribute widthAttribute;
++            private readonly PacketFieldAttribute packetFieldAttribute;
++            private readonly bool isLSBFirst;
+         }
+     }
+ }
+-- 
+2.51.0
+

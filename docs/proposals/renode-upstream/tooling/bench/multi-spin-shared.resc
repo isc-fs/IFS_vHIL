@@ -1,0 +1,3 @@
+# _multi-spin.resc (two spinning Cortex-M4s) with the machines on the master time source.
+python "TIMESOURCE = 'shared'"
+include $ORIGIN/_multi-spin.resc

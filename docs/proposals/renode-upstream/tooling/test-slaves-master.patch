@@ -1,0 +1,45 @@
+From ca8640bbe971c2d8460382d0a0c75fedf64e144f Mon Sep 17 00:00:00 2001
+From: Raul Moran <rmg@raulmoranguerra.com>
+Date: Thu, 15 Oct 2026 10:18:34 +0200
+Subject: [PATCH] TEST ONLY: RENODE_TEST_SLAVES=threads puts every machine on a
+ slave time source (master)
+
+---
+ src/Emulator/Main/Core/Emulation.cs | 7 +++++++
+ src/Emulator/Main/Core/Machine.cs   | 5 ++++-
+ 2 files changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/src/Emulator/Main/Core/Emulation.cs b/src/Emulator/Main/Core/Emulation.cs
+index f62a1370a..f25155d60 100644
+--- a/src/Emulator/Main/Core/Emulation.cs
++++ b/src/Emulator/Main/Core/Emulation.cs
+@@ -213,6 +213,13 @@ public bool TryAddMachine(IMachine machine, string name)
+ 
+                 if(machine.LocalTimeSource is ITimeSink machineTimeSink)
+                 {
++                    if(machine.LocalTimeSource is SlaveTimeSource testSlave && Environment.GetEnvironmentVariable("RENODE_TEST_SLAVES") != null)
++                    {
++                        // TEST ONLY: the master's settings, as a machine on the master time source would run with
++                        testSlave.Quantum = MasterTimeSource.Quantum;
++                        testSlave.AdvanceImmediately = MasterTimeSource.AdvanceImmediately;
++                        testSlave.ExecuteInSerial = MasterTimeSource.ExecuteInSerial;
++                    }
+                     MasterTimeSource.RegisterSink(machineTimeSink);
+                 }
+                 else
+diff --git a/src/Emulator/Main/Core/Machine.cs b/src/Emulator/Main/Core/Machine.cs
+index d7e366ca8..fae0adb35 100644
+--- a/src/Emulator/Main/Core/Machine.cs
++++ b/src/Emulator/Main/Core/Machine.cs
+@@ -65,7 +65,10 @@ public Machine(bool createLocalTimeSource = false)
+             invalidatedAddressesLock = new object();
+             beforeHaltState = new Dictionary<IHaltable, bool>();
+ 
+-            if(createLocalTimeSource)
++            // TEST ONLY (not for upstream): RENODE_TEST_SLAVES=threads puts every machine on a slave time source
++            // on its own thread, to run Renode's tests over that path (master: no "inline").
++            var testSlaves = Environment.GetEnvironmentVariable("RENODE_TEST_SLAVES");
++            if(createLocalTimeSource || testSlaves == "threads" || testSlaves == "inline")
+             {
+                 LocalTimeSource = new SlaveTimeSource();
+             }

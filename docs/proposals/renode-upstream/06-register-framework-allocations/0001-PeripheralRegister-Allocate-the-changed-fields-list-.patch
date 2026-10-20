@@ -1,0 +1,209 @@
+From 6fda70fa7e95bca97c6c988bdb5885b0bfd2ed0f Mon Sep 17 00:00:00 2001
+From: Raul Moran <rmg@raulmoranguerra.com>
+Date: Wed, 14 Oct 2026 02:35:24 +0200
+Subject: [PATCH 1/2] PeripheralRegister: Allocate the changed fields list only
+ when needed
+
+Every register read and write allocates a list of the fields it
+changed, calls Distinct on it (a HashSet) and, on writes, filters the
+tags with LINQ to check their allowed values. Most reads change no
+field, and a write rarely changes more than one.
+
+Create the list when the first field changes, skip Distinct when it
+holds fewer than two fields (Distinct keeps the first occurrence of
+each field, in order, so the handlers run as before) and loop over the
+tags directly.
+---
+ .../Structure/Registers/PeripheralRegister.cs | 71 ++++++++++++-------
+ 1 file changed, 47 insertions(+), 24 deletions(-)
+
+diff --git a/src/Emulator/Main/Core/Structure/Registers/PeripheralRegister.cs b/src/Emulator/Main/Core/Structure/Registers/PeripheralRegister.cs
+index fd1b0f260..558fbdf01 100644
+--- a/src/Emulator/Main/Core/Structure/Registers/PeripheralRegister.cs
++++ b/src/Emulator/Main/Core/Structure/Registers/PeripheralRegister.cs
+@@ -548,7 +548,8 @@ protected ulong ReadInner()
+             }
+             var baseValue = UnderlyingValue;
+             var valueToRead = UnderlyingValue;
+-            var changedFields = new List<RegisterField>();
++            // Allocated only when a field changes: every register read goes through here
++            List<RegisterField> changedFields = null;
+             foreach(var registerField in registerFields)
+             {
+                 if(!registerField.FieldMode.IsReadable())
+@@ -560,26 +561,23 @@ protected ulong ReadInner()
+                    && BitHelper.AreAnyBitsSet(UnderlyingValue, registerField.Position, registerField.Width))
+                 {
+                     BitHelper.ClearBits(ref UnderlyingValue, registerField.Position, registerField.Width);
+-                    changedFields.Add(registerField);
++                    AddChangedField(ref changedFields, registerField);
+                 }
+                 if(registerField.FieldMode.IsFlagSet(FieldMode.ReadToSet)
+                    && !BitHelper.AreAllBitsSet(UnderlyingValue, registerField.Position, registerField.Width))
+                 {
+                     BitHelper.SetBits(ref UnderlyingValue, registerField.Position, registerField.Width);
+-                    changedFields.Add(registerField);
++                    AddChangedField(ref changedFields, registerField);
+                 }
+             }
+             foreach(var registerField in registerFields)
+             {
+                 registerField.CallReadHandler(baseValue, UnderlyingValue);
+             }
+-            foreach(var changedRegister in changedFields.Distinct())
+-            {
+-                changedRegister.CallChangeHandler(baseValue, UnderlyingValue);
+-            }
++            CallFieldChangeHandlers(changedFields, baseValue);
+ 
+             CallReadHandlers(baseValue, UnderlyingValue);
+-            if(changedFields.Any())
++            if(changedFields != null)
+             {
+                 CallChangeHandlers(baseValue, UnderlyingValue);
+             }
+@@ -591,7 +589,8 @@ protected void WriteInner(long offset, ulong value)
+         {
+             var baseValue = UnderlyingValue;
+             var difference = UnderlyingValue ^ value;
+-            var changedRegisters = new List<RegisterField>();
++            // Allocated only when a field changes: every register write goes through here
++            List<RegisterField> changedRegisters = null;
+             foreach(var registerField in registerFields)
+             {
+                 //switch is OK, because write modes are exclusive.
+@@ -601,7 +600,7 @@ protected void WriteInner(long offset, ulong value)
+                     if(BitHelper.AreAnyBitsSet(difference, registerField.Position, registerField.Width))
+                     {
+                         BitHelper.UpdateWith(ref UnderlyingValue, value, registerField.Position, registerField.Width);
+-                        changedRegisters.Add(registerField);
++                        AddChangedField(ref changedRegisters, registerField);
+                     }
+                     break;
+                 case FieldMode.Set:
+@@ -609,28 +608,28 @@ protected void WriteInner(long offset, ulong value)
+                     if(BitHelper.AreAnyBitsSet(setRegisters, registerField.Position, registerField.Width))
+                     {
+                         BitHelper.OrWith(ref UnderlyingValue, setRegisters, registerField.Position, registerField.Width);
+-                        changedRegisters.Add(registerField);
++                        AddChangedField(ref changedRegisters, registerField);
+                     }
+                     break;
+                 case FieldMode.WriteOneToToggle:
+                     if(BitHelper.AreAnyBitsSet(value, registerField.Position, registerField.Width))
+                     {
+                         BitHelper.XorWith(ref UnderlyingValue, value, registerField.Position, registerField.Width);
+-                        changedRegisters.Add(registerField);
++                        AddChangedField(ref changedRegisters, registerField);
+                     }
+                     break;
+                 case FieldMode.WriteOneToClear:
+                     if(BitHelper.AreAnyBitsSet((~difference & value), registerField.Position, registerField.Width))
+                     {
+                         BitHelper.AndWithNot(ref UnderlyingValue, value, registerField.Position, registerField.Width);
+-                        changedRegisters.Add(registerField);
++                        AddChangedField(ref changedRegisters, registerField);
+                     }
+                     break;
+                 case FieldMode.WriteZeroToClear:
+                     if(BitHelper.AreAnyBitsSet((difference & UnderlyingValue), registerField.Position, registerField.Width))
+                     {
+                         BitHelper.AndWithNot(ref UnderlyingValue, ~value, registerField.Position, registerField.Width);
+-                        changedRegisters.Add(registerField);
++                        AddChangedField(ref changedRegisters, registerField);
+                     }
+                     break;
+                 case FieldMode.WriteZeroToSet:
+@@ -638,28 +637,28 @@ protected void WriteInner(long offset, ulong value)
+                     if(BitHelper.AreAnyBitsSet(negSetRegisters, registerField.Position, registerField.Width))
+                     {
+                         BitHelper.OrWith(ref UnderlyingValue, negSetRegisters, registerField.Position, registerField.Width);
+-                        changedRegisters.Add(registerField);
++                        AddChangedField(ref changedRegisters, registerField);
+                     }
+                     break;
+                 case FieldMode.WriteZeroToToggle:
+                     if(BitHelper.AreAnyBitsSet(~value, registerField.Position, registerField.Width))
+                     {
+                         BitHelper.XorWith(ref UnderlyingValue, ~value, registerField.Position, registerField.Width);
+-                        changedRegisters.Add(registerField);
++                        AddChangedField(ref changedRegisters, registerField);
+                     }
+                     break;
+                 case FieldMode.WriteToClear:
+                     if(BitHelper.AreAnyBitsSet(UnderlyingValue, registerField.Position, registerField.Width))
+                     {
+                         BitHelper.ClearBits(ref UnderlyingValue, registerField.Position, registerField.Width);
+-                        changedRegisters.Add(registerField);
++                        AddChangedField(ref changedRegisters, registerField);
+                     }
+                     break;
+                 case FieldMode.WriteToSet:
+                     if(!BitHelper.AreAllBitsSet(UnderlyingValue, registerField.Position, registerField.Width))
+                     {
+                         BitHelper.SetBits(ref UnderlyingValue, registerField.Position, registerField.Width);
+-                        changedRegisters.Add(registerField);
++                        AddChangedField(ref changedRegisters, registerField);
+                     }
+                     break;
+                 }
+@@ -668,13 +667,10 @@ protected void WriteInner(long offset, ulong value)
+             {
+                 registerField.CallWriteHandler(baseValue, value);
+             }
+-            foreach(var changedRegister in changedRegisters.Distinct())
+-            {
+-                changedRegister.CallChangeHandler(baseValue, UnderlyingValue);
+-            }
++            CallFieldChangeHandlers(changedRegisters, baseValue);
+ 
+             CallWriteHandlers(baseValue, value);
+-            if(changedRegisters.Any())
++            if(changedRegisters != null)
+             {
+                 CallChangeHandlers(baseValue, UnderlyingValue);
+             }
+@@ -723,6 +719,29 @@ protected void CallHandlers<T>(List<Action<T, T>> handlers, T oldValue, T newVal
+ 
+         protected ulong UnderlyingShadowValue;
+ 
++        private static void AddChangedField(ref List<RegisterField> changedFields, RegisterField field)
++        {
++            if(changedFields == null)
++            {
++                changedFields = new List<RegisterField>();
++            }
++            changedFields.Add(field);
++        }
++
++        private void CallFieldChangeHandlers(List<RegisterField> changedFields, ulong oldValue)
++        {
++            if(changedFields == null)
++            {
++                return;
++            }
++            // Distinct keeps the first occurrence of each field, in order: with fewer than two there is nothing to remove
++            var fields = changedFields.Count < 2 ? changedFields : changedFields.Distinct().ToList();
++            foreach(var field in fields)
++            {
++                field.CallChangeHandler(oldValue, UnderlyingValue);
++            }
++        }
++
+         private void LogUnhandledWrites(long offset, ulong unhandledWrites, ulong originalValue)
+         {
+             var warningLogMessage = TagLogger(offset, unhandledWrites, originalValue, matchSilent: false);
+@@ -767,8 +786,12 @@ private bool InvalidTagValues(long offset, ulong originalValue, out string log)
+             ulong allowedValuesMask = 0;
+             ulong allowedValues = 0;
+ 
+-            foreach(var tag in tags.Where(x => x.AllowedValue != null))
++            foreach(var tag in tags)
+             {
++                if(tag.AllowedValue == null)
++                {
++                    continue;
++                }
+                 allowedValuesMask |= BitHelper.CalculateQuadWordMask(tag.Width, tag.Position);
+                 allowedValues |= tag.AllowedValue.Value << tag.Position;
+             }

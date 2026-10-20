@@ -1,0 +1,79 @@
+From 4e632f3d42e0263f180aa57c50405a40df2908f8 Mon Sep 17 00:00:00 2001
+From: Raul Moran <rmg@raulmoranguerra.com>
+Date: Fri, 16 Oct 2026 08:42:52 +0200
+Subject: [PATCH] TranslationCPU: Allow a memory access hook for IO accesses
+ only
+
+A memory access hook (SetHookAtMemoryAccess) is called for every load
+and store, and while it is set translated code doesn't use the TLB fast
+path. A hook that only watches peripherals pays for every RAM access as
+well: a softmmu helper call and a call from tlib into C# each.
+
+SetHookAtMemoryAccess(hook, ioAccessesOnly: true) uses tlib's IO-only
+mode: the hook is called for IO accesses and slow (unaligned,
+page-spanning) ones, not for accesses that hit RAM within a page, and
+translated code keeps the TLB fast path. The mode is restored with the
+hook after deserialization. SetHookAtMemoryAccess(hook) is unchanged.
+---
+ .../Peripherals/CPU/TranslationCPU.cs         | 24 +++++++++++++++++--
+ 1 file changed, 22 insertions(+), 2 deletions(-)
+
+diff --git a/src/Emulator/Peripherals/Peripherals/CPU/TranslationCPU.cs b/src/Emulator/Peripherals/Peripherals/CPU/TranslationCPU.cs
+index 7906fc471..7f6891149 100644
+--- a/src/Emulator/Peripherals/Peripherals/CPU/TranslationCPU.cs
++++ b/src/Emulator/Peripherals/Peripherals/CPU/TranslationCPU.cs
+@@ -225,7 +225,22 @@ public void SetHookAtBlockBegin(Action<ulong, uint> hook)
+ 
+         public void SetHookAtMemoryAccess(MemoryAccessHook hook)
+         {
+-            TlibOnMemoryAccessEventEnabled(hook != null ? 1 : 0);
++            SetHookAtMemoryAccess(hook, ioAccessesOnly: false);
++        }
++
++        /// <summary>
++        /// Sets the hook called on memory accesses, or removes it (<paramref name="hook"/> null).
++        /// </summary>
++        /// <param name="hook">The hook, or null.</param>
++        /// <param name="ioAccessesOnly">
++        /// If true, the hook is called for IO (peripheral) accesses and slow (unaligned, page-spanning) ones only,
++        /// not for loads and stores that hit RAM within a page, so translated code keeps the TLB fast path.
++        /// If false, it is called for every access.
++        /// </param>
++        public void SetHookAtMemoryAccess(MemoryAccessHook hook, bool ioAccessesOnly)
++        {
++            memoryAccessHookIoAccessesOnly = ioAccessesOnly;
++            TlibOnMemoryAccessEventEnabled(hook == null ? 0 : (ioAccessesOnly ? MemoryAccessEventIoOnly : MemoryAccessEventAll));
+             memoryAccessHook = hook;
+         }
+ 
+@@ -1953,7 +1968,8 @@ private void RestoreState()
+             if(memoryAccessHook != null)
+             {
+                 // Repeat memory hook enable to make sure that the tcg context is set not to use the tlb
+-                TlibOnMemoryAccessEventEnabled(1);
++                // (or, for IO accesses only, to use it)
++                TlibOnMemoryAccessEventEnabled(memoryAccessHookIoAccessesOnly ? MemoryAccessEventIoOnly : MemoryAccessEventAll);
+             }
+         }
+ 
+@@ -2110,6 +2126,7 @@ private ulong TranslateAddressInner(ulong logicalAddress, MpuAccess accessType)
+         private Action<ulong> interruptEndHook;
+         private ExternalMmuFaultHook mmuFaultHook;
+         private MemoryAccessHook memoryAccessHook;
++        private bool memoryAccessHookIoAccessesOnly;
+         private Action<bool> wfiStateChangeHook;
+         private volatile bool wakeUpFromWfiRequested;
+ 
+@@ -2365,6 +2382,9 @@ private ulong TranslateAddressInner(ulong logicalAddress, MpuAccess accessType)
+         private readonly CpuThreadPauseGuard pauseGuard;
+ 
+         private readonly MinimalRangesCollection disabledMemory = new MinimalRangesCollection();
++        // tlib's enum memory_access_event
++        private const int MemoryAccessEventAll = 1;
++        private const int MemoryAccessEventIoOnly = 2;
+         private const int DefaultMaximumTranslationCacheSize = 512 * 1024 * 1024; // 512 MiB
+         private const int DefaultMinimumTranslationCacheSize = 32 * 1024 * 1024; // 32 MiB
+ 
+-- 
+2.51.0
+

@@ -1,0 +1,60 @@
+# An STM32H753's FDCAN1 (MCAN) in internal loopback, configured from the
+# monitor: 16 standard filter elements in the message RAM (15 ranges that
+# don't match, then a classic filter for the frame's ID 0x123 into Rx FIFO 0,
+# 4 elements in overwrite mode), one dedicated Tx buffer with an 8-byte
+# frame. A Cortex-M7 at 100 MIPS requests its transmission, then waits 200
+# loop iterations: about 250,000 frames a second of virtual time, each
+# decoding the Tx buffer's header and the 16 filter elements and encoding the
+# Rx FIFO element with Packet (PR 15).
+$warmup?="0.02"
+$measure?="0.1"
+mach create
+machine LoadPlatformDescription @platforms/cpus/stm32h753.repl
+cpu PerformanceInMips 100
+# CCCR: INIT and CCE, then TEST; TEST.LBCK (internal loopback)
+sysbus WriteDoubleWord 0x4000A018 0x3
+sysbus WriteDoubleWord 0x4000A018 0x83
+sysbus WriteDoubleWord 0x4000A010 0x10
+# SIDFC: 16 standard filters at 0x0; RXF0C: 4 elements at 0x100, overwrite;
+# TXBC: 1 dedicated Tx buffer at 0x200
+sysbus WriteDoubleWord 0x4000A084 0x00100000
+sysbus WriteDoubleWord 0x4000A0A0 0x80040100
+sysbus WriteDoubleWord 0x4000A0C0 0x00010200
+# Filters 0-14: range 0x700-0x7FF into Rx FIFO 0 (no match); 15: classic,
+# ID 0x123 mask 0x7FF into Rx FIFO 0
+sysbus WriteDoubleWord 0x4000ac00 0x0F0007FF
+sysbus WriteDoubleWord 0x4000ac04 0x0F0007FF
+sysbus WriteDoubleWord 0x4000ac08 0x0F0007FF
+sysbus WriteDoubleWord 0x4000ac0c 0x0F0007FF
+sysbus WriteDoubleWord 0x4000ac10 0x0F0007FF
+sysbus WriteDoubleWord 0x4000ac14 0x0F0007FF
+sysbus WriteDoubleWord 0x4000ac18 0x0F0007FF
+sysbus WriteDoubleWord 0x4000ac1c 0x0F0007FF
+sysbus WriteDoubleWord 0x4000ac20 0x0F0007FF
+sysbus WriteDoubleWord 0x4000ac24 0x0F0007FF
+sysbus WriteDoubleWord 0x4000ac28 0x0F0007FF
+sysbus WriteDoubleWord 0x4000ac2c 0x0F0007FF
+sysbus WriteDoubleWord 0x4000ac30 0x0F0007FF
+sysbus WriteDoubleWord 0x4000ac34 0x0F0007FF
+sysbus WriteDoubleWord 0x4000ac38 0x0F0007FF
+sysbus WriteDoubleWord 0x4000AC3C 0x892307FF
+# Tx buffer 0: standard ID 0x123, DLC 8, data
+sysbus WriteDoubleWord 0x4000AE00 0x048C0000
+sysbus WriteDoubleWord 0x4000AE04 0x00080000
+sysbus WriteDoubleWord 0x4000AE08 0x03020100
+sysbus WriteDoubleWord 0x4000AE0C 0x07060504
+# CCCR: leave initialisation (TEST kept)
+sysbus WriteDoubleWord 0x4000A018 0x80
+cpu AssembleBlock 0x20000000 """
+ldr r0, =0x4000A0D0
+movs r1, #1
+loop:
+str r1, [r0]
+movs r2, #200
+delay:
+subs r2, #1
+bne delay
+b loop
+"""
+cpu PC 0x20000000
+include $ORIGIN/_measure.resc

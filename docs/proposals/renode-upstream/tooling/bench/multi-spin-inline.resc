@@ -1,0 +1,3 @@
+# _multi-spin.resc (two spinning Cortex-M4s) with the machines on slave time sources on the master's thread (PR 13).
+python "TIMESOURCE = 'inline'"
+include $ORIGIN/_multi-spin.resc

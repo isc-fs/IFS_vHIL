@@ -1,0 +1,22 @@
+# Defines add_machine(name) for the multi-* benchmarks: adds a machine to
+# the emulation (`mach set` it after). The including script sets the Python
+# variable TIMESOURCE first:
+# - "shared": what `mach create` does, the machine on the emulation's master
+#   time source;
+# - "slaves": a slave time source of its own,
+#   `new Machine(createLocalTimeSource: true)`, with its dispatcher thread;
+# - "inline": the same, running on the master's thread (PR 13's
+#   SlaveTimeSource.RunsOnMasterThread; fails on a build without it).
+python """
+from Antmicro.Renode.Core import EmulationManager, Machine
+def add_machine(name):
+    if TIMESOURCE == 'shared':
+        m = Machine()
+    elif TIMESOURCE in ('slaves', 'inline'):
+        m = Machine(True)
+        if TIMESOURCE == 'inline':
+            m.LocalTimeSource.RunsOnMasterThread = True
+    else:
+        raise Exception('TIMESOURCE must be shared, slaves or inline, not ' + TIMESOURCE)
+    EmulationManager.Instance.CurrentEmulation.AddMachine(m, name)
+"""

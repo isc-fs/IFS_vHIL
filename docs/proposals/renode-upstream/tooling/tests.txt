@@ -1,0 +1,58 @@
+# Renode's own tests run against master and master + the PRs (tooling/build.sh):
+# every NUnit project renode/tests/tests.yaml lists except options-parser's, and the
+# Robot suites that exercise the time framework, the system bus (tags, locked and
+# per-core registrations, isolation, TrustZone state-aware look-ups), the register
+# framework (every peripheral model), CPU hooks, opcode hooks, pausing, snapshots and
+# logging, plus Cortex-M platforms and the demos; for PRs 08-12, every STM32 platform
+# suite (STM32_Timer is in all of them), timers and opcode hooks / execution tracing.
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj
+src/Infrastructure/src/Emulator/Peripherals/Test/PeripheralsTests/PeripheralsTests.csproj
+src/Infrastructure/src/Emulator/Extensions/MonitorTests/MonitorTests.csproj
+tests/unit-tests/RenodeTests/RenodeTests.csproj
+tests/unit-tests/sysbus.robot
+tests/unit-tests/sysbus-tag.robot
+tests/unit-tests/sysbus-data-race.robot
+tests/unit-tests/bus-isolation.robot
+tests/unit-tests/bus-performance.robot
+tests/unit-tests/offset-bus-registrations.robot
+tests/unit-tests/per-core-registration.robot
+tests/unit-tests/peripheral-hooks.robot
+tests/unit-tests/hooks.robot
+tests/unit-tests/opcodes-execution-hooks.robot
+tests/unit-tests/opcodes-counting.robot
+tests/unit-tests/execution-tracing.robot
+tests/unit-tests/instructions-counting.robot
+tests/unit-tests/timer-reconfiguration.robot
+tests/unit-tests/virtual-time.robot
+tests/unit-tests/real-time-clock-mode.robot
+tests/unit-tests/precise-pause.robot
+tests/unit-tests/pause-without-sleep.robot
+tests/unit-tests/cpu-pause-halt.robot
+tests/unit-tests/cpu-step.robot
+tests/unit-tests/snapshot-tracking.robot
+tests/unit-tests/auto-save.robot
+tests/unit-tests/load-command.robot
+tests/unit-tests/register-read-caching.robot
+tests/unit-tests/log-tests.robot
+tests/unit-tests/memory-access.robot
+tests/unit-tests/arm-cortex-m-interrupts.robot
+tests/unit-tests/arm-cortex-m-trustzone.robot
+tests/unit-tests/arm-cortex-m-bus-fault.robot
+tests/unit-tests/mpu.robot
+tests/unit-tests/emulation-environment.robot
+tests/unit-tests/demos.robot
+tests/platforms/STM32F4_Discovery.robot
+tests/platforms/STM32F103.robot
+tests/platforms/nucleo_h753zi.robot
+tests/platforms/NXP-K64F.robot
+tests/platforms/STM32F7.robot
+tests/platforms/STM32F072b.robot
+tests/platforms/STM32L072.robot
+tests/platforms/STM32W108.robot
+tests/platforms/nucleo_f429zi.robot
+tests/platforms/nucleo_f767zi.robot
+tests/platforms/nucleo_wba52cg.robot
+tests/platforms/ramn.robot
+tests/platforms/SAME70.robot
+tests/peripherals/STM32H7_RCC.robot
+tests/peripherals/STM32_UART.robot

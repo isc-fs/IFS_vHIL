@@ -1,0 +1,152 @@
+From 541c914cf94332f04cec1337288227c1fe5b1257 Mon Sep 17 00:00:00 2001
+From: Raul Moran <rmg@raulmoranguerra.com>
+Date: Wed, 14 Oct 2026 02:32:23 +0200
+Subject: [PATCH 2/2] ClockSource: Use plain fields for the update flags
+
+reupdateNeeded and updateAlreadyInProgress are ThreadLocal<bool>, read
+several times on every update. They are only accessed with the clock
+source's lock held, which a thread keeps for the whole update, its
+handlers included, so no other thread can see them set: plain fields
+behave the same without the thread-local look-ups. Also reuse one list
+of the handlers already run instead of allocating one per update; a
+nested update never reaches it.
+---
+ src/Emulator/Main/Time/BaseClockSource.cs | 46 +++++++++++------------
+ 1 file changed, 22 insertions(+), 24 deletions(-)
+
+diff --git a/src/Emulator/Main/Time/BaseClockSource.cs b/src/Emulator/Main/Time/BaseClockSource.cs
+index bb8b0e191..a50e89a00 100644
+--- a/src/Emulator/Main/Time/BaseClockSource.cs
++++ b/src/Emulator/Main/Time/BaseClockSource.cs
+@@ -8,9 +8,7 @@
+ using System;
+ using System.Collections.Generic;
+ using System.Linq;
+-using System.Threading;
+ 
+-using Antmicro.Migrant;
+ using Antmicro.Renode.Utilities;
+ 
+ namespace Antmicro.Renode.Time
+@@ -26,9 +24,8 @@ public BaseClockSource(bool skipAdvancesHigherThanNearestLimit = false)
+             toNotify = new List<Action>();
+             nearestLimitIn = TimeInterval.Maximal;
+             sync = new object();
+-            reupdateNeeded = new ThreadLocal<bool>();
+-            updateAlreadyInProgress = new ThreadLocal<bool>();
+             indexByHandler = new Dictionary<Action, int>();
++            alreadyRunHandlers = new List<Action>();
+         }
+ 
+         public virtual void ExecuteInLock(Action action)
+@@ -102,11 +99,11 @@ public virtual ClockEntry GetClockEntry(Action handler)
+                 {
+                     return result;
+                 }
+-                if(updateAlreadyInProgress.Value)
++                if(updateAlreadyInProgress)
+                 {
+                     return result;
+                 }
+-                updateAlreadyInProgress.Value = true;
++                updateAlreadyInProgress = true;
+                 try
+                 {
+                     var updateHandler = clockEntriesUpdateHandlers[i];
+@@ -124,7 +121,7 @@ public virtual ClockEntry GetClockEntry(Action handler)
+                 }
+                 finally
+                 {
+-                    updateAlreadyInProgress.Value = false;
++                    updateAlreadyInProgress = false;
+                 }
+                 if(i == -1)
+                 {
+@@ -258,8 +255,6 @@ public void AddClockEntries(IEnumerable<ClockEntry> entries)
+ 
+         public void Dispose()
+         {
+-            reupdateNeeded.Dispose();
+-            updateAlreadyInProgress.Dispose();
+         }
+ 
+         public TimeInterval NearestLimitIn
+@@ -366,20 +361,22 @@ private void AdvanceInner(TimeInterval time, bool immediately)
+                     return;
+                 }
+ 
+-                if(updateAlreadyInProgress.Value)
++                if(updateAlreadyInProgress)
+                 {
+-                    reupdateNeeded.Value = true;
++                    reupdateNeeded = true;
+                 }
+                 else
+                 {
+-                    var alreadyRunHandlers = new List<Action>();
+-                    Update(elapsed, ref alreadyRunHandlers);
++                    // Not in use: a nested AdvanceInner finds updateAlreadyInProgress set and doesn't get here
++                    alreadyRunHandlers.Clear();
++                    Update(elapsed, alreadyRunHandlers);
+                     // Check if another update was attempted in the meantime, e.g., a clock entry was updated within the handlers.
+-                    while(reupdateNeeded.Value)
++                    while(reupdateNeeded)
+                     {
+-                        reupdateNeeded.Value = false;
+-                        Update(TimeInterval.Empty, ref alreadyRunHandlers);
++                        reupdateNeeded = false;
++                        Update(TimeInterval.Empty, alreadyRunHandlers);
+                     }
++                    alreadyRunHandlers.Clear();
+                 }
+ 
+                 elapsed = TimeInterval.Empty;
+@@ -400,15 +397,15 @@ private void UpdateLimits()
+             AdvanceInner(TimeInterval.Empty, true);
+         }
+ 
+-        private void Update(TimeInterval time, ref List<Action> alreadyRunHandlers)
++        private void Update(TimeInterval time, List<Action> alreadyRunHandlers)
+         {
+-            if(updateAlreadyInProgress.Value)
++            if(updateAlreadyInProgress)
+             {
+                 return;
+             }
+             try
+             {
+-                updateAlreadyInProgress.Value = true;
++                updateAlreadyInProgress = true;
+                 lock(sync)
+                 {
+                     nearestLimitIn = TimeInterval.Maximal;
+@@ -447,7 +444,7 @@ private void Update(TimeInterval time, ref List<Action> alreadyRunHandlers)
+             }
+             finally
+             {
+-                updateAlreadyInProgress.Value = false;
++                updateAlreadyInProgress = false;
+             }
+         }
+ 
+@@ -542,15 +539,16 @@ private void UpdateUpdateHandler(int clockEntryIndex)
+         private TimeInterval elapsed;
+         private TimeInterval totalElapsed;
+ 
+-        [Constructor]
+-        private readonly ThreadLocal<bool> reupdateNeeded;
+-        [Constructor]
+-        private readonly ThreadLocal<bool> updateAlreadyInProgress;
++        // Only accessed with `sync` held, which a thread keeps for the whole update (handlers included),
++        // so no other thread can see them set: they don't need to be thread-local.
++        private bool reupdateNeeded;
++        private bool updateAlreadyInProgress;
+         private readonly bool skipAdvancesHigherThanNearestLimit;
+         private readonly List<Action> toNotify;
+         private readonly List<ClockEntry> clockEntries;
+         private readonly List<UpdateHandlerDelegate> clockEntriesUpdateHandlers;
+         private readonly Dictionary<Action, int> indexByHandler;
++        private readonly List<Action> alreadyRunHandlers;
+         private readonly List<TimeInterval> unaccountedTimes;
+         private readonly object sync;
+ 

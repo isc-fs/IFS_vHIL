@@ -1,0 +1,265 @@
+From d04426eca54a3afb20c5f534895744e4056114e3 Mon Sep 17 00:00:00 2001
+From: Raul Moran <rmg@raulmoranguerra.com>
+Date: Thu, 15 Oct 2026 09:09:13 +0200
+Subject: [PATCH 1/3] TimeSourceBase: Split `InnerExecute` into a begin and an
+ end half
+
+`InnerExecuteBegin` takes the lock, updates the nearest sync point, latches
+the handles and grants them the time interval (or unblocks them);
+`InnerExecuteEnd` waits for them, unlatches them, then runs the sync
+phase. `InnerExecute` calls one after the other, so nothing changes for
+existing time sources: the same steps run in the same order on the same
+thread, and in serial execution everything still happens in the second
+half.
+
+The split lets a time source start an iteration of another source's
+handles and finish it later on the same thread, which a slave time source
+running on its master's thread needs (next commits).
+---
+ src/Emulator/Main/Time/TimeSourceBase.cs | 179 ++++++++++++++++-------
+ 1 file changed, 128 insertions(+), 51 deletions(-)
+
+diff --git a/src/Emulator/Main/Time/TimeSourceBase.cs b/src/Emulator/Main/Time/TimeSourceBase.cs
+index 9f31aa089..bbd6338fd 100644
+--- a/src/Emulator/Main/Time/TimeSourceBase.cs
++++ b/src/Emulator/Main/Time/TimeSourceBase.cs
+@@ -370,66 +370,112 @@ public TimeInterval Quantum
+         /// </returns>
+         protected bool InnerExecute(out TimeInterval virtualTimeElapsed, TimeInterval? timeLimit = null)
+         {
+-            using(sync.LowPriority)
++            InnerExecuteBegin(timeLimit);
++            return InnerExecuteEnd(out virtualTimeElapsed);
++        }
++
++        /// <summary>
++        /// The first half of <see cref="InnerExecute">: steps (1) and (2), up to granting the time interval to (or unblocking) the handles, without waiting for them.
++        /// </summary>
++        /// <remarks>
++        /// It must be followed by <see cref="InnerExecuteEnd"> on the same thread: it takes <see cref="sync"> and <see cref="InnerExecuteEnd"> releases it.
++        /// In serial execution the handles are only granted time in <see cref="InnerExecuteEnd">, one after another.
++        /// </remarks>
++        /// <param name="timeLimit">Maximum amount of virtual time that can pass during this iteration. If not set, current <see cref="Quantum"> is used.</param>
++        protected void InnerExecuteBegin(TimeInterval? timeLimit = null)
++        {
++            DebugHelper.Assert(pendingLock == null, "InnerExecuteBegin called again before InnerExecuteEnd");
++            pendingLock = sync.LowPriority;
++
++            if(updateNearestSyncPoint)
+             {
+-                if(updateNearestSyncPoint)
+-                {
+-                    NearestSyncPoint += timeLimit.HasValue ? TimeInterval.Min(timeLimit.Value, Quantum) : Quantum;
+-                    updateNearestSyncPoint = false;
+-                    this.Trace($"Updated NearestSyncPoint to: {NearestSyncPoint}");
+-                }
+-                DebugHelper.Assert(NearestSyncPoint.Ticks >= ElapsedVirtualTime.Ticks, $"Nearest sync point set in the past: EVT={ElapsedVirtualTime} NSP={NearestSyncPoint}");
++                NearestSyncPoint += timeLimit.HasValue ? TimeInterval.Min(timeLimit.Value, Quantum) : Quantum;
++                updateNearestSyncPoint = false;
++                this.Trace($"Updated NearestSyncPoint to: {NearestSyncPoint}");
++            }
++            DebugHelper.Assert(NearestSyncPoint.Ticks >= ElapsedVirtualTime.Ticks, $"Nearest sync point set in the past: EVT={ElapsedVirtualTime} NSP={NearestSyncPoint}");
+ 
+-                isBlocked = false;
++            isBlocked = false;
+ 
+-                // This is not revelant when we have blocked handles
+-                var toRunFor = NearestSyncPoint - ElapsedVirtualTime;
++            // This is not revelant when we have blocked handles
++            var toRunFor = NearestSyncPoint - ElapsedVirtualTime;
++            pendingToRunFor = toRunFor;
++            pendingElapsedVirtualTimeAtStart = ElapsedVirtualTime;
++            pendingExecutor = null;
++            pendingTargets = null;
+ 
+-                var elapsedVirtualTimeAtStart = ElapsedVirtualTime;
++            handles.LatchAllAndCollectGarbage();
+ 
+-                handles.LatchAllAndCollectGarbage();
++            if(handles.NotReady.Count > 0)
++            {
++                this.Trace($"Iteration start: unblocking {handles.NotReady.Count} handles");
++
++                pendingExecutor = new PhaseExecutor<LinkedListNode<TimeHandle>>();
+ 
+-                if(handles.NotReady.Count > 0)
++                if(ExecuteInSerial)
+                 {
+-                    this.Trace($"Iteration start: unblocking {handles.NotReady.Count} handles");
++                    // We only test in serial execution to ensure determinism
++                    pendingExecutor.RegisterTestPhase(ExecuteReadyForUnblockTestPhase);
++                }
++                pendingExecutor.RegisterPhase(ExecuteUnblockPhase);
++                pendingExecutor.RegisterPhase(ExecuteWaitPhase);
++                pendingTargets = handles.NotReady.Nodes();
++                pendingGrant = false;
++            }
++            else if(toRunFor != TimeInterval.Empty && handles.Ready.Count > 0)
++            {
++                this.Trace($"Iteration start: granting {handles.Ready.Count} handles {toRunFor} of time");
++
++                pendingExecutor = new PhaseExecutor<LinkedListNode<TimeHandle>>();
++                pendingExecutor.RegisterPhase(s => ExecuteGrantPhase(s, toRunFor));
++                pendingExecutor.RegisterPhase(ExecuteWaitPhase);
++                pendingTargets = handles.Ready.Nodes();
++                pendingGrant = true;
++            }
+ 
+-                    var executor = new PhaseExecutor<LinkedListNode<TimeHandle>>();
++            // Everything but the wait for the handles (in parallel execution)
++            pendingExecutor?.ExecuteUpToLastPhase(pendingTargets, ExecuteInSerial);
++        }
+ 
+-                    if(ExecuteInSerial)
++        /// <summary>
++        /// The second half of <see cref="InnerExecute">, after <see cref="InnerExecuteBegin">: steps (3) to (5), waiting for the handles, then the sync phase.
++        /// </summary>
++        /// <param name="virtualTimeElapsed">Contains the amount of virtual time that passed during this iteration (see <see cref="InnerExecute">).</param>
++        /// <returns>
++        /// True if sync point has just been reached or False if the execution has been blocked.
++        /// </returns>
++        protected bool InnerExecuteEnd(out TimeInterval virtualTimeElapsed)
++        {
++            DebugHelper.Assert(pendingLock != null, "InnerExecuteEnd called without InnerExecuteBegin");
++            using(pendingLock)
++            {
++                pendingLock = null;
++                var toRunFor = pendingToRunFor;
++
++                if(pendingExecutor != null)
++                {
++                    pendingExecutor.ExecuteLastPhase(pendingTargets, ExecuteInSerial);
++                    pendingExecutor = null;
++                    pendingTargets = null;
++
++                    virtualTimeElapsed = ElapsedVirtualTime - pendingElapsedVirtualTimeAtStart;
++                    if(pendingGrant)
+                     {
+-                        // We only test in serial execution to ensure determinism
+-                        executor.RegisterTestPhase(ExecuteReadyForUnblockTestPhase);
+-                    }
+-                    executor.RegisterPhase(ExecuteUnblockPhase);
+-                    executor.RegisterPhase(ExecuteWaitPhase);
+-                    executor.Execute(handles.NotReady.Nodes(), ExecuteInSerial);
++                        DebugHelper.Assert(virtualTimeElapsed <= toRunFor, "Some handle ran for more time than allocated");
+ 
+-                    virtualTimeElapsed = ElapsedVirtualTime - elapsedVirtualTimeAtStart;
++                        var allTookAllTime = virtualTimeElapsed == toRunFor;
++
++                        DebugHelper.Assert(allTookAllTime || isBlocked, "Some handle did not consume all time despite no handles being blocked");
++                        // NOTE: The other unusual situation, `allTookAllTime && isBlocked`,
++                        // is not asserted against because it can happen if a handle blocks
++                        // with an empty remaining interval. This is explicitly tested in
++                        // `ShouldHandleBlockingAtTheEndOfGrantedInterval`
++                    }
+                 }
+                 else if(toRunFor == TimeInterval.Empty)
+                 {
+                     virtualTimeElapsed = toRunFor;
+                 }
+-                else if(handles.Ready.Count > 0)
+-                {
+-                    this.Trace($"Iteration start: granting {handles.Ready.Count} handles {toRunFor} of time");
+-
+-                    var executor = new PhaseExecutor<LinkedListNode<TimeHandle>>();
+-                    executor.RegisterPhase(s => ExecuteGrantPhase(s, toRunFor));
+-                    executor.RegisterPhase(ExecuteWaitPhase);
+-                    executor.Execute(handles.Ready.Nodes(), ExecuteInSerial);
+-
+-                    virtualTimeElapsed = ElapsedVirtualTime - elapsedVirtualTimeAtStart;
+-                    DebugHelper.Assert(virtualTimeElapsed <= toRunFor, "Some handle ran for more time than allocated");
+-
+-                    var allTookAllTime = virtualTimeElapsed == toRunFor;
+-
+-                    DebugHelper.Assert(allTookAllTime || isBlocked, "Some handle did not consume all time despite no handles being blocked");
+-                    // NOTE: The other unusual situation, `allTookAllTime && isBlocked`,
+-                    // is not asserted against because it can happen if a handle blocks
+-                    // with an empty remaining interval. This is explicitly tested in
+-                    // `ShouldHandleBlockingAtTheEndOfGrantedInterval`
+-                }
+                 else
+                 {
+                     this.Trace($"There are no handles, updating VTE by {toRunFor}");
+@@ -799,6 +845,16 @@ private void ExecuteSyncPhase()
+         private TimeInterval elapsedAtLastUpdate; // Executor-thread out-of-loop or inside `virtualTimeSyncLock` only
+         private bool isBlocked; // Executor-thread only
+         private bool updateNearestSyncPoint; // Executor-thread only
++        // The iteration started by `InnerExecuteBegin` for `InnerExecuteEnd`; executor-thread only
++        [Transient]
++        private PrioritySynchronizer pendingLock;
++        [Transient]
++        private PhaseExecutor<LinkedListNode<TimeHandle>> pendingExecutor;
++        [Transient]
++        private IEnumerable<LinkedListNode<TimeHandle>> pendingTargets;
++        private bool pendingGrant;
++        private TimeInterval pendingToRunFor;
++        private TimeInterval pendingElapsedVirtualTimeAtStart;
+         private int? executeThreadId;
+         private ulong delayedTaskId;
+         private uint virtualTimeProgressBlockers; // Executor-thread out-of-loop or inside `virtualTimeSyncLock` only
+@@ -924,30 +980,49 @@ public void ExecuteInSerial(IEnumerable<T> targets)
+                 }
+             }
+ 
+-            public void ExecuteInParallel(IEnumerable<T> targets)
++            /// <summary>
++            /// In parallel execution (every phase on every target, then the next phase), the test phases and every phase but the last; nothing in serial execution.
++            /// </summary>
++            /// <remarks>
++            /// Must be followed by <see cref="ExecuteLastPhase"> with the same arguments.
++            /// </remarks>
++            public void ExecuteUpToLastPhase(IEnumerable<T> targets, bool serial)
+             {
+-                if(!ExecuteTestPhase(targets))
++                if(serial)
++                {
++                    return;
++                }
++                testPassed = ExecuteTestPhase(targets);
++                if(!testPassed)
+                 {
+                     return;
+                 }
+-                foreach(var phase in phases)
++                for(var i = 0; i < phases.Count - 1; i++)
+                 {
+                     foreach(var target in targets)
+                     {
+-                        phase(target);
++                        phases[i](target);
+                     }
+                 }
+             }
+ 
+-            public void Execute(IEnumerable<T> targets, bool serial)
++            /// <summary>
++            /// After <see cref="ExecuteUpToLastPhase">: in parallel execution, the last phase; in serial execution (every phase on a target, then the next target), everything.
++            /// </summary>
++            public void ExecuteLastPhase(IEnumerable<T> targets, bool serial)
+             {
+                 if(serial)
+                 {
+                     ExecuteInSerial(targets);
++                    return;
+                 }
+-                else
++                if(!testPassed || phases.Count == 0)
+                 {
+-                    ExecuteInParallel(targets);
++                    return;
++                }
++                foreach(var target in targets)
++                {
++                    phases[phases.Count - 1](target);
+                 }
+             }
+ 
+@@ -966,6 +1041,8 @@ private bool ExecuteTestPhase(IEnumerable<T> targets)
+                 return true;
+             }
+ 
++            private bool testPassed;
++
+             private readonly List<Func<T, Boolean>> testPhases;
+             private readonly List<Action<T>> phases;
+         }
