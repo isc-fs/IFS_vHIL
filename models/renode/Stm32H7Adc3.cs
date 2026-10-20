@@ -59,6 +59,15 @@
 // A differential channel reads INP<n> minus the pin that is its INN<n>,
 // given by negativeInputs ("n:m" = INN<n> shares the pin of INP<m>).
 //
+// A differential channel may carry the board's measured transfer (#320):
+//     sysbus.adc3_h73x DifferentialTransfer 3 0.92 6   (channel, gain, codes)
+// reads code = (1 + gain x (V(INP) - V(INN)) / VREF+) x 2^(n-1) + offset,
+// the offset in 12-bit codes (scaled to the resolution), instead of RM0468's
+// ideal transfer (gain 1, offset 0, the default). It is the carrier's, not
+// the chip's: a system sets it from its board role's catalogue entry
+// (catalog/boards/mainlite.yaml `adc_differential`, which cites the
+// measurement), once, and it survives Reset as the board's analog path does.
+//
 // Fault injection: while ConversionFault is true a started conversion never
 // ends (no EOC, no DMA request, DR unchanged), as when the ADC kernel clock
 // is lost; the HAL's poll for EOC then times out.
@@ -160,6 +169,22 @@ namespace Antmicro.Renode.Peripherals.Analog
             CheckChannel(channel);
             CatchUpForObserver();   // results due before the change convert the old voltage
             volts[channel] = microvolts / 1e6;
+        }
+
+        // The board's measured differential transfer of an INP channel (see
+        // the header): gain on V(INP) - V(INN), then offsetCodes (12-bit).
+        public void DifferentialTransfer(int channel, double gain, int offsetCodes)
+        {
+            CheckChannel(channel);
+            CatchUpForObserver();   // results due before the change convert the old way
+            if(gain == 1.0 && offsetCodes == 0)
+            {
+                diffTransfer.Remove(channel);
+            }
+            else
+            {
+                diffTransfer[channel] = Tuple.Create(gain, offsetCodes);
+            }
         }
 
         public double GetVoltage(int channel)
@@ -882,7 +907,15 @@ namespace Antmicro.Renode.Peripherals.Analog
                 {
                     WarnOnce($"differential channel {channel} has no negativeInputs entry; INN taken as 0 V");
                 }
-                code = (1 + (volts[channel] - vn) / vref) * (1 << bits) / 2;
+                if(diffTransfer.TryGetValue(channel, out var t))
+                {
+                    code = (1 + t.Item1 * (volts[channel] - vn) / vref) * (1 << bits) / 2
+                        + t.Item2 / (double)(1 << (12 - bits));
+                }
+                else
+                {
+                    code = (1 + (volts[channel] - vn) / vref) * (1 << bits) / 2;
+                }
             }
             else
             {
@@ -1032,6 +1065,7 @@ namespace Antmicro.Renode.Peripherals.Analog
         private readonly uint[] regs = new uint[0x400 / 4];
         private readonly double[] volts = new double[Channels];
         private readonly Dictionary<int, int> innOf = new Dictionary<int, int>();
+        private readonly Dictionary<int, Tuple<double, int>> diffTransfer = new Dictionary<int, Tuple<double, int>>();
         private readonly HashSet<string> warned = new HashSet<string>();
     }
 }
