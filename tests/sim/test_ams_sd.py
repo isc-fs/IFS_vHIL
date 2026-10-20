@@ -219,8 +219,11 @@ def test_the_cell_frames_carry_every_read_of_the_seeded_cell(split):
 def test_the_current_windows_run_at_100_hz_and_agree_with_the_log(split):
     """ELE0000.BIN: a record per 10 ms window of the 12.5 kHz oversampled
     capture, numbered without a gap, mean within [min, max]; at a constant
-    input every window's mean is the current LOG.CSV reports
-    (bin_log.hpp:178-230, ams_config.hpp:408)."""
+    input the windows and LOG.CSV read the same current within the car's ADC
+    noise (bin_log.hpp:178-230, ams_config.hpp:408). The AMS current channel
+    carries the car's measured noise (catalog/boards/mainlite.yaml,
+    adc_differential PF7: 0.32 codes rms held per 50 ms capture, about 0.11 A),
+    so single readings scatter by a few tenths of an amp; their averages agree."""
     log = _bin(split.img, "ELE0000.BIN")
     assert (log.stream, log.index, log.schema) == ("ELE", 0, binlog.ELE_SCHEMA)
     recs = log.records
@@ -234,10 +237,16 @@ def test_the_current_windows_run_at_100_hz_and_agree_with_the_log(split):
     assert all(r["flags"] == 0 for r in recs), sorted({r["flags"] for r in recs})
     assert all(r["i_min"] <= r["i_mean"] <= r["i_max"] for r in recs)
     _, rows = _rows(split.img, "LOG0000.CSV")
-    raw = {int(r["I_raw_mA"]) for r in rows}
-    means = {r["i_mean"] for r in recs}
-    assert max(raw) - min(raw) <= 50 and max(means) - min(means) <= 50, (raw, means)
-    assert abs(sum(means) / len(means) - sum(raw) / len(raw)) <= 50, (raw, means)
+    raw = [int(r["I_raw_mA"]) for r in rows]
+    means = [r["i_mean"] for r in recs]
+    # ~9 sigma of the per-capture noise (0.11 A): a bound no seed reaches,
+    # yet ten times tighter than any real fault in the logged current.
+    spread = 1000
+    assert max(raw) - min(raw) <= spread and max(means) - min(means) <= spread, \
+        (sorted(set(raw)), sorted(set(means)))
+    # Averaged over the log, both read the same current.
+    assert abs(sum(means) / len(means) - sum(raw) / len(raw)) <= 50, \
+        (sum(means) / len(means), sum(raw) / len(raw))
 
 
 def test_a_power_cut_loses_at_most_a_second(logged):
