@@ -25,3 +25,20 @@ def images(request):
                 fw[key] = Path(elf)
         return fw
     return get
+
+
+def pytest_collection_modifyitems(config, items):
+    """VHIL_SCENARIO_SYSTEMS="ecu ecu-ams": run only those systems' scenarios
+    (CI's impact selection, scripts/ci-select.py); unset or empty runs all."""
+    import os
+    wanted = set(os.environ.get("VHIL_SCENARIO_SYSTEMS", "").split())
+    if not wanted:
+        return
+    keep, drop = [], []
+    for item in items:
+        path = getattr(item, "callspec", None) and item.callspec.params.get("path")
+        system = Path(path).parent.name.removesuffix(".scenarios") if path else None
+        (keep if system is None or system in wanted else drop).append(item)
+    if drop:
+        config.hook.pytest_deselected(items=drop)
+        items[:] = keep
