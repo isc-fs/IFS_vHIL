@@ -15,6 +15,10 @@ on:
       since:
         description: "ISO-8601 start of the window (default: the previous audit, else 26 h ago)"
         required: false
+      comment:
+        description: "Comment on PRs with a selection gap (the nightly always does)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -40,6 +44,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           SINCE: ${{ inputs.since }}
+          COMMENT: ${{ github.event_name == 'schedule' || inputs.comment }}
         run: |
           pip install -q "pyyaml==6.0.*" "coverage==7.6.*"
-          python scripts/ci-audit.py ${SINCE:+--since "$SINCE"} --summary "$GITHUB_STEP_SUMMARY" --comment
+          args=(--summary "$GITHUB_STEP_SUMMARY")
+          if [ -n "$SINCE" ]; then args+=(--since "$SINCE"); fi
+          if [ "$COMMENT" = true ]; then args+=(--comment); fi
+          python scripts/ci-audit.py "${args[@]}"

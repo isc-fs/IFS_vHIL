@@ -56,6 +56,7 @@ class Failure:
     kind: str       # sim | scenario | smoke | ifs_hil | guard | speed | renode | job
     item: str       # tests/sim file, <system>/<scenario>, system, job name
     run_url: str = ""
+    run_created: str = ""   # ISO-8601: the nightly checked out dev then
 
     def label(self) -> str:
         return f"{self.kind}: {self.item}"
@@ -76,6 +77,14 @@ def in_selection(f: Failure, sel: "cs.Selection") -> bool:
         return sel.speed
     # The guard and the Renode build run with every heavy selection.
     return sel.heavy
+
+
+def could_cause(pr: dict, f: Failure) -> bool:
+    """A nightly runs dev as it was when it started: only a PR merged before
+    then is in it."""
+    if not f.run_created or not pr.get("merged_at"):
+        return True
+    return pr["merged_at"] < f.run_created     # both ISO-8601 UTC ("...Z")
 
 
 def sim_failures(results_tsv: str) -> list[str]:
@@ -174,14 +183,16 @@ def nightly_failures(since: dt.datetime, workdir: Path) -> tuple[list[Failure], 
             precise = []
             if name.startswith("sim (") and name[5:-1].isdigit():
                 tsv = _artifact_file(run["id"], f"sim-logs-{name[5:-1]}", "results.tsv", workdir)
-                precise = [Failure("sim", f, run["html_url"]) for f in sim_failures(tsv or "")]
+                precise = [Failure("sim", f, run["html_url"], run["created_at"])
+                           for f in sim_failures(tsv or "")]
             elif name == "scenarios":
                 xml = _artifact_file(run["id"], "scenarios", "scenarios.xml", workdir)
                 if xml:
-                    precise = [Failure("scenario", s, run["html_url"]) for s in scenario_failures(xml)]
+                    precise = [Failure("scenario", s, run["html_url"], run["created_at"])
+                               for s in scenario_failures(xml)]
             elif name == "sim":
                 continue        # the aggregate of the shards and the guard
-            failures += precise or [Failure(kind, item, run["html_url"])]
+            failures += precise or [Failure(kind, item, run["html_url"], run["created_at"])]
     return sorted(set(failures), key=lambda f: (f.kind, f.item)), seen
 
 
@@ -286,7 +297,7 @@ def report(since, prs, failures, seen, gaps, map_note,
         if sel is None:
             lines.append(f"| #{pr['number']} | {mode} | (diff unavailable) | |")
             continue
-        outside = [f for f in failures if not in_selection(f, sel)]
+        outside = [f for f in failures if not in_selection(f, sel) and could_cause(pr, f)]
         what = (f"{len(sel.sim_files)} sim files; scenarios {','.join(sorted(sel.scenarios)) or '-'}; "
                 f"smoke {','.join(sorted(sel.smoke)) or '-'}; IFS_HIL {','.join(sorted(sel.ifs_hil)) or '-'}")
         if sel.sim_files == all_sim and sel.ifs_hil == set(cs.IFS_HIL):
