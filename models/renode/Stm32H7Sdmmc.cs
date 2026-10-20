@@ -41,6 +41,19 @@
 // 0xFFFFFFFF; it clears the flag on the command's CTIMEOUT without waiting).
 // Test API (monitor): UnansweredCommands here; Respond and Flush on the card.
 //
+// A reset ends a transfer in flight: the registers go back to their reset
+// values and the DPSM to Idle (RM0468 60.5.4). Renode's base queues a data
+// command's data for the nearest synced state, and this model its IDMA after
+// it; a reset that lands between the command and that synced state (a power
+// cut, the board's machine paused while the firmware wrote a block) used to
+// run both on the reset registers: the base set WriteDataLeft to the reset
+// DBLOCKSIZE's 1 byte, and the IDMA fed the card from IDMABASE0 = 0 four
+// bytes at a time, so WriteDataLeft wrapped below zero and the loop read the
+// address space up from 0 for ever inside one synced state: the board's
+// virtual time stood still (IFS_HIL ams job, block U, after a power cycle).
+// An IDMA command written before the latest reset now moves nothing, and
+// what the base queued for it is dropped, leaving the FIFO as the reset did.
+//
 // Register offsets from ST's stm32h733xx.h (SDMMC_TypeDef: IDMACTRL 0x50,
 // IDMABSIZE 0x54, IDMABASE0 0x58, IDMABASE1 0x5C); SDMMC1_BASE =
 // D1_AHB1PERIPH_BASE + 0x7000 = 0x52007000, DLYB_SDMMC1 at +0x8000, so the
@@ -69,6 +82,10 @@ namespace Antmicro.Renode.Peripherals.SD
                 ?? throw new InvalidOperationException("STM32SDMMC.UpdateInterrupts not found");
             writeDataLeft = typeof(STM32SDMMC).GetProperty("WriteDataLeft", BaseMembers)
                 ?? throw new InvalidOperationException("STM32SDMMC.WriteDataLeft not found");
+            rxFifoE = BaseField<IFlagRegisterField>("rxFifoE");
+            rxFifoHF = BaseField<IFlagRegisterField>("rxFifoHF");
+            txFifoF = BaseField<IFlagRegisterField>("txFifoF");
+            txFifoHE = BaseField<IFlagRegisterField>("txFifoHE");
         }
 
         public long Size => 0x1000;
@@ -80,6 +97,7 @@ namespace Antmicro.Renode.Peripherals.SD
         {
             base.Reset();
             dataTimeout = false;
+            resets++;   // a transfer queued before this is not this boot's (header)
         }
 
         // DTIMEOUT is a tag in the base's STAR: OR in the modelled flag.
@@ -106,6 +124,7 @@ namespace Antmicro.Renode.Peripherals.SD
                 SendUnanswered(value);
                 return;
             }
+            var boot = resets;
             base.WriteDoubleWord(offset, value);
             if(offset == IcrOffset || offset == MaskrOffset)
             {
@@ -126,7 +145,7 @@ namespace Antmicro.Renode.Peripherals.SD
             }
             // The base class queues the card access for the nearest synced
             // state; queue the IDMA after it.
-            Machine.LocalTimeSource.ExecuteInNearestSyncedState(_ => TransferByIdma());
+            Machine.LocalTimeSource.ExecuteInNearestSyncedState(_ => TransferByIdma(boot));
         }
 
         protected override void InitializeRegisters()
@@ -245,8 +264,22 @@ namespace Antmicro.Renode.Peripherals.SD
         // Moves what the data command left in the base class's buffers: a read
         // drains ReadDataBuffer into memory, a write feeds the card from memory.
         // ReadBuffer/WriteBuffer raise DATAEND and DBCKEND on the last word.
-        private void TransferByIdma()
+        // A command written before the latest reset (`boot`) moves nothing,
+        // and what the base queued for it is dropped (header).
+        private void TransferByIdma(ulong boot)
         {
+            if(boot != resets)
+            {
+                ReadDataBuffer.Clear();
+                writeDataLeft.SetValue(this, 0UL);
+                rxFifoE.Value = true;
+                rxFifoHF.Value = false;
+                txFifoF.Value = true;
+                txFifoHE.Value = false;
+                UpdateInterrupts();
+                this.DebugLog("IDMA: the command was written before the reset, nothing moved");
+                return;
+            }
             if(!CardAnswers)
             {
                 // DPSM in Wait_R/Busy with nothing on D[3:0]: the data timer runs out.
@@ -279,11 +312,16 @@ namespace Antmicro.Renode.Peripherals.SD
         private IFlagRegisterField idmaDoubleBuffer;
         private IValueRegisterField idmaBase0;
         private bool dataTimeout;
+        private ulong resets;
 
         private readonly IFlagRegisterField cmdSent;
         private readonly IFlagRegisterField cTimeout;
         private readonly MethodInfo baseUpdateInterrupts;
         private readonly PropertyInfo writeDataLeft;
+        private readonly IFlagRegisterField rxFifoE;
+        private readonly IFlagRegisterField rxFifoHF;
+        private readonly IFlagRegisterField txFifoF;
+        private readonly IFlagRegisterField txFifoHE;
 
         private const BindingFlags BaseMembers = BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public;
 

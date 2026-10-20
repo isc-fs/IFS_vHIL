@@ -135,18 +135,10 @@ jobs:
         run: pip install -q -e ifs_hil
 
       - name: Create vcan can0 / can1 / can2
-        run: |
-          sudo apt-get install -y -qq "linux-modules-extra-$(uname -r)" >/dev/null
-          sudo modprobe vcan
-          for i in 0 1 2; do
-            sudo ip link add "can$i" type vcan
-            sudo ip link set "can$i" txqueuelen 1000 up
-          done
-          ip -br link show type vcan
+        run: scripts/ci-vcan.sh can-utils
 
       - name: Capture all CAN traffic
         run: |
-          sudo apt-get install -y -qq can-utils >/dev/null
           nohup candump -L -t a can0 can1 can2 > candump.log 2>&1 &
 
       - name: Run IFS_HIL's ECU suite against the virtual ECU
@@ -237,12 +229,7 @@ jobs:
       - name: Create vcan can0 / can1 / can2
         run: |
           # dosfstools, mtools: the AMS's card image (vhil/bench_operator.py)
-          sudo apt-get install -y -qq "linux-modules-extra-$(uname -r)" can-utils dosfstools mtools >/dev/null
-          sudo modprobe vcan
-          for i in 0 1 2; do
-            sudo ip link add "can$i" type vcan
-            sudo ip link set "can$i" txqueuelen 1000 up
-          done
+          scripts/ci-vcan.sh can-utils dosfstools mtools
           nohup candump -L -t a can0 can1 can2 > candump.log 2>&1 &
 
       - name: Run IFS_HIL's real-AMS block against the virtual ECU + AMS
@@ -345,12 +332,7 @@ jobs:
       - name: Create vcan can0 / can1 / can2
         run: |
           # dosfstools, mtools: the AMS's card image (vhil/bench_operator.py)
-          sudo apt-get install -y -qq "linux-modules-extra-$(uname -r)" can-utils dosfstools mtools >/dev/null
-          sudo modprobe vcan
-          for i in 0 1 2; do
-            sudo ip link add "can$i" type vcan
-            sudo ip link set "can$i" txqueuelen 1000 up
-          done
+          scripts/ci-vcan.sh can-utils dosfstools mtools
           nohup candump -L -t a can0 can1 can2 > candump.log 2>&1 &
 
       - name: Run IFS_HIL's AMS suite against the virtual AMS

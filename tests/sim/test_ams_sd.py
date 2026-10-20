@@ -470,3 +470,48 @@ def test_a_board_with_no_sd_device_boots_clean(images):
         _assert_healthy(_health(sim, ok), "no sd device")
         assert sim.read_symbol("ams", LOG_STATE) == LOG_NO_CARD
         assert _unanswered(sim) > 0
+
+
+# SDMMC1 registers (stm32h733xx.h SDMMC_TypeDef; SDMMC1_BASE 0x52007000) and
+# the CMD24 the AMS's FatFs writes a block with (HAL_SD_WriteBlocks_DMA).
+SDMMC_BASE = 0x52007000
+DLEN, DCTRL, CMD, STAR, ICR, IDMACTRL, IDMABASE0 = 0x28, 0x2C, 0x0C, 0x34, 0x38, 0x50, 0x58
+WRITE_BLOCK = 24 | 1 << 6 | 1 << 8 | 1 << 12        # CMDINDEX 24, CMDTRANS, WAITRESP short, CPSMEN
+DATAEND, DBCKEND, TXFIFOHE = 1 << 8, 1 << 10, 1 << 14
+
+
+def test_a_reset_drops_an_idma_write_in_flight(tmp_path, images):
+    """A power cut between a block write's command and its data (the base
+    queues the data, and the model its IDMA, for the nearest synced state)
+    moves nothing after the reset. It used to run on the reset registers:
+    WriteDataLeft 1 byte, IDMABASE0 0, so the IDMA read the address space up
+    from 0 for ever and the board's virtual time stood still (IFS_HIL ams
+    job, block U's power cycles; Stm32H7Sdmmc.cs header)."""
+    img = _card(tmp_path)
+
+    def write(offset, value):
+        sim.monitor(f"sysbus WriteDoubleWord {SDMMC_BASE + offset:#x} {value:#x}", board="ams")
+
+    def status():
+        return int(sim.monitor(f"sysbus ReadDoubleWord {SDMMC_BASE + STAR:#x}",
+                               board="ams").strip(), 0)
+
+    def write_block():
+        write(IDMABASE0, 0x24000000)            # AXI SRAM
+        write(IDMACTRL, 1)                      # IDMAEN, single buffer
+        write(DLEN, 512)
+        write(DCTRL, 9 << 4)                    # DBLOCKSIZE 512, DTDIR to the card
+        write(CMD, WRITE_BLOCK)
+
+    with Sim(REPO / "systems" / "ams.yaml", images("ams"),
+             params={"sd": {"image": str(img)}}, card_dirs=[img.parent]) as sim:
+        write_block()                           # control: the block moves
+        sim.run_for(ms=1)
+        assert status() & (DATAEND | DBCKEND) == DATAEND | DBCKEND, f"STAR {status():#x}"
+        write(ICR, DATAEND | DBCKEND)
+        write_block()
+        sim.monitor("machine Reset", board="ams")   # as vhil/broker.py's power-on
+        sim.monitor('cpu SetRegister "BasePri" 0x0', board="ams")
+        t = sim.now_us()
+        assert sim.run_for(ms=5) - t >= 5000
+        assert status() & (DATAEND | DBCKEND | TXFIFOHE) == 0, f"STAR {status():#x}"
