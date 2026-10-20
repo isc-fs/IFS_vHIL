@@ -4,10 +4,12 @@ name: Smoke (virtual)
 # declares, render the system to a Renode script, and run its smoke suite
 # (tests/<system>_smoke.robot). No hardware.
 
-# Heavy CI runs only in special cases (owner, 2026-10-06): a pull request
-# labelled `full-ci`, a release pull request into main, the nightly run on
-# dev, or a manual dispatch. Otherwise the jobs are skipped, which counts as
-# passing for required checks; unit tests (unit.yml) run on every pull request.
+# Heavy CI runs only in special cases (owner, 2026-10-06; docs/ci.md): a
+# pull request labelled `full-ci` runs the legs its changes select
+# (ci/impact.yaml), `full-ci-all`, a release pull request into main, the
+# nightly run on dev and a manual dispatch run both. A leg not selected
+# still runs, its steps skipped, so "smoke (<system>)" (the required checks)
+# always reports; unit tests (unit.yml) run on every pull request.
 on:
   pull_request:
     types: [opened, synchronize, reopened, labeled]
@@ -22,34 +24,35 @@ concurrency:
 permissions:
   contents: read
 
-env:
-  # Skipped steps still report the jobs, "smoke (<system>)" the required checks.
-  FULL: ${{ github.event_name != 'pull_request' || github.base_ref == 'main' || contains(github.event.pull_request.labels.*.name, 'full-ci') }}
-
 jobs:
+  # What this event runs (scripts/ci-select.py over ci/impact.yaml).
+  select:
+    uses: ./.github/workflows/select.yml
+
   # Renode as the image builds it (docker/renode/,
   # .github/actions/setup-renode), into the Actions cache once; the legs
-  # below read it from there. Always runs, its steps skipped when not FULL,
-  # so the legs (which need it) are never skipped as a whole.
+  # below read it from there. Only when a leg runs.
   renode:
     name: renode build
+    needs: select
+    if: needs.select.outputs.smoke_any == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: env.FULL == 'true'
         with:
           ref: ${{ github.event_name == 'schedule' && 'dev' || '' }}
           persist-credentials: false
       - uses: ./.github/actions/setup-renode
-        if: env.FULL == 'true'
         with:
           save: 'true'
 
   smoke:
-    needs: renode
-    # After the build, which a failed `renode` doesn't skip: the leg then
-    # builds Renode itself (and fails loudly if it can't).
+    needs: [select, renode]
+    # Every leg always runs (a skipped matrix job would not report
+    # "smoke (<system>)"), its steps gated on FULL: this leg's selection.
+    # After the build, which a failed or skipped `renode` doesn't skip: a
+    # selected leg then builds Renode itself (and fails loudly if it can't).
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -57,10 +60,18 @@ jobs:
       fail-fast: false
       matrix:
         system: [ecu, ams]
+    env:
+      FULL: ${{ (matrix.system == 'ecu' && needs.select.outputs.smoke_ecu == 'true') || (matrix.system == 'ams' && needs.select.outputs.smoke_ams == 'true') }}
     steps:
-      - name: Not a special case, skipping
+      - name: The selection ran
+        env:
+          SELECT: ${{ needs.select.result }}
+        # A failed selection fails the leg instead of skipping it as passed.
+        run: test "$SELECT" = success
+
+      - name: Not selected, skipping
         if: env.FULL != 'true'
-        run: echo "smoke runs on full-ci-labelled PRs, PRs into main, nightly and dispatch"
+        run: echo "not selected, see docs/ci.md (full-ci by impact; full-ci-all, PRs into main, nightly and dispatch run both)"
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: env.FULL == 'true'

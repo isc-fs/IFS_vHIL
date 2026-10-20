@@ -6,9 +6,11 @@ name: Editor
 # On a plain Python base, not the vHIL image: the editor stages need only
 # Python, git and curl, and building Renode's image here would cost minutes.
 #
-# Runs only when the editor's inputs change. The filter is a job-level `if:`
-# on the `changes` job, not workflow `paths:`, so a skipped run still reports
-# the check as passed.
+# Runs only when the editor's inputs change: the paths ci/impact.yaml maps
+# to `editor: true` (scripts/ci-select.py, docs/ci.md), on any pull request,
+# labelled or not, and on pushes to dev. The filter is a job-level `if:` on
+# the selection, not workflow `paths:`, so a skipped run still reports the
+# check as passed.
 
 on:
   pull_request:
@@ -19,32 +21,12 @@ permissions:
   contents: read
 
 jobs:
-  changes:
-    runs-on: ubuntu-latest
-    outputs:
-      editor: ${{ steps.diff.outputs.editor }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          fetch-depth: 0
-      - id: diff
-        env:
-          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
-        run: |
-          if [ -z "$BASE" ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
-              echo "editor=true" >> "$GITHUB_OUTPUT"; exit 0
-          fi
-          changed=$(git diff --name-only "$BASE" HEAD)
-          if grep -qE '^(editor/|vhil/editor\.py$|vhil/server/|docker/editor\.Dockerfile|\.github/workflows/editor\.yml$)' <<<"$changed"; then
-              echo "editor=true" >> "$GITHUB_OUTPUT"
-          else
-              echo "editor=false" >> "$GITHUB_OUTPUT"
-          fi
+  select:
+    uses: ./.github/workflows/select.yml
 
   editor:
-    needs: changes
-    if: needs.changes.outputs.editor == 'true'
+    needs: select
+    if: needs.select.outputs.editor == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

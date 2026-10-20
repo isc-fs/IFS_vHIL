@@ -5,12 +5,13 @@ name: Scenario tests (vHIL suite)
 # power-on, its expects checked against the trace in virtual time
 # (tests/scenarios/test_scenarios.py), with JUnit output.
 #
-# Heavy, so it runs as the native tests do (sim.yml; owner, 2026-10-06): a
-# pull request labelled `full-ci`, a release pull request into main, the
-# nightly run on dev, or a manual dispatch. A gate since #198 (10 clean
-# nightlies, 2026-10-09..18): a failing scenario fails the check, which is
-# required on dev. On an unlabelled PR the job is skipped, which GitHub counts
-# as passing, so it gates the PRs that run it.
+# Heavy, so it runs as the native tests do (sim.yml; owner, 2026-10-06;
+# docs/ci.md): a pull request labelled `full-ci` runs the systems its changes
+# select (ci/impact.yaml), `full-ci-all`, a release pull request into main,
+# the nightly run on dev and a manual dispatch run every system's. A gate
+# since #198 (10 clean nightlies, 2026-10-09..18): a failing scenario fails
+# the check, which is required on dev. When no system is selected the job is
+# skipped, which GitHub counts as passing, so it gates the PRs that run it.
 on:
   pull_request:
     types: [opened, synchronize, reopened, labeled]
@@ -26,11 +27,22 @@ permissions:
   contents: read
 
 jobs:
+  # What this event runs (scripts/ci-select.py over ci/impact.yaml).
+  select:
+    uses: ./.github/workflows/select.yml
+
   scenarios:
-    if: github.event_name != 'pull_request' || github.base_ref == 'main' || contains(github.event.pull_request.labels.*.name, 'full-ci')
+    needs: select
+    # Runs when the selection failed too, to fail (not skip) the check.
+    if: ${{ !cancelled() && (needs.select.result != 'success' || needs.select.outputs.scenarios == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
+      - name: The selection ran
+        env:
+          SELECT: ${{ needs.select.result }}
+        run: test "$SELECT" = success
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event_name == 'schedule' && 'dev' || '' }}
@@ -72,7 +84,11 @@ jobs:
           VHIL_ECU_ELF: ${{ steps.fw.outputs.ecu }}
           VHIL_AMS_ELF: ${{ steps.fw.outputs.ams }}
           VHIL_CAN_BOOTLOADER_ELF: ${{ steps.fw.outputs.bootloader }}
+          # The selected systems (empty: every system's scenarios;
+          # tests/scenarios/conftest.py).
+          VHIL_SCENARIO_SYSTEMS: ${{ needs.select.outputs.mode != 'all' && needs.select.outputs.scenario_systems || '' }}
         run: |
+          echo "systems: ${VHIL_SCENARIO_SYSTEMS:-all}"
           set +e
           # xunit1: the family whose report keeps each expect's property.
           python -m pytest tests/scenarios -v --sim-log-dir sim-logs \
