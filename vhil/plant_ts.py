@@ -1,3 +1,4 @@
+# impact-selection demo: a plant change (throwaway, not for merge)
 """The tractive-system plant, TS-1 (M8, #147; docs/m8-plan.md): AIR+, AIR-
 and the precharge relay, the inverter's DC link and its bleed, and the
 inverter's report of the link on 0x466.
