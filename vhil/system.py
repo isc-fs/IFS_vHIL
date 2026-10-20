@@ -623,6 +623,12 @@ class System:
                         or not isinstance(target.get("pin"), int) or isinstance(target["pin"], bool)):
                     raise SystemError(f"board {bid}: role {name}'s GPIO {pin} needs a port "
                                       f"and a pin number")
+            for pin in (role.get("adc_differential") or {}):
+                # A transfer of the carrier's ADC path, on an input the board
+                # models as analog and the role keeps analog.
+                if pin not in (board.get("analog_in") or {}) or pin in (role.get("gpio") or {}):
+                    raise SystemError(f"board {bid}: role {name} gives {pin!r} a differential "
+                                      f"ADC transfer, but it is not an analog input in that role")
 
     def _check_role(self, b: Board) -> None:
         """A board with roles (the MainLite: ECU, AMS, uDV) is placed in one of
@@ -1109,6 +1115,13 @@ class System:
                 out.append(f"${var}={rn.file_arg(firmware[b.name])}")
             out.append(f"machine LoadPlatformDescription {rn.file_arg(REPO / platform['repl'])}")
             out += [line.format(board=b.name) for line in platform.get("setup", [])]
+            for pin, t in ((b.role_spec or {}).get("adc_differential") or {}).items():
+                # The carrier's measured differential transfer (#320; cited in
+                # the catalogue): analog hardware, so set once, not on reset.
+                target = b.board["analog_in"][pin]
+                out.append(f"{rn.path(target['adc'])} DifferentialTransfer "
+                           f"{int(target['channel'])} {rn.number(float(t['gain']))} "
+                           f"{int(t.get('offset_codes', 0))}")
             if "cpu" in b.firmware:
                 # The rate the chip runs this firmware's code at, which its
                 # caches and memory placement set (docs/cpu-timing.md); the

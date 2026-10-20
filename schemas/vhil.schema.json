@@ -279,6 +279,22 @@
                 "additionalProperties": {
                   "$ref": "#/$defs/gpio_pin"
                 }
+              },
+              "adc_differential": {
+                "type": "object",
+                "description": "The measured transfer of this role's carrier on a differential ADC input, by the INP pin (an analog input of the board): the code reads (1 + gain * dV / VREF+) * 2^(n-1) + offset_codes (12-bit codes). Cite the measurement. Absent: the ideal transfer (gain 1, offset 0).",
+                "propertyNames": {
+                  "$ref": "#/$defs/name"
+                },
+                "additionalProperties": {
+                  "type": "object",
+                  "required": ["gain"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "gain": {"type": "number", "exclusiveMinimum": 0.5, "maximum": 1.5},
+                    "offset_codes": {"type": "integer", "minimum": -2048, "maximum": 2048}
+                  }
+                }
               }
             }
           }

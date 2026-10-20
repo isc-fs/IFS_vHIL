@@ -79,6 +79,22 @@ and an analog source on either is refused. PC0 (ADC3 INP10) and the spares
 (PB8, PB0 GPIOs; PC2_C, ADC3 INP0) are emulated as the board models them;
 the firmware uses none of them.
 
+The pack-current pair is read through the car's carrier, not an ideal ADC
+(#320). The AMS firmware's calibration (`CurrentMvPerAmpe1` 46 for the
+SSA-2's 5 mV/A, `CurrentZeroCount` 2054; IFS08-CE-AMS `ams_config.hpp:785-797`)
+absorbs a gain of 0.92 on the differential and a zero 6 codes above
+mid-scale, measured on the car's carrier (the gain read back exact against
+an aux-PSU current; the HIL bench carrier, with a DAC and no backplane, saw
+0.924). The AMS role's `adc_differential` (`catalog/boards/mainlite.yaml`)
+gives ADC3 that transfer on INP3/INN3 (`Stm32H7Adc3.cs`
+`DifferentialTransfer`), so a true current on the sensor model reads as
+itself and `CurrentMaxMa` (185 A) trips at 185 A of true current. On the
+ideal ADC the AMS read about 1.087 × I − 2.1 A and tripped at 173 A. No
+datasheet term found explains the gain (VREF+ is VDD through 47 Ω, VDD
+3.30 V ± 0.10 V; the series R10/R11 100 Ω against the pins' weak pull-downs
+take a few tenths of a percent), so the figures are the measurement's.
+Single-ended reads stay ideal: nothing measured them.
+
 ## Known gotchas
 
 - **CAN_H/L swapped at the MainLite connector**

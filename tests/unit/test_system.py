@@ -671,6 +671,18 @@ def test_a_role_rekinds_an_analog_pin_as_gpio(tmp_path):
         System(p)
 
 
+def test_the_ams_carrier_reads_the_current_pair_through_its_measured_transfer():
+    """#320: the AMS role's adc_differential (the car's measured gain and
+    zero) is set on its ADC3 once, before the reset macro; other roles keep
+    the ideal transfer."""
+    script = System(REPO / "systems" / "ecu-ams.yaml").render_renode()
+    line = "sysbus.adc3_h73x DifferentialTransfer 3 0.92 6"
+    assert script.count("DifferentialTransfer") == 1 and line in script
+    ams = script.index('"ams"')
+    assert ams < script.index(line) < script.index("macro reset", ams)
+    assert "DifferentialTransfer" not in System(REPO / "systems" / "ecu.yaml").render_renode()
+
+
 @pytest.mark.parametrize("old, new, message", [
     # The schema refuses a label, a firmware id or a page that isn't one
     # (test_injection checks System() refuses them without it); System()
@@ -683,6 +695,9 @@ def test_a_role_rekinds_an_analog_pin_as_gpio(tmp_path):
                                                  "v1.0 lacks"),
     ("      PF9: {port: sysbus.gpioPortF, pin: 9}", "      PB4: {port: sysbus.gpioPortB, pin: 4}",
      "makes 'PB4' a GPIO, but the board models no analog input"),
+    ("      PF7: {gain: 0.92, offset_codes: 6}", "      PF9: {gain: 0.92, offset_codes: 6}",
+     "gives 'PF9' a differential ADC transfer, but it is not an analog input"),
+    ("      PF7: {gain: 0.92, offset_codes: 6}", "      PF7: {gain: 0.2}", "not valid under any"),
 ])
 def test_the_roles_table_is_checked(tmp_path, old, new, message):
     with pytest.raises(SystemError, match=message):
