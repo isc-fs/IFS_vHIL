@@ -14,9 +14,9 @@ detail; JUnit's xunit1 family, which keeps properties). A scenario whose
 system's images are missing is skipped, so
 `pytest tests` on a host without firmware still runs.
 
-CI (.github/workflows/scenarios.yml) runs it with `full-ci`, nightly and on
-dispatch, advisory for now (owner decision: scenario tests don't gate
-firmware PRs yet).
+CI (.github/workflows/scenarios.yml, docs/ci.md) runs the systems a `full-ci`
+PR's changes select (VHIL_SCENARIO_SYSTEMS, conftest.py), and every system's
+with `full-ci-all`, nightly and on dispatch; a required check on dev (#198).
 """
 from __future__ import annotations
 

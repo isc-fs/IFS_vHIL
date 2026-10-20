@@ -31,6 +31,11 @@ import pytest
 from vhil.sim import Sim
 from vhil.system import REPO
 
+# Impact selection (ci/impact.yaml, docs/ci.md): boards, systems, subsystems.
+pytestmark = [pytest.mark.ecu, pytest.mark.ams, pytest.mark.udv, pytest.mark.system_ecu,
+              pytest.mark.system_ams, pytest.mark.system_udv, pytest.mark.system_ecu_ams,
+              pytest.mark.system_ecu_ams_udv, pytest.mark.cpu_timing, pytest.mark.fast_forward]
+
 RUN_MS = 3500        # 2 s bootloader window, then the apps' boot and steady state
 
 # Board pins watched per system: (board, pin) as the catalogue names them.

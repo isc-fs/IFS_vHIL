@@ -19,6 +19,9 @@ import pytest
 from vhil.sim import Sim
 from vhil.system import REPO
 
+# Impact selection (ci/impact.yaml, docs/ci.md): boards, systems, subsystems.
+pytestmark = [pytest.mark.ecu, pytest.mark.system_ecu, pytest.mark.can]
+
 INTERLOCK, VDC, HEARTBEAT = 0x021, 0x466, 0x100
 FSM_IN_START, TSMS = 0x01, 0x02
 TICK_MS = 10

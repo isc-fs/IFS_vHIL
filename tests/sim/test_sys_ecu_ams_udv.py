@@ -19,6 +19,10 @@ import pytest
 
 from vhil import can_bootloader as cb
 
+# Impact selection (ci/impact.yaml, docs/ci.md): boards, systems, subsystems.
+pytestmark = [pytest.mark.ecu, pytest.mark.ams, pytest.mark.udv, pytest.mark.system_ecu_ams_udv,
+              pytest.mark.can]
+
 HEARTBEAT, AMS_STATUS, TS_ACTIVE = 0x100, 0x4A0, 0x504
 DL_DYN1 = 0x500
 UDV_TRIGGER = (0x002, bytes.fromhex("B007AD13"))

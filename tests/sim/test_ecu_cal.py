@@ -50,6 +50,10 @@ import pytest
 from vhil.sim import Sim
 from vhil.system import REPO
 
+# Impact selection (ci/impact.yaml, docs/ci.md): boards, systems, subsystems.
+pytestmark = [pytest.mark.ecu, pytest.mark.system_ecu, pytest.mark.flash, pytest.mark.adc,
+              pytest.mark.can]
+
 CAL_CMD, CAL_STATUS, CAL_APPS, CAL_BRAKE = 0x7E2, 0x7E3, 0x7E4, 0x7E5
 HEALTH, PIT_ARM, PIT_BRAKE = 0x704, 0x7E0, 0x705
 UDV_TS_ACTIVE = 0x504                # 100 ms uDV tick (control_task.cpp:326-338)

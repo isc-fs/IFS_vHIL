@@ -25,6 +25,9 @@ import pytest
 from vhil.sim import Sim
 from vhil.system import REPO
 
+# Impact selection (ci/impact.yaml, docs/ci.md): boards, systems, subsystems.
+pytestmark = [pytest.mark.ams, pytest.mark.system_ams, pytest.mark.can, pytest.mark.i2c]
+
 SOC, FW_HEALTH, POST_MORTEM = 0x130, 0x6CA, 0x6C5
 PIT_ARM, VCU = 0x7F0, 0x100
 UNKNOWN = 0xFF

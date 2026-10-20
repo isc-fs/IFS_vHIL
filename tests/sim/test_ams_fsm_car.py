@@ -25,6 +25,9 @@ from ams_car import (AMS_OK, Car, DASH_CHG, ERROR, GPIOB, GPIOF, PACK_V, PRECHAR
 from vhil.sim import Sim
 from vhil.system import REPO
 
+# Impact selection (ci/impact.yaml, docs/ci.md): boards, systems, subsystems.
+pytestmark = [pytest.mark.ams, pytest.mark.system_ams, pytest.mark.can]
+
 FSM_ERROR, VCU_STALE, UNDERVOLTAGE = 12, 11, 4
 STATUS, TEMPS = 0x4A0, 0x4A2
 BOOT_MS = 3000

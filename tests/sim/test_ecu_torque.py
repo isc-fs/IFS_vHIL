@@ -54,6 +54,10 @@ from vhil.plants import APPS1_FULL, APPS1_REST, APPS2_FULL, APPS2_REST
 from vhil.sim import Sim
 from vhil.system import REPO
 
+# Impact selection (ci/impact.yaml, docs/ci.md): boards, systems, subsystems.
+pytestmark = [pytest.mark.ecu, pytest.mark.system_ecu, pytest.mark.adc, pytest.mark.can,
+              pytest.mark.plant]
+
 ACTIVE, TICK_MS = 5, 10
 APPS1, APPS2 = (2490, 3350), (2345, 3025)            # ecu_config.hpp:95-98
 BRAKE_RELEASED, BRAKE_FIRM, BRAKE_FULL = 580, 1500, 3500

@@ -30,6 +30,9 @@ from vhil import elf
 from vhil.sim import Sim
 from vhil.system import REPO
 
+# Impact selection (ci/impact.yaml, docs/ci.md): boards, systems, subsystems.
+pytestmark = [pytest.mark.ams, pytest.mark.system_ams, pytest.mark.adc, pytest.mark.dma]
+
 CURRENTS = 0x135
 STREAM = 1                                    # DMA1 Stream1 (hdma_adc3)
 CAPTURE = "_ZN12_GLOBAL__N_19s_captureE"      # uint16_t s_capture[2][1024]

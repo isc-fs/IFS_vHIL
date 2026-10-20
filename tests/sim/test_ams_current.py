@@ -36,6 +36,9 @@ from vhil.plant_pack import sensor_volts
 from vhil.sim import Sim
 from vhil.system import CATALOG, REPO
 
+# Impact selection (ci/impact.yaml, docs/ci.md): boards, systems, subsystems.
+pytestmark = [pytest.mark.ams, pytest.mark.system_ams, pytest.mark.adc, pytest.mark.plant]
+
 VREF = 3.3
 CURRENT_ZERO_COUNT = 2054
 CURRENT_MV_PER_A_E1 = 46

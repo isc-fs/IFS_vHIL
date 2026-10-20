@@ -10,6 +10,9 @@ The raw fields are the ADC codes unfiltered, so they are asserted exactly.
 """
 import pytest
 
+# Impact selection (ci/impact.yaml, docs/ci.md): boards, systems, subsystems.
+pytestmark = [pytest.mark.ecu, pytest.mark.system_ecu, pytest.mark.adc]
+
 VREF = 3.3
 PIT_ARM, PEDALS = 0x7E0, 0x701
 

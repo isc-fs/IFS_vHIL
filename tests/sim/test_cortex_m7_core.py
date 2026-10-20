@@ -10,6 +10,9 @@ tests check that it stays off.
 """
 import pytest
 
+# Impact selection (ci/impact.yaml, docs/ci.md): boards, systems, subsystems.
+pytestmark = [pytest.mark.ams, pytest.mark.system_ams, pytest.mark.cpu_timing]
+
 BOARD = "ams"
 SYSCLK_MHZ = 528                 # AMS/ECU/bootloader main.c SystemClock_Config
 DWT_CTRL, DWT_CYCCNT = 0xE0001000, 0xE0001004

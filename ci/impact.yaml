@@ -1,0 +1,220 @@
+# Test-impact selection: which heavy CI a pull request labelled `full-ci`
+# runs, from the paths it changes (scripts/ci-select.py, docs/ci.md).
+#
+# `full-ci-all`, a release PR into main, the nightly run on dev and a manual
+# dispatch run everything; an unlabelled PR runs the unit tests only. With
+# `full-ci`, the guard (unit tests, every system's identity fingerprint
+# against ci/fingerprints.json, the two-board determinism test) always runs,
+# plus the union of what each changed path selects here.
+#
+# A changed path that matches `everything` selects everything. Otherwise
+# every changed path must match at least one rule (all the rules it matches
+# add up); a path no rule matches selects everything (fail safe), so a new
+# directory runs the whole CI until a rule names it. `select: {}` maps a
+# path to nothing heavy (docs, unit-only code).
+#
+# Globs: `*` is any run of characters within one path segment, `**` any
+# number of segments (`docs/**` is everything under docs/), `{name}` one
+# segment's worth of characters, captured and substituted into the rule's
+# select (`systems/{system}.yaml` -> `systems: ['{system}']`).
+#
+# What a rule may select:
+#   markers:  [m]      the tests/sim files tagged with any of these pytest
+#                      markers (pytest.ini: boards, systems, subsystems)
+#   sim:      [glob]   tests/sim files by path
+#   importers: true    besides, the tests/sim and tests/scenarios files that
+#                      import the changed Python module directly
+#   systems:  [s]      a system whole: its tests/sim files (system_<s>
+#                      marker), its scenarios, its smoke suite and its
+#                      IFS_HIL job where it has them
+#   runs:     [s]      a system's scenarios, smoke suite and IFS_HIL job,
+#                      not its tests/sim files
+#   boards:   [b]      a board role: the tests/sim files marked <b>, and
+#                      every system with a board in that role (`systems`)
+#   firmware: [id]     the boards whose role runs that catalogue firmware
+#                      (`boards`)
+#   devices:  [model]  `runs` of every system with a device of that
+#                      catalogue model (catalog/models/<model>.yaml)
+#   scenarios: [s]     systems/<s>.scenarios/ (`'*'`: every system's)
+#   smoke:    [s]      tests/<s>_smoke.robot: ecu, ams (`'*'`: both)
+#   ifs_hil:  [job]    IFS_HIL suites: ecu, ecu-ams, ams (`'*'`: all three)
+#   speed:    true     the `emulation speed` benchmark
+#   editor:   true     the editor image check (editor.yml; it runs on any PR
+#                      whose paths select it, labelled or not, and on pushes
+#                      to dev)
+#
+# To extend: add a rule for the new path naming what it can change, smallest
+# group that still catches a regression; the guard backs every selection up
+# for what a change does to every system's first seconds, and the nightly
+# audit (impact-audit.yml) reports what a merged PR's selection skipped that
+# then failed. Check a rule with
+#   python scripts/ci-select.py --explain --changed <path> ...
+
+everything:
+  # The emulator, the platform, the board, the generator and the session
+  # plumbing every test runs through.
+  - docker/renode/**
+  - docker/Dockerfile
+  - platforms/**
+  - catalog/platforms/**
+  - catalog/boards/**
+  - catalog/pin-models/**
+  - catalog/firmware/can-bootloader.yaml   # every MainLite boots through it
+  - schemas/**
+  - vhil/__init__.py
+  - vhil/sim.py
+  - vhil/system.py
+  - vhil/worker.py
+  - vhil/renode.py
+  - vhil/broker.py
+  - vhil/bench*.py
+  - vhil/pytest_plugin.py
+  - vhil/models.py
+  - vhil/flash_image.py
+  - vhil/peripheral_guard.py
+  - vhil/elf.py
+  - vhil/pin_model.py
+  - configs/peripherals.yaml               # the peripheral guard, every session
+  # Models every board's every run goes through: the CAN path, the
+  # machines and their time sources, the monitor, the fast-forward and lazy
+  # paths, the bus hooks, the probes every test observes with.
+  - models/renode/VhilCanBus.cs
+  - models/renode/Stm32H7Fdcan.cs
+  - models/renode/Stm32H7FdcanCcu.cs
+  - models/renode/VhilMachine.cs
+  - models/renode/VhilMonitor.cs
+  - models/renode/VhilFastForward.cs
+  - models/renode/VhilLazy.cs
+  - models/renode/VhilBusHooks.cs
+  - models/renode/VhilProbe.cs
+  # CI itself.
+  - .github/workflows/**
+  - .github/actions/**
+  - ci/**
+  - scripts/ci-*.py
+  - scripts/sim-balance.py
+  - scripts/sim-shard.sh
+  - scripts/fingerprint.py
+
+rules:
+  # -- nothing heavy -------------------------------------------------------
+  - name: docs and repo metadata
+    paths: [docs/**, '*.md', .gitignore, .gitattributes, .github/dependabot.yml]
+    select: {}
+  - name: unit-tested only (tests/unit runs on every PR)
+    paths: [tests/unit/**, tests/js/**, deploy/**, docker/compose.yaml,
+            vhil/coverage.py, vhil/fwprune.py, vhil/trace.py,
+            models/renode/VhilTrace.cs, tests/sim/durations.json]
+    select: {importers: true}
+  - name: developer scripts
+    paths: [scripts/explore.sh, scripts/probe.sh, scripts/vhil-docker.sh, scripts/wsl-vcan.sh,
+            scripts/update-pin-model.sh, scripts/shims/**]
+    select: {}
+
+  # -- editor ----------------------------------------------------------------
+  - name: editor
+    paths: [editor/**, vhil/editor.py, docker/editor.Dockerfile, docker/editor.Dockerfile.dockerignore,
+            .github/workflows/editor.yml,
+            scripts/editor.sh]
+    select: {editor: true}
+  - name: web app (server, live session, the shell the editor embeds)
+    paths: [vhil/server/**]
+    select: {editor: true, markers: [server, live_session], scenarios: ['*'], importers: true}
+
+  # -- systems, scenarios, firmware -----------------------------------------
+  - name: a system
+    paths: ['systems/{system}.yaml']
+    select: {systems: ['{system}']}
+  - name: a system's scenarios
+    paths: ['systems/{system}.scenarios/**']
+    select: {scenarios: ['{system}']}
+  - name: the benchmark-only systems
+    paths: [scripts/speed-systems/**, scripts/speed.py, models/renode/VhilPcSampler.cs]
+    select: {speed: true}
+  - name: an application's catalogue entry
+    paths: ['catalog/firmware/{firmware}.yaml']
+    select: {firmware: ['{firmware}']}
+
+  # -- tests -------------------------------------------------------------------
+  - name: a native test file or helper (with the files importing it)
+    paths: ['tests/sim/{file}.py']
+    select: {sim: ['tests/sim/{file}.py'], importers: true}
+  - name: the native tests' fixtures and options
+    paths: [tests/sim/conftest.py, tests/conftest.py, pytest.ini]
+    select: {sim: ['tests/sim/test_*.py'], scenarios: ['*']}
+  - name: the scenario suite
+    paths: [tests/scenarios/**]
+    select: {scenarios: ['*']}
+  - name: the ECU smoke suite
+    paths: [tests/ecu_smoke.robot]
+    select: {smoke: [ecu]}
+  - name: the AMS smoke suite
+    paths: [tests/ams_smoke.robot]
+    select: {smoke: [ams]}
+  - name: IFS_HIL's runs (the parity ledger, the runner, vcan)
+    paths: [configs/gaps.yaml, scripts/run-ifs-hil.sh, scripts/ci-vcan.sh,
+            models/renode/VhilClock.cs, models/renode/VhilPacer.cs]
+    select: {ifs_hil: ['*'], markers: [broker]}
+
+  # -- devices and peripherals (models/renode, catalog/models) -----------------
+  # A peripheral's tests by subsystem, plus the system runs whose firmware
+  # drives it in normal operation; what it does at boot to every system the
+  # guard's fingerprint checks.
+  - name: SD card / SDMMC1
+    paths: [models/renode/Stm32H7Sdmmc.cs, catalog/models/sd-card.yaml]
+    select: {markers: [sd], devices: [sd-card]}
+  - name: isoSPI chain (SPI1, LTC6820, LTC6811)
+    paths: [models/renode/IsoSpi.cs, models/renode/Stm32H7Spi.cs, catalog/models/ltc6811.yaml,
+            catalog/models/ltc6820.yaml]
+    select: {markers: [isospi], devices: [ltc6820]}
+  - name: I2C and the BMI088
+    paths: [models/renode/Stm32H7I2c.cs, models/renode/Bmi088.cs, catalog/models/bmi088.yaml]
+    select: {markers: [i2c], devices: [bmi088]}
+  - name: the nRF24 radio
+    paths: [models/renode/Nrf24l01p.cs, catalog/models/nrf24l01p.yaml]
+    select: {markers: [radio], devices: [nrf24l01p]}
+  - name: ADC3 and the analog sources (the ECU's pedals, the AMS's current sensors)
+    paths: [models/renode/Stm32H7Adc3.cs, catalog/models/acs758lcb-050b.yaml,
+            catalog/models/ssa-2-250a.yaml]
+    select: {markers: [adc], devices: [acs758lcb-050b, ssa-2-250a], runs: [ecu]}
+  - name: DMA
+    paths: [models/renode/Stm32H7Dma.cs]
+    select: {markers: [dma, adc], devices: [acs758lcb-050b, ssa-2-250a], runs: [ecu]}
+  - name: DBGMCU
+    paths: [models/renode/Stm32H7Dbgmcu.cs]
+    select: {markers: [dma, debugger]}
+  - name: CORDIC (the uDV's attitude filter)
+    paths: [models/renode/Stm32H7Cordic.cs]
+    select: {boards: [udv]}
+  - name: flash controller (bootloader writes, option bytes; IFS_HIL's flashing)
+    paths: [models/renode/Stm32H7Flash.cs]
+    select: {markers: [flash, bootloader], ifs_hil: [ecu, ams]}
+  - name: resets and reset causes
+    paths: [models/renode/VhilRccResets.cs, models/renode/VhilResetFlags.cs]
+    select: {markers: [reset]}
+  - name: bus errors and execute-never (fault paths)
+    paths: [models/renode/VhilBusError.cs, models/renode/VhilExecuteNever.cs]
+    select: {markers: [fault_hooks]}
+  - name: core timing (caches)
+    paths: [models/renode/VhilCaches.cs]
+    select: {markers: [cpu_timing]}
+  - name: the debugger
+    paths: [models/renode/VhilGdb.cs, vhil/gdb.py]
+    select: {markers: [debugger], importers: true}
+
+  # -- plants and co-simulation -------------------------------------------------
+  - name: plants, co-simulation, FMI
+    paths: [vhil/cosim.py, vhil/plants.py, 'vhil/plant_*.py', vhil/fmi.py, catalog/plants/**,
+            tests/fmu/**, models/renode/VhilRunner.cs]
+    select: {markers: [plant], scenarios: [ecu-ams], importers: true}
+
+  # -- the run path's Python (the worker's helpers: scenarios run through it) -----
+  - name: frames, contracts, expects, state view, run logs
+    paths: [vhil/canframe.py, vhil/candef.py, vhil/expect.py, vhil/stateview.py, vhil/runlog.py]
+    select: {markers: [server], scenarios: ['*'], importers: true}
+  - name: host-side bootloader protocol
+    paths: [vhil/can_bootloader.py]
+    select: {markers: [bootloader], importers: true}
+  - name: failure snapshots
+    paths: [vhil/snapshot.py]
+    select: {importers: true}

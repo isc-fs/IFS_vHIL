@@ -18,6 +18,9 @@ import pytest
 from vhil.sim import Sim
 from vhil.system import REPO
 
+# Impact selection (ci/impact.yaml, docs/ci.md): boards, systems, subsystems.
+pytestmark = [pytest.mark.ecu, pytest.mark.system_ecu, pytest.mark.can]
+
 OK_PRECHARGE, AMS_STATUS, TS_ACTIVE = 0x020, 0x4A0, 0x504
 STALE_MS, TICK_MS = 200, 10
 WAIT_INV_VDC, WAIT_START_BRAKE, AMS_ERROR = 0, 2, 6

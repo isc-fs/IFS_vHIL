@@ -5,10 +5,12 @@ name: Native tests (virtual time)
 # Sharded by suite so the whole set doesn't serialise every PR; the `sim`
 # job (the required check) passes only when every shard did.
 
-# Heavy CI runs only in special cases (owner, 2026-10-06): a pull request
-# labelled `full-ci`, a release pull request into main, the nightly run on
-# dev, or a manual dispatch. Otherwise the jobs are skipped, which counts as
-# passing for required checks; unit tests (unit.yml) run on every pull request.
+# Heavy CI runs only in special cases (owner, 2026-10-06; docs/ci.md): a
+# pull request labelled `full-ci` runs the files its changes select
+# (ci/impact.yaml) plus the guard, `full-ci-all`, a release pull request into
+# main, the nightly run on dev and a manual dispatch run everything.
+# Otherwise the jobs are skipped, which counts as passing for required
+# checks; unit tests (unit.yml) run on every pull request.
 on:
   pull_request:
     types: [opened, synchronize, reopened, labeled]
@@ -24,12 +26,17 @@ permissions:
   contents: read
 
 jobs:
+  # What this event runs (scripts/ci-select.py over ci/impact.yaml).
+  select:
+    uses: ./.github/workflows/select.yml
+
   # Renode as the image builds it (docker/renode/,
   # .github/actions/setup-renode), into the Actions cache once; the jobs below
   # read it from there.
   renode:
     name: renode build
-    if: github.event_name != 'pull_request' || github.base_ref == 'main' || contains(github.event.pull_request.labels.*.name, 'full-ci')
+    needs: select
+    if: needs.select.outputs.renode_sim == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
@@ -43,16 +50,16 @@ jobs:
 
   shard:
     name: sim (${{ matrix.shard }})
-    needs: renode
+    needs: [select, renode]
     # After the build, which a failed `renode` doesn't skip: the job then
     # builds Renode itself (and fails loudly if it can't).
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.base_ref == 'main' || contains(github.event.pull_request.labels.*.name, 'full-ci')) }}
+    if: ${{ !cancelled() && needs.select.result == 'success' && needs.select.outputs.sim == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
-        # Shard k of 8 runs the files scripts/sim-balance.py gives it: split
+        # Shard k of N runs the files scripts/sim-balance.py gives it: split
         # by each file's wall time on CI (tests/sim/durations.json, from the
         # per-file tables sim-shard.sh writes to the job summaries), longest
         # first, so the shards end together. Each shard runs its files two at
@@ -61,8 +68,10 @@ jobs:
         # (#260; it was 15 shards of one file at a time, 156 runner-minutes,
         # the longest 17). Every boot spends the bootloader's 2 s window
         # first; its FDCAN polling loop is fast-forwarded (#154,
-        # docs/performance.md).
-        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+        # docs/performance.md). N is 8 for a full run, fewer for an impact
+        # selection (scripts/ci-select.py: as many as keep each lane within a
+        # full run's).
+        shard: ${{ fromJSON(needs.select.outputs.sim_shards) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -99,8 +108,12 @@ jobs:
 
       - name: This shard's test files
         id: files
+        env:
+          SHARD: ${{ matrix.shard }}
+          SHARDS: ${{ needs.select.outputs.sim_shard_count }}
+          SELECTED: ${{ needs.select.outputs.sim_files }}
         run: |
-          files=$(python scripts/sim-balance.py 8 ${{ matrix.shard }})
+          files=$(python scripts/sim-balance.py "$SHARDS" "$SHARD" --files "$SELECTED")
           echo "$files"
           echo "list=$(echo $files)" >> "$GITHUB_OUTPUT"
 
@@ -116,13 +129,18 @@ jobs:
 
       - name: Run this shard of tests/sim
         env:
+          # The nightly also maps what each file exercises (docs/ci.md, the
+          # impact audit).
+          VHIL_IMPACT_MAP: ${{ github.event_name == 'schedule' && '1' || '0' }}
           RENODE: ${{ runner.temp }}/renode/renode
           VHIL_ECU_ELF: ${{ steps.fw.outputs.ecu }}
           VHIL_AMS_ELF: ${{ steps.fw.outputs.ams }}
           VHIL_UDV_ELF: ${{ steps.fw.outputs.udv }}
           VHIL_CAN_BOOTLOADER_ELF: ${{ steps.fw.outputs.bootloader }}
           FILES: ${{ steps.files.outputs.list }}
-        run: scripts/sim-shard.sh 2 sim-logs $FILES
+        run: |
+          if [ "$VHIL_IMPACT_MAP" = 1 ]; then pip install -q "coverage==7.6.*"; fi
+          scripts/sim-shard.sh 2 sim-logs $FILES
 
       - name: Upload Renode logs
         if: always()
@@ -140,10 +158,10 @@ jobs:
   # an artifact; it fails only if the benchmark can't run.
   speed:
     name: emulation speed
-    needs: renode
+    needs: [select, renode]
     # After the build, which a failed `renode` doesn't skip: the job then
     # builds Renode itself (and fails loudly if it can't).
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.base_ref == 'main' || contains(github.event.pull_request.labels.*.name, 'full-ci')) }}
+    if: ${{ !cancelled() && needs.select.result == 'success' && needs.select.outputs.speed == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -201,13 +219,120 @@ jobs:
           path: speed/
           if-no-files-found: ignore
 
+  # The guard every heavy run has, whatever the selection (docs/ci.md): each
+  # system's identity fingerprint against ci/fingerprints.json, on the
+  # firmware commits that file pins, and the two-board determinism test. A
+  # change the selection left tests out for must still leave every system's
+  # first seconds byte-identical (or re-record the references).
+  guard:
+    name: impact guard
+    needs: [select, renode]
+    if: ${{ !cancelled() && needs.select.result == 'success' && needs.select.outputs.guard == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'schedule' && 'dev' || '' }}
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+
+      - name: Arm GNU toolchain (pinned like IFS_HIL's recipe)
+        uses: carlosperate/arm-none-eabi-gcc-action@0edbb000a5a98e2292b051b463bff6f512547118 # v1.14.0
+        with:
+          release: '14.2.Rel1'
+
+      - name: Build the firmware ci/fingerprints.json pins
+        id: fw
+        run: |
+          pip install -q pyyaml "jsonschema>=4" pytest "fastapi==0.115.*" "httpx==0.28.*"
+          commits=$(python - <<'EOF'
+          import json
+          fw = json.load(open("ci/fingerprints.json"))["firmware"]
+          pairs = [f"{b}={fw[b]}" for b in ("ecu", "ams", "udv")]
+          pairs += [f"{b}.bootloader={fw['can-bootloader']}" for b in ("ecu", "ams", "udv")]
+          print(" ".join(f"--commit {p}" for p in pairs))
+          EOF
+          )
+          python -m vhil.system build systems/ecu-ams-udv.yaml --workdir "$RUNNER_TEMP/fw" $commits | tee built.txt
+          echo "ecu=$(sed -n 's/^ecu=//p' built.txt | tail -1)" >> "$GITHUB_OUTPUT"
+          echo "ams=$(sed -n 's/^ams=//p' built.txt | tail -1)" >> "$GITHUB_OUTPUT"
+          echo "udv=$(sed -n 's/^udv=//p' built.txt | tail -1)" >> "$GITHUB_OUTPUT"
+          echo "bootloader=$(sed -n 's/^ecu.bootloader=//p' built.txt | tail -1)" >> "$GITHUB_OUTPUT"
+
+      # Renode 1.17.0 + docker/renode's patches, as the image builds it.
+      - name: Renode (vHIL build)
+        uses: ./.github/actions/setup-renode
+
+      - name: FAT tools for SD card images
+        run: sudo apt-get install -y -qq dosfstools mtools >/dev/null
+
+      - name: Identity fingerprint of every system
+        id: fingerprint
+        env:
+          RENODE: ${{ runner.temp }}/renode/renode
+          VHIL_ECU_ELF: ${{ steps.fw.outputs.ecu }}
+          VHIL_AMS_ELF: ${{ steps.fw.outputs.ams }}
+          VHIL_UDV_ELF: ${{ steps.fw.outputs.udv }}
+          VHIL_CAN_BOOTLOADER_ELF: ${{ steps.fw.outputs.bootloader }}
+        run: |
+          mkdir -p fingerprint
+          set +e
+          python scripts/fingerprint.py check ci/fingerprints.json \
+            --out fingerprint/fingerprints.json --full fingerprint/observed.json | tee fingerprint/check.txt
+          rc=${PIPESTATUS[0]}
+          {
+            echo "## Identity fingerprint (ci/fingerprints.json)"
+            echo '```'
+            cat fingerprint/check.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit $rc
+
+      - name: Two-board determinism
+        if: ${{ !cancelled() }}
+        env:
+          RENODE: ${{ runner.temp }}/renode/renode
+          VHIL_ECU_ELF: ${{ steps.fw.outputs.ecu }}
+          VHIL_AMS_ELF: ${{ steps.fw.outputs.ams }}
+          VHIL_CAN_BOOTLOADER_ELF: ${{ steps.fw.outputs.bootloader }}
+        run: |
+          set -o pipefail
+          python -m pytest -v -rs --sim-log-dir sim-logs \
+            "tests/sim/test_can_bus.py::test_two_board_runs_give_the_same_bus_timeline" | tee det.txt
+          # A skip (a missing image) must not pass as the guard.
+          grep -qE "^=+ 1 passed" det.txt
+
+      - name: Upload the fingerprint (commit fingerprint/fingerprints.json to re-record)
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fingerprint
+          path: |
+            fingerprint/
+            sim-logs/
+          if-no-files-found: ignore
+
+  # The required check: the selection ran, every shard it selected passed,
+  # and the guard did. Skipped jobs pass only when the selection skipped
+  # them; a failed selection fails this check rather than letting it pass.
   sim:
-    needs: shard
+    needs: [select, shard, guard]
     if: always()
     runs-on: ubuntu-latest
     steps:
-      - name: Every shard passed
+      - name: The selection, every shard and the guard passed
         env:
-          RESULT: ${{ needs.shard.result }}
-        # skipped when this run is not one of the special cases above
-        run: test "$RESULT" = success || test "$RESULT" = skipped
+          SELECT: ${{ needs.select.result }}
+          SHARDS: ${{ needs.shard.result }}
+          GUARD: ${{ needs.guard.result }}
+          SIM: ${{ needs.select.outputs.sim }}
+          HEAVY: ${{ needs.select.outputs.guard }}
+        run: |
+          echo "select=$SELECT shards=$SHARDS (selected: $SIM) guard=$GUARD (selected: $HEAVY)"
+          test "$SELECT" = success
+          if [ "$SIM" = true ]; then test "$SHARDS" = success; else test "$SHARDS" = skipped; fi
+          if [ "$HEAVY" = true ]; then test "$GUARD" = success; else test "$GUARD" = skipped; fi

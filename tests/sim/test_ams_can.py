@@ -29,6 +29,9 @@ from vhil import candef
 from vhil.sim import Sim
 from vhil.system import REPO
 
+# Impact selection (ci/impact.yaml, docs/ci.md): boards, systems, subsystems.
+pytestmark = [pytest.mark.ams, pytest.mark.system_ams, pytest.mark.can]
+
 PIT_CELLS = range(0x680, 0x698)
 PIT_TEMPS = range(0x6A0, 0x6B9)
 PIT_CMD, PIT_ACK = 0x7F0, 0x7F1

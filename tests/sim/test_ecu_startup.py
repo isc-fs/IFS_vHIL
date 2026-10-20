@@ -17,6 +17,9 @@ import pytest
 from vhil.sim import Sim
 from vhil.system import REPO
 
+# Impact selection (ci/impact.yaml, docs/ci.md): boards, systems, subsystems.
+pytestmark = [pytest.mark.ecu, pytest.mark.system_ecu, pytest.mark.can, pytest.mark.adc]
+
 WAIT_VDC, PRECHARGE, WAIT_START_BRAKE, R2D_DELAY, WAIT_INV_STANDBY = 0, 1, 2, 3, 4
 TICK_MS, R2D_SOUND_MS, DEBOUNCE_MS = 10, 2000, 50
 BRAKE_FIRM_V = 1500 * 3.3 / 4095          # well past BrakeArmRaw (750 counts)

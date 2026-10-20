@@ -54,6 +54,9 @@ from vhil import elf
 from vhil.sim import BUS_ERROR_ADDRESS, XN_ADDRESS, Sim
 from vhil.system import REPO
 
+# Impact selection (ci/impact.yaml, docs/ci.md): boards, systems, subsystems.
+pytestmark = [pytest.mark.ams, pytest.mark.system_ams, pytest.mark.fault_hooks, pytest.mark.reset]
+
 FW_HEALTH = 0x6CA
 LAST_FAULT = {"HardFault_Handler": 1, "MemManage_Handler": 5, "BusFault_Handler": 6,
               "UsageFault_Handler": 7}

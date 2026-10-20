@@ -44,6 +44,9 @@ from vhil.plants import APPS1_FULL, APPS2_FULL, APPS1_REST, APPS2_REST, COUNTS_T
 from vhil.sim import Sim, assert_cadence
 from vhil.system import REPO
 
+# Impact selection (ci/impact.yaml, docs/ci.md): boards, systems, subsystems.
+pytestmark = [pytest.mark.ecu, pytest.mark.system_ecu, pytest.mark.can, pytest.mark.plant]
+
 TS_ACTIVE, BRAKE_OVER, MOTOR_RPM, R2D_CONFIRM = 0x504, 0x505, 0x506, 0x511
 UDV_TORQUE, UDV_R2D = 0x507, 0x510
 OK_PRECHARGE, AMS_STATUS, TMAX_A, TMAX_B = 0x020, 0x4A0, 0x136, 0x137

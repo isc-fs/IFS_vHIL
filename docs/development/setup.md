@@ -311,12 +311,14 @@ exit criterion. Bugs and model gaps get their own issue, labelled
 - Small and thematic. Draft PRs are fine for blocked work.
 - Green CI before merge; merge commit, not squash; delete the branch
   after merge.
-- **CI runs the heavy jobs only in special cases.** These are the sim shards,
-  smoke and the IFS_HIL ECU/ECU+AMS/AMS suites, and they run when:
-  - the PR is labelled `full-ci`;
-  - the PR is a release PR into `main`;
-  - the nightly run on `dev` fires;
-  - someone dispatches a workflow by hand.
+- **CI runs the heavy jobs only in special cases** ([`docs/ci.md`](../ci.md)).
+  These are the sim shards, smoke, the scenarios and the IFS_HIL
+  ECU/ECU+AMS/AMS suites:
+  - a PR labelled `full-ci` runs what its changed paths select
+    (`ci/impact.yaml`) plus the guard (every system's identity fingerprint,
+    the two-board determinism test);
+  - a PR labelled `full-ci-all`, a release PR into `main`, the nightly run on
+    `dev` and a manual dispatch run everything.
 
   Every PR runs `unit`, a minute or so, which also validates every system.
   Otherwise the heavy jobs are skipped, which counts as passing for the

@@ -94,8 +94,9 @@ that is busy with something else.
 #154's speed-ups, on the same host (`VHIL_FAST_FORWARD=0`, .NET's default
 tiering delay and call-count threshold). `VHIL_DOCKER_CPUS=N` limits the
 container to N cores, as a CI runner (GitHub's have 4). The `emulation speed` job of
-[`sim.yml`](../.github/workflows/sim.yml) runs it with `--baseline` on every
-full-ci pull request and every night, into the job summary and an artifact.
+[`sim.yml`](../.github/workflows/sim.yml) runs it with `--baseline` when a run
+selects it (`full-ci-all`, every night, or a `full-ci` change to the speed
+paths, [`ci.md`](ci.md)), into the job summary and an artifact.
 
 On an M-series host under Colima, run to run variation is ±20 %: the VM's
 vCPUs land on performance or efficiency cores as macOS schedules them. Take

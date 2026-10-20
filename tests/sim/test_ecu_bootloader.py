@@ -30,6 +30,9 @@ from vhil.can_bootloader import CanBootloader, FwInfo
 from vhil.sim import Sim
 from vhil.system import REPO
 
+# Impact selection (ci/impact.yaml, docs/ci.md): boards, systems, subsystems.
+pytestmark = [pytest.mark.ecu, pytest.mark.system_ecu, pytest.mark.bootloader, pytest.mark.flash]
+
 NODE = 0x1
 AUTO_JUMP_MS = 2000
 HEARTBEAT = 0x100

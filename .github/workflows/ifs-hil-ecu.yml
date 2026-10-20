@@ -6,10 +6,12 @@ name: IFS_HIL ECU and AMS suites (virtual)
 # bridged to vcan can0/can1/can2 and the virtual broker answering IFS_HIL's
 # broker protocol (issue #1).
 
-# Heavy CI runs only in special cases (owner, 2026-10-06): a pull request
-# labelled `full-ci`, a release pull request into main, the nightly run on
-# dev, or a manual dispatch. Otherwise the jobs are skipped, which counts as
-# passing for required checks; unit tests (unit.yml) run on every pull request.
+# Heavy CI runs only in special cases (owner, 2026-10-06; docs/ci.md): a
+# pull request labelled `full-ci` runs the jobs its changes select
+# (ci/impact.yaml), `full-ci-all`, a release pull request into main, the
+# nightly run on dev and a manual dispatch run all three. Otherwise a job is
+# skipped, which counts as passing for required checks (`ecu` is one); unit
+# tests (unit.yml) run on every pull request.
 on:
   pull_request:
     types: [opened, synchronize, reopened, labeled]
@@ -51,12 +53,17 @@ env:
   IFS_HIL_REF: ${{ inputs.ifs_hil_ref || 'dev' }}
 
 jobs:
+  # What this event runs (scripts/ci-select.py over ci/impact.yaml).
+  select:
+    uses: ./.github/workflows/select.yml
+
   # Renode as the image builds it (docker/renode/,
   # .github/actions/setup-renode), into the Actions cache once; the jobs below
   # read it from there.
   renode:
     name: renode build
-    if: github.event_name != 'pull_request' || github.base_ref == 'main' || contains(github.event.pull_request.labels.*.name, 'full-ci')
+    needs: select
+    if: needs.select.outputs.ifs_hil_any == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
@@ -73,10 +80,11 @@ jobs:
   # and jump through can-flasher over vcan, #4) runs here: a skip in it fails
   # the job, as it would mean the flashing path never ran.
   ecu:
-    needs: renode
+    needs: [select, renode]
     # After the build, which a failed `renode` doesn't skip: the job then
     # builds Renode itself (and fails loudly if it can't).
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.base_ref == 'main' || contains(github.event.pull_request.labels.*.name, 'full-ci')) }}
+    # Runs when the selection failed too, to fail (not skip) the check.
+    if: ${{ !cancelled() && (needs.select.result != 'success' || needs.select.outputs.ifs_hil_ecu == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     env:
@@ -85,6 +93,11 @@ jobs:
       # isc-fs/can-flasher --json assets), checked against a download.
       CAN_FLASHER_SHA256: 8e3412b846a3ced9abd34b9a2a5665232c2fb72f089fcf55fdcccb5635c87b5e
     steps:
+      - name: The selection ran
+        env:
+          SELECT: ${{ needs.select.result }}
+        run: test "$SELECT" = success
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event_name == 'schedule' && 'dev' || '' }}
@@ -178,13 +191,19 @@ jobs:
   # IFS_HIL's real-AMS block against the emulated AMS. Every test must run:
   # a skip here means the live AMS was not there.
   ecu-ams:
-    needs: renode
+    needs: [select, renode]
     # After the build, which a failed `renode` doesn't skip: the job then
     # builds Renode itself (and fails loudly if it can't).
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.base_ref == 'main' || contains(github.event.pull_request.labels.*.name, 'full-ci')) }}
+    # Runs when the selection failed too, to fail (not skip) the check.
+    if: ${{ !cancelled() && (needs.select.result != 'success' || needs.select.outputs.ifs_hil_ecu_ams == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
+      - name: The selection ran
+        env:
+          SELECT: ${{ needs.select.result }}
+        run: test "$SELECT" = success
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event_name == 'schedule' && 'dev' || '' }}
@@ -273,16 +292,22 @@ jobs:
   # What the virtual bench can't run yet is skipped with its reason from
   # configs/gaps.yaml.
   ams:
-    needs: renode
+    needs: [select, renode]
     # After the build, which a failed `renode` doesn't skip: the job then
     # builds Renode itself (and fails loudly if it can't).
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.base_ref == 'main' || contains(github.event.pull_request.labels.*.name, 'full-ci')) }}
+    # Runs when the selection failed too, to fail (not skip) the check.
+    if: ${{ !cancelled() && (needs.select.result != 'success' || needs.select.outputs.ifs_hil_ams == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 50
     env:
       CAN_FLASHER_VERSION: 3.1.1
       CAN_FLASHER_SHA256: 8e3412b846a3ced9abd34b9a2a5665232c2fb72f089fcf55fdcccb5635c87b5e
     steps:
+      - name: The selection ran
+        env:
+          SELECT: ${{ needs.select.result }}
+        run: test "$SELECT" = success
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event_name == 'schedule' && 'dev' || '' }}

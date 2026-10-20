@@ -12,6 +12,10 @@ from vhil.fmi import Fmu, FmuPlant, build_reference_fmu
 
 pytestmark = pytest.mark.skipif(shutil.which("cc") is None, reason="no C compiler for the reference FMU")
 
+# Impact selection (ci/impact.yaml, docs/ci.md): boards, systems, subsystems.
+pytestmark = [pytestmark, pytest.mark.ecu, pytest.mark.ams, pytest.mark.system_ecu_ams,
+              pytest.mark.plant]
+
 
 @pytest.fixture(scope="module")
 def fmu_path(tmp_path_factory):

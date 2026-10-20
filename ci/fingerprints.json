@@ -1,0 +1,84 @@
+{
+ "firmware": {
+  "ams": "94b59a9e5bc5a5fe90705018ebcd8e6a23e851d0",
+  "can-bootloader": "1c5f1be67712b8977efa832c93c6bb9d615d8583",
+  "ecu": "44610a5366ad5c785751a6eccb1cf4a8616890ca",
+  "udv": "125202217216e0c8cf7b4d0d117c16362a7adedf"
+ },
+ "renode": "renode 1.17.0 (ab721d88e135) + vhil patches 1.17.0-vhil.9 [0001,0002,0003,0004,0005,0006,0007,0008,0009,tlib/0001,tlib/0002] queue 6d3b1e779966",
+ "run_ms": 5000,
+ "systems": {
+  "ams": {
+   "digest": "89b3ad312037c25a814b9c207a77e593b380f3bbba6edc3a4e5c5bbe551e0228",
+   "edges": {
+    "ams": 2393
+   },
+   "frames": {
+    "can_acu": 341
+   }
+  },
+  "ecu": {
+   "digest": "16215c5300c3f750aad844f5e373197c2c0a32c57726d6b26e30ec4f3554300e",
+   "edges": {
+    "ecu": 54001
+   },
+   "frames": {
+    "can_acu": 712,
+    "can_dash": 270,
+    "can_inv": 594
+   }
+  },
+  "ecu-ams": {
+   "digest": "fe9c6b151702a7a7025f211f7a7c769d724e664d1b3e5cf7dc766d1facaed3b6",
+   "edges": {
+    "ams": 2393,
+    "ecu": 50857
+   },
+   "frames": {
+    "can_acu": 1053,
+    "can_dash": 270,
+    "can_inv": 594
+   }
+  },
+  "ecu-ams-ecu": {
+   "digest": "9a794e63a7842721c801d5391fb916b2bed82a55a4a364fb377e6401957bf441",
+   "edges": {
+    "ams": 2393,
+    "ecu": 50857,
+    "ecu2": 49776
+   },
+   "frames": {
+    "can2_acu": 712,
+    "can2_dash": 270,
+    "can2_inv": 594,
+    "can_acu": 1053,
+    "can_dash": 270,
+    "can_inv": 594
+   }
+  },
+  "ecu-ams-udv": {
+   "digest": "d340bc0cab0afa9197e659de5c8231281f9667df96aead79abcddb4f38315c93",
+   "edges": {
+    "ams": 2393,
+    "ecu": 50857,
+    "udv": 1
+   },
+   "frames": {
+    "can_acu": 1053,
+    "can_dash": 270,
+    "can_dv": 93,
+    "can_inv": 594
+   }
+  },
+  "udv": {
+   "digest": "9ed55abfbd3dc66aab253ff39c1eb215a2415ef2d3426fd1fdc01eefebbac224",
+   "edges": {
+    "udv": 2
+   },
+   "frames": {
+    "can_acu": 0,
+    "can_dv": 93
+   }
+  }
+ }
+}

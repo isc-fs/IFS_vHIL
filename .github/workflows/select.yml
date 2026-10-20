@@ -1,0 +1,89 @@
+name: Impact selection
+
+# Called by the heavy workflows (sim, smoke, scenarios, IFS_HIL) and the
+# editor's: what this event runs, from the labels and the changed paths
+# (scripts/ci-select.py over ci/impact.yaml, docs/ci.md). Its outputs gate
+# the callers' jobs; a caller whose selection failed fails its required
+# checks instead of skipping them.
+
+on:
+  workflow_call:
+    outputs:
+      mode:             {value: '${{ jobs.select.outputs.mode }}'}
+      heavy:            {value: '${{ jobs.select.outputs.heavy }}'}
+      guard:            {value: '${{ jobs.select.outputs.guard }}'}
+      renode_sim:       {value: '${{ jobs.select.outputs.renode_sim }}'}
+      sim:              {value: '${{ jobs.select.outputs.sim }}'}
+      sim_files:        {value: '${{ jobs.select.outputs.sim_files }}'}
+      sim_shards:       {value: '${{ jobs.select.outputs.sim_shards }}'}
+      sim_shard_count:  {value: '${{ jobs.select.outputs.sim_shard_count }}'}
+      speed:            {value: '${{ jobs.select.outputs.speed }}'}
+      scenarios:        {value: '${{ jobs.select.outputs.scenarios }}'}
+      scenario_systems: {value: '${{ jobs.select.outputs.scenario_systems }}'}
+      smoke_any:        {value: '${{ jobs.select.outputs.smoke_any }}'}
+      smoke_ecu:        {value: '${{ jobs.select.outputs.smoke_ecu }}'}
+      smoke_ams:        {value: '${{ jobs.select.outputs.smoke_ams }}'}
+      ifs_hil_any:      {value: '${{ jobs.select.outputs.ifs_hil_any }}'}
+      ifs_hil_ecu:      {value: '${{ jobs.select.outputs.ifs_hil_ecu }}'}
+      ifs_hil_ecu_ams:  {value: '${{ jobs.select.outputs.ifs_hil_ecu_ams }}'}
+      ifs_hil_ams:      {value: '${{ jobs.select.outputs.ifs_hil_ams }}'}
+      editor:           {value: '${{ jobs.select.outputs.editor }}'}
+
+permissions:
+  contents: read
+
+jobs:
+  select:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      mode: ${{ steps.select.outputs.mode }}
+      heavy: ${{ steps.select.outputs.heavy }}
+      guard: ${{ steps.select.outputs.guard }}
+      renode_sim: ${{ steps.select.outputs.renode_sim }}
+      sim: ${{ steps.select.outputs.sim }}
+      sim_files: ${{ steps.select.outputs.sim_files }}
+      sim_shards: ${{ steps.select.outputs.sim_shards }}
+      sim_shard_count: ${{ steps.select.outputs.sim_shard_count }}
+      speed: ${{ steps.select.outputs.speed }}
+      scenarios: ${{ steps.select.outputs.scenarios }}
+      scenario_systems: ${{ steps.select.outputs.scenario_systems }}
+      smoke_any: ${{ steps.select.outputs.smoke_any }}
+      smoke_ecu: ${{ steps.select.outputs.smoke_ecu }}
+      smoke_ams: ${{ steps.select.outputs.smoke_ams }}
+      ifs_hil_any: ${{ steps.select.outputs.ifs_hil_any }}
+      ifs_hil_ecu: ${{ steps.select.outputs.ifs_hil_ecu }}
+      ifs_hil_ecu_ams: ${{ steps.select.outputs.ifs_hil_ecu_ams }}
+      ifs_hil_ams: ${{ steps.select.outputs.ifs_hil_ams }}
+      editor: ${{ steps.select.outputs.editor }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'schedule' && 'dev' || '' }}
+          persist-credentials: false
+          fetch-depth: 0
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+
+      - name: Select
+        id: select
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          # A pull request's checkout is its merge commit, whose first parent
+          # is the base branch's tip: HEAD^1..HEAD is exactly what it changes.
+          # A push compares with the commit it moved from.
+          BEFORE: ${{ github.event.before }}
+        run: |
+          pip install -q "pyyaml==6.0.*"
+          case "$EVENT" in
+            pull_request) base=HEAD^1 ;;
+            push) base=$BEFORE ;;
+            *) base=HEAD ;;
+          esac
+          python scripts/ci-select.py --event "$EVENT" --base-ref "$BASE_REF" --labels "$LABELS" \
+            --diff "$base" HEAD --github-output "$GITHUB_OUTPUT" --summary "$GITHUB_STEP_SUMMARY"
+          cat "$GITHUB_OUTPUT"

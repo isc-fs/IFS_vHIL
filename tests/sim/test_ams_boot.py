@@ -24,6 +24,9 @@ import pytest
 from vhil.sim import Sim
 from vhil.system import REPO
 
+# Impact selection (ci/impact.yaml, docs/ci.md): boards, systems, subsystems.
+pytestmark = [pytest.mark.ams, pytest.mark.system_ams, pytest.mark.can, pytest.mark.isospi]
+
 STATUS, PACK, TEMPS, RELAYS = 0x4A0, 0x4A1, 0x4A2, 0x4A4
 PIT_ARM, PIT_BOOT, PIT_FWID = 0x7F0, 0x6C4, 0x6C6
 GPIOB, GPIOF = "sysbus.gpioPortB", "sysbus.gpioPortF"

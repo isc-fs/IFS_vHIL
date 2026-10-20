@@ -18,6 +18,9 @@ from vhil.plants import AcuStimulus, Inverter, Pedals
 from vhil.sim import Sim
 from vhil.system import REPO
 
+# Impact selection (ci/impact.yaml, docs/ci.md): boards, systems, subsystems.
+pytestmark = [pytest.mark.ecu, pytest.mark.system_ecu, pytest.mark.plant]
+
 R2D_SOUND_MS = 2000
 TORQUE_MAX_NM = 240
 

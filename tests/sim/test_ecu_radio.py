@@ -44,6 +44,9 @@ import pytest
 from cpu_timing import mips
 from vhil.sim import assert_cadence
 
+# Impact selection (ci/impact.yaml, docs/ci.md): boards, systems, subsystems.
+pytestmark = [pytest.mark.ecu, pytest.mark.system_ecu, pytest.mark.radio]
+
 PERIOD_US = 200_000                       # telemetry_task.cpp:35 PeriodMs
 FRAGMENTS, FRAGMENT_SIZE, SLICE = 5, 32, 24
 SNAPSHOT_SIZE = 102

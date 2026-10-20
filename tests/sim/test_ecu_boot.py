@@ -21,6 +21,9 @@ import pytest
 from vhil.sim import Sim, assert_cadence
 from vhil.system import REPO
 
+# Impact selection (ci/impact.yaml, docs/ci.md): boards, systems, subsystems.
+pytestmark = [pytest.mark.ecu, pytest.mark.system_ecu, pytest.mark.can]
+
 HEARTBEAT = 0x100
 HEALTH = 0x704
 CONTROL_PERIOD_US = 10_000

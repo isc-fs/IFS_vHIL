@@ -25,6 +25,9 @@ from vhil.cosim import Port
 from vhil.sim import Sim
 from vhil.system import REPO
 
+# Impact selection (ci/impact.yaml, docs/ci.md): boards, systems, subsystems.
+pytestmark = [pytest.mark.ams, pytest.mark.system_ams, pytest.mark.can, pytest.mark.plant]
+
 VCU_STALE, CHARGER_STALE, CHARGER_TSMS_OPEN = 11, 14, 15
 TEMPS = 0x4A2
 BOOT_MS = 3000

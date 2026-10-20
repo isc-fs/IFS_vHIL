@@ -44,6 +44,9 @@ import ams_binlog as binlog
 from vhil.sim import Sim
 from vhil.system import REPO
 
+# Impact selection (ci/impact.yaml, docs/ci.md): boards, systems, subsystems.
+pytestmark = [pytest.mark.ams, pytest.mark.system_ams, pytest.mark.sd, pytest.mark.dma]
+
 CARD_BYTES = 0x8000000          # catalog/models/sd-card.yaml capacity: 128 MiB
 LOG_S, AFTER_CUT_S = 8, 6
 RUNS, RUN_S = 3, 5

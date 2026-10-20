@@ -224,11 +224,14 @@ scripts/vhil-docker.sh scenarios               # in Docker, the last built firmw
 python -m pytest tests/scenarios -o junit_family=xunit1 --junitxml=scenarios.xml
 ```
 
-CI runs it in `.github/workflows/scenarios.yml` with `full-ci`, nightly on
-`dev` and on dispatch. Since #198 it is a **required check** on `dev`
-(`scenarios`): a failing scenario fails it. On a pull request without
-`full-ci` the job is skipped, which GitHub counts as passing, so it gates the
-PRs that run it (labelled ones and release PRs into `main`) and the nightly.
+CI runs it in `.github/workflows/scenarios.yml`: with `full-ci`, the
+scenarios of the systems the PR's changes select (`ci/impact.yaml`,
+[`docs/ci.md`](ci.md); `VHIL_SCENARIO_SYSTEMS` filters them), with
+`full-ci-all`, nightly on `dev`, on dispatch and on release PRs every
+system's. Since #198 it is a **required check** on `dev` (`scenarios`): a
+failing scenario fails it. When no system is selected the job is skipped,
+which GitHub counts as passing, so it gates the PRs that run it and the
+nightly.
 
 ### Promotion to a gate (met 2026-10-18, #198)
 

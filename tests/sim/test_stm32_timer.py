@@ -31,6 +31,10 @@ import pytest
 from vhil.sim import Sim
 from vhil.system import REPO
 
+# Impact selection (ci/impact.yaml, docs/ci.md): boards, systems, subsystems.
+pytestmark = [pytest.mark.ecu, pytest.mark.ams, pytest.mark.udv, pytest.mark.system_ecu,
+              pytest.mark.system_ams, pytest.mark.system_udv, pytest.mark.timers]
+
 CR1, DIER, SR, EGR, CNT, PSC, ARR = 0x00, 0x0C, 0x10, 0x14, 0x24, 0x28, 0x2C
 CEN, DIR, UIF, UG = 1 << 0, 1 << 4, 1 << 0, 1 << 0
 TIMERS = {"timer23": 0x4000E000, "timer2": 0x40000000, "timer6": 0x40001000,

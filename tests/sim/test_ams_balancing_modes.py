@@ -25,6 +25,9 @@ from ams_car import CHARGE, Car, ERROR, RUN
 from vhil.sim import Sim
 from vhil.system import REPO
 
+# Impact selection (ci/impact.yaml, docs/ci.md): boards, systems, subsystems.
+pytestmark = [pytest.mark.ams, pytest.mark.system_ams, pytest.mark.isospi, pytest.mark.can]
+
 BAL = 0x103
 PIT_ARM, PIT_FSM, BAL_MASK_A = 0x7F0, 0x6C0, 0x6C2
 OVERRIDE = 0x04                     # 0x6C0 byte 2 bit 2

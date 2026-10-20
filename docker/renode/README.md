@@ -137,8 +137,10 @@ run computes is unchanged ([`docs/performance.md`](../../docs/performance.md)).
    (`<new>-vhil.1`), `RENODE_INFRA_PATCHED_TREE`, `RENODE_TLIB_PATCHED_TREE`.
 4. Build the package; check `VhilFastForward` still calibrates (it finds
    tlib's counters at run time) and that a run is byte-identical to the new
-   release package's (the study's `fingerprint.py`); run the full CI
-   (`full-ci`) and the `emulation speed` job.
+   release package's (the study's `fingerprint.py`; CI's guard runs it as
+   `scripts/fingerprint.py` against `ci/fingerprints.json`, docs/ci.md); run
+   the full CI (any `docker/renode/` change selects everything) and the
+   `emulation speed` job.
 5. Bump `1.17.0` everywhere else in the same PR (CLAUDE.md, `.github/`,
    `docs/`): a Renode bump is its own PR.
 

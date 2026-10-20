@@ -42,6 +42,9 @@ from vhil.sim import Sim
 from vhil.snapshot import parse_bytes
 from vhil.system import REPO
 
+# Impact selection (ci/impact.yaml, docs/ci.md): boards, systems, subsystems.
+pytestmark = [pytest.mark.ecu, pytest.mark.ams, pytest.mark.system_ecu_ams, pytest.mark.can]
+
 GPIOB, GPIOF = "sysbus.gpioPortB", "sysbus.gpioPortF"
 AIR_P, AIR_N, PRE = 5, 6, 7
 TSMS, DASH_CHG = 9, 10

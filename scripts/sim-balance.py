@@ -2,6 +2,9 @@
 
     python scripts/sim-balance.py <shards> <k> [--lanes 2]   # the files of shard k (1-based)
     python scripts/sim-balance.py <shards> --table           # every shard's files and estimate
+    python scripts/sim-balance.py <shards> <k> --files "tests/sim/a.py tests/sim/b.py"
+                                                             # split only these (CI's impact
+                                                             # selection, scripts/ci-select.py)
 
 Each shard runs its files `lanes` at a time (scripts/sim-shard.sh), so a
 shard takes about the longer of its lanes. Files go, longest first, to the
@@ -43,8 +46,12 @@ def main() -> int:
     ap.add_argument("k", type=int, nargs="?")
     ap.add_argument("--lanes", type=int, default=2)
     ap.add_argument("--table", action="store_true")
+    ap.add_argument("--files", help="whitespace-separated files to split (default: every tests/sim file)")
     args = ap.parse_args()
-    files = sorted(p.relative_to(REPO).as_posix() for p in (REPO / "tests" / "sim").glob("test_*.py"))
+    if args.files is not None:
+        files = sorted(set(args.files.split()))
+    else:
+        files = sorted(p.relative_to(REPO).as_posix() for p in (REPO / "tests" / "sim").glob("test_*.py"))
     durations = json.loads(DURATIONS.read_text()) if DURATIONS.exists() else {}
     shards = split(files, durations, args.shards, args.lanes)
     if args.table:

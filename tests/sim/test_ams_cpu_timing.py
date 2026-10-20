@@ -19,6 +19,9 @@ import pytest
 from cpu_timing import mips
 from vhil.system import System, REPO
 
+# Impact selection (ci/impact.yaml, docs/ci.md): boards, systems, subsystems.
+pytestmark = [pytest.mark.ams, pytest.mark.system_ams, pytest.mark.cpu_timing, pytest.mark.isospi]
+
 BOARD = "ams"
 CS = ("sysbus.gpioPortB", 9)
 CHAIN = 10                        # ams_config.hpp LtcChainLength

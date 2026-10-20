@@ -20,6 +20,9 @@ from vhil import peripheral_guard as guard
 from vhil.sim import Sim
 from vhil.system import REPO
 
+# Impact selection (ci/impact.yaml, docs/ci.md): boards, systems, subsystems.
+pytestmark = [pytest.mark.ecu, pytest.mark.system_ecu, pytest.mark.dma, pytest.mark.debugger]
+
 DMA1 = 0x40020000
 LISR, LIFCR = DMA1 + 0x00, DMA1 + 0x08
 EN, TEIE, HTIE, TCIE = 1 << 0, 1 << 2, 1 << 3, 1 << 4

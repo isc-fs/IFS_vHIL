@@ -36,6 +36,10 @@ from vhil import canframe
 from vhil.sim import Sim
 from vhil.system import REPO
 
+# Impact selection (ci/impact.yaml, docs/ci.md): boards, systems, subsystems.
+pytestmark = [pytest.mark.ecu, pytest.mark.ams, pytest.mark.system_ecu, pytest.mark.system_ams,
+              pytest.mark.system_ecu_ams, pytest.mark.can]
+
 BIT_NS = 2000                         # 500 kbit/s (both firmwares' NBTP)
 FDCAN1, FDCAN2 = 0x4000A000, 0x4000A400
 ECR, PSR, TXFQS = 0x040, 0x044, 0x0C4

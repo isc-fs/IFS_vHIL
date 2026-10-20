@@ -11,6 +11,9 @@ from vhil import canframe
 from vhil.sim import Sim
 from vhil.system import REPO
 
+# Impact selection (ci/impact.yaml, docs/ci.md): boards, systems, subsystems.
+pytestmark = [pytest.mark.ecu, pytest.mark.system_ecu, pytest.mark.probe, pytest.mark.can]
+
 OK_PRECHARGE, TS_ACTIVE = 0x020, 0x504
 QUANTUM_US = 500                                # systems/ecu.yaml time.quantum_s
 BIT_NS = 2000                                   # 500 kbit/s (the ECU's FDCAN2 NBTP)

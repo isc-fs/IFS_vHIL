@@ -21,6 +21,10 @@ from vhil.server.runs import read_trace  # noqa: E402
 from vhil.system import REPO  # noqa: E402
 from vhil.worker import TraceWriter, execute_run  # noqa: E402
 
+# Impact selection (ci/impact.yaml, docs/ci.md): boards, systems, subsystems.
+pytestmark = [pytest.mark.ams, pytest.mark.system_ams, pytest.mark.live_session,
+              pytest.mark.server]
+
 AMS = REPO / "systems" / "ams.yaml"
 STATE = "g_state_telemetry"     # ams::fsm::State: Start 0, Precharge 1, Transition 2, Run 3
 VCU = {"kind": "can_periodic", "bus": "can_acu", "id": 0x100, "period_ms": 10}

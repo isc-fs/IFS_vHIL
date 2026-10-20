@@ -36,6 +36,9 @@ from vhil.can_bootloader import CanBootloader, FwInfo
 from vhil.sim import Sim, assert_cadence
 from vhil.system import REPO
 
+# Impact selection (ci/impact.yaml, docs/ci.md): boards, systems, subsystems.
+pytestmark = [pytest.mark.udv, pytest.mark.system_udv, pytest.mark.can, pytest.mark.bootloader]
+
 NODE = 0x3
 AUTO_JUMP_MS = 2000
 NMT, DL = 0x000, (0x500, 0x501, 0x502)

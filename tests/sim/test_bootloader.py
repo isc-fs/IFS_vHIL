@@ -21,6 +21,10 @@ import pytest
 from vhil.sim import Sim
 from vhil.system import REPO
 
+# Impact selection (ci/impact.yaml, docs/ci.md): boards, systems, subsystems.
+pytestmark = [pytest.mark.ecu, pytest.mark.ams, pytest.mark.system_ecu, pytest.mark.system_ams,
+              pytest.mark.bootloader, pytest.mark.flash]
+
 AUTO_JUMP_MS = 2000
 META_CRC = 0x080FFFE8                 # metadata word 2: image_crc32
 

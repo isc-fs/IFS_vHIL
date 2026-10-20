@@ -21,6 +21,9 @@ import pytest
 from vhil.sim import Sim
 from vhil.system import REPO
 
+# Impact selection (ci/impact.yaml, docs/ci.md): boards, systems, subsystems.
+pytestmark = [pytest.mark.ams, pytest.mark.system_ams, pytest.mark.isospi]
+
 BAL = 0x103
 BALM = 0x104
 UPDATE_MS = 2000            # two mask updates, whatever the phase
