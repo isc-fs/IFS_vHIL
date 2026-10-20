@@ -29,7 +29,20 @@ instructions, PC, state and RAM digests, the HAL tick) and a SHA-256 of it
 per system; a pure speed change leaves the file byte-identical. On dev
 0b7449a (patch set vhil.6, firmware at the catalogue's refs, 2026-10-15):
 ecu `f66bae9a`, ams `e34419b8`, ecu-ams `8afef3de`, udv `f61019b8`,
-ecu-ams-udv `a329f2fb`, ecu-ams-ecu `4718c51b`.
+ecu-ams-udv `a329f2fb`, ecu-ams-ecu `4718c51b` (dev d371c84 too).
+
+Since #320 (the AMS carrier's measured ADC3 transfer on the pack-current
+pair, not a speed change; same patch set and firmware, 2026-10-20): ecu
+`f66bae9a`, ams `f46357e7`, ecu-ams `26c157b3`, udv `f61019b8`, ecu-ams-udv
+`5f05bd19`, ecu-ams-ecu `0bfcdbf3`. What moved, only in systems with the
+AMS: the pack current it reads at rest, -2102 mA -> 0, so 0x135's accu
+(0xFFEB -> 0), 0x4A1's current (-2102 -> 0) and the SoC its coulomb count
+integrates (0x130, 54 -> 55 %) on can_acu, the ECU's relay of it on
+can_dash (0x518) and in its nRF24 payloads; then, from those frames'
+different bit stuffing, every later frame's timing by a few us, and the AMS's
+and ECU's instruction counts, PB9 / ECU edges (by a few us, same count),
+state and RAM digests. Frame counts, edge counts and the ecu and udv
+fingerprints are unchanged.
 
 `ecu-ams-ecu` is a benchmark, not a car system
 ([`scripts/speed-systems/`](../scripts/speed-systems/ecu-ams-ecu.yaml), named
