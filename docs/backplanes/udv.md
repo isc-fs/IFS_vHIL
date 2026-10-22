@@ -59,6 +59,26 @@ The firmware configures PC2_C as ADC3 INP0 (A7), not the LED's output
 ([#7](https://github.com/isc-fs/IFS09-DV-uDV/issues/7)); in the udv role it
 is a GPIO endpoint all the same, as the backplane uses it.
 
+### ADC path (#326)
+
+The uDV samples PF9 (ASMS), PC0 and PF10 (the EBS pressures), one
+single-ended 12-bit conversion at 640.5 cycles each
+(`hardware_io.c:33-71`). PF7/PF8 are read only by functions nothing calls.
+The udv role's `adc_single_ended` (`catalog/boards/mainlite.yaml`):
+
+| Pin | Front end (sensor to pin) | ADC gain, offset | Noise, 12-bit codes rms |
+|---|---|---|---|
+| PF7 `EBS_PRES1` | R12 10k / R11 5k: 1/3 | ideal | 0.42 |
+| PF8 `EBS_PRES2` | R13 10k / R14 5k: 1/3 | ideal | 0.42 |
+| PF9 `EBS_24V` | R15 10k / R16 1k: 1/11 | ideal | 0.42 |
+| PF10 `SDC_SENSE` | R18 10k / R19 1k: 1/11 | ideal | 0.42 |
+| PC0 `RES_IN` | R40 10k / R41 1k: 1/11 | ideal | 0.42 |
+
+The noise is derived from the datasheet, as the ECU's
+([ecu.md](ecu.md#adc-path-326)), and seeded per board; the front end
+applies only to a sensor-side source (`System.sensor_to_pin`), never to the
+pin volts every stimulus is written in today.
+
 ## Known gotchas
 
 - **FDCAN3 is no-connect, but the firmware uses it**

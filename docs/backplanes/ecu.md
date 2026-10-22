@@ -63,6 +63,40 @@ for A4/A5), and `ecu.USART10` the platform's USART10 (no GPS is modelled).
 A test drives or watches one with `Sim.io("ecu").gpio("PB6")` or
 `set_voltage("PF10", v)`.
 
+### ADC path (#326)
+
+The ECU samples PF7, PF8 and PF9 once each per 10 ms tick, one
+single-ended 12-bit conversion at 2.5 cycles each (`io_signals.cpp:16-50`).
+The ecu role's `adc_single_ended` (`catalog/boards/mainlite.yaml`) models
+what is between the sensor and the code:
+
+| Pin | Front end (sensor to pin) | ADC gain, offset | Noise, 12-bit codes rms |
+|---|---|---|---|
+| PF7 `S_BRAKE` | R8 1k / R9 2k: 2/3 (EPT1400 0.5-4.5 V to 0.33-3.0 V); D5 clamp not modelled | ideal | 0.42 |
+| PF8 `APPS_1` | R1 100k + C1 100n: 1 (fc 16 Hz) | ideal | 0.42 |
+| PF9 `APPS_2` | R2 100k + C2 100n: 1 | ideal | 0.42 |
+
+- **The noise is derived, not measured** (no car log of the ECU's codes):
+  DS13313 Table 85's single-ended SNR, 69.1 dB typical, less the
+  quantisation the model's rounding adds. It is seeded per board from the
+  system's `seed`, so runs repeat. A lower bound: the AMS carrier measured
+  ~4x the datasheet's differential figure (#327), and no sensor's own noise
+  is in it.
+- **Gain and offset stay ideal:** the datasheet gives only a spread, and no
+  single-ended read has been measured on a MainLite.
+- **The front end applies to sensor-side sources only.** Every stimulus
+  today (the plants, scenario `volts:` rows, the bench DAC routes) is pin
+  volts, from the car's counts; a model that gives volts at the sensor goes
+  through `System.sensor_to_pin`.
+- With noise, a raw code lands within 3 codes of the ideal one (the draw is
+  bounded at 4.9 rms, 2.06 codes, then rounded): tests compare raw codes
+  within that and keep pedal stimuli off integer-percent edges.
+- **Not modelled:** the brake read's settling. Its 667 Ω source is sampled
+  for 2.5 cycles, where DS13313 Table 84 wants 217 ns for 680 Ω on a fast
+  channel at 12 bits; the conversion keeps part of the previous channel's
+  charge (the uDV moved to 640.5 cycles for this, `hardware_io.c:37-45`).
+  How much depends on the D5 zener's capacitance, which isn't traced.
+
 ## Known gotchas
 
 - **The TEL/SENS net names are stale**
