@@ -102,3 +102,41 @@ def test_differential_noise_is_the_measured_spread_and_repeats(images):
     assert 0.95 < rms < 1.3, f"rms {rms:.2f} codes"
     assert runs[1] == codes, "the same seed drew differently"
     assert runs[2] != codes, "another seed drew the same"
+
+
+def _single_ended_codes(sim, channel, n):
+    """n single conversions of single-ended `channel` at 1.0 V, each its own
+    ADSTART, through whatever the ECU role's catalogue gives it."""
+    _wr(sim, CR, ADEN)
+    sim.monitor(f"sysbus.adc3_h73x SetVoltage 1000000 {channel}")
+    _wr(sim, SQR1, channel << 6)
+    _wr(sim, ISR, 0x7FF)
+    codes = []
+    for _ in range(n):
+        _wr(sim, CR, ADEN | ADSTART)
+        sim.run_for(us=10)
+        codes.append(_rd(sim, DR))
+    return codes
+
+
+def test_the_ecus_sampled_pins_carry_the_derived_noise_and_repeat(images):
+    """#326: APPS_1 (PF8, INP7) single-ended carries the ECU role's
+    datasheet-derived 0.42 codes rms (catalog/boards/mainlite.yaml): around
+    the ideal 1.0 / 3.3 x 4095 = 1240.91, rounding adding its own 0.29
+    (sqrt(0.42^2 + 1/12) = 0.51), never past the draw's bound (4.9 rms, 2.06
+    codes: 1239..1243 once rounded); the same seed repeats, another differs. A
+    pin the role leaves ideal (PF10, INP6, never sampled) reads one code."""
+    runs = []
+    for i, seed in enumerate((5, 5, 6)):
+        with Sim(REPO / "systems" / "ecu.yaml", images("ecu"), seed=seed) as sim:
+            runs.append(_single_ended_codes(sim, 7, 400))
+            if i == 0:
+                assert set(_single_ended_codes(sim, 6, 50)) == {1241}, "an ideal pin read noisily"
+    codes = runs[0]
+    mean = sum(codes) / len(codes)
+    rms = (sum((c - mean) ** 2 for c in codes) / len(codes)) ** 0.5
+    assert abs(mean - 1240.91) < 0.1, f"mean {mean:.2f}"
+    assert 0.42 < rms < 0.62, f"rms {rms:.2f} codes"
+    assert all(1239 <= c <= 1243 for c in codes), sorted(set(codes))
+    assert runs[1] == codes, "the same seed drew differently"
+    assert runs[2] != codes, "another seed drew the same"

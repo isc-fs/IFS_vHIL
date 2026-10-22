@@ -297,6 +297,25 @@
                     "start_noise_codes_rms": {"type": "number", "minimum": 0, "maximum": 64, "description": "Measured rms of an offset drawn at each regular sequence start (ADSTART) and held for its conversions, 12-bit codes. Cite the measurement."}
                   }
                 }
+              },
+              "adc_single_ended": {
+                "type": "object",
+                "description": "This role's ADC path on a single-ended input, by pin (an analog input of the board the role keeps analog): the code reads gain * V / VREF+ * (2^n - 1) + offset_codes (12-bit codes), plus its noise (noise_codes_rms, start_noise_codes_rms; seeded by the system's seed); front_end_ratio is the backplane's DC ratio from the sensor to the pin, applied only to a sensor-side source (System.sensor_to_pin), never to a stimulus written at the pin. Cite each figure and say whether it is measured or derived. Absent: the ideal transfer (gain 1, offset 0, noise-free).",
+                "propertyNames": {
+                  "$ref": "#/$defs/name"
+                },
+                "additionalProperties": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "minProperties": 1,
+                  "properties": {
+                    "gain": {"type": "number", "exclusiveMinimum": 0.5, "maximum": 1.5},
+                    "offset_codes": {"type": "integer", "minimum": -2048, "maximum": 2048},
+                    "noise_codes_rms": {"type": "number", "minimum": 0, "maximum": 64, "description": "rms noise of each conversion, 12-bit codes (Gaussian-shaped, drawn per conversion). Cite its source."},
+                    "start_noise_codes_rms": {"type": "number", "minimum": 0, "maximum": 64, "description": "rms of an offset drawn at each regular sequence start (ADSTART) and held for its conversions, 12-bit codes. Cite its source."},
+                    "front_end_ratio": {"type": "number", "exclusiveMinimum": 0, "maximum": 1, "description": "Pin volts per volt at the sensor: the backplane's divider (1 for a series RC). Cite the schematic."}
+                  }
+                }
               }
             }
           }

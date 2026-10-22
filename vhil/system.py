@@ -626,12 +626,13 @@ class System:
                         or not isinstance(target.get("pin"), int) or isinstance(target["pin"], bool)):
                     raise SystemError(f"board {bid}: role {name}'s GPIO {pin} needs a port "
                                       f"and a pin number")
-            for pin in (role.get("adc_differential") or {}):
-                # A transfer of the carrier's ADC path, on an input the board
-                # models as analog and the role keeps analog.
-                if pin not in (board.get("analog_in") or {}) or pin in (role.get("gpio") or {}):
-                    raise SystemError(f"board {bid}: role {name} gives {pin!r} a differential "
-                                      f"ADC transfer, but it is not an analog input in that role")
+            for key, mode in (("adc_differential", "differential"), ("adc_single_ended", "single-ended")):
+                for pin in (role.get(key) or {}):
+                    # A transfer of the carrier's ADC path, on an input the
+                    # board models as analog and the role keeps analog.
+                    if pin not in (board.get("analog_in") or {}) or pin in (role.get("gpio") or {}):
+                        raise SystemError(f"board {bid}: role {name} gives {pin!r} a {mode} "
+                                          f"ADC transfer, but it is not an analog input in that role")
 
     def _check_role(self, b: Board) -> None:
         """A board with roles (the MainLite: ECU, AMS, uDV) is placed in one of
@@ -978,6 +979,21 @@ class System:
             levels[endpoint] = min(max(v, o.get("min_V", v)), o.get("max_V", v))
         return levels
 
+    def sensor_to_pin(self, endpoint: str, volts: float) -> float:
+        """The pin voltage a sensor-side source of `volts` gives on a board's
+        analog input (`ecu.PF7`): its backplane front end's DC ratio
+        (`adc_single_ended` `front_end_ratio` in the role, cited there; 1
+        without one). Every stimulus written at the pin (plants, scenario
+        `volts:` rows, the bench DAC routes) is already pin volts and never
+        goes through it; a model that gives volts at the sensor must (#326)."""
+        board, _, pin = endpoint.partition(".")
+        b = self.boards.get(board)
+        if (b is None or pin not in (b.board.get("analog_in") or {})
+                or pin in ((b.role_spec or {}).get("gpio") or {})):
+            raise SystemError(f"{endpoint!r} is not an analog input of this system")
+        t = ((b.role_spec or {}).get("adc_single_ended") or {}).get(pin) or {}
+        return volts * float(t.get("front_end_ratio", 1))
+
     def _renode_device(self, name: str, dev: dict) -> str:
         """Platform-description text attaching one device (or a counted chain).
         Every value goes through vhil.renode's encoders, so even a param that
@@ -1135,6 +1151,20 @@ class System:
                 if t.get("noise_codes_rms") or t.get("start_noise_codes_rms"):
                     # Its measured noise (#327), drawn from the run's seed.
                     out.append(f"{rn.path(target['adc'])} DifferentialNoise "
+                               f"{int(target['channel'])} "
+                               f"{rn.number(float(t.get('noise_codes_rms', 0)))} "
+                               f"{rn.number(float(t.get('start_noise_codes_rms', 0)))} "
+                               f"{self.noise_seed(b.name)}")
+            for pin, t in ((b.role_spec or {}).get("adc_single_ended") or {}).items():
+                # The same terms on a single-ended channel (#326; cited in the
+                # catalogue): the identity transfer is not rendered.
+                target = b.board["analog_in"][pin]
+                gain, offset = float(t.get("gain", 1)), int(t.get("offset_codes", 0))
+                if gain != 1 or offset != 0:
+                    out.append(f"{rn.path(target['adc'])} SingleEndedTransfer "
+                               f"{int(target['channel'])} {rn.number(gain)} {offset}")
+                if t.get("noise_codes_rms") or t.get("start_noise_codes_rms"):
+                    out.append(f"{rn.path(target['adc'])} SingleEndedNoise "
                                f"{int(target['channel'])} "
                                f"{rn.number(float(t.get('noise_codes_rms', 0)))} "
                                f"{rn.number(float(t.get('start_noise_codes_rms', 0)))} "

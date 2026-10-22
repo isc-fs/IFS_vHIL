@@ -65,6 +65,36 @@ roles:
       PF10: SPARE_J3       # A4, header J3 only
       PC0: SPARE_J3        # A5, header J3 only
       PC2_C: SPARE_J3      # PC2, header J3 only
+    # The ADC path of the pins the ECU samples (#326): io_signals.cpp
+    # read_adc3, one single-ended 12-bit conversion per ADSTART, 2.5 cycles,
+    # no oversampling, every ControlPeriodMs = 10 ms (IFS08-CE-ECU dev
+    # 44610a5 io_signals.cpp:16-31, :36-50, ecu_config.hpp:22). DERIVED, NOT
+    # MEASURED: no car log of the ECU's raw codes exists (see
+    # ADC_NOISE_DERIVATION below, shared with the uDV role).
+    # - gain, offset: ideal (1, 0). DS13313 Rev 3 Table 85 gives a spread, not
+    #   a value (EO +/-2 typ, +/-5 max LSB; EG "TBD"), and nothing has measured
+    #   a single-ended read on a MainLite (the AMS's 0.92 is differential).
+    # - noise_codes_rms 0.42: ADC_NOISE_DERIVATION. The front ends add
+    #   nothing visible: APPS R1/R2 100k + C1/C2 100n, kT/C 0.2 uV; the brake
+    #   divider's 667 R into the 5 pF sample capacitor (Table 83 CADC), kT/C
+    #   29 uV = 0.04 codes. The sensors' own output noise is not in it (no
+    #   datasheet figure), so this is a lower bound.
+    # - start_noise_codes_rms: none (one conversion per start: a held term
+    #   would only add to the per-conversion one).
+    # - front_end_ratio: the backplane's DC ratio, docs/backplanes/ecu.md
+    #   "Pin map" (BACKPLANE ECU v3.0). Every stimulus today is pin volts
+    #   (plants.py COUNTS_TO_V, scenario rows) and never goes through it; a
+    #   sensor-side model does (System.sensor_to_pin). PF7: R8 1k / R9 2k,
+    #   2/3 (the EPT1400's 0.5-4.5 V to 0.33-3.0 V); the D5 zener clamp is
+    #   not modelled (its part is not in the backplane page). PF8/PF9: series
+    #   R + C only, 1; the sample capacitor, 5 pF switched at 100 Hz, is
+    #   2 G against the 100k: 5e-5 of the previous channel's voltage, at
+    #   most 0.2 codes, not modelled.
+    # PF10, PC0, PC1, PC2_C (header J3 only, never sampled) stay ideal.
+    adc_single_ended:
+      PF7: {noise_codes_rms: 0.42, front_end_ratio: 0.6667}   # S_BRAKE
+      PF8: {noise_codes_rms: 0.42, front_end_ratio: 1}        # APPS_1
+      PF9: {noise_codes_rms: 0.42, front_end_ratio: 1}        # APPS_2
   ams:
     node_id: 0x2
     flash_bus: FDCAN1
@@ -181,6 +211,42 @@ roles:
     gpio:
       PC1: {port: sysbus.gpioPortC, pin: 1}
       PC2_C: {port: sysbus.gpioPortC, pin: 2}
+    # The ADC path of the uDV's analog pins (#326): hardware_io.c
+    # hardware_io_read_adc_raw, one single-ended 12-bit conversion per
+    # ADSTART at 640.5 cycles, no oversampling (IFS09-DV-uDV dev 1252022
+    # hardware_io.c:33-71). It samples PF9 (ch 2, ASMS), PC0 (ch 10) and
+    # PF10 (ch 6, the EBS pressures; app_task.cpp:255-256, :407,
+    # ebs_manager.cpp:77, :129-130); PF7/PF8 (ch 3/7) only from functions
+    # nothing calls (IFS09-DV-uDV#5). DERIVED, NOT MEASURED, as the ECU's:
+    # - gain, offset: ideal, as the ECU's.
+    # - noise_codes_rms 0.42: ADC_NOISE_DERIVATION. The dividers' Thevenin
+    #   resistance (909 R for 10k/1k, 3.3k for 10k/5k) into 5 pF adds
+    #   kT/C 29 uV = 0.04 codes; the Festo SPAN's own noise is not in it (no
+    #   figure in its operating instructions), so this is a lower bound.
+    # - front_end_ratio: docs/backplanes/udv.md "Pin map" (MicroDV2,
+    #   feat/5-hardware 6766d99): PF7 R12 10k / R11 5k and PF8 R13 10k / R14
+    #   5k, 1/3; PF9 R15/R16, PF10 R18/R19, PC0 R40/R41, 10k/1k, 1/11. Not
+    #   applied to pin-volt stimuli, as the ECU's.
+    adc_single_ended:
+      PF7: {noise_codes_rms: 0.42, front_end_ratio: 0.3333}   # EBS_PRES1
+      PF8: {noise_codes_rms: 0.42, front_end_ratio: 0.3333}   # EBS_PRES2
+      PF9: {noise_codes_rms: 0.42, front_end_ratio: 0.0909}   # EBS_24V
+      PF10: {noise_codes_rms: 0.42, front_end_ratio: 0.0909}  # SDC_SENSE
+      PC0: {noise_codes_rms: 0.42, front_end_ratio: 0.0909}   # RES_IN
+# ADC_NOISE_DERIVATION (the ECU's and the uDV's noise_codes_rms, #326):
+# DERIVED from the datasheet, not measured on a car. STM32H723/733 datasheet
+# DS13313 Rev 3, Table 85 "12-bit ADC accuracy" (the H733's ADC3; the
+# MainLite is an STM32H733ZGT6, isc-fs/IFS08-ES-MainLite
+# docs/WORK_ORDER_MAIN_LITE.md:25): SNR 69.1 dB typical, single-ended. A
+# full-scale sine is 4096 / (2 sqrt 2) = 1448 codes rms, so the noise is
+# 1448 / 10^(69.1 / 20) = 0.508 codes rms, quantisation included; less the
+# 1 / sqrt 12 = 0.289 codes the model's rounding adds itself,
+# sqrt(0.508^2 - 0.289^2) = 0.42 codes per conversion. Typical, and
+# characterised on BGA (Table 85 note 1; the MainLite's is LQFP-144): a lower
+# bound. The car's AMS carrier measured 1.07 codes differential (above,
+# #327) where the same table's 71.4 dB differential gives 0.26: the board
+# adds noise the datasheet does not, so a single-ended log from the car
+# should replace this figure.
 # No coin cell or supercap on VBAT, so a power cut wipes the backup domain:
 # the RTC backup registers (the AMS's sticky ErrorLatch, BKP1R) start clear.
 # Source: IFS08-CE-AMS app_init_task.cpp:78-80; the pin model agrees (VBAT,
