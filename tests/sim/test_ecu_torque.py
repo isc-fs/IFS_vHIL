@@ -87,9 +87,14 @@ def _nm(pct):
 
 
 def _raw(pct, cal):
-    """The lowest ADC code that reads as pct."""
+    """The middle ADC code of pct's band. The band is 6-9 codes wide
+    (spans 860 and 680), and the ECU role's ADC noise (#326, 0.42 codes
+    rms, bounded at 2.06) keeps every reading of it inside the band; the
+    lowest code would read pct - 1 on a negative draw."""
     lo, hi = cal
-    return lo + -(-pct * (hi - lo) // 100)
+    first = lo + -(-pct * (hi - lo) // 100)
+    last = lo + -(-(pct + 1) * (hi - lo) // 100) - 1
+    return (first + last) // 2
 
 
 def _power_cap(erpm):

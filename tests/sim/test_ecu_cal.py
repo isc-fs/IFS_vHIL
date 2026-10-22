@@ -78,6 +78,10 @@ DEFAULTS = (2490, 3350, 2345, 3025, 0, 750, 2500, 3000)
 REST, FULL, MID = (2000, 1800, 600), (3000, 2600, 3200), (2500, 2200, 600)
 # What that sweep stages: brake arm/dv_hard re-derived from 600..3200.
 SWEPT = (2000, 3000, 1800, 2600, 600, 860, 2160, 3200)
+# A captured code is the live ADC read, which carries the ECU role's noise
+# (#326: 0.42 codes rms, its draw bounded at 2.06 codes, then rounded):
+# within NOISE_CODES of the code on the pin.
+NOISE_CODES = 3
 
 
 @dataclass(frozen=True)
@@ -169,6 +173,31 @@ def _sweep(sim, rest=REST, full=FULL, mid=MID):
     _capture(sim, APPS_FULL, full)
     _capture(sim, BRAKE_PRESSED, full)
     return _capture(sim, APPS_MID, mid)
+
+
+def _derived(staged):
+    """The firmware's arm and dv_hard from a staged brake span
+    (cal_session.cpp:121-126): rest + 10 % and rest + 60 %, truncated."""
+    rest, pressed = staged[4], staged[7]
+    span = pressed - rest
+    return rest + span * 10 // 100, rest + span * 60 // 100
+
+
+def _assert_swept(staged, swept=SWEPT):
+    """`staged` is the sweep's capture: each captured code within the ADC
+    noise of the one on its pin, arm and dv_hard derived from what was
+    captured."""
+    captured = (0, 1, 2, 3, 4, 7)
+    assert all(abs(staged[i] - swept[i]) <= NOISE_CODES for i in captured), (staged, swept)
+    assert (staged[5], staged[6]) == _derived(staged), staged
+
+
+def _staged_sweep(sim, **points):
+    """_sweep, then the staged set it captured (checked against SWEPT)."""
+    assert _sweep(sim, **points).mask == ALL_POINTS
+    staged = _cmd(sim, READ_STAGED).values
+    _assert_swept(staged)
+    return staged
 
 
 def _commit(sim, values):
@@ -273,7 +302,7 @@ def test_capture_takes_the_live_adc_and_derives_the_brake_thresholds(ecu):
     assert _sweep(ecu).mask == ALL_POINTS
     r = _cmd(ecu, READ_STAGED)
     assert (r.state, r.mask) == (ACTIVE, ALL_POINTS)
-    assert r.values == SWEPT
+    _assert_swept(r.values)
     assert _cmd(ecu, READ_STORED).values == DEFAULTS, "staging changed the live set"
 
 
@@ -315,7 +344,7 @@ def test_a_calibration_that_fails_validation_is_never_written(ecu):
     """APPS2 at 25 % where APPS1 reads 50 %: the mid-travel check (5 %)
     flags AppsSpanMismatch, the session goes to Error, flash is untouched."""
     _sweep(ecu, mid=(2500, 2000, 600))
-    r = _commit(ecu, SWEPT)
+    r = _commit(ecu, _cmd(ecu, READ_STAGED).values)
     assert (r.state, r.result, r.flags) == (ERROR, VALIDATION_FAILED, APPS_SPAN_MISMATCH)
     assert not _cal_entries(ecu)
     assert _cmd(ecu, READ_STORED).values == DEFAULTS
@@ -445,17 +474,20 @@ def test_commit_applies_now_persists_one_flash_word_and_reloads(fresh):
     acu = fresh.can("can_acu")
     _arm_pit_diag_off_the_udv_tick(fresh)
     before = _entries(fresh)
-    _sweep(fresh)
+    swept = _staged_sweep(fresh)
     _pedals(fresh, 2500, 2200, 1900)
     fresh.run_for(ms=2 * STREAM_MS)
     pct_before = acu.last(PIT_BRAKE).data[2]
-    assert pct_before == 1900 * 100 // 4095              # uncalibrated: full-range scale
+    # uncalibrated: full-range scale (1897..1903 all read 46 %)
+    assert pct_before == 1900 * 100 // 4095
 
-    r = _commit(fresh, SWEPT)
+    r = _commit(fresh, swept)
     assert (r.state, r.result, r.cal_load) == (COMMITTED, OK, LOAD_LOADED)
     fresh.run_for(ms=2 * STREAM_MS)
-    assert acu.last(PIT_BRAKE).data[2] == (1900 - 600) * 100 // (3200 - 600)
-    assert _cmd(fresh, READ_STORED).values == SWEPT
+    rest, pressed = swept[4], swept[7]
+    assert acu.last(PIT_BRAKE).data[2] in {
+        (raw - rest) * 100 // (pressed - rest) for raw in range(1900 - NOISE_CODES, 1900 + NOISE_CODES + 1)}
+    assert _cmd(fresh, READ_STORED).values == swept
 
     after = _entries(fresh)
     assert after[:len(before)] == before, "the bootloader's entries moved"
@@ -463,7 +495,7 @@ def test_commit_applies_now_persists_one_flash_word_and_reloads(fresh):
     assert slot == before[-1][0] + 1
     seq = max(int.from_bytes(e[8:12], "little") for _, e in before) + 1
     expected = (NVM_MAGIC.to_bytes(2, "little") + CAL_KEY.to_bytes(2, "little")
-                + bytes([18, 0, 0, 0]) + seq.to_bytes(4, "little") + _record(SWEPT) + bytes(2))
+                + bytes([18, 0, 0, 0]) + seq.to_bytes(4, "little") + _record(swept) + bytes(2))
     assert entry == expected
     t = fresh.run_for(ms=1100)
     assert _cal_status(fresh, t - 1_100_000) == LOAD_LOADED
@@ -471,7 +503,7 @@ def test_commit_applies_now_persists_one_flash_word_and_reloads(fresh):
     t = _power_cycle(fresh)
     assert _cal_status(fresh, t) == LOAD_LOADED
     r = _cmd(fresh, READ_STORED)
-    assert (r.cal_load, r.values) == (LOAD_LOADED, SWEPT)
+    assert (r.cal_load, r.values) == (LOAD_LOADED, swept)
 
 
 def test_a_torn_newest_record_falls_back_to_the_previous_one(fresh):
@@ -480,8 +512,8 @@ def test_a_torn_newest_record_falls_back_to_the_previous_one(fresh):
     loads the previous record. The torn slot is the append point and is not
     erased, so the next commit is refused (CalWrite::Full -> NvmWriteFailed,
     session Error) but still applies for this power cycle."""
-    _sweep(fresh)
-    assert _commit(fresh, SWEPT).state == COMMITTED
+    swept = _staged_sweep(fresh)
+    assert _commit(fresh, swept).state == COMMITTED
     _cmd(fresh, ENTER, guard=GUARD)
     _cmd(fresh, RESET_DEFAULTS, guard=GUARD)
     assert _commit(fresh, DEFAULTS).state == COMMITTED
@@ -490,7 +522,7 @@ def test_a_torn_newest_record_falls_back_to_the_previous_one(fresh):
 
     t = _power_cycle(fresh)
     assert _cal_status(fresh, t) == LOAD_LOADED
-    assert _cmd(fresh, READ_STORED).values == SWEPT
+    assert _cmd(fresh, READ_STORED).values == swept
 
     _sweep(fresh, rest=(2100, 1900, 700))
     staged = _cmd(fresh, READ_STAGED).values
@@ -510,8 +542,7 @@ def test_a_corrupt_record_boots_on_the_defaults_and_says_why(fresh, offset, valu
     """A record that keeps its magic but fails the parser's checks: boot runs
     the compile-time defaults, never the corrupt values, and names the cause
     on 0x704 and 0x7E3."""
-    _sweep(fresh)
-    assert _commit(fresh, SWEPT).state == COMMITTED
+    assert _commit(fresh, _staged_sweep(fresh)).state == COMMITTED
     (slot, _), = _cal_entries(fresh)
     fresh.monitor(f"sysbus WriteByte {NVM_BASE + slot * ENTRY + offset:#x} {value:#x}",
                   board="ecu")
