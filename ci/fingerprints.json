@@ -18,9 +18,9 @@
    }
   },
   "ecu": {
-   "digest": "16215c5300c3f750aad844f5e373197c2c0a32c57726d6b26e30ec4f3554300e",
+   "digest": "3d2bdfadd6cc94689ea1155691780049ca16d8fb131e6ba9ba3ace77f6e56a16",
    "edges": {
-    "ecu": 54001
+    "ecu": 54009
    },
    "frames": {
     "can_acu": 712,
@@ -29,7 +29,7 @@
    }
   },
   "ecu-ams": {
-   "digest": "fe9c6b151702a7a7025f211f7a7c769d724e664d1b3e5cf7dc766d1facaed3b6",
+   "digest": "1d51b853872fe88d63b2d82ee63d600bae3dfe5eb3822aa4017e442e3d8e349b",
    "edges": {
     "ams": 2393,
     "ecu": 50857
@@ -41,7 +41,7 @@
    }
   },
   "ecu-ams-ecu": {
-   "digest": "9a794e63a7842721c801d5391fb916b2bed82a55a4a364fb377e6401957bf441",
+   "digest": "2d30a9e53262989d88a1952d4a03d36457e8a2f0719dc5cea2941f7f3c7607f7",
    "edges": {
     "ams": 2393,
     "ecu": 50857,
@@ -57,7 +57,7 @@
    }
   },
   "ecu-ams-udv": {
-   "digest": "d340bc0cab0afa9197e659de5c8231281f9667df96aead79abcddb4f38315c93",
+   "digest": "6084d96c403e440eedd535a18d0fb974afa3226e144777804662ab30a827b4ea",
    "edges": {
     "ams": 2393,
     "ecu": 50857,
@@ -71,7 +71,7 @@
    }
   },
   "udv": {
-   "digest": "9ed55abfbd3dc66aab253ff39c1eb215a2415ef2d3426fd1fdc01eefebbac224",
+   "digest": "d7b56357d4596a7565d6e138269e2e1ddaea70eaf61091bbcb9a21cbda29ab1a",
    "edges": {
     "udv": 2
    },

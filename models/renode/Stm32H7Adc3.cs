@@ -45,7 +45,8 @@
 // both and compares them.
 //
 // Oversampling: each of the N conversions of a result reads the same input
-// (noise-free unless the channel has DifferentialNoise, below), the N codes
+// (noise-free unless the channel has DifferentialNoise or SingleEndedNoise,
+// below), the N codes
 // are summed, shifted right by OVSS and kept to the 16 bits of DR,
 // right-aligned whatever ALIGN says (RM0468 ADC3 "Oversampler"). The
 // truncating shift is exact for the shifts the firmwares use (OVSS <= log2 N)
@@ -82,11 +83,20 @@
 // and the result's (or the start's) index on this ADC, in integers and IEEE
 // basic operations only: the same on every host and run, lazy-DMA or not
 // (a result's value depends on its index, not on when it is handed over).
-// The indices count from load, not from Reset. Absent (the default) or
-// single-ended reads: noise-free, as before. A system sets it from its
+// The indices count from load, not from Reset. Absent (the default), a
+// differential read is noise-free, as before. A system sets it from its
 // board role's catalogue entry (catalog/boards/mainlite.yaml
 // `adc_differential`, which cites the measurement) with a seed vhil.system
 // derives from the system's `seed` and the board's name.
+//
+// A single-ended channel may carry the same two terms (#326), set apart from
+// the differential ones because a channel is read either way by DIFSEL:
+//     sysbus.adc3_h73x SingleEndedTransfer 3 1.0 0    (channel, gain, codes)
+//     sysbus.adc3_h73x SingleEndedNoise 3 0.42 0 <seed>
+// read code = gain x V(INP) / VREF+ x (2^n - 1) + offset (12-bit codes), and
+// add the noise as above, while DIFSEL leaves the channel single-ended. A
+// system sets them from its board role's `adc_single_ended` (the ECU's and
+// the uDV's datasheet-derived noise, cited there).
 //
 // Fault injection: while ConversionFault is true a started conversion never
 // ends (no EOC, no DMA request, DR unchanged), as when the ADC kernel clock
@@ -225,6 +235,42 @@ namespace Antmicro.Renode.Peripherals.Analog
             else
             {
                 diffNoise[channel] = new Noise { Rms = codesRms, StartRms = startCodesRms, Seed = seed };
+            }
+        }
+
+        // The board's transfer of a single-ended INP channel (see the
+        // header): gain on V(INP), then offsetCodes (12-bit).
+        public void SingleEndedTransfer(int channel, double gain, int offsetCodes)
+        {
+            CheckChannel(channel);
+            CatchUpForObserver();   // results due before the change convert the old way
+            if(gain == 1.0 && offsetCodes == 0)
+            {
+                seTransfer.Remove(channel);
+            }
+            else
+            {
+                seTransfer[channel] = Tuple.Create(gain, offsetCodes);
+            }
+        }
+
+        // The board's noise on a single-ended INP channel (see the header),
+        // as DifferentialNoise's. 0 and 0 removes it.
+        public void SingleEndedNoise(int channel, double codesRms, double startCodesRms, ulong seed)
+        {
+            CheckChannel(channel);
+            if(codesRms < 0 || startCodesRms < 0)
+            {
+                throw new ArgumentException("noise rms must be >= 0");
+            }
+            CatchUpForObserver();   // results due before the change convert the old way
+            if(codesRms == 0 && startCodesRms == 0)
+            {
+                seNoise.Remove(channel);
+            }
+            else
+            {
+                seNoise[channel] = new Noise { Rms = codesRms, StartRms = startCodesRms, Seed = seed };
             }
         }
 
@@ -944,7 +990,8 @@ namespace Antmicro.Renode.Peripherals.Analog
             var bits = 12 - 2 * (int)((regs[CFGR / 4] >> 3) & 0x3);   // RES: 12/10/8/6
             var full = (1 << bits) - 1;
             double code;
-            if((regs[DIFSEL / 4] & (1u << channel)) != 0)
+            var differential = (regs[DIFSEL / 4] & (1u << channel)) != 0;
+            if(differential)
             {
                 var vn = innOf.TryGetValue(channel, out var m) ? volts[m] : 0.0;
                 if(!innOf.ContainsKey(channel))
@@ -961,12 +1008,16 @@ namespace Antmicro.Renode.Peripherals.Analog
                     code = (1 + (volts[channel] - vn) / vref) * (1 << bits) / 2;
                 }
             }
+            else if(seTransfer.TryGetValue(channel, out var st))
+            {
+                code = st.Item1 * volts[channel] / vref * full + st.Item2 / (double)(1 << (12 - bits));
+            }
             else
             {
                 code = volts[channel] / vref * full;
             }
-            if(diffNoise.Count != 0 && (regs[DIFSEL / 4] & (1u << channel)) != 0
-               && diffNoise.TryGetValue(channel, out var noise))
+            var noises = differential ? diffNoise : seNoise;
+            if(noises.Count != 0 && noises.TryGetValue(channel, out var noise))
             {
                 return ConvertNoisy(channel, code, full, bits, noise, index);
             }
@@ -987,7 +1038,7 @@ namespace Antmicro.Renode.Peripherals.Analog
             return (uint)value;
         }
 
-        // A differential result with the board's noise (see the header): the
+        // A result with the board's noise (see the header): the
         // N conversions' codes summed as one draw, offsets and clamping per
         // conversion, then the oversampler's shift (or the alignment).
         private uint ConvertNoisy(int channel, double code, int full, int bits, Noise noise, ulong index)
@@ -1166,6 +1217,8 @@ namespace Antmicro.Renode.Peripherals.Analog
         private readonly Dictionary<int, int> innOf = new Dictionary<int, int>();
         private readonly Dictionary<int, Tuple<double, int>> diffTransfer = new Dictionary<int, Tuple<double, int>>();
         private readonly Dictionary<int, Noise> diffNoise = new Dictionary<int, Noise>();
+        private readonly Dictionary<int, Tuple<double, int>> seTransfer = new Dictionary<int, Tuple<double, int>>();
+        private readonly Dictionary<int, Noise> seNoise = new Dictionary<int, Noise>();
         private readonly HashSet<string> warned = new HashSet<string>();
         private ulong noiseIndex;    // results since load (not Reset): the noise's counter
         private ulong startIndex;    // regular sequence starts since load

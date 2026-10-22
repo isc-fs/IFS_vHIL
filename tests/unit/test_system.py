@@ -704,6 +704,52 @@ def test_the_ams_carrier_reads_the_current_pair_with_the_cars_noise(tmp_path):
     assert "DifferentialNoise" not in System(REPO / "systems" / "ecu.yaml").render_renode()
 
 
+def test_the_ecu_and_udv_read_single_ended_pins_with_derived_noise():
+    """#326: the ECU and uDV roles' adc_single_ended noise (derived from the
+    datasheet, cited in the catalogue) is set on each sampled ADC3 channel,
+    seeded per board, before the reset macro; their identity transfer is not
+    rendered, and the AMS keeps only its differential pair's."""
+    system = System(REPO / "systems" / "ecu-ams-udv.yaml")
+    script = system.render_renode()
+    ecu, udv = system.noise_seed("ecu"), system.noise_seed("udv")
+    want = {f"sysbus.adc3_h73x SingleEndedNoise {ch} 0.42 0.0 {ecu}" for ch in (3, 7, 2)}
+    want |= {f"sysbus.adc3_h73x SingleEndedNoise {ch} 0.42 0.0 {udv}" for ch in (3, 7, 2, 6, 10)}
+    got = {line.strip() for line in script.splitlines() if "SingleEndedNoise" in line}
+    assert got == want
+    assert "SingleEndedTransfer" not in script
+    for name, ch in (("ecu", 3), ("udv", 10)):
+        at = script.index(f'"{name}"')
+        seed = system.noise_seed(name)
+        assert at < script.index(f"SingleEndedNoise {ch} 0.42 0.0 {seed}") < script.index("macro reset", at)
+    assert "SingleEndedNoise" not in System(REPO / "systems" / "ams.yaml").render_renode()
+
+
+def test_a_single_ended_transfer_other_than_identity_is_rendered():
+    """A role's single-ended gain and offset reach the ADC as the
+    differential ones do; noise alone renders no transfer."""
+    system = System(REPO / "systems" / "ecu.yaml")
+    b = system.boards["ecu"]
+    b.role_spec = dict(b.role_spec, adc_single_ended={"PF8": {"gain": 0.98, "offset_codes": -3}})
+    script = system.render_renode()
+    assert "sysbus.adc3_h73x SingleEndedTransfer 7 0.98 -3" in script
+    assert "SingleEndedNoise" not in script
+
+
+def test_a_sensor_side_voltage_reaches_the_pin_through_the_front_end():
+    """#326: sensor_to_pin applies the backplane's divider (ECU brake 2/3,
+    uDV EBS pressure 1/3, the 10k/1k taps 1/11; APPS a series RC, 1), and
+    refuses a pin that is not an analog input in its role."""
+    system = System(REPO / "systems" / "ecu-ams-udv.yaml")
+    assert system.sensor_to_pin("ecu.PF7", 4.5) == pytest.approx(3.0, abs=1e-3)
+    assert system.sensor_to_pin("ecu.PF8", 2.0) == 2.0
+    assert system.sensor_to_pin("udv.PF7", 9.0) == pytest.approx(3.0, abs=1e-3)
+    assert system.sensor_to_pin("udv.PC0", 11.0) == pytest.approx(1.0, abs=1e-3)
+    assert system.sensor_to_pin("ams.PF7", 1.0) == 1.0
+    for bad in ("udv.PC1", "ecu.PB5", "nobody.PF7"):
+        with pytest.raises(SystemError, match="not an analog input"):
+            system.sensor_to_pin(bad, 1.0)
+
+
 @pytest.mark.parametrize("old, new, message", [
     # The schema refuses a label, a firmware id or a page that isn't one
     # (test_injection checks System() refuses them without it); System()
@@ -720,6 +766,10 @@ def test_the_ams_carrier_reads_the_current_pair_with_the_cars_noise(tmp_path):
      "gives 'PF9' a differential ADC transfer, but it is not an analog input"),
     ("      PF7: {gain: 0.92,", "      PF7: {gain: 0.2,", "not valid under any"),
     ("noise_codes_rms: 1.07", "noise_codes_rms: -1", "not valid under any"),
+    ("      PC0: {noise_codes_rms: 0.42,", "      PC1: {noise_codes_rms: 0.42,",
+     "gives 'PC1' a single-ended ADC transfer, but it is not an analog input"),
+    ("front_end_ratio: 0.6667", "front_end_ratio: 1.5", "not valid under any"),
+    ("      PF8: {noise_codes_rms: 0.42, front_end_ratio: 1}", "      PF8: {}", "not valid under any"),
 ])
 def test_the_roles_table_is_checked(tmp_path, old, new, message):
     with pytest.raises(SystemError, match=message):

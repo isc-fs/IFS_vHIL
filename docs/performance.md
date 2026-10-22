@@ -58,6 +58,17 @@ and ECU's instruction counts, PB9 / ECU edge instruction counts and times,
 state and RAM digests. SoC (0x130), frame counts, edge counts and the ecu and
 udv fingerprints are unchanged.
 
+Since #326 (the ECU's and uDV's datasheet-derived single-ended ADC3 noise,
+seed 1, not a speed change; same patch set and firmware; 2026-10-22), the
+CI guard's 5 s references (`ci/fingerprints.json`): ams unchanged
+(`89b3ad31`), ecu `3d2bdfad`, ecu-ams `1d51b853`, udv `d7b56357`,
+ecu-ams-udv `6084d96c`, ecu-ams-ecu `2d30a9e5`; two runs byte-identical.
+What moved, in every system with an ECU or a uDV: the codes they read, so
+their RAM and state digests and what they send from them (the ECU's nRF24
+payloads carry the raw pedal codes, IFS08-CE-ECU `radio_snapshot.hpp:43-45`,
+hence ecu's watched SPI edges 54001 -> 54009). Frame counts and the other
+edge counts are unchanged.
+
 `ecu-ams-ecu` is a benchmark, not a car system
 ([`scripts/speed-systems/`](../scripts/speed-systems/ecu-ams-ecu.yaml), named
 in `speed.py`'s `BENCH_ONLY`, so the catalogue, the editor and the scenarios

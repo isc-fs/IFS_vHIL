@@ -38,6 +38,8 @@ vcu_r2d_confirm.def:5-6 calls 0x511 "acyclic, on the DV R2D transition"; the
 firmware sends it every 100 ms carrying the latch (control_task.cpp:335-337),
 which is what the uDV keys on and what is asserted here.
 """
+from contextlib import contextmanager, nullcontext
+
 import pytest
 
 from vhil.plants import APPS1_FULL, APPS2_FULL, APPS1_REST, APPS2_REST, COUNTS_TO_V
@@ -58,6 +60,29 @@ TICK_MS, UDV_PERIOD_MS, R2D_SOUND_MS = 10, 100, 2000
 KERNEL_TICK_US = 1000      # ECU FreeRTOS tick: configTICK_RATE_HZ 1000 (FreeRTOSConfig.h:67)
 R2D_STALE_MS, CMD_STALE_MS = 200, 100
 BRAKE_RELEASED, BRAKE_FIRM, BRAKE_DV_HARD, BRAKE_HARD = 580, 1500, 2500, 2700
+# The ECU role's ADC noise (#326, catalog/boards/mainlite.yaml: 0.42 codes
+# rms, its draw bounded at 2.06 codes, then rounded): a raw read lands within
+# NOISE_CODES of the code on the pin.
+NOISE_CODES = 3
+
+
+@contextmanager
+def _ideal_brake_adc(sim):
+    """The brake channel without its ADC noise, for a row that checks the
+    firmware's comparison at one code (brake_raw > 2500, strictly): no pin
+    voltage holds a single code against the noise, on the car either. The
+    catalogue's noise and seed come back on exit."""
+    ecu = sim.system.boards["ecu"]
+    target = ecu.board["analog_in"]["PF7"]
+    noise = ecu.role_spec["adc_single_ended"]["PF7"]
+    adc, ch = target["adc"], int(target["channel"])
+    sim.monitor(f"{adc} SingleEndedNoise {ch} 0 0 0", board="ecu")
+    try:
+        yield
+    finally:
+        sim.monitor(f"{adc} SingleEndedNoise {ch} {noise['noise_codes_rms']} "
+                    f"{noise.get('start_noise_codes_rms', 0)} {sim.system.noise_seed('ecu')}",
+                    board="ecu")
 
 
 def _nm(pct):
@@ -211,17 +236,20 @@ def test_100_ms_frames_cadence_and_idle_values(parked):
         assert {(len(f.data), f.data[0]) for f in frames} == {(1, value)}, hex(can_id)
 
 
-@pytest.mark.parametrize("brake, over", [(BRAKE_FIRM, 0), (BRAKE_DV_HARD, 0),
-                                         (BRAKE_DV_HARD + 1, 1), (4000, 1)])
-def test_brake_over_limit_boundary(parked, brake, over):
-    """L-002: 0x505 = brake_raw > 2500, strictly."""
-    parked.brake(brake)
-    t = parked.sim.run_for(ms=250)
-    assert parked.sim.read_symbol("ecu", "g_last_brake_raw", 2) == brake
-    frames = parked.acu.frames([BRAKE_OVER], since_us=t - 150_000)
-    assert frames and all(f.data[0] == over for f in frames)
-    parked.brake(BRAKE_RELEASED)
-    parked.sim.run_for(ms=50)
+@pytest.mark.parametrize("brake, over, edge", [(BRAKE_FIRM, 0, False), (BRAKE_DV_HARD, 0, True),
+                                               (BRAKE_DV_HARD + 1, 1, True), (4000, 1, False)])
+def test_brake_over_limit_boundary(parked, brake, over, edge):
+    """L-002: 0x505 = brake_raw > 2500, strictly: the two rows at the code
+    itself read an ideal ADC (_ideal_brake_adc), the others the noisy one."""
+    with _ideal_brake_adc(parked.sim) if edge else nullcontext():
+        parked.brake(brake)
+        t = parked.sim.run_for(ms=250)
+        raw = parked.sim.read_symbol("ecu", "g_last_brake_raw", 2)
+        assert raw == brake if edge else abs(raw - brake) <= NOISE_CODES, raw
+        frames = parked.acu.frames([BRAKE_OVER], since_us=t - 150_000)
+        assert frames and all(f.data[0] == over for f in frames)
+        parked.brake(BRAKE_RELEASED)
+        parked.sim.run_for(ms=50)
 
 
 @pytest.mark.parametrize("brake, req", [
@@ -229,12 +257,14 @@ def test_brake_over_limit_boundary(parked, brake, over):
     (BRAKE_HARD, 0),                                            # hard braking, request byte 0
 ])
 def test_dv_refused_without_hard_braking_or_a_request(parked, brake, req):
-    """L-004: 0x510 is honoured only with brake > 2500 and byte 0 != 0."""
-    parked.brake(brake)
-    parked.acu.send_periodic("r2d", UDV_R2D, bytes([req]), 50)
-    t = parked.sim.run_for(ms=500)
-    parked.acu.stop_periodic("r2d")
-    parked.brake(BRAKE_RELEASED)
+    """L-004: 0x510 is honoured only with brake > 2500 and byte 0 != 0. The
+    row at 2500 itself reads an ideal ADC (_ideal_brake_adc)."""
+    with _ideal_brake_adc(parked.sim) if brake == BRAKE_DV_HARD else nullcontext():
+        parked.brake(brake)
+        parked.acu.send_periodic("r2d", UDV_R2D, bytes([req]), 50)
+        t = parked.sim.run_for(ms=500)
+        parked.acu.stop_periodic("r2d")
+        parked.brake(BRAKE_RELEASED)
     # Past UdvR2dStaleMs: the next case must not meet this case's request,
     # still fresh, with its own hard braking (as [2700-0] did after [2500-1]).
     parked.sim.run_for(ms=R2D_STALE_MS + 3 * TICK_MS)
