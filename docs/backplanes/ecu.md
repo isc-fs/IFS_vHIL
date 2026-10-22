@@ -90,7 +90,10 @@ what is between the sensor and the code:
   through `System.sensor_to_pin`.
 - With noise, a raw code lands within 3 codes of the ideal one (the draw is
   bounded at 4.9 rms, 2.06 codes, then rounded): tests compare raw codes
-  within that and keep pedal stimuli off integer-percent edges.
+  within that and keep pedal stimuli off integer-percent edges. A check of
+  the firmware's comparison at one code (`test_ecu_dv.py`, brake_raw > 2500)
+  switches the brake channel's noise off for that row: no pin voltage holds
+  one code against it.
 - **Not modelled:** the brake read's settling. Its 667 Ω source is sampled
   for 2.5 cycles, where DS13313 Table 84 wants 217 ns for 680 Ω on a fast
   channel at 12 bits; the conversion keeps part of the previous channel's
