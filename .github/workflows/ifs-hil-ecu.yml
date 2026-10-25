@@ -80,11 +80,11 @@ jobs:
       # image from there (its SHA-256 checked) instead of building it, and
       # build it themselves when it is not there (this step failed, a ref
       # moved since). Failing here fails nothing: the jobs build.
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.11'
       - name: Arm GNU toolchain (pinned like IFS_HIL's recipe)
-        uses: carlosperate/arm-none-eabi-gcc-action@0edbb000a5a98e2292b051b463bff6f512547118 # v1.14.0
+        uses: carlosperate/arm-none-eabi-gcc-action@49f4db4520f840e77ab1e99b24cfac2c540a21b1 # v1.14.1
         with:
           release: '14.2.Rel1'
       - uses: ./.github/actions/firmware-cache
@@ -153,7 +153,7 @@ jobs:
           path: ifs_hil
 
       - name: Arm GNU toolchain (pinned like IFS_HIL's recipe)
-        uses: carlosperate/arm-none-eabi-gcc-action@0edbb000a5a98e2292b051b463bff6f512547118 # v1.14.0
+        uses: carlosperate/arm-none-eabi-gcc-action@49f4db4520f840e77ab1e99b24cfac2c540a21b1 # v1.14.1
         with:
           release: '14.2.Rel1'
 
@@ -191,7 +191,7 @@ jobs:
           sudo install -m 0755 "$RUNNER_TEMP/can-flasher-v${CAN_FLASHER_VERSION}-x86_64-unknown-linux-gnu/can-flasher" /usr/local/bin/can-flasher
           can-flasher --version
 
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.11'
 
@@ -269,7 +269,7 @@ jobs:
           path: ifs_hil
 
       - name: Arm GNU toolchain (pinned like IFS_HIL's recipe)
-        uses: carlosperate/arm-none-eabi-gcc-action@0edbb000a5a98e2292b051b463bff6f512547118 # v1.14.0
+        uses: carlosperate/arm-none-eabi-gcc-action@49f4db4520f840e77ab1e99b24cfac2c540a21b1 # v1.14.1
         with:
           release: '14.2.Rel1'
 
@@ -299,7 +299,7 @@ jobs:
       - name: Renode (vHIL build)
         uses: ./.github/actions/setup-renode
 
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.11'
 
@@ -383,7 +383,7 @@ jobs:
           path: ifs_hil
 
       - name: Arm GNU toolchain (pinned like IFS_HIL's recipe)
-        uses: carlosperate/arm-none-eabi-gcc-action@0edbb000a5a98e2292b051b463bff6f512547118 # v1.14.0
+        uses: carlosperate/arm-none-eabi-gcc-action@49f4db4520f840e77ab1e99b24cfac2c540a21b1 # v1.14.1
         with:
           release: '14.2.Rel1'
 
@@ -418,7 +418,7 @@ jobs:
           sudo install -m 0755 "$RUNNER_TEMP/can-flasher-v${CAN_FLASHER_VERSION}-x86_64-unknown-linux-gnu/can-flasher" /usr/local/bin/can-flasher
           can-flasher --version
 
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.11'
 
