@@ -170,7 +170,8 @@ them, e.g. "invariant 8"), so they are not in order.
 - (3) **Each app's HAL timebase timer must be modelled.** That is TIM23 on the
   ECU, TIM6 on the AMS and TIM1 on the uDV. The CAN bootloader's HAL tick is
   SysTick. Remove it and every HAL timeout spins forever. Its period is
-  (ARR+1)·(PSC+1) timer clocks (RM0468 44.3.2, Renode patch 0007, #292).
+  (ARR+1)·(PSC+1) timer clocks (RM0468 44.3.2, Renode patch 0007, #292);
+  SysTick's is RELOAD+1 clocks (ARMv7-M ARM B3.3, patch 0012, #294).
 - (4) **Every address and IRQ in `stm32h733.repl` comes from ST's
   `stm32h733xx.h`.** Cite it; don't guess.
 - (5) **Every MainLite boots through its CAN bootloader**, as on the car: the
@@ -240,7 +241,8 @@ Pinned versions: Renode **1.17.0** (the current backend), Arm GNU
 **14.2.Rel1**. Bump deliberately, in their own PR. The image and CI build
 Renode from the release's source with the patches in `docker/renode/`
 (speed, which computes the same as the release package, plus fidelity
-fixes such as 0007, STM32 timers' ARR + 1 period, #292; a log's
+fixes such as 0007, STM32 timers' ARR + 1 period, #292, and 0012,
+SysTick's RELOAD + 1 period, #294; a log's
 first line names the build, `vhil: renode 1.17.0 ... + vhil patches ...`);
 a new release means rebasing them ([`docker/renode/README.md`](docker/renode/README.md)).
 

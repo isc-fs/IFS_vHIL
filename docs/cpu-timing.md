@@ -91,6 +91,34 @@ how many polls the wait takes, but no pin shows that.
   (the AMS's isoSPI wake after IFS08-CE-AMS#637: 42.7 us / 1056 us for a
   20 us / 500 us request). `tests/sim/test_cortex_m7_core.py` pins the rate.
 
+## The SysTick
+
+SysTick (NVIC, 0xE000E010) is clocked by the processor clock, 528 MHz on
+every image (the `nvic`'s frequency), and like the timers it does not depend
+on the rate. Its period is **RELOAD + 1** clocks: the counter counts RELOAD,
+..., 1, 0 and loads RELOAD on the next clock (ARMv7-M ARM DDI0403E B3.3,
+SYST_RVR "Calculating the RELOAD value"). Every image writes RELOAD = 527999
+for its 1 ms tick: the CAN bootloader's HAL tick and each app's FreeRTOS tick
+(the apps' HAL tick is a TIMx, invariant 3).
+
+- Renode's NVIC counted RELOAD clocks per period (1 clock short, a tick of
+  999 999 ns: 1 ppm fast) and SYST_CVR never read 0 while counting. Renode
+  patch 0012 (`docker/renode/`, #294) counts RELOAD + 1; SYST_CVR reads
+  RELOAD..0, a write to it clears it (and COUNTFLAG) and the counter loads
+  RELOAD on the next clock, a RELOAD written while the counter is at 0 is
+  the one it loads (FreeRTOS's port writes SYST_CVR before SYST_RVR), and
+  RELOAD = 0 stops it at 0 at its next wrap.
+- CLKSOURCE reads 1 (processor clock) and ignores writes: Renode's NVIC has
+  no external reference (SYST_CALIB.NOREF reads 1). Every image selects the
+  processor clock, so none needs the H7's HCLK / 8 reference.
+- A SYST_CVR read syncs the CPU's time, as a CYCCNT read does, so it is
+  exact to the instruction. No loop on it is fast-forwarded
+  (`VhilFastForward`: it is not in the whitelist); `HAL_Delay`'s tick waits
+  and the bootloader's polls are, up to the next clock entry (SysTick's
+  among them), so they follow the period without assuming it.
+- `tests/sim/test_systick.py` pins the period, the SYST_CVR sequence and
+  COUNTFLAG at the register level.
+
 ## The caches
 
 Renode has no cache. Every fetch and load sees memory, and every instruction
@@ -271,7 +299,8 @@ That is what makes a 20 us window measurable in the emulator.
 catalogue rate, and that its wake train is 20 us low and 500 us high per IC
 in virtual time, to the instruction. Once isc-fs/IFS_HIL#154 reports the
 chip's widths, it also holds the train to them.
-`tests/sim/test_cortex_m7_core.py` holds CYCCNT at 528 cycles per virtual us.
+`tests/sim/test_cortex_m7_core.py` holds CYCCNT at 528 cycles per virtual us,
+`tests/sim/test_systick.py` SysTick at RELOAD + 1 clocks per period.
 
 ## Limitations
 
