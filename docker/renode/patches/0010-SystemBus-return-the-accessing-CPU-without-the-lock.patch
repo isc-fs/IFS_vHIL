@@ -1,0 +1,42 @@
+From e2eab67a76d280692aaa92e5ef841af63c96073c Mon Sep 17 00:00:00 2001
+From: Raul Moran <rmg@raulmoranguerra.com>
+Date: Fri, 30 Oct 2026 12:18:12 +0100
+Subject: [PATCH 10/11] SystemBus: return the accessing CPU without the lock
+
+TryGetCurrentCPU took cpuSync's read lock and looked the CPU up twice
+(idByCpu, then cpuById) even inside a CPU's own bus access, where the
+access context already names it. Peripherals that sync the time on a
+register access (machine.SystemBus.TryGetCurrentCPU, then cpu.SyncTime)
+paid the lock and both look-ups on every access.
+
+When the thread's access context is in use and its initiator is a CPU,
+return that CPU: the object cpuById[idByCpu[cpu]] yields for it. The
+locked path is unchanged for every other caller.
+---
+ src/Emulator/Main/Peripherals/Bus/SystemBus.cs | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/src/Emulator/Main/Peripherals/Bus/SystemBus.cs b/src/Emulator/Main/Peripherals/Bus/SystemBus.cs
+index 011b6c3..feff8d9 100644
+--- a/src/Emulator/Main/Peripherals/Bus/SystemBus.cs
++++ b/src/Emulator/Main/Peripherals/Bus/SystemBus.cs
+@@ -855,6 +855,16 @@ public bool TryGetCurrentContextState<T>(out IPeripheralWithTransactionState cpu
+ 
+         public bool TryGetCurrentCPU(out ICPU cpu)
+         {
++            // Inside a CPU's bus access (every access sets the context), that
++            // CPU: what TryGetCurrentCPUId and cpuById give for it
++            // (cpuById[idByCpu[cpu]]), without the lock and two dictionary
++            // look-ups. A peripheral that asks on every access (to sync the
++            // time) paid them every time.
++            if(threadLocalContext.InUse && threadLocalContext.Initiator is ICPU initiator)
++            {
++                cpu = initiator;
++                return true;
++            }
+             cpuSync.EnterReadLock();
+             try
+             {
+-- 
+2.51.0
+
