@@ -559,13 +559,23 @@ namespace Antmicro.Renode.Testing
             {
                 return;
             }
-            var t0 = System.Diagnostics.Stopwatch.GetTimestamp();
-            accessCalls++;
-            OnPeripheralAccess(operation == MemoryOperation.MemoryIOWrite, physicalAddress, width, value, inSelfYield);
-            accessTicks += System.Diagnostics.Stopwatch.GetTimestamp() - t0;
+            // Timed one call in AccessTimingStride (two clock reads per access
+            // were 2 % of the uDV's CPU thread): Stats' figure is an estimate.
+            var timed = (++accessCalls & (AccessTimingStride - 1)) == 0UL;
+            var t0 = timed ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
+            OnPeripheralAccess(operation == MemoryOperation.MemoryIOWrite, pc, physicalAddress, width, value, inSelfYield);
+            if(timed)
+            {
+                accessTicks += (System.Diagnostics.Stopwatch.GetTimestamp() - t0) * AccessTimingStride;
+            }
         }
 
-        private void OnPeripheralAccess(bool write, ulong address, uint width, ulong value, bool inSelfYield = false)
+        private const int AccessTimingStride = 32;
+
+        // `pc`: the access's instruction, as tlib reports it (CPU_PC, the PC it
+        // stores before every instruction: Renode's default,
+        // SyncPCEveryInstructionDisabled false).
+        private void OnPeripheralAccess(bool write, ulong pc, ulong address, uint width, ulong value, bool inSelfYield)
         {
             if(!enabled || !Polls)
             {
@@ -587,34 +597,35 @@ namespace Antmicro.Renode.Testing
                 Disarm();
                 return;
             }
-            // The exact position: the PC tlib keeps per instruction (Renode's
-            // default, SyncPCEveryInstructionDisabled false), and the executed
-            // count of the blocks before this one plus this instruction's index
-            // in its block.
+            var access = new Access(pc, address, width, write, value);
+            var atBoundary = state == PollState.Seek ? !inSelfYield : !inSelfYield && access.SamePlace(boundary);
+            if(!atBoundary)
+            {
+                if(state == PollState.Seek)
+                {
+                    return;
+                }
+                // Inside an iteration: only the access itself is recorded.
+                trace.Add(access);
+                if(trace.Count > MaxTrace)
+                {
+                    Refuse("iteration too long");
+                }
+                return;
+            }
+            // The exact position, at an iteration's boundary only: the
+            // executed count of the blocks before this one (tlib's total, read
+            // from its CPUState) plus this instruction's index in its block.
             var index = tlib.RestoreContext();
             if(index < 0)
             {
                 Refuse("no block for this access");
                 return;
             }
-            var position = cpu.GetCurrentInstructionsCount() + (ulong)index;
-            var access = new Access(cpu.PC.RawValue, address, width, write, value);
+            var position = tlib.Total() + (ulong)index;
             if(state == PollState.Seek)
             {
-                if(inSelfYield)
-                {
-                    return;
-                }
                 Begin(PollState.First, access, position);
-                return;
-            }
-            if(inSelfYield || !access.SamePlace(boundary))
-            {
-                trace.Add(access);
-                if(trace.Count > MaxTrace)
-                {
-                    Refuse("iteration too long");
-                }
                 return;
             }
             OnBoundary(access, position);
@@ -2456,6 +2467,10 @@ namespace Antmicro.Renode.Testing
             var declaration = (uint)Marshal.ReadInt32(state, limitOffset + 8);
             return (ulong)limit > (ulong)value + declaration ? limit - value - declaration : 0;
         }
+
+        // tlib's executed-instruction total (tlib_get_total_executed_instructions,
+        // TranslationCPU.GetCurrentInstructionsCount), without the call.
+        public ulong Total() => (ulong)Marshal.ReadInt64(State, totalOffset);
 
         // Count `instructions` as executed now; never more than Budget().
         public void Charge(ulong instructions)
