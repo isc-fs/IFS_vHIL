@@ -474,7 +474,7 @@ class Sim:
                  trace: Optional[int] = None, coverage_dir: Optional[Path] = None,
                  card_dirs: Iterable[Path | str] = (),
                  arbitration: Iterable[str] = (), hub: Iterable[str] = (),
-                 uart_log_dir: Path | None = None):
+                 uart_log_dir: Path | None = None, quantum_us: int | None = None):
         """seed: the run's seed, which every modelled noise draws from (the
         system file's `seed`, default 1, when None); also Renode's.
         params overrides device params for this run, e.g.
@@ -490,8 +490,17 @@ class Sim:
         uart_log_dir: every byte each board's firmware sends on a UART of its
         catalogue's `uart` table goes to <dir>/<board>.<UART>.txt (Renode's
         UART file backend; `uart_logs`), as the worker streams them
-        (vhil/runlog.py). The firmware is not changed."""
+        (vhil/runlog.py). The firmware is not changed.
+        quantum_us: this run's sync quantum, the system file's (500 us, the
+        gate's) when None; 1000 opts in to #348's faster quantum, where what
+        a board sees of another lags by up to 1 ms. Only 500 and 1000 are
+        accepted (vhil.system.quantum_us), and no required check uses 1000
+        (tests/conftest.py, scripts/fingerprint.py)."""
         self.system = System(Path(system), extra_card_dirs=card_dirs)
+        if quantum_us is not None:
+            self.system.set_quantum_us(quantum_us)
+        # The run's quantum, as its result records it (vhil/worker.py).
+        self.quantum_us = self.system.sync_quantum_us()
         for name, sectors in (write_protect or {}).items():
             if name not in self.system.boards:
                 raise ValueError(f"write_protect: no board '{name}' in {self.system.id}")

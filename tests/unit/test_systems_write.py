@@ -514,7 +514,7 @@ def test_a_run_at_a_saved_branch_runs_that_file_and_leaves_the_checkout_alone(en
             seen["expected"] = self.expected(system, refs, commits)
             return {k: tmp_path / f"{k}.elf" for k in system.images()}
 
-    def factory(path, firmware, log_path):
+    def factory(path, firmware, log_path, quantum_us=500):
         seen["path"] = path
         seen["text"] = path.read_text()
         return FakeSim(system=path)

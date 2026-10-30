@@ -109,6 +109,12 @@ def parse(doc: dict, system_id: str, name: str) -> tuple[Optional[RunScenario], 
         # recording is a plain scenario (vhil/server/session.py).
         errors.append("live: a scenario file is not a live session")
         run.pop("live")
+    if "quantum_us" in run:
+        # A run option (vhil/server/runs.py RunScenario): a scenario is the
+        # gate's, at the systems' 500 us quantum, never 1 ms (#348).
+        errors.append("quantum_us: a scenario file runs at the gate's 500 us quantum; 1 ms "
+                      "is a run option (the editor's Sync)")
+        run.pop("quantum_us")
     try:
         sc = RunScenario.model_validate({**run, "kind": "run", "name": name})
     except ValidationError as e:
@@ -186,6 +192,7 @@ def as_data(sc: RunScenario, description: str) -> dict:
     d.pop("kind", None)
     d.pop("name", None)
     d.pop("live", None)
+    d.pop("quantum_us", None)
     if not d.get("tags"):
         d.pop("tags", None)
     return {"description": description, **d}

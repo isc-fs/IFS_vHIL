@@ -99,8 +99,9 @@ from vhil.server.runs import (HEARTBEAT_S, MAX_ATTEMPTS, RECLAIM_AFTER_S, TRACE,
                               RunStore, code_changes, materialise_system, trace_header)
 from vhil.server.session import SessionStore
 from vhil.server.workspace import Workspace
-from vhil.system import (COMMIT, System, SystemError, built_images, commit_image_path,
-                         commit_source_dir, find_build, image_path, stamp_ref)
+from vhil.system import (COMMIT, GATE_QUANTUM_US, System, SystemError, built_images,
+                         commit_image_path, commit_source_dir, find_build, image_path,
+                         quantum_us, stamp_ref)
 
 DEFAULT_FW_DIR = Path(os.environ.get("VHIL_FW_DIR", "/vhil/fw"))
 
@@ -1336,11 +1337,14 @@ class FirmwareResolver:
 
 # -- the worker --------------------------------------------------------------------
 
-def _default_sim(system_path: Path, firmware: dict, log_path: Path):
+def _default_sim(system_path: Path, firmware: dict, log_path: Path,
+                 quantum_us: int = GATE_QUANTUM_US):
     """The run's Sim: Renode's log at `log_path`, and what each board sends
-    on its UARTs in uart/ beside it (vhil/runlog.py streams both)."""
+    on its UARTs in uart/ beside it (vhil/runlog.py streams both), at the
+    run's sync quantum (RunScenario.quantum_us: 500 us, or 1 ms opted in)."""
     from vhil.sim import Sim
-    return Sim(system_path, firmware, log_path=log_path, uart_log_dir=log_path.parent / "uart")
+    return Sim(system_path, firmware, log_path=log_path, uart_log_dir=log_path.parent / "uart",
+               quantum_us=quantum_us)
 
 
 def renode_build() -> str:
@@ -1489,7 +1493,14 @@ class Worker:
             if scenario["kind"] == "run":
                 if scenario.get("live"):
                     session = LiveSession(SessionStore(self.settings.db), run_id, self.limits)
-                sim = self.sim_factory(system_path, firmware, run_dir / "renode.log")
+                # The run's sync quantum: the gate's 500 us unless the run
+                # opted in to 1 ms (#348), which only ever is a non-gate run.
+                quantum = quantum_us(scenario.get("quantum_us", GATE_QUANTUM_US))
+                if quantum != GATE_QUANTUM_US:
+                    trace.log(0, f"sync quantum {quantum / 1000:g} ms (opted in, #348): what a "
+                                 f"board sees of another lags by up to {quantum / 1000:g} ms, "
+                                 f"not the gate's {GATE_QUANTUM_US} us")
+                sim = self.sim_factory(system_path, firmware, run_dir / "renode.log", quantum)
                 logs = runlog.RunLogs(run_dir / "renode.log", limit=limit)
                 try:
                     with sim:
@@ -1505,6 +1516,7 @@ class Worker:
                     except TraceLimit:
                         pass
                 state, virtual_us = "passed", progress["us"]
+                summary["quantum_us"] = getattr(sim, "quantum_us", quantum)
                 if scenario.get("expect"):
                     summary.update(evaluate_expects(run_dir, scenario, system, firmware,
                                                     virtual_us, trace))
@@ -1515,6 +1527,8 @@ class Worker:
                                                 image_env(system, firmware), trace, cancelled,
                                                 max_output_bytes=self.limits.max_output_bytes,
                                                 limit=limit)
+                # Native tests run at their systems' own (the gate's) quantum.
+                summary["quantum_us"] = system.sync_quantum_us()
             else:
                 raise ValueError(f"unknown scenario kind '{scenario['kind']}'")
             summary["firmware"] = {k: str(p) for k, p in firmware.items()}

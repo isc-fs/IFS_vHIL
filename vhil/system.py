@@ -42,6 +42,13 @@ CATALOG = REPO / "catalog"
 # The CAN bus model every bus uses unless it says `arbitration: false` (#174).
 # Renode's global quantum when a system sets no `time.quantum_s` (100 us).
 RENODE_DEFAULT_QUANTUM_S = 0.0001
+# The sync quantum every system file sets and the gate runs at (scenarios,
+# fingerprints, the sim, smoke and native suites, the IFS_HIL virtual
+# suites): what one board sees of another lags by up to 500 us. A run may opt
+# in to 1 ms instead (#348: +12-25 % steady, a lag of up to 1 ms), never a
+# required check; no other value is accepted (quantum_us).
+GATE_QUANTUM_US = 500
+QUANTA_US = (500, 1000)
 CAN_BUS_SOURCE = REPO / "models" / "renode" / "VhilCanBus.cs"
 # Each board's machine, with a time source of its own (#209).
 MACHINE_SOURCE = REPO / "models" / "renode" / "VhilMachine.cs"
@@ -324,6 +331,29 @@ class Board:
         return connector in pins or connector in (self.board.get("onboard") or {})
 
 
+def quantum_us(value) -> int:
+    """A run's sync quantum option in whole us: 500 (the gate's, every system
+    file's) or 1000 (#348's opt-in); anything else raises SystemError."""
+    if isinstance(value, int) and not isinstance(value, bool):
+        us = value
+    elif isinstance(value, str) and value.strip().isdigit():
+        us = int(value)
+    else:
+        us = None
+    if us not in QUANTA_US:
+        raise SystemError(f"sync quantum {value!r} us: only "
+                          f"{' or '.join(str(q) for q in QUANTA_US)} us (#348)")
+    return us
+
+
+def require_gate_quantum(us: int, what: str) -> None:
+    """The gate's guard (#348): `what` (a fingerprint run, a required check's
+    Sim or bench) runs at GATE_QUANTUM_US, never the 1 ms opt-in."""
+    if us != GATE_QUANTUM_US:
+        raise SystemError(f"{what} runs at a {us} us sync quantum: the gate runs at "
+                          f"{GATE_QUANTUM_US} us only; 1 ms is a non-gate run's opt-in (#348)")
+
+
 class System:
     def __init__(self, path: Path, catalog: Path = CATALOG,
                  extra_card_dirs: Iterable[Path | str] = ()):
@@ -360,6 +390,15 @@ class System:
         self.devices = {name: dict(spec, model_doc=_entry("model", spec["model"], catalog))
                         for name, spec in self.doc.get("devices", {}).items()}
         self._check()
+
+    def set_quantum_us(self, us) -> int:
+        """This run's sync quantum, in place of the system file's: one of
+        QUANTA_US (quantum_us); returns it. The file is not changed, and at
+        GATE_QUANTUM_US the generated script is the file's own."""
+        us = quantum_us(us)
+        if us != self.sync_quantum_us():
+            self.doc.setdefault("time", {})["quantum_s"] = us / 1e6
+        return us
 
     def sync_quantum_us(self) -> int:
         """The emulation's sync period in whole us: `time.quantum_s`, else
@@ -1417,6 +1456,9 @@ def main(argv=None) -> int:
                                 "renode-test's CAN Tester keywords, which attach only to a "
                                 "CANHub (renode CANKeywords.cs: TestersProvider<CANTester, "
                                 "CANHub>)")
+            s.add_argument("--quantum-us", type=int, default=None, choices=QUANTA_US,
+                           help="this run's sync quantum instead of the file's 500 us: 1000 "
+                                "for a non-gate run (#348), never a required check")
             s.add_argument("-o", "--output", type=Path)
         if name == "build":
             s.add_argument("--workdir", type=Path, default=REPO / "build" / "fw")
@@ -1438,6 +1480,8 @@ def main(argv=None) -> int:
             if args.can_hub:
                 for spec in system.buses.values():
                     spec["arbitration"] = False
+            if args.quantum_us is not None:
+                system.set_quantum_us(args.quantum_us)
             text = system.render_renode({k: Path(v) for k, v in _pairs(args.firmware).items()},
                                         socketcan=args.socketcan)
             if args.output:
