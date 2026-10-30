@@ -1102,6 +1102,115 @@ passing; the fingerprint is the references above on both; `speed.py` (no
 probe frames) is unchanged on both hosts within noise (x86 steady ecu-ams
 2.98-3.12x → 3.04-3.24x, ams 7.55-8.02x → 7.54-7.88x).
 
+### Lock-step runs: the uDV's MMIO hook path (#260)
+
+Host `perf` of `ecu-ams-udv` in steady state (dev at 12e2c00, patch set
+vhil.9, M-series host through Colima, 4 vCPU, 15 s at 1999 Hz):
+
+- **The uDV's CPU thread is the critical path.** It has 49 % of Renode's
+  samples, is on-CPU about 88 % of the time and executing 83.5 % of it. The
+  other boards mostly wait for it in the hand-off. The boards' busy stretches
+  rarely overlap, so a multi-board run costs about the sum of its boards plus
+  the hand-off's wake-ups.
+- **Where the uDV thread goes.** Guest time is mostly `HAL_ADC_PollForConversion`
+  (32 % of its host time). On the host, `tlib_read/write_double_word` are 30 %
+  (the bus round trip of ADC3's registers, IFS09-DV-uDV#18). The fast-forward's
+  memory-access hook is 19 %: `VhilFastForward.OnAccess` 15.2 % (a stopwatch
+  2 %, `RestoreContext` 3 %, reading the PC ~4 %, the instruction total 1.7 %)
+  and `TryTranslateAddress` 2.5 %. `ADC3.Now` → `SystemBus.TryGetCurrentCPU`
+  (a reader-writer lock and a dictionary) is ~4 %.
+- **The master thread** spins or waits ~70 % of its samples. Its sync phase
+  is ~9 % and the futex wake-ups of `Release` ~11 %.
+- **ecu-ams** is flat. The time framework and timers are 5-7 %, then the
+  ECU's GPIO bit-bang (`NRF24_BitBangDelay`, 21 % of the ECU's guest time) and
+  the counter-skip's block invalidation (2.4 % of the ECU thread). Each CPU
+  thread spends ~21-23 % in the hand-off's spin. The AMS is idle 69 % of its
+  guest time.
+
+Two changes, both computing exactly what dev computes (identity fingerprint
+byte-identical for all six systems):
+
+1. **The detector locates an access only at an iteration's boundary**
+   (`models/renode/VhilFastForward.cs`). While armed, every MMIO access used
+   to restore the CPU context and read the PC and the instruction total.
+   Now the hook's own PC is compared with the boundary first, and the context
+   and the total (read straight from the CPUState) are taken only there. One
+   call in 32 is timed. A throwaway check build compared the hook's PC with
+   `cpu.PC` and the CPUState total with `GetCurrentInstructionsCount` in
+   ~1.5 M accesses: 0 mismatches. The hook goes from 19 % to 10.7 % of the
+   uDV thread (`OnAccess` 15.2 % → 7.4 %).
+2. **Patches 0010-0011, two calls fewer per access** (patch set vhil.10).
+   0010: `TryGetCurrentCPU` returns the bus access's initiating CPU from the
+   thread-local context, without the lock. 0011: on Cortex-M,
+   `OnMemoryAccess` skips the address translation unless an external MMU
+   window has a nonzero addend (VhilExecuteNever's identity windows set
+   none). A first 0011 that skipped it only with no external MMU at all
+   never took effect, because VhilExecuteNever enables one. The hook is
+   8.8 % of the uDV thread after both.
+
+One GitHub runner (x86, 4 vCPU) building both Renode packages and
+interleaving them, median of 3, dev → both changes (2026-10-30), boot /
+steady:
+
+| System | Path | Boot | Steady |
+|---|---|---|---|
+| udv | sim | 2.71x → 2.97x (+10 %) | 2.37x → 2.81x (+19 %) |
+| udv | bench | 3.32x → 3.85x (+16 %) | 2.93x → 3.35x (+14 %) |
+| ecu-ams-udv | sim | 1.52x → 1.58x (+4 %) | 1.27x → 1.39x (+9 %) |
+| ecu-ams-udv | bench | 1.48x → 1.60x (+8 %) | 1.23x → 1.28x (+4 %) |
+| ecu-ams | sim | 2.25x → 2.38x (+6 %) | 3.00x → 3.05x (+2 %) |
+| ecu-ams | bench | 2.19x → 2.30x (+5 %) | 2.40x → 2.38x (-1 %) |
+| ecu | sim | 3.46x → 3.67x (+6 %) | 7.16x → 6.96x (-3 %) |
+| ams | sim | 3.61x → 3.71x (+3 %) | 6.96x → 7.01x (+1 %) |
+
+CPU s/s fell on every uDV row (udv sim steady 0.578 → 0.508). The ECU and
+the AMS alone arm the detector rarely, so they move within the runner's noise.
+On the M-series host (4 vCPU, interleaved, median of 3, sim, steady):
+ecu-ams-udv 0.96x → 1.11x, ecu-ams 1.91x → 2.19x, ams 5.04x → 5.17x, ecu
+4.61x → 4.03x. The Mac's noise is about ±20 %, and an earlier run of the
+detector alone had ecu at +1 %, so the ECU row is noise. Start-up is
+unchanged: Renode ready / every app at 1.65 / 2.86 s → 1.78 / 2.94 s (ecu),
+1.96 / 3.37 → 2.00 / 3.35 s (ecu-ams), 2.20 / 3.92 → 2.27 / 3.87 s
+(ecu-ams-udv), median of 3, M-series host.
+
+**A 1 ms quantum (measured, not done).** With `time.quantum_s: 0.001` on
+every system (dev, M-series host, interleaved, median of 3, sim):
+
+| System | Boot | Steady |
+|---|---|---|
+| ecu | 2.36x → 3.22x (+36 %) | 4.07x → 4.89x (+20 %) |
+| ecu-ams | 1.91x → 2.33x (+22 %) | 2.23x → 2.49x (+12 %) |
+| ecu-ams-udv | 1.40x → 1.84x (+31 %) | 1.12x → 1.40x (+25 %) |
+
+That is half the hand-offs. But it changes what a run computes: every
+digest of the five systems changed moves except udv's. The frame and edge counts stay the
+same and the instruction counts at edges match. Cross-board timings move,
+for example the ECU's frames land 131 µs earlier, because a frame between
+boards can now lag by up to 1 ms. That is a fidelity decision (CAN latency
+against speed) and a new identity reference, so it is left for its own
+issue.
+
+**Tried and dropped:**
+
+- **Granting the critical board first** each quantum: 2-3 % at most.
+- **A combining barrier** in which the last CPU to report runs the master's
+  duties. It moves `SyncHook` and the delayed actions onto a CPU thread,
+  which breaks the thread-identity assumptions they make.
+- **A long spin on the master only.** It is close enough to the hand-off
+  waiter above (no gain on x86, costs throughput) not to repeat it.
+- **Reading IPSR through interrupt hooks** instead of a register read. It
+  adds hooks on every exception entry and return, for ~1 %.
+- **tlib's cached-access reads** for ADC3's registers. They change when a
+  peripheral sees an access.
+- **Skipping the counter-skip's block invalidation** on pages without
+  translated code: ~1 % on the ECU.
+
+What is left on the critical path is the bus round trip itself
+(`tlib_read/write_double_word`, ~27 % + 7 % of the uDV thread). That is one
+reverse P/Invoke per register access, which needs a Renode/tlib change (a
+native fast path for plain registers), or fewer accesses from the uDV
+(IFS09-DV-uDV#18).
+
 ## What is left
 
 Host `perf` of Renode in lock-step steady state on the final build of this
@@ -1162,7 +1271,9 @@ What could still buy something, most first:
    single conversion, six conversions a millisecond, each through Renode's
    bus (`SystemBus` look-ups, reverse P/Invokes): what keeps the uDV at
    twice an ECU's cost per quantum, and so the board ecu-ams-udv waits for.
-8. Done: the uDV round (#297-#308, above); the slave time sources on the master's thread (#288), the AMS's CYCCNT waits fast-forwarded (#289); start-up (the models' assembly, ReadyToRun), the timer
+   Its hook path is cheaper since this round (the detector at the boundary,
+   patches 0010-0011, above); the bus round trip itself is what remains.
+8. Done: the uDV hook path (the detector at the boundary, patches 0010-0011); the uDV round (#297-#308, above); the slave time sources on the master's thread (#288), the AMS's CYCCNT waits fast-forwarded (#289); start-up (the models' assembly, ReadyToRun), the timer
    update events (patch 0004; its clock-source integer arithmetic, exact but
    with no measurable gain, was dropped in patch set vhil.4), the CMP.W hook
    only at delay loops (patch 0005 and tlib/0001).
