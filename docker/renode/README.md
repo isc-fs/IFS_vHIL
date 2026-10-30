@@ -1,7 +1,7 @@
 # Renode 1.17.0 with the vHIL's patch queue
 
-The vHIL runs Renode **1.17.0** built from source with nine patches to
-renode-infrastructure and two to tlib. Eight of them and tlib's make every
+The vHIL runs Renode **1.17.0** built from source with eleven patches to
+renode-infrastructure and two to tlib. Ten of them and tlib's make every
 system faster (the first three 13-58 %) and change nothing a run computes;
 0007 is a fidelity fix, which does (#292, below). They are a patch queue on the
 release tag, not a fork: `build.sh` fetches the tag, checks every input
@@ -34,13 +34,15 @@ were measured:
 | 0007 | — | **Fidelity fix.** `STM32_Timer` counts ARR + 1 values per update period, as the chip does (RM0468 44.3.2: up from 0 to ARR, then an overflow to 0; down from ARR to 0, then an underflow to ARR), so its update event comes every (ARR + 1) x (PSC + 1) timer clocks; stock Renode's clock entry had ARR as its limit, one count short. Every HAL timebase (ARR = 999 at 1 MHz: TIM23 on the ECU, TIM6 on the AMS, TIM1 on the uDV) ticked every 999 us, 0.1 % fast, and the uDV's TIM2 (ARR = 2499) every 2.499 ms. The entry's limit is ARR + 1; counting down its value is CNT + 1 (a descending entry fires on reaching 0). `TIMx_CNT` now reads 0..ARR (it never read ARR); PWM mode 1 has a period of ARR + 1 counts and CCRx high (#292, `tests/sim/test_stm32_timer.py`) | PR 14 (prepared, not submitted) |
 | 0008 | — | `Packet`'s field wrappers (`FieldPropertyInfoWrapper`, already cached per type) keep each kind of attribute they looked up and the declaring type's byte order, instead of calling `GetCustomAttributes` for every attribute read of every field of every value decoded or encoded. MCAN decodes each filter element from the message RAM for every frame it receives (`FilterMessage`, `DecodeFilterElement`) and encodes every frame it stores (`StoreInRxFIFO`): on ecu-ams-udv (x86) the reflection was 6 % of the host's samples and the RX path 8-12 % | Not submitted |
 | 0009 | — | `NVIC`'s ICSR.RETTOBASE value provider built the `SystemException` numbers by reflection (`Enum.GetValues`) and intersected them with the active exceptions through LINQ on every ICSR read; FreeRTOS's Cortex-M ports read ICSR in every outermost critical section (`vPortEnterCritical`'s `configASSERT` on VECTACTIVE). The numbers are built once, and with no exception active (Thread mode) the answer is immediate: the same value | Not submitted |
+| 0010 | — | `SystemBus.TryGetCurrentCPU` inside a CPU's own bus access (the thread's access context in use, its initiator a CPU) returns that CPU at once: the object `cpuById[idByCpu[cpu]]` gives, without `cpuSync`'s read lock and the two dictionary look-ups. A peripheral that syncs the time on a register access (`TryGetCurrentCPU`, then `cpu.SyncTime`: the vHIL's ADC3 while it converts, ~300,000 accesses a second on the uDV) paid them every time: 4 % of the uDV's CPU thread on ecu-ams-udv (#260) | Not submitted |
+| 0011 | — | `TranslationCPU.OnMemoryAccess` asked tlib to translate every reported access's address (a P/Invoke under the execution lock) to give the memory-access hook a physical address. A core can say it never translates (`AddressesAreUntranslated`; `CortexM` does: tlib's `get_phys_addr` sets phys = address on every M-profile path, and a failed translation passed the address unchanged too), and the hook then gets the virtual address, unless an external MMU is enabled with a window whose addend was set nonzero (a window translates by adding its addend, 0 when acquired; the vHIL's execute-never windows, `VhilExecuteNever.cs`, set none). The fast-forward's armed detector is that hook: 2.5 % of the uDV's CPU thread (#260) | Not submitted |
 
 The study's P1 (blocking instead of spinning at the lock-step barrier) is
 slower on 4 cores and P4 (aarch64 inline TLB) not worth it; neither is here.
 When upstream takes a patch, the next release carries it: drop it from the
 queue on that bump.
 
-**What a run computes is unchanged by 0001-0006, 0008, 0009, tlib/0001 and tlib/0002**: bus
+**What a run computes is unchanged by 0001-0006, 0008-0011, tlib/0001 and tlib/0002**: bus
 timelines, GPIO edges with the instruction count at each write, radio
 payloads, each CPU's executed instructions, PC, state and RAM are
 byte-identical against the release package (the study's fingerprint, and the
@@ -73,7 +75,7 @@ other (with and without fast-forward, lazy DMA; run against run) in CI.
 `build.sh` writes `VHIL_RENODE_BUILD` beside the launcher, one line:
 
 ```
-renode 1.17.0 (ab721d88e135) + vhil patches 1.17.0-vhil.9 [0001,0002,0003,0004,0005,0006,0007,0008,0009,tlib/0001,tlib/0002] queue <sha256 of the patches, 12 hex>
+renode 1.17.0 (ab721d88e135) + vhil patches 1.17.0-vhil.10 [0001,0002,0003,0004,0005,0006,0007,0008,0009,0010,0011,tlib/0001,tlib/0002] queue <sha256 of the patches, 12 hex>
 ```
 
 `vhil.renode.build_id()` reads it: `launch()` writes it as the first line
