@@ -1,0 +1,110 @@
+From 74a1efe804c1d3acdd9fe0afffbed8a35f6e4655 Mon Sep 17 00:00:00 2001
+From: Raul Moran <rmg@raulmoranguerra.com>
+Date: Fri, 30 Oct 2026 12:18:29 +0100
+Subject: [PATCH 11/11] TranslationCPU: skip the hook's translation on cores
+ that never translate
+
+With a memory-access hook set, every reported access called back into
+tlib (under the execution lock) to translate the address it had just
+accessed, to pass the hook a physical address. On an M-profile core the
+translation always returns the address it is given (tlib get_phys_addr:
+no MPU, MPU disabled and the PMSA paths all set phys = address), and a
+failed translation passed the address unchanged as well. An external
+MMU window translates only by adding its addend, which starts at 0.
+
+A core can say its addresses are untranslated (CortexM does); the hook
+then gets the virtual address as the physical one, unless an external
+MMU is enabled with a window whose addend was set nonzero (tracked by
+SetMmuWindowAddend and the window resets). Same values, one P/Invoke
+and a lock fewer per access.
+---
+ src/Emulator/Cores/Arm-M/CortexM.cs           |  4 +++
+ .../Peripherals/CPU/TranslationCPU.cs         | 26 ++++++++++++++++++-
+ 2 files changed, 29 insertions(+), 1 deletion(-)
+
+diff --git a/src/Emulator/Cores/Arm-M/CortexM.cs b/src/Emulator/Cores/Arm-M/CortexM.cs
+index 9054c88..eec20ac 100644
+--- a/src/Emulator/Cores/Arm-M/CortexM.cs
++++ b/src/Emulator/Cores/Arm-M/CortexM.cs
+@@ -306,6 +306,10 @@ public override List<GDBFeatureDescriptor> GDBFeatures
+             }
+         }
+ 
++        // An M-profile core never translates: tlib's get_phys_addr returns the address it is
++        // given on every path (no MPU, MPU disabled, PMSAv7/v8 regions), denied or not.
++        protected override bool AddressesAreUntranslated => true;
++
+         public override MemorySystemArchitectureType MemorySystemArchitecture => NumberOfMPURegions > 0 ? MemorySystemArchitectureType.Physical_PMSA : MemorySystemArchitectureType.None;
+ 
+         public override uint ExceptionVectorAddress
+diff --git a/src/Emulator/Peripherals/Peripherals/CPU/TranslationCPU.cs b/src/Emulator/Peripherals/Peripherals/CPU/TranslationCPU.cs
+index f36ca0a..3e601bd 100644
+--- a/src/Emulator/Peripherals/Peripherals/CPU/TranslationCPU.cs
++++ b/src/Emulator/Peripherals/Peripherals/CPU/TranslationCPU.cs
+@@ -517,6 +517,14 @@ public void SetMmuWindowAddend(ulong id, ulong addend)
+             if(AssertMmuEnabled())
+             {
+                 TlibSetMmuWindowAddend(id, addend);
++                if(addend != 0)
++                {
++                    translatingMmuWindows.Add(id);
++                }
++                else
++                {
++                    translatingMmuWindows.Remove(id);
++                }
+             }
+         }
+ 
+@@ -525,6 +533,7 @@ public void ResetMmuWindow(ulong id)
+             if(AssertMmuEnabled())
+             {
+                 TlibResetMmuWindow(id);
++                translatingMmuWindows.Remove(id);
+             }
+         }
+ 
+@@ -541,6 +550,7 @@ public void ResetAllMmuWindows()
+             if(AssertMmuEnabled())
+             {
+                 TlibResetAllMmuWindows();
++                translatingMmuWindows.Clear();
+             }
+         }
+ 
+@@ -1820,10 +1830,21 @@ private void OnMassBroadcastDirty(IntPtr arrayStart, int size)
+         private void OnMemoryAccess(ulong pc, uint operation, ulong virtualAddress, uint width, ulong value)
+         {
+             // We don't care if translation fails here (the address is unchanged in this case)
+-            TryTranslateAddress(virtualAddress, Misc.MemoryOperationToMpuAccess((MemoryOperation)operation), out var physicalAddress);
++            var physicalAddress = virtualAddress;
++            if(!AddressesAreUntranslated || (externalMmuPosition != ExternalMmuPosition.None && translatingMmuWindows.Count > 0))
++            {
++                TryTranslateAddress(virtualAddress, Misc.MemoryOperationToMpuAccess((MemoryOperation)operation), out physicalAddress);
++            }
+             memoryAccessHook?.Invoke(pc, (MemoryOperation)operation, virtualAddress, physicalAddress, width, value);
+         }
+ 
++        /// <summary>
++        /// True for a core whose own translation always returns the address it is given (no MMU),
++        /// so a memory-access hook's physical address is the virtual one without asking tlib,
++        /// unless an external MMU window with a nonzero addend may add to it.
++        /// </summary>
++        protected virtual bool AddressesAreUntranslated => false;
++
+         private void RemoveHookAtInterruptBegin(Action<ulong> hook)
+         {
+             interruptBeginHook -= hook;
+@@ -2120,6 +2141,9 @@ private ulong TranslateAddressInner(ulong logicalAddress, MpuAccess accessType)
+                 : localAtomicState.StoreTableBits;
+ 
+         private ExternalMmuPosition externalMmuPosition;
++        // External MMU windows given a nonzero addend (a window translates by adding it; a new one has 0).
++        // Kept when windows are reset by address, which cannot say which: then only slower.
++        private readonly HashSet<ulong> translatingMmuWindows = new HashSet<ulong>();
+ 
+         /// <summary>
+         /// <see cref="atomicId" /> acts as a binder between the CPU and atomic state.
+-- 
+2.51.0
+
