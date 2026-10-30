@@ -37,7 +37,7 @@ from vhil import bench_operator as operator
 from vhil import renode as rn
 from vhil.bench import DEFAULT_RENODE, REPO, VirtualBench
 from vhil.benchclock import BenchClock, BenchStalled, host
-from vhil.system import System
+from vhil.system import System, SystemError, require_gate_quantum
 
 _bench = None
 _operator = None
@@ -91,6 +91,13 @@ def pytest_configure(config):
         return
     # The AMS's card is an image the operator steps can pull and read.
     params, card_dirs = operator.prepare(Path(config.getoption("--vhil-system")))
+    # The IFS_HIL virtual suites are the gate's: at its 500 us sync quantum,
+    # never #348's 1 ms opt-in (vhil.system.require_gate_quantum).
+    try:
+        require_gate_quantum(System(Path(config.getoption("--vhil-system"))).sync_quantum_us(),
+                             "the IFS_HIL virtual suite")
+    except SystemError as e:
+        raise pytest.UsageError(str(e))
     _bench = VirtualBench(
         ifs_hil=Path(config.rootpath), firmware=firmware,
         system=Path(config.getoption("--vhil-system")),

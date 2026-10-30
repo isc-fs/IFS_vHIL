@@ -78,8 +78,14 @@ def images(system: str) -> dict[str, Path]:
 def observe(system: str, ms: int) -> dict:
     from vhil import elf as elfsyms
     from vhil.sim import Sim
+    from vhil.system import SystemError, require_gate_quantum
     fw = images(system)
     with Sim(system_path(system), fw) as sim:
+        # The references are the gate's: 500 us, never #348's 1 ms opt-in.
+        try:
+            require_gate_quantum(sim.quantum_us, f"fingerprint run of {system}")
+        except SystemError as e:
+            sys.exit(f"fingerprint: {e}")
         for board, pin in WATCHED[system]:
             io = sim.io(board)
             io.watch(*io.gpio(pin))

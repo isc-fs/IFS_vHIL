@@ -374,10 +374,14 @@ jobs:
           VHIL_CAN_BOOTLOADER_ELF: ${{ steps.fw.outputs.bootloader }}
         run: |
           set -o pipefail
+          # At the gate's 500 us quantum, and at the 1 ms opt-in (#348), which
+          # no required check runs at but which must repeat all the same.
           python -m pytest -v -rs --sim-log-dir sim-logs \
-            "tests/sim/test_can_bus.py::test_two_board_runs_give_the_same_bus_timeline" | tee det.txt
+            "tests/sim/test_can_bus.py::test_two_board_runs_give_the_same_bus_timeline" \
+            "tests/sim/test_can_bus.py::test_two_board_runs_at_the_1ms_quantum_give_the_same_bus_timeline" \
+            | tee det.txt
           # A skip (a missing image) must not pass as the guard.
-          grep -qE "^=+ 1 passed" det.txt
+          grep -qE "^=+ 2 passed" det.txt
 
       - name: Upload the fingerprint (commit fingerprint/fingerprints.json to re-record)
         if: always()

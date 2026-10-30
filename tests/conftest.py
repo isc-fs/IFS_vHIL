@@ -34,6 +34,7 @@ def pytest_configure(config):
     from vhil import sim
     sim.INSTRUMENT.trace = config.getoption("--vhil-trace") or 0
     _record_systems(sim, os.environ.get("VHIL_IMPACT_RECORD"))
+    _gate_quantum(sim)
     cov = config.getoption("--vhil-coverage")
     if cov:
         # A fresh run: logs left by an earlier one would be counted again.
@@ -55,6 +56,39 @@ def _record_systems(sim, path):
         return start(self, *args, **kwargs)
 
     sim.Sim.start = recording_start
+
+
+# The test being run (its setup, call and teardown): _gate_quantum asks it
+# whether it opted in to the 1 ms quantum.
+_ITEM: list = [None]
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_protocol(item, nextitem):
+    _ITEM[0] = item
+    try:
+        yield
+    finally:
+        _ITEM[0] = None
+
+
+def _gate_quantum(sim):
+    """The gate's guard (#348): every Sim of this test tree (the sim, smoke
+    and scenario suites, every required check's) starts at the 500 us sync
+    quantum, unless its test is marked `quantum_opt_in` (pytest.ini): the
+    1 ms quantum's own determinism test, which checks the opt-in and gates
+    nothing else. A Sim started outside a test (a session fixture's first
+    use is inside one) is held to 500 us too."""
+    from vhil.system import require_gate_quantum
+    start = sim.Sim.start
+
+    def gated_start(self, *args, **kwargs):
+        item = _ITEM[0]
+        if item is None or item.get_closest_marker("quantum_opt_in") is None:
+            require_gate_quantum(self.quantum_us, f"{self.system.id}'s Sim")
+        return start(self, *args, **kwargs)
+
+    sim.Sim.start = gated_start
 
 
 def pytest_sessionfinish(session):

@@ -200,10 +200,13 @@ def test_every_ams_frame_reaches_the_bus_beside_the_ecu(two_boards):
 
 # -- determinism (#209) -------------------------------------------------------
 
-def acu_run(images):
+def acu_run(images, quantum_us=None):
     """One power-on of ecu-ams with both pit-diag streams armed: the ACU
-    bus's whole timeline and its stats."""
-    with Sim(REPO / "systems" / "ecu-ams.yaml", images("ecu-ams"), arbitration=["can_acu"]) as sim:
+    bus's whole timeline and its stats. quantum_us: the run's sync quantum
+    (the system file's 500 us when None; vhil.sim.Sim)."""
+    with Sim(REPO / "systems" / "ecu-ams.yaml", images("ecu-ams"), arbitration=["can_acu"],
+             quantum_us=quantum_us) as sim:
+        assert sim.quantum_us == (quantum_us or 500)
         sim.wait_for_app()
         sim.run_for(ms=500)
         can = sim.can("can_acu")
@@ -221,7 +224,19 @@ def test_two_board_runs_give_the_same_bus_timeline(images):
     master time source, each board's timers followed whichever CPU thread
     the host had run furthest, and no two runs agreed past the first 20 ms
     after boot."""
-    runs = [acu_run(images) for _ in range(3)]
+    assert_same_runs([acu_run(images) for _ in range(3)])
+
+
+@pytest.mark.quantum_opt_in
+def test_two_board_runs_at_the_1ms_quantum_give_the_same_bus_timeline(images):
+    """#348's opt-in: at the 1 ms sync quantum (a non-gate run's, never a
+    required check's) the same seed still gives the same ACU bus, frame for
+    frame. Its timeline is not the 500 us one (frames land up to a quantum
+    off), so it has no fingerprint reference: only this check."""
+    assert_same_runs([acu_run(images, quantum_us=1000) for _ in range(2)])
+
+
+def assert_same_runs(runs):
     tl0, stats0 = runs[0]
     assert {r.node.split(":")[0] for r in tl0} >= {"ecu", "ams"}
     for k, (tl, stats) in enumerate(runs[1:], 1):
