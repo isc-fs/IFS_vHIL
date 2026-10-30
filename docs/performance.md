@@ -752,6 +752,16 @@ order are the same):
 [`docker/renode/README.md`](../docker/renode/README.md#the-patches). It
 adds no work per period (the same clock-entry updates).
 
+### A new identity reference: SysTick's RELOAD + 1 period (#294)
+
+Patch 0012 (vhil.11) is the same kind of fidelity fix for the core's SysTick:
+its exception now comes every RELOAD + 1 clocks, as on the core, so every
+1 ms SysTick tick (the CAN bootloader's HAL tick, the apps' FreeRTOS tick) is
+1 ns later than before and the identity fingerprint changes once more; the
+vhil.11 one is the reference. What moved (only timing):
+[`docker/renode/README.md`](../docker/renode/README.md#the-patches). No work
+is added per period.
+
 ### The hand-off's wait: studied, not shipped (#260)
 
 Profiled with wait-time histograms in the time framework (every

@@ -1,0 +1,151 @@
+From d681d86e61562756d769b4ba799f95eec9db7b9a Mon Sep 17 00:00:00 2001
+From: Raul Moran <rmg@raulmoranguerra.com>
+Date: Fri, 30 Oct 2026 21:11:03 +0100
+Subject: [PATCH] NVIC: Count RELOAD + 1 clocks per SysTick period
+
+SysTick's clock entry fired when it reached 0 and was then given RELOAD,
+so the exception came every RELOAD clocks: with SYST_RVR = 527999 at
+528 MHz (every 1 ms tick a HAL or FreeRTOS port writes) one clock short
+per tick. On the chip the counter counts RELOAD, RELOAD - 1, ..., 1, 0
+and loads RELOAD on the next clock, so the period is RELOAD + 1 clocks
+(ARMv7-M ARM B3.3, SYST_RVR "Calculating the RELOAD value": a RELOAD
+value of N - 1 gives a period of N clocks).
+
+The entry is now loaded with RELOAD + 1 (its limit is 2^24): it holds
+that value for the clock the counter holds 0, and the counter's value
+otherwise, so SYST_CVR reads RELOAD..0 (it never read 0 while counting).
+A write to SYST_CVR clears it to 0 and the counter loads RELOAD on the
+next clock, as before but one clock later; a write to SYST_RVR while the
+counter is at 0 is what it loads (FreeRTOS's port writes SYST_CVR before
+SYST_RVR), and RELOAD = 0 written then stops it at 0 without a 1 -> 0
+step. COUNTFLAG, RELOAD = 0 disabling the counter and CLKSOURCE are
+unchanged.
+---
+ src/Emulator/Cores/Arm-M/NVIC.cs | 62 ++++++++++++++++++++++++++------
+ 1 file changed, 52 insertions(+), 10 deletions(-)
+
+diff --git a/src/Emulator/Cores/Arm-M/NVIC.cs b/src/Emulator/Cores/Arm-M/NVIC.cs
+index f93c13a..4bf25b2 100644
+--- a/src/Emulator/Cores/Arm-M/NVIC.cs
++++ b/src/Emulator/Cores/Arm-M/NVIC.cs
+@@ -2844,9 +2844,14 @@ public SysTick(IMachine machine, NVIC parent, ulong systickFrequency, bool isSec
+             {
+                 IsSecure = isSecure;
+                 this.parent = parent;
+-                // We set initial limit to the maximum 24-bit value, and don't modify it afterwards.
+-                // Instead we reload counter with RELOAD value when counter reaches 0.
+-                systick = new LimitTimer(machine.ClockSource, systickFrequency, parent, nameof(systick) + (isSecure ? "_S" : "_NS"), SysTickMaxValue, Direction.Descending, false, eventEnabled: true);
++                // The counter counts RELOAD, RELOAD - 1, ..., 1, 0 and loads RELOAD on the clock after 0, so
++                // its period is RELOAD + 1 clocks (ARMv7-M ARM B3.3, SYST_RVR "Calculating the RELOAD value":
++                // a RELOAD value of N - 1 gives a period of N clocks). The descending clock entry fires when its
++                // value reaches 0 (the counter's 1 -> 0 step, which sets COUNTFLAG and pends the exception),
++                // and the handler loads it with RELOAD + 1: the entry then holds RELOAD + 1 for the clock the
++                // counter holds 0, and the counter's value otherwise (see Load and Value). We set the initial
++                // limit to the maximum 24-bit value + 1 and don't modify it afterwards.
++                systick = new LimitTimer(machine.ClockSource, systickFrequency, parent, nameof(systick) + (isSecure ? "_S" : "_NS"), EntryLimit, Direction.Descending, false, eventEnabled: true);
+                 systick.LimitReached += () =>
+                 {
+                     CountFlag = true;
+@@ -2860,11 +2865,9 @@ public SysTick(IMachine machine, NVIC parent, ulong systickFrequency, bool isSec
+                     {
+                         systick.Enabled = false;
+                     }
+-                    else
+-                    {
+-                        systick.Value = Reload;
+-                    }
++                    Load(Reload);
+                 };
++                loadedValue = EntryLimit;
+             }
+ 
+             public void Reset()
+@@ -2874,6 +2877,7 @@ public void Reset()
+ 
+                 systick.Reset();
+                 systick.AutoUpdate = true;
++                loadedValue = EntryLimit; // the entry's value after the reset: the counter reads 0
+             }
+ 
+             public void UpdateSystickValue()
+@@ -2884,7 +2888,8 @@ public void UpdateSystickValue()
+                     systick.Enabled = false;
+                 }
+ 
+-                systick.Value = reloadValue;
++                // A write clears the counter to 0; it loads RELOAD on the next clock (ARMv7-M ARM B3.3, SYST_CVR)
++                Load(reloadValue);
+                 CountFlag = false;
+             }
+ 
+@@ -2919,7 +2924,12 @@ public bool Enabled
+ 
+             public ulong Value // CURRENT
+             {
+-                get => systick.Value;
++                get
++                {
++                    // The entry holds what Load gave it for the clock the counter holds 0 (see the constructor)
++                    var value = systick.Value;
++                    return value == loadedValue ? 0 : value;
++                }
+             }
+ 
+             public ulong Reload // RELOAD
+@@ -2932,9 +2942,30 @@ public ulong Reload // RELOAD
+                         // We explicitly enable underlying SysTick counter only in the case it was blocked by RELOAD=0.
+                         // We ignore other cases, as we don't want to accidentally enable counter in DEEPSLEEP just by writing to this register.
+                         parent.DebugLog("Resuming Systick_{0} counter due to reload value change from 0x0 to 0x{1:X}", IsSecure ? "_S" : "_NS", value);
+-                        systick.Value = value;
++                        // The counter is at 0 and loads the new RELOAD on the next clock
++                        Load(value);
+                         systick.Enabled = true;
+                     }
++                    else if(value != reloadValue)
++                    {
++                        // A write does not change the count, but a counter at 0 loads the new RELOAD on the next clock
++                        if(systick.Enabled)
++                        {
++                            parent.cpu?.SyncTime();
++                        }
++                        if(systick.Value == loadedValue)
++                        {
++                            if(value == 0)
++                            {
++                                // It stays at 0: no 1 -> 0 step, so no COUNTFLAG and no exception
++                                systick.Enabled = false;
++                            }
++                            else
++                            {
++                                Load(value);
++                            }
++                        }
++                    }
+                     reloadValue = value;
+                 }
+             }
+@@ -2957,10 +2988,21 @@ public ulong Divider
+                 }
+             }
+ 
++            // The counter at 0, loading `reload` on the next clock: the entry reaches 0 (the counter's next
++            // 1 -> 0 step) reload + 1 clocks later.
++            private void Load(ulong reload)
++            {
++                loadedValue = reload + 1;
++                systick.Value = loadedValue;
++            }
++
+             private ulong reloadValue;
++            private ulong loadedValue; // what Load last gave the entry: the counter reads 0 while the entry holds it
+             private bool systickEnabled; // ENABLE
+             private readonly LimitTimer systick;
+             private readonly NVIC parent;
++
++            private const ulong EntryLimit = (ulong)SysTickMaxValue + 1;
+         }
+ 
+         /// This is the simplest hash-map-like class, to store exceptions.
+-- 
+2.51.0
+
