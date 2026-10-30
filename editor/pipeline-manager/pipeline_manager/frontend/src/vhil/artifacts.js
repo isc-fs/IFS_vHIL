@@ -127,10 +127,12 @@ export function wallText(run, now = Date.now()) {
     return min < 60 ? `${min} min ${Math.round(s % 60)} s` : `${Math.floor(min / 60)} h ${min % 60} min`;
 }
 
-/** What a run ran: "run 3000 ms", "scenario tsms (6000 ms)", "pytest …", "live session". */
+/** What a run ran: "run 3000 ms", "scenario tsms (6000 ms)", "pytest …", "live session",
+ *  and ", 1 ms sync" for a run that opted in to the 1 ms quantum (#348). */
 export function scenarioText(run) {
     const sc = run.scenario || {};
     if (sc.kind === 'pytest') return `pytest ${sc.select || ''}`;
-    if (sc.live) return 'live session';
-    return sc.name ? `scenario ${sc.name} (${sc.virtual_ms} ms)` : `run ${sc.virtual_ms} ms`;
+    const sync = sc.quantum_us && sc.quantum_us !== 500 ? `, ${sc.quantum_us / 1000} ms sync` : '';
+    if (sc.live) return `live session${sync}`;
+    return (sc.name ? `scenario ${sc.name} (${sc.virtual_ms} ms)` : `run ${sc.virtual_ms} ms`) + sync;
 }

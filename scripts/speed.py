@@ -3,7 +3,8 @@
 
     python scripts/speed.py ecu=ECU08.elf ams=AMS.elf bootloader=CAN_BL.elf \
         [--systems ams ecu ecu-ams] [--paths bench sim] [--boot 3] [--steady 5] \
-        [--json results/speed.json] [--profile results/profile] [--mips N]
+        [--json results/speed.json] [--profile results/profile] [--mips N] \
+        [--quantum-us 1000]
 
 Paths:
   bench  the wall-clock bench's emulation (vhil/bench.py): Renode's shared
@@ -70,7 +71,7 @@ from vhil import renode as rn  # noqa: E402
 from vhil.bench import DEFAULT_RENODE, WALL_CLOCK_MIPS  # noqa: E402
 from vhil.broker import probe_commands  # noqa: E402
 from vhil.sim import _free_port  # noqa: E402
-from vhil.system import System  # noqa: E402
+from vhil.system import QUANTA_US, System  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -152,8 +153,10 @@ class Run:
 
     def __init__(self, system_path: Path, firmware: dict[str, str], path: str,
                  renode: str, mips: int | None, profile: Path | None, log: Path | None,
-                 setup: list[str] = (), threads: bool = False):
+                 setup: list[str] = (), threads: bool = False, quantum_us: int | None = None):
         self.system = System(system_path)
+        if quantum_us is not None:
+            self.system.set_quantum_us(quantum_us)     # 500 or 1000 (#348)
         self.threads, self.last_threads = threads, None
         self.firmware = firmware_for(self.system, firmware)
         self.path, self.renode, self.mips, self.profile = path, renode, mips, profile
@@ -321,9 +324,10 @@ def measure(system: str, firmware: dict[str, str], path: str, args, variant: str
 def _measure(sys_path: Path, firmware: dict[str, str], path: str, args, variant: str,
              log: Path | None) -> dict:
     with Run(sys_path, firmware, path, args.renode, args.mips, args.profile, log,
-             args.setup, args.threads) as run:
+             args.setup, args.threads, args.quantum_us) as run:
         result = {"system": run.system.id, "path": path, "variant": variant,
-                  "mips": args.mips or ("bench" if path == "bench" else "catalogue")}
+                  "mips": args.mips or ("bench" if path == "bench" else "catalogue"),
+                  "quantum_us": run.system.sync_quantum_us()}
         for phase, seconds in (("boot", args.boot), ("steady", args.steady)):
             print(f"[speed] {run.system.id} {path} {variant} {phase} start", file=sys.stderr, flush=True)
             wall = run.run_for(seconds)
@@ -350,6 +354,9 @@ def main() -> int:
     ap.add_argument("--steady", type=float, default=5.0, help="virtual s after the boot")
     ap.add_argument("--mips", type=int, default=None, help="every core at this rate instead")
     ap.add_argument("--renode", default=DEFAULT_RENODE)
+    ap.add_argument("--quantum-us", type=int, choices=QUANTA_US, default=None,
+                    help="the sync quantum instead of the systems' 500 us: 1000 measures "
+                         "#348's opt-in (what a board sees of another lags by up to 1 ms)")
     ap.add_argument("--json", type=Path, help="write the results here")
     ap.add_argument("--baseline", action="store_true",
                     help="also measure each configuration as before #154's speed-ups")

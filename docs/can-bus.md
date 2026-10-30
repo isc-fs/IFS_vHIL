@@ -76,6 +76,23 @@ late and never early. `CanBus.stats()["late"]` counts those effects. On
 `ecu-ams` at 500 µs, about 60 % of cross-board effects are late, by up to
 about 390 µs.
 
+**The lag bound.** Every system file and the whole gate (the scenarios, the
+identity fingerprint, the sim, smoke and native suites, the IFS_HIL virtual
+suites, every required check) sync every **500 µs**, so a cross-board effect
+is at most 500 µs late. A non-gate run may opt in to a **1 ms** quantum
+([#348](https://github.com/isc-fs/IFS_vHIL/issues/348)): about 12-25 % faster
+in steady state, and what a board sees of another (CAN included) can then lag
+by up to 1 ms. Only those two values are accepted
+(`vhil.system.quantum_us`). It is chosen per run: `Sim(..., quantum_us=1000)`,
+a run's `quantum_us` (the editor's **Sync**, for Run and Live), or
+`--quantum-us 1000` on `python -m vhil.system render` and
+`scripts/speed.py`. The run's summary records which it used
+(`summary.quantum_us`). A scenario file can't set it, and the test tree, the
+fingerprint script and the IFS_HIL plugin refuse 1 ms
+(`require_gate_quantum`), except the opt-in's own determinism test (below).
+A 1 ms run's timeline is not the 500 µs one, so it has no fingerprint
+reference.
+
 A quantum under the shortest frame (44 bit times, 88 µs at 500 kbit/s) would
 make them all exact. With two boards it costs 3x to 5x in wall time, and it
 slows the ECU's control loop, so the model doesn't do it. The spike numbers
@@ -86,7 +103,9 @@ are on [#174](https://github.com/isc-fs/IFS_vHIL/issues/174).
 The same system, images and inputs give the same bus timeline on every run:
 the same frames in the same order, the same offer, start and end times, the
 same arbitration outcomes, the same late effects
-(`test_two_board_runs_give_the_same_bus_timeline`).
+(`test_two_board_runs_give_the_same_bus_timeline`). The 1 ms opt-in repeats
+all the same (`test_two_board_runs_at_the_1ms_quantum_give_the_same_bus_timeline`,
+in CI's guard beside it).
 
 That needs each board on a time source of its own
 ([`VhilMachine.cs`](../models/renode/VhilMachine.cs), #209), which `vhil.sim`

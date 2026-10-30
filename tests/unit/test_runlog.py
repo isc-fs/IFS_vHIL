@@ -172,7 +172,7 @@ def test_a_run_trace_has_build_renode_and_uart_logs_as_they_happen(tmp_path, set
     run_id = store.create("ecu", "", {}, {"kind": "run", "virtual_ms": 400, "slice_ms": 100},
                           firmware_commits={"ecu": {"ref": "dev", "commit": "e" * 40},
                                             "ecu.bootloader": {"ref": "v1.7.0", "commit": "1" * 40}})
-    Worker(settings, sim_factory=lambda path, fw, log: TalkingSim(log),
+    Worker(settings, sim_factory=lambda path, fw, log, quantum: TalkingSim(log),
            resolver=FirmwareResolver(tmp_path / "fw", log=lambda m: None)).run_once()
     run = store.get(run_id)
     assert run["state"] == "passed", run["summary"]

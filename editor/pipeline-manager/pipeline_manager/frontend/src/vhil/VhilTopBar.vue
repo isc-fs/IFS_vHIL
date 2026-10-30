@@ -141,6 +141,16 @@ scenario" records it.
             />
             <span class="muted">ms</span>
         </label>
+        <label v-if="ws.mode === 'DESIGN'" class="vhil-quantum" :title="QUANTUM_TITLE">
+            <span>Sync</span>
+            <select
+                v-model.number="ws.quantumUs" :disabled="live"
+                aria-label="Sync quantum for Run and Live"
+            >
+                <option :value="500">0.5 ms</option>
+                <option :value="1000">1 ms</option>
+            </select>
+        </label>
 
         <div v-if="!live" class="vhil-run-buttons">
             <button
@@ -305,6 +315,9 @@ export default defineComponent({
             showArtifacts,
             LIVE_TITLE: 'A live session of the saved system: drive its buses and pins as on the '
                 + 'bench, until you stop it',
+            QUANTUM_TITLE: 'How often the boards meet (the sync quantum) in Run and Live: '
+                + '0.5 ms, as every test and scenario runs, or 1 ms, about 12-25 % faster, '
+                + 'where what a board sees of another (CAN included) can lag by up to 1 ms',
             live,
             session,
             heldText,

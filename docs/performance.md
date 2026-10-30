@@ -180,9 +180,11 @@ on the RCC and NVIC, the peripheral guard, which reads Renode's log) is under
 half a percent of any profile. Block chaining and the block cache are on, and
 `MaximumBlockSize` is tlib's 10000 already. Serial execution of the two
 boards' quanta on one thread was 10x slower on the bench path. The sync
-quantum (500 us) is left alone: it decides when boards and the bus meet (what
-a firmware sees of another can lag by up to one quantum, `can-bus.md`), so it
-is part of what the emulation computes, not a host setting.
+quantum (500 us) is left alone for the gate: it decides when boards and the
+bus meet (what a firmware sees of another can lag by up to one quantum,
+`can-bus.md`), so it is part of what the emulation computes, not a host
+setting. A non-gate run may opt in to 1 ms (#348, below), with a lag of up to
+1 ms.
 
 Idle is already cheap: both firmwares sleep in their idle task (AMS#626,
 ECU#261), and a CPU in WFI makes Renode report the time to the next event at
@@ -1173,8 +1175,9 @@ unchanged: Renode ready / every app at 1.65 / 2.86 s → 1.78 / 2.94 s (ecu),
 1.96 / 3.37 → 2.00 / 3.35 s (ecu-ams), 2.20 / 3.92 → 2.27 / 3.87 s
 (ecu-ams-udv), median of 3, M-series host.
 
-**A 1 ms quantum (measured, not done).** With `time.quantum_s: 0.001` on
-every system (dev, M-series host, interleaved, median of 3, sim):
+**A 1 ms quantum: an opt-in for non-gate runs (#348).** With
+`time.quantum_s: 0.001` on every system (dev, M-series host, interleaved,
+median of 3, sim):
 
 | System | Boot | Steady |
 |---|---|---|
@@ -1187,8 +1190,13 @@ digest of the five systems changed moves except udv's. The frame and edge counts
 same and the instruction counts at edges match. Cross-board timings move,
 for example the ECU's frames land 131 µs earlier, because a frame between
 boards can now lag by up to 1 ms. That is a fidelity decision (CAN latency
-against speed) and a new identity reference, so it is left for its own
-issue.
+against speed), so the gate keeps 500 us and its references
+(`ci/fingerprints.json`), and 1 ms is a per-run opt-in for editor live
+sessions, batch and throughput runs: `Sim(..., quantum_us=1000)`, a run's
+`quantum_us` (the editor's Sync), `--quantum-us 1000` on `scripts/speed.py`
+and `vhil.system render` ([`can-bus.md`](can-bus.md#virtual-time-and-the-sync-quantum)).
+No required check may use it (`require_gate_quantum`), and a determinism test
+holds two 1 ms runs of ecu-ams identical instead of a second fingerprint set.
 
 **Tried and dropped:**
 

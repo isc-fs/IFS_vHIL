@@ -884,7 +884,7 @@ def test_worker_runs_a_queued_run_to_passed(settings, store):
     run_id = store.create("ecu", "", {"ecu": "dev"}, {"kind": "run", "virtual_ms": 200, "slice_ms": 100})
     sims = []
 
-    def factory(path, firmware, log_path):
+    def factory(path, firmware, log_path, quantum_us=500):
         assert path == REPO / "systems" / "ecu.yaml" and firmware == {"ecu": Path("/fw/ECU08.elf")}
         sims.append(FakeSim())
         return sims[0]
@@ -901,6 +901,36 @@ def test_worker_runs_a_queued_run_to_passed(settings, store):
     assert run["summary"]["firmware"] == {"ecu": "/fw/ECU08.elf"}
     trace = read_trace(settings.results / str(run_id) / "trace.jsonl")
     assert trace[0]["kind"] == "log" and "ECU08.elf" in trace[0]["text"]
+
+
+@pytest.mark.parametrize("asked", [None, 500, 1000])
+def test_worker_runs_at_the_run_quantum_and_records_it(settings, store, asked):
+    """#348: a run's sync quantum is the gate's 500 us unless it opted in to
+    1 ms; the Sim gets it, and the run's summary says which it ran at."""
+    scenario = {"kind": "run", "virtual_ms": 200, "slice_ms": 100}
+    if asked is not None:
+        scenario["quantum_us"] = asked
+    run_id = store.create("ecu", "", {}, scenario)
+    given = []
+
+    def factory(path, firmware, log_path, quantum_us=None):
+        given.append(quantum_us)
+        return FakeSim(quantum_us=quantum_us)
+
+    Worker(settings, sim_factory=factory, resolver=FixedResolver()).run_once()
+    run = store.get(run_id)
+    assert given == [asked or 500]
+    assert run["state"] == "passed" and run["summary"]["quantum_us"] == (asked or 500)
+    opted = [r for r in read_trace(settings.results / str(run_id) / "trace.jsonl")
+             if r["kind"] == "log" and "sync quantum" in r.get("text", "")]
+    assert len(opted) == (1 if asked == 1000 else 0)
+
+
+def test_a_run_at_another_quantum_is_refused(settings, store):
+    run_id = store.create("ecu", "", {}, {"kind": "run", "virtual_ms": 200, "quantum_us": 750})
+    Worker(settings, sim_factory=lambda *a, **k: FakeSim(), resolver=FixedResolver()).run_once()
+    run = store.get(run_id)
+    assert run["state"] == "error" and "only 500 or 1000 us" in run["summary"]["error"]
 
 
 def test_worker_honours_a_cancel_from_the_api(settings, store):

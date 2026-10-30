@@ -357,6 +357,11 @@ class RunScenario(_Model):
     # Virtual time per slice: the trace is flushed and cancellation checked
     # after each one (a live session's default: LIVE_SLICE_MS).
     slice_ms: int = Field(100, ge=10, le=1000)
+    # The run's sync quantum, us: the gate's 500 (every system file's), or
+    # 1000, a non-gate run's opt-in (#348: +12-25 % steady, what a board sees
+    # of another lags by up to 1 ms). A run option, never a scenario file's
+    # (vhil/server/scenarios.py parse), so no gate scenario runs at 1 ms.
+    quantum_us: Literal[500, 1000] = 500
     stimuli: list[Stimulus] = []
     watch: list[Watch] = []
     expect: list[Expect] = []
