@@ -1,9 +1,9 @@
 # Renode 1.17.0 with the vHIL's patch queue
 
-The vHIL runs Renode **1.17.0** built from source with eleven patches to
+The vHIL runs Renode **1.17.0** built from source with twelve patches to
 renode-infrastructure and two to tlib. Ten of them and tlib's make every
 system faster (the first three 13-58 %) and change nothing a run computes;
-0007 is a fidelity fix, which does (#292, below). They are a patch queue on the
+0007 and 0012 are fidelity fixes, which do (#292, #294, below). They are a patch queue on the
 release tag, not a fork: `build.sh` fetches the tag, checks every input
 against a pin, applies `patches/` in order and builds the portable headless
 package, the release tarball's layout. `docker/Dockerfile`'s `renode-build`
@@ -36,6 +36,7 @@ were measured:
 | 0009 | — | `NVIC`'s ICSR.RETTOBASE value provider built the `SystemException` numbers by reflection (`Enum.GetValues`) and intersected them with the active exceptions through LINQ on every ICSR read; FreeRTOS's Cortex-M ports read ICSR in every outermost critical section (`vPortEnterCritical`'s `configASSERT` on VECTACTIVE). The numbers are built once, and with no exception active (Thread mode) the answer is immediate: the same value | Not submitted |
 | 0010 | — | `SystemBus.TryGetCurrentCPU` inside a CPU's own bus access (the thread's access context in use, its initiator a CPU) returns that CPU at once: the object `cpuById[idByCpu[cpu]]` gives, without `cpuSync`'s read lock and the two dictionary look-ups. A peripheral that syncs the time on a register access (`TryGetCurrentCPU`, then `cpu.SyncTime`: the vHIL's ADC3 while it converts, ~300,000 accesses a second on the uDV) paid them every time: 4 % of the uDV's CPU thread on ecu-ams-udv (#260) | Not submitted |
 | 0011 | — | `TranslationCPU.OnMemoryAccess` asked tlib to translate every reported access's address (a P/Invoke under the execution lock) to give the memory-access hook a physical address. A core can say it never translates (`AddressesAreUntranslated`; `CortexM` does: tlib's `get_phys_addr` sets phys = address on every M-profile path, and a failed translation passed the address unchanged too), and the hook then gets the virtual address, unless an external MMU is enabled with a window whose addend was set nonzero (a window translates by adding its addend, 0 when acquired; the vHIL's execute-never windows, `VhilExecuteNever.cs`, set none). The fast-forward's armed detector is that hook: 2.5 % of the uDV's CPU thread (#260) | Not submitted |
+| 0012 | — | **Fidelity fix.** `NVIC`'s SysTick counts RELOAD + 1 clocks per period, as the core does (ARMv7-M ARM B3.3, SYST_RVR "Calculating the RELOAD value": the counter counts RELOAD to 0 and loads RELOAD on the next clock), so its exception comes every RELOAD + 1 clocks; stock Renode's descending clock entry fired on reaching 0 and was given RELOAD, one clock short. Every image's 1 ms tick (RELOAD = 527999 at 528 MHz: the CAN bootloader's HAL tick, each app's FreeRTOS tick) was 999 999 ns, 1 ppm fast. The entry is loaded with RELOAD + 1 (its limit is 2^24) and holds that value for the clock the counter holds 0: `SYST_CVR` reads RELOAD..0 (it never read 0 while counting); a write to it clears it and COUNTFLAG and the counter loads RELOAD on the next clock; a RELOAD written while the counter is at 0 is the one it loads (FreeRTOS's port writes `SYST_CVR` before `SYST_RVR`), and RELOAD = 0 written then stops it at 0 without a 1 -> 0 step. COUNTFLAG, RELOAD = 0 stopping the counter at its wrap and CLKSOURCE (reads 1, the processor clock) are unchanged (#294, `tests/sim/test_systick.py`) | Candidate, beside 0007 (not prepared, not submitted) |
 
 The study's P1 (blocking instead of spinning at the lock-step barrier) is
 slower on 4 cores and P4 (aarch64 inline TLB) not worth it; neither is here.
@@ -66,6 +67,23 @@ Digests (the fingerprint script with uwTick added):
 ecu `8781ed1d…` → `76394279…`, ams `0778b2ef…` → `74e362eb…`, ecu-ams `b839edac…` →
 `6a8427e0…`, udv `b09e608e…` → `3b280945…`, ecu-ams-udv `3b9faadc…` →
 `ee8cef99…`.
+**0012 changes it on purpose too** (#294): every SysTick tick comes one clock
+later (1 ns of Renode's time per 1 ms tick), so the fingerprint taken with
+1.17.0-vhil.11 is the new reference. Against 1.17.0-vhil.10 (5 s from
+power-on of every system in `ci/fingerprints.json`, its pinned firmware;
+2026-10-30) only timing moved: every bus carries the same frames (ids, data,
+senders, outcomes) in the same order, every watched pin the same edges in the
+same order, the radio the same payloads, and uwTick is the same on every
+board (2976 ECU, 2991 AMS, 2952 uDV). The CAN bootloader's 2 s auto-jump
+window, timed on its SysTick HAL tick, ends about 3 us later, so each app's
+code runs a constant number of instructions later (+699 on the ECU and +695 on
+the uDV at 231 MIPS, +1707 on the AMS at 528 MIPS, about 3 us); the frames
+the apps send move by 0 to 3 us (the AMS's first one not at all), the radio's
+payloads by 0 to 3 us, the uDV's PB4 edge not at all (instructions +695), the
+ECU's nRF24 edges by the same +699 instructions except where its status poll
+waits for HAL_GetTick to advance (up to 18,298 instructions, as with 0007).
+Digests:
+ecu `3d2bdfad…` → `a9f1de52…`, ams `89b3ad31…` → `7c6936ea…`, ecu-ams `1d51b853…` → `9dec78bb…`, udv `d7b56357…` → `a1dad2bc…`, ecu-ams-udv `6084d96c…` → `700f1f13…`, ecu-ams-ecu `2d30a9e5…` → `932ff886…` (CI's guard, x86; the A/B above ran on an arm64 host, whose uDV instruction counts differ from x86's by a constant, 234 with 0012, and whose uDV digests differ from x86's at vhil.10 too).
 `tests/sim/test_fast_forward.py`, `tests/sim/test_lazy_dma.py` and
 `test_two_board_runs_give_the_same_bus_timeline` hold runs identical to each
 other (with and without fast-forward, lazy DMA; run against run) in CI.
@@ -75,7 +93,7 @@ other (with and without fast-forward, lazy DMA; run against run) in CI.
 `build.sh` writes `VHIL_RENODE_BUILD` beside the launcher, one line:
 
 ```
-renode 1.17.0 (ab721d88e135) + vhil patches 1.17.0-vhil.10 [0001,0002,0003,0004,0005,0006,0007,0008,0009,0010,0011,tlib/0001,tlib/0002] queue <sha256 of the patches, 12 hex>
+renode 1.17.0 (ab721d88e135) + vhil patches 1.17.0-vhil.11 [0001,0002,0003,0004,0005,0006,0007,0008,0009,0010,0011,0012,tlib/0001,tlib/0002] queue <sha256 of the patches, 12 hex>
 ```
 
 `vhil.renode.build_id()` reads it: `launch()` writes it as the first line
