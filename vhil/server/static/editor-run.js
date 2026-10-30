@@ -31,9 +31,19 @@ export function firmwareRefs(dataflow) {
 // checked-out tree), the graph's firmware refs, `virtualMs` of virtual time
 // from power-on. With `scenario` ({name, doc}: a scenario file's rows,
 // vhil/server/scenarios.py), the run applies its stimuli, watches and
-// expects, and is named after it.
-export function runRequest({ system, ref, dataflow, virtualMs, scenario = null }) {
+// expects, and is named after it. `quantumUs`: the run's sync quantum, the
+// gate's 500 us unless the run opts in to 1 ms (QUANTA_US; #348), which the
+// request then carries as quantum_us (vhil/server/runs.py RunScenario).
+export const GATE_QUANTUM_US = 500;
+export const QUANTA_US = [500, 1000];
+
+export function runRequest({ system, ref, dataflow, virtualMs, scenario = null,
+                             quantumUs = GATE_QUANTUM_US }) {
+  if (!QUANTA_US.includes(quantumUs)) {
+    throw new Error(`sync quantum ${quantumUs} us: only ${QUANTA_US.join(" or ")} us`);
+  }
   const run = { kind: "run", virtual_ms: virtualMs };
+  if (quantumUs !== GATE_QUANTUM_US) run.quantum_us = quantumUs;
   if (scenario) {
     const { stimuli = [], watch = [], expect = [], slice_ms: slice } = scenario.doc;
     Object.assign(run, { name: scenario.name, stimuli, watch, expect });

@@ -68,6 +68,11 @@ test("a run's record as text", () => {
   assert.equal(scenarioText({ scenario: { kind: "pytest", select: "tests/sim/test_x.py" } }), "pytest tests/sim/test_x.py");
   assert.equal(scenarioText({ scenario: { kind: "run", virtual_ms: 3000 } }), "run 3000 ms");
   assert.equal(scenarioText({ scenario: { kind: "run", live: true } }), "live session");
+  assert.equal(scenarioText({ scenario: { kind: "run", virtual_ms: 3000, quantum_us: 500 } }), "run 3000 ms");
+  assert.equal(scenarioText({ scenario: { kind: "run", virtual_ms: 3000, quantum_us: 1000 } }),
+               "run 3000 ms, 1 ms sync");
+  assert.equal(scenarioText({ scenario: { kind: "run", live: true, quantum_us: 1000 } }),
+               "live session, 1 ms sync");
 });
 
 test("the shell's old links land in the workspace", () => {

@@ -151,6 +151,12 @@ select.vhil-input option { padding: 2px var(--sp-2); }
   width: 5.5rem; height: 26px; box-sizing: border-box; padding: 0 var(--sp-1); text-align: right;
   color: var(--fg); background: var(--bg-0); border: 1px solid var(--border-control); border-radius: var(--r-control);
 }
+.vhil-quantum { display: flex; align-items: center; gap: var(--sp-1); flex: none; font-size: var(--fs-dense); }
+.vhil-quantum select {
+  height: 26px; box-sizing: border-box; padding: 0 var(--sp-1);
+  color: var(--fg); background: var(--bg-0); border: 1px solid var(--border-control);
+  border-radius: var(--r-control); font: inherit;
+}
 .vhil-run-buttons, .vhil-git-buttons { display: flex; gap: var(--sp-1); flex: none; }
 .vhil-mode {
   flex: none; padding: 0 var(--sp-2); border-radius: var(--r-pill);

@@ -40,6 +40,16 @@ test("the request is a normal run scenario, at the ref when there is one", () =>
   assert.equal(tree.scenario.virtual_ms, 2500);
 });
 
+test("the run's sync quantum is the gate's 500 us unless it opts in to 1 ms (#348)", () => {
+  const base = { system: "ecu-ams", ref: "", dataflow: GRAPH, virtualMs: 3000 };
+  assert.equal("quantum_us" in runRequest(base).scenario, false);
+  assert.equal("quantum_us" in runRequest({ ...base, quantumUs: 500 }).scenario, false);
+  assert.equal(runRequest({ ...base, quantumUs: 1000 }).scenario.quantum_us, 1000);
+  for (const bad of [250, 2000, "1000", null]) {
+    assert.throws(() => runRequest({ ...base, quantumUs: bad }), /only 500 or 1000 us/);
+  }
+});
+
 test("a scenario's rows ride in the run, named after it", () => {
   const doc = { description: "x", virtual_ms: 9, slice_ms: 50,
                 stimuli: [{ kind: "gpio", at_ms: 5, board: "ams", pin: "PF9", level: true }],

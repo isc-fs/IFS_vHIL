@@ -109,6 +109,10 @@ export const ws = reactive({
     run: null, // {id, state, counts, what}
     runs: [], // the open system's history
     virtualMs: 3000,
+    // The sync quantum Run and Live run at, us: the gate's 500 unless picked
+    // 1000 (#348; shell/editor-run.js QUANTA_US). Not remembered: a reload
+    // is back at 500.
+    quantumUs: 500,
     mode: 'DESIGN',
     theme: 'dark',
     backend: 'connecting', // the editor backend (vhil.editor serve)
@@ -616,10 +620,12 @@ export function startLive() {
             return;
         }
         const body = runRequest({
-            system: ws.id, ref: ws.runRef, dataflow, virtualMs: 1,
+            system: ws.id, ref: ws.runRef, dataflow, virtualMs: 1, quantumUs: ws.quantumUs,
         });
         // Open-ended: the server caps it (VHIL_MAX_LIVE_MS).
+        const { quantum_us: quantum } = body.scenario;
         body.scenario = { kind: 'run', live: true };
+        if (quantum) body.scenario.quantum_us = quantum;
         let out;
         try {
             out = await call('POST', '/api/runs', body);
@@ -763,7 +769,7 @@ export function runNow() {
             return;
         }
         const body = runRequest({
-            system: ws.id, ref: ws.runRef, dataflow, virtualMs, scenario,
+            system: ws.id, ref: ws.runRef, dataflow, virtualMs, scenario, quantumUs: ws.quantumUs,
         });
         let out;
         try {
